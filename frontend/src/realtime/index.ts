@@ -16,7 +16,7 @@ export class RealtimeClient {
 
     this.eventSource = new EventSource(this.endpoint, { withCredentials: true });
 
-    this.eventSource.onmessage = (event) => {
+    this.eventSource.onmessage = (_event) => {
       // Parse event and invalidate queries or update state as needed
       // console.log('SSE Event:', event.data);
     };
