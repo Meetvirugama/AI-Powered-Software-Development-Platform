@@ -1,10 +1,11 @@
 import { Navigate, Outlet } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { apiClient } from '../services/api';
+
 
 const fetchAuthStatus = async () => {
-  const response = await apiClient.get('/auth/me');
-  return response.data;
+  // Day 1 Placeholder: Do not invent backend behavior.
+  // Return a mock user so the skeleton layout can be viewed without backend.
+  return { id: 1, name: 'Day 1 User' };
 };
 
 export function ProtectedRoute() {
