@@ -1,0 +1,12 @@
+import { create } from 'zustand';
+
+interface AppState {
+  sidebarOpen: boolean;
+  toggleSidebar: () => void;
+  // UI state only, server state goes to TanStack Query
+}
+
+export const useAppStore = create<AppState>((set) => ({
+  sidebarOpen: true,
+  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
+}));
