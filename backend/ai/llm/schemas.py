@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -35,8 +35,7 @@ class LLMRequest(BaseModel):
         exclude=True,  # don't serialise the class itself
     )
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +49,7 @@ class LLMResponse(BaseModel):
     output_tokens: int
     latency_ms: float
 
-    class Config:
-        frozen = True
+    model_config = ConfigDict(frozen=True)
 
 
 # ---------------------------------------------------------------------------
