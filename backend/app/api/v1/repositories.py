@@ -1,0 +1,5 @@
+"""Repository-management route contract placeholder for the Week 1 API."""
+
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/repositories", tags=["repositories"])
