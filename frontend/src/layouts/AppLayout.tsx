@@ -23,6 +23,11 @@ export function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  async function handleLogout() {
+    await logout();
+    navigate('/login', { replace: true });
+  }
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* ------------------------------------------------------------------ */}
@@ -76,7 +81,7 @@ export function AppLayout() {
           <div className="ml-auto flex items-center gap-2">
             <span className="text-sm text-muted-foreground">{user?.login}</span>
             <button
-              onClick={async () => { await logout(); navigate('/login', { replace: true }); }}
+              onClick={handleLogout}
               aria-label="Sign out"
               title="Sign out"
               className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
