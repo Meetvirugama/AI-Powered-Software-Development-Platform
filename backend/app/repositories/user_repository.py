@@ -29,3 +29,21 @@ class UserRepository:
 
     def get_by_id(self, user_id: uuid.UUID) -> Optional[User]:
         return self.session.get(User, user_id)
+
+    def upsert_github_user(
+        self,
+        github_id: str,
+        login: str,
+        email: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+    ) -> User:
+        """Create a GitHub user on first login or refresh mutable profile fields."""
+        user = self.get_by_github_id(github_id)
+        if user is None:
+            return self.create_user(github_id, login, email, avatar_url)
+        user.login = login
+        user.email = email
+        user.avatar_url = avatar_url
+        self.session.commit()
+        self.session.refresh(user)
+        return user

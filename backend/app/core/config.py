@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     github_client_secret: str | None = None
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 15
+    github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
+    auth_cookie_name: str = "access_token"
+    cookie_secure: bool = False
 
 
 @lru_cache
