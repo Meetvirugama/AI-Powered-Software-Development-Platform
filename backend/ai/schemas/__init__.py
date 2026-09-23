@@ -7,6 +7,7 @@ from .output import ErrorResponse, RepositoryAnswer, SourceReference
 from .errors import LLMError, LLMTimeoutError, LLMUnavailableError, LLMValidationError, LLMRateLimitError
 from .validator import OutputValidator
 from .prompt_builder import PromptBuilder
+from .grounding import GroundingValidator, GroundingResult
 
 __all__ = [
     "SourceReference",
@@ -19,4 +20,6 @@ __all__ = [
     "LLMRateLimitError",
     "OutputValidator",
     "PromptBuilder",
+    "GroundingValidator",
+    "GroundingResult",
 ]
