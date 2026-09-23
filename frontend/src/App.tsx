@@ -3,6 +3,7 @@ import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { ProtectedRoute } from './layouts/ProtectedRoute';
 import { AppLayout } from './layouts/AppLayout';
 import { Login } from './pages/Login';
+import { AuthCallback } from './pages/AuthCallback';
 import { Dashboard } from './pages/Dashboard';
 import { Repositories } from './pages/Repositories';
 import { RepositoryDetail } from './pages/RepositoryDetail';
@@ -14,6 +15,7 @@ export function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/auth/callback" element={<AuthCallback />} />
 
           {/* Protected Application Routes */}
           <Route path="/app" element={<ProtectedRoute />}>
