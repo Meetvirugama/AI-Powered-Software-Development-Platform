@@ -28,6 +28,7 @@ export const handlers = [
       id: 'mock-user-1',
       login: 'dev-user',
       name: 'Dev User',
+      email: null,
       avatar_url: null,
     });
   }),

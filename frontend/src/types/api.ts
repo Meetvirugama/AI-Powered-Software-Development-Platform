@@ -1,13 +1,10 @@
 /**
  * API-level TypeScript types.
  *
- * Fields are derived from:
- *   - backend/app/schemas/health.py  (only finalized schema on Day 1)
- *   - Docs/daily_tasks.md            (contract placeholders for upcoming endpoints)
- *
- * Placeholder types are clearly marked. Do NOT add fields not supported by
- * the backend contract. Fields will be filled in as Yug finalises the OpenAPI
- * spec on Day 2.
+ * Fields are derived directly from backend Pydantic schemas:
+ *   - backend/app/schemas/auth.py       (AuthenticatedUser, TokenResponse)
+ *   - backend/app/schemas/health.py     (HealthResponse)
+ *   - backend/app/schemas/repository.py (Repository — placeholder)
  */
 
 // ---------------------------------------------------------------------------
@@ -38,18 +35,18 @@ export interface HealthResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Auth  — Placeholder until Yug finalises auth endpoints on Day 2
+// Auth — matches backend/app/schemas/auth.py :: AuthenticatedUser
 // ---------------------------------------------------------------------------
 
 /**
- * The authenticated user object returned by GET /api/v1/auth/me.
- * Fields are placeholders; update when the OpenAPI spec is available.
+ * Authenticated user returned by GET /api/v1/auth/me.
+ * Mirrors backend AuthenticatedUser exactly.
  */
 export interface User {
-  /** @placeholder — actual field names TBD by backend contract */
   id: string;
   login: string;
   name: string | null;
+  email: string | null;
   avatar_url: string | null;
 }
 
