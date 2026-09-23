@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.core.config import get_settings
 from app.core.database import Base
 # ensure models are imported
-from app.models.base import TimestampedModel
+import app.models
 
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
