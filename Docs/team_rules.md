@@ -409,14 +409,14 @@ When you finish a module interface that other people depend on, follow this prot
 ```
 main                    ← Protected. PR-only. Passing CI required.
 develop                 ← Integration branch. PR from your feature branch.
-feature/W1-01-yug-skeleton     ← Your working branch. Format: feature/W{week}-{task-id}-{owner}-{description}
-feature/W1-07-prit-scanner
-feature/W2-03-meet-react-loop
+meet/skeleton                  ← Your working branch. Format: {owner}/{description}
+om/db-schema
+prit/scanner
 ```
 
-**Branch naming format:** `feature/W{week}-{task-id}-{owner}-{description}`
-- Example: `feature/W1-08-prit-ast-symbols`
-- Example: `feature/W2-01-meet-orchestrator`
+**Branch naming format:** `{owner}/{description}` (Do not use week-wise branch names)
+- Example: `meet/react-loop`
+- Example: `om/user-model`
 
 **PR rules:**
 - PR title must reference the task ID: `[W1-08] AST Symbol Extraction — tree-sitter integration`
