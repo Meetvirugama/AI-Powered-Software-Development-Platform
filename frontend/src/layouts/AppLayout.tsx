@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
+import { useAuth } from '../hooks/useAuth';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
-import { Menu, LayoutDashboard, FolderGit2 } from 'lucide-react';
+import { Menu, LayoutDashboard, FolderGit2, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 /**
@@ -19,6 +20,8 @@ import { cn } from '../lib/utils';
 export function AppLayout() {
   const sidebarOpen = useAppStore((state) => state.sidebarOpen);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -70,9 +73,16 @@ export function AppLayout() {
           >
             <Menu className="w-5 h-5" />
           </button>
-          <div className="ml-auto text-sm text-muted-foreground">
-            {/* User profile placeholder — populated on Day 2 */}
-            User
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">{user?.login}</span>
+            <button
+              onClick={async () => { await logout(); navigate('/login', { replace: true }); }}
+              aria-label="Sign out"
+              title="Sign out"
+              className="p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </header>
 
