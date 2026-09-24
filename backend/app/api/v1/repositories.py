@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -11,8 +10,9 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
-from app.models.repository import Repository, SyncStatus
+from app.models.repository import Repository
 from app.repositories.repository_repository import RepositoryRepository
+from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 from app.schemas.repository import (
     CodeSymbolResponse,
     PaginatedResponse,
@@ -38,18 +38,8 @@ def get_repository(repository_id: UUID, request: Request, db: Session = Depends(
 @router.post("/{repository_id}/sync", response_model=SyncJobResponse, status_code=status.HTTP_202_ACCEPTED, summary="Queue repository synchronization")
 def sync_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> SyncJobResponse:
     user_id = _request_user_id(request)
-    repository = _owned_repository(repository_id, request, db)
-    repository_repository = RepositoryRepository(db)
-    job = repository_repository.create_sync_job(repository.id, user_id)
-    try:
-        get_redis().rpush(
-            "sync_jobs",
-            json.dumps({"job_id": str(job.id), "repository_id": str(repository.id), "user_id": str(user_id)}),
-        )
-        repository_repository.update_sync_status(repository.id, SyncStatus.SYNCING)
-    except Exception as exc:
-        db.rollback()
-        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Sync queue is unavailable.", retryable=True) from exc
+    service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
+    job = service.request_sync(repository_id, user_id)
     return SyncJobResponse(job_id=str(job.id))
 
 
