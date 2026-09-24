@@ -1,24 +1,20 @@
 import { Navigate, Outlet } from 'react-router-dom';
+import { useAuth } from '../hooks/useAuth';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 
 /**
  * ProtectedRoute — access control boundary.
  *
- * Day 1 Placeholder:
- * Authentication check is stubbed. The actual check (calling GET /api/v1/auth/me
- * and reading AuthStore) is implemented on Day 2 via the `useAuth()` hook.
+ * Uses useAuth() to determine the current session state:
+ *  - While /auth/me is in flight: renders a loading spinner in the content area.
+ *  - If not authenticated (401 from /auth/me): redirects to /login.
+ *  - If authenticated: renders the child routes via <Outlet />.
  *
- * Architecture:
- * - Auth state lives in useAuthStore (Zustand).
- * - Loading is shown inside the content area, NOT by replacing the full screen,
- *   so the application shell (header/sidebar) is preserved.
- * - Unauthenticated users are redirected to /login.
+ * The loading state is shown inside the layout content area, not full-screen,
+ * so the application shell is preserved during the check.
  */
 export function ProtectedRoute() {
-  // Day 1: authentication check is a placeholder.
-  // Replace with: const { isAuthenticated, isLoading } = useAuth();
-  const isLoading = false;
-  const isAuthenticated = true; // stub — always pass for layout preview
+  const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return (

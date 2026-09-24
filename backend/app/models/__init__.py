@@ -6,8 +6,9 @@ from app.models.repository_file import RepositoryFile
 from app.models.code_symbol import CodeSymbol
 from app.models.symbol_edge import SymbolEdge
 from app.models.code_chunk import CodeChunk
+from app.models.sync_job import SyncJob, SyncJobStatus
 
 __all__ = [
     "TimestampedModel", "User", "GitHubInstallation", "Repository", "SyncStatus",
-    "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk"
+    "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus"
 ]

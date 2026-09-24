@@ -1,41 +1,36 @@
 /**
- * MSW request handlers.
+ * MSW request handlers — Day 2.
  *
- * Day 1 — minimal infrastructure only.
- * These handlers mock backend endpoints that are not yet implemented,
- * allowing frontend development to proceed independently.
+ * Default state: authenticated (GET /auth/me returns a valid user).
  *
- * DO NOT add application business logic here.
- * DO NOT invent response fields not specified by the backend contract.
+ * To test the unauthenticated state, edit the /auth/me handler below to
+ * return a 401 response, then restart the dev server:
  *
- * Add handlers here as the backend contract is specified (Day 2+).
- * Remove handlers as real endpoints become available.
+ *   return new HttpResponse(null, { status: 401 });
  */
 import { http, HttpResponse } from 'msw';
 
 const BASE = '/api/v1';
 
 export const handlers = [
-  /**
-   * GET /api/v1/auth/me
-   * Returns a stub authenticated user so frontend pages can be built while
-   * Yug implements the real endpoint on Day 2.
-   *
-   * Remove this handler once the real endpoint is available.
-   */
+  // GET /api/v1/auth/me — returns the authenticated user.
+  // Matches backend AuthenticatedUser schema (backend/app/schemas/auth.py).
   http.get(`${BASE}/auth/me`, () => {
     return HttpResponse.json({
       id: 'mock-user-1',
       login: 'dev-user',
       name: 'Dev User',
+      email: 'dev@example.com',
       avatar_url: null,
     });
   }),
 
-  /**
-   * GET /api/v1/health
-   * Matches the finalized HealthResponse schema from backend/app/schemas/health.py.
-   */
+  // POST /api/v1/auth/logout — backend returns 204 and deletes the auth cookie.
+  http.post(`${BASE}/auth/logout`, () => {
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  // GET /api/v1/health — matches backend HealthResponse schema.
   http.get(`${BASE}/health`, () => {
     return HttpResponse.json({ status: 'ok', version: '1.0.0' });
   }),
