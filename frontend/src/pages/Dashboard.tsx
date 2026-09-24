@@ -5,7 +5,6 @@ import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { PlusCircle, ChevronLeft, ChevronRight, GitBranch } from 'lucide-react';
-import type { ApiError } from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -51,10 +50,6 @@ export function Dashboard() {
         </button>
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Platform status summary                                              */}
-      {/* ------------------------------------------------------------------ */}
-      {data && <PlatformStatus total={data.total} items={data.items} />}
 
       {/* ------------------------------------------------------------------ */}
       {/* Repository grid — loading                                            */}
@@ -71,8 +66,7 @@ export function Dashboard() {
       {isError && !isLoading && (
         <div className="flex flex-col items-center gap-4 py-12">
           <ErrorMessage
-            error={error as unknown as ApiError}
-            message="Could not load repositories."
+            message={error instanceof Error ? error.message : 'Could not load repositories.'}
             className="max-w-md"
           />
           <button
@@ -132,51 +126,6 @@ export function Dashboard() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// PlatformStatus
-// ---------------------------------------------------------------------------
-
-interface PlatformStatusProps {
-  total: number;
-  items: { sync_status: string }[];
-}
-
-function PlatformStatus({ total, items }: PlatformStatusProps) {
-  const synced = items.filter((r) => r.sync_status === 'SYNCED').length;
-  const syncing = items.filter((r) => r.sync_status === 'SYNCING').length;
-  const failed = items.filter((r) => r.sync_status === 'FAILED').length;
-
-  return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Platform status">
-      <StatusTile label="Repositories" value={total} />
-      <StatusTile label="Synced" value={synced} accent="emerald" />
-      <StatusTile label="Syncing" value={syncing} accent="blue" />
-      <StatusTile label="Failed" value={failed} accent={failed > 0 ? 'red' : undefined} />
-    </div>
-  );
-}
-
-interface StatusTileProps {
-  label: string;
-  value: number;
-  accent?: 'emerald' | 'blue' | 'red';
-}
-
-function StatusTile({ label, value, accent }: StatusTileProps) {
-  const accentClasses: Record<NonNullable<StatusTileProps['accent']>, string> = {
-    emerald: 'text-emerald-600',
-    blue: 'text-blue-600',
-    red: 'text-destructive',
-  };
-  const valueClass = accent ? accentClasses[accent] : 'text-foreground';
-
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`mt-1 text-2xl font-bold ${valueClass}`}>{value}</p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // EmptyState
