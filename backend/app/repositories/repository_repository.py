@@ -64,3 +64,12 @@ class RepositoryRepository:
         self.session.commit()
         self.session.refresh(job)
         return job
+
+    def mark_sync_job_failed(self, job_id: uuid.UUID) -> Optional[SyncJob]:
+        """Record a dispatch failure after a job has been persisted."""
+        job = self.session.get(SyncJob, job_id)
+        if job:
+            job.status = SyncJobStatus.FAILED
+            self.session.commit()
+            self.session.refresh(job)
+        return job
