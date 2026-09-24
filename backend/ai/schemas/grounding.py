@@ -170,32 +170,24 @@ class GroundingValidator:
             once Om's repository layer (get_file_by_path) is available.
         """
         if self._db is None:
-            # Stub: when no DB is provided, treat all sources as grounded.
-            # Replace with real query when Om's repository layer is available.
             logger.debug(
                 "grounding_stubbed",
                 extra={"file": source.file, "reason": "no_db_session"},
             )
             return GroundingResult(source=source, grounded=True, reason="stub_no_db")
 
-        # Day 4 implementation:
-        # from app.repositories.repository_files import get_file_by_path
-        #
-        # file_row = await get_file_by_path(
-        #     db=self._db,
-        #     repository_id=repository_id,
-        #     path=source.file,
-        # )
-        #
-        # if file_row is None:
-        #     return GroundingResult(source=source, grounded=False, reason="file_not_found")
-        #
-        # if source.end_line > file_row.line_count:
-        #     return GroundingResult(source=source, grounded=False, reason="line_range_invalid")
-        #
-        # return GroundingResult(source=source, grounded=True, reason="ok")
+        from app.repositories.repository_files import get_file_by_path
 
-        raise NotImplementedError(
-            "GroundingValidator._check_source() DB path implemented on Day 4 "
-            "once Om's repository_files query layer is available."
+        file_row = get_file_by_path(
+            db=self._db,
+            repository_id=repository_id,
+            path=source.file,
         )
+
+        if file_row is None:
+            return GroundingResult(source=source, grounded=False, reason="file_not_found")
+
+        if source.end_line > file_row.line_count:
+            return GroundingResult(source=source, grounded=False, reason="line_range_invalid")
+
+        return GroundingResult(source=source, grounded=True, reason="ok")
