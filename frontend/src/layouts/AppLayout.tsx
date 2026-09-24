@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
 import { useAuth } from '../hooks/useAuth';
+import { useRealtimeRepositories } from '../hooks/useRealtimeRepositories';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
 import { Menu, LayoutDashboard, FolderGit2, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -22,6 +23,10 @@ export function AppLayout() {
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+
+  // Maintain the SSE connection for the duration of the authenticated session.
+  // Incoming repository events automatically invalidate TanStack Query cache.
+  useRealtimeRepositories();
 
   async function handleLogout() {
     await logout();
