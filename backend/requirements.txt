@@ -5,3 +5,7 @@ alembic>=1.13,<2.0
 pydantic-settings>=2.5,<3.0
 redis>=5.0,<6.0
 psycopg[binary]>=3.2,<4.0
+
+# GitHub integration (Parth — W1-03)
+httpx>=0.27,<1.0         # Async HTTP client for GitHub API calls
+PyJWT[crypto]>=2.8,<3.0  # RS256 JWT signing for GitHub App authentication
