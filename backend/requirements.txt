@@ -6,7 +6,11 @@ pydantic-settings>=2.5,<3.0
 redis>=5.0,<6.0
 psycopg[binary]>=3.2,<4.0
 pgvector>=0.3,<1.0
-httpx>=0.27,<1.0
+
+# GitHub integration (Parth — W1-03)
+httpx>=0.27,<1.0         # Async HTTP client for GitHub API calls
+PyJWT[crypto]>=2.8,<3.0  # RS256 JWT signing for GitHub App authentication
+
 python-jose[cryptography]>=3.3,<4.0
 sentence-transformers>=3.0,<4.0
 openai>=1.0,<2.0

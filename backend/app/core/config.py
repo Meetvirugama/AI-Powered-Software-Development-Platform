@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     github_app_private_key: str | None = None
     github_client_id: str | None = None
     github_client_secret: str | None = None
+    github_webhook_secret: str | None = None
+    github_workspace_root: str | None = None
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 15
