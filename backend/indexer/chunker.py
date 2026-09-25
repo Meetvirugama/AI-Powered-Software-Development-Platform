@@ -1,4 +1,6 @@
-from typing import Any
+from uuid import UUID
+
+from backend.scanner.symbols import Symbol
 
 from .models import Chunk
 
@@ -8,15 +10,15 @@ class SymbolChunker:
 
     def chunk_symbols(
         self,
-        repository_id,
-        file_id,
-        symbols: list[Any],
+        repository_id: UUID,
+        file_id: UUID,
+        symbols: list[Symbol],
         content: str,
         language: str,
     ) -> list[Chunk]:
         lines = content.splitlines()
         chunks: list[Chunk] = []
-        module_symbols = []
+        module_symbols: list[Symbol] = []
 
         for symbol in symbols:
             if symbol.kind in {"function", "method", "class"}:
