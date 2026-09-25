@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Protocol
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -18,10 +19,40 @@ from app.schemas.repository import (
     PaginatedResponse,
     RepositoryFileResponse,
     RepositoryResponse,
+    RepositorySearchRequest,
+    RepositorySearchResponse,
+    RepositorySearchResult,
     SyncJobResponse,
 )
 
+if TYPE_CHECKING:
+    from ai.retrieval.base import CodeChunk
+
 router = APIRouter(prefix="/repositories", tags=["repositories"])
+
+
+class RetrievalPipeline(Protocol):
+    """The Day 5 interface published by Meet's RAG pipeline."""
+
+    async def retrieve(self, query: str, repository_id: UUID, top_k: int) -> list["CodeChunk"]: ...
+
+
+def get_rag_pipeline(request: Request) -> RetrievalPipeline:
+    """Return the application-configured RAG pipeline without coupling routes to it.
+
+    Application startup (or an integration test) supplies the implementation on
+    ``app.state.rag_pipeline``. Keeping this boundary explicit lets the API own
+    authentication and response shaping while Meet's module owns retrieval.
+    """
+    pipeline = getattr(request.app.state, "rag_pipeline", None)
+    if pipeline is None:
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Repository search is not available because the retrieval pipeline is not configured.",
+            retryable=True,
+        )
+    return pipeline
 
 
 @router.get("", response_model=list[RepositoryResponse], summary="List connected repositories")
@@ -41,6 +72,33 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
     job = service.request_sync(repository_id, user_id)
     return SyncJobResponse(job_id=str(job.id))
+
+
+@router.post("/{repository_id}/search", response_model=RepositorySearchResponse, summary="Hybrid code search")
+async def search_repository(
+    repository_id: UUID,
+    payload: RepositorySearchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    pipeline: RetrievalPipeline = Depends(get_rag_pipeline),
+) -> RepositorySearchResponse:
+    """Search only code indexed for a repository the authenticated user owns."""
+    _owned_repository(repository_id, request, db)
+    chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
+    return RepositorySearchResponse(
+        query=payload.query,
+        results=[
+            RepositorySearchResult(
+                id=str(chunk.id),
+                file_path=chunk.file_path,
+                start_line=chunk.start_line,
+                end_line=chunk.end_line,
+                content=chunk.content,
+                score=chunk.score,
+            )
+            for chunk in chunks
+        ],
+    )
 
 
 @router.get("/{repository_id}/files", response_model=PaginatedResponse, summary="List indexed repository files")
