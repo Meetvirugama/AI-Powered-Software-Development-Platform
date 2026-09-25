@@ -25,3 +25,7 @@ To make this a rigorous benchmark, we are using 10 specific questions mapping to
 - **File Hit Rate:** TBD
 - **Symbol Hit Rate:** TBD
 - **Final Status:** TBD
+
+> [!WARNING]
+> **STATUS: BLOCKED (Waiting for Day 7)**
+> The benchmark framework and all test datasets have been successfully created. However, calculating the true accuracy score is currently blocked. We are waiting for Divu to finish the `EmbeddingQueue` pipeline so the database is populated with real chunks. We will run `scripts/benchmark_rag.py` again on **Day 7 (AI Integration Day)** to record the final scores here.
