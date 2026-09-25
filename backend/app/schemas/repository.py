@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RepositoryResponse(BaseModel):
@@ -54,3 +54,36 @@ class PaginatedResponse(BaseModel):
 class SyncJobResponse(BaseModel):
     job_id: str
     status: str = "QUEUED"
+
+
+class RepositorySearchRequest(BaseModel):
+    """A repository-scoped hybrid-search request."""
+
+    query: str = Field(min_length=1, max_length=1_000)
+    top_k: int = Field(default=8, ge=1, le=30)
+
+    @field_validator("query")
+    @classmethod
+    def query_must_contain_non_whitespace(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("query must contain non-whitespace characters")
+        return value
+
+
+class RepositorySearchResult(BaseModel):
+    """A code chunk returned by the RAG retrieval pipeline."""
+
+    id: str
+    file_path: str
+    start_line: int
+    end_line: int
+    content: str
+    score: float
+
+
+class RepositorySearchResponse(BaseModel):
+    """Hybrid-search results in descending relevance order."""
+
+    query: str
+    results: list[RepositorySearchResult]
