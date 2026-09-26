@@ -41,6 +41,11 @@ const MOCK_REPOSITORIES = [
     language: 'Python',
     sync_status: 'SYNCED',
     last_synced_at: '2026-09-24T18:00:00Z',
+    description: 'Core backend services for the AI Platform.',
+    framework: 'FastAPI',
+    file_count: 142,
+    symbol_count: 850,
+    chunk_count: 3100,
   },
   {
     id: 'repo-2',
@@ -52,6 +57,11 @@ const MOCK_REPOSITORIES = [
     language: 'TypeScript',
     sync_status: 'SYNCING',
     last_synced_at: null,
+    description: 'React frontend for the AI Platform.',
+    framework: 'React',
+    file_count: 210,
+    symbol_count: 1200,
+    chunk_count: 4500,
   },
   {
     id: 'repo-3',
@@ -63,6 +73,11 @@ const MOCK_REPOSITORIES = [
     language: 'Python',
     sync_status: 'FAILED',
     last_synced_at: '2026-09-23T09:30:00Z',
+    description: 'Data ingestion and processing pipelines.',
+    framework: 'PySpark',
+    file_count: 45,
+    symbol_count: 320,
+    chunk_count: 1100,
   },
   {
     id: 'repo-4',
@@ -74,6 +89,11 @@ const MOCK_REPOSITORIES = [
     language: 'Python',
     sync_status: 'NOT_SYNCED',
     last_synced_at: null,
+    description: 'Experimental machine learning models.',
+    framework: 'PyTorch',
+    file_count: 12,
+    symbol_count: 50,
+    chunk_count: 120,
   },
   {
     id: 'repo-5',
@@ -85,6 +105,11 @@ const MOCK_REPOSITORIES = [
     language: null,
     sync_status: 'SYNCED',
     last_synced_at: '2026-09-24T12:15:00Z',
+    description: 'Infrastructure as code for the platform.',
+    framework: 'Terraform',
+    file_count: 30,
+    symbol_count: 150,
+    chunk_count: 500,
   },
   // repo-new: represents a freshly connected repository (begins SYNCING).
   // Returned by the connect mock so the UI can demonstrate sync progress.
@@ -98,7 +123,85 @@ const MOCK_REPOSITORIES = [
     language: 'Go',
     sync_status: 'SYNCING',
     last_synced_at: null,
+    description: 'Authentication and authorization service.',
+    framework: 'Gin',
+    file_count: 0, // Since it's syncing, we can pretend it hasn't indexed yet
+    symbol_count: 0,
+    chunk_count: 0,
   },
+];
+
+// ---------------------------------------------------------------------------
+// Mock data — file tree (Day 5)
+// ---------------------------------------------------------------------------
+
+const MOCK_FILES = [
+  {
+    id: 'file-1',
+    path: 'src/',
+    language: null,
+    size_bytes: 0,
+    line_count: 0,
+    content_hash: '',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+  {
+    id: 'file-2',
+    path: 'src/main.py',
+    language: 'Python',
+    size_bytes: 1530,
+    line_count: 52,
+    content_hash: 'hash-main-py',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+  {
+    id: 'file-3',
+    path: 'src/api/',
+    language: null,
+    size_bytes: 0,
+    line_count: 0,
+    content_hash: '',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+  {
+    id: 'file-4',
+    path: 'src/api/routes.py',
+    language: 'Python',
+    size_bytes: 4200,
+    line_count: 120,
+    content_hash: 'hash-routes-py',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+  {
+    id: 'file-5',
+    path: 'requirements.txt',
+    language: 'Text',
+    size_bytes: 320,
+    line_count: 12,
+    content_hash: 'hash-req',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+  {
+    id: 'file-6',
+    path: 'README.md',
+    language: 'Markdown',
+    size_bytes: 1800,
+    line_count: 45,
+    content_hash: 'hash-readme',
+    last_indexed_at: '2026-09-24T18:00:00Z',
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Mock data — dependencies (Day 5)
+// ---------------------------------------------------------------------------
+
+const MOCK_DEPENDENCIES = [
+  { name: 'fastapi', version: '0.110.0', ecosystem: 'pip' },
+  { name: 'pydantic', version: '2.6.4', ecosystem: 'pip' },
+  { name: 'uvicorn', version: '0.29.0', ecosystem: 'pip' },
+  { name: 'sqlalchemy', version: '2.0.29', ecosystem: 'pip' },
+  { name: 'pytest', version: '8.1.1', ecosystem: 'pip' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -394,6 +497,30 @@ export const handlers = [
       );
     }
     return HttpResponse.json(repo);
+  }),
+
+  // GET /api/v1/repositories/:id/files — repository file tree (Day 5).
+  // Mock returns MOCK_FILES paginated.
+  http.get(`${BASE}/repositories/:id/files`, ({ request }) => {
+    const url = new URL(request.url);
+    const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10));
+    const pageSize = Math.max(1, parseInt(url.searchParams.get('page_size') ?? '50', 10));
+
+    const total = MOCK_FILES.length;
+    const start = (page - 1) * pageSize;
+    const items = MOCK_FILES.slice(start, start + pageSize);
+
+    return HttpResponse.json({
+      items,
+      total,
+      page,
+      page_size: pageSize,
+    });
+  }),
+
+  // GET /api/v1/repositories/:id/dependencies — top level dependencies (Day 5 Mock).
+  http.get(`${BASE}/repositories/:id/dependencies`, () => {
+    return HttpResponse.json(MOCK_DEPENDENCIES);
   }),
 
   // -------------------------------------------------------------------------

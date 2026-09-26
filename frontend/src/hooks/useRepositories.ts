@@ -1,10 +1,17 @@
 import { useQuery } from '@tanstack/react-query';
-import { listRepositories, getRepository } from '../services/repositories';
+import {
+  listRepositories,
+  getRepository,
+  getRepositoryFiles,
+  getRepositoryDependencies,
+} from '../services/repositories';
 import type {
   PaginatedRepositoryResponse,
   Repository,
   SyncProgress,
   SyncStatus,
+  PaginatedRepositoryFileResponse,
+  RepositoryDependency,
 } from '../types/api';
 
 /**
@@ -19,6 +26,10 @@ export const repositoryKeys = {
   list: (page: number, pageSize: number) =>
     [...repositoryKeys.all, 'list', { page, pageSize }] as const,
   detail: (id: string) => [...repositoryKeys.all, 'detail', id] as const,
+  files: (id: string, page: number, pageSize: number) =>
+    [...repositoryKeys.detail(id), 'files', { page, pageSize }] as const,
+  dependencies: (id: string) =>
+    [...repositoryKeys.detail(id), 'dependencies'] as const,
 };
 
 /**
@@ -181,4 +192,36 @@ export function syncProgressFromStatus(status: SyncStatus): SyncProgress {
         isFailed: false,
       };
   }
+}
+
+// ---------------------------------------------------------------------------
+// useRepositoryFiles — file tree hook
+//
+// Day 5 requires a 2-level file tree.
+// ---------------------------------------------------------------------------
+
+export function useRepositoryFiles(
+  id: string | undefined,
+  page: number = 1,
+  pageSize: number = 50,
+) {
+  return useQuery<PaginatedRepositoryFileResponse>({
+    queryKey: repositoryKeys.files(id ?? '', page, pageSize),
+    queryFn: () => getRepositoryFiles(id!, { page, pageSize }),
+    enabled: Boolean(id),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// useRepositoryDependencies — dependencies hook
+//
+// Day 5 requires top-level dependencies.
+// ---------------------------------------------------------------------------
+
+export function useRepositoryDependencies(id: string | undefined) {
+  return useQuery<RepositoryDependency[]>({
+    queryKey: repositoryKeys.dependencies(id ?? ''),
+    queryFn: () => getRepositoryDependencies(id!),
+    enabled: Boolean(id),
+  });
 }
