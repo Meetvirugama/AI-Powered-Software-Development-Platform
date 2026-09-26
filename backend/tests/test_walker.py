@@ -34,5 +34,5 @@ def test_file_walker_skips_and_counts(tmp_path):
     assert any('main.py' in p for p in returned_paths)
     assert any('.gitignore' in p for p in returned_paths)
 
-    # We expect exactly 2 files
-    assert len(files) == 2
+    # We expect 11 indexed files (excluding ignored.py, image.png, and node_modules/)
+    assert len(files) == 11

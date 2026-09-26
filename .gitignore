@@ -12,3 +12,11 @@ dist/
 build/
 
 .DS_Store
+
+# Test & coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+*.db
+test.db

@@ -12,7 +12,7 @@ from app.core.redis import get_redis
 from app.core.security import decode_access_token
 
 
-PUBLIC_PATHS = {"/docs", "/openapi.json", "/redoc", "/api/v1/health"}
+PUBLIC_PATHS = {"/docs", "/openapi.json", "/redoc", "/health", "/api/v1/health"}
 
 
 class JWTMiddleware(BaseHTTPMiddleware):
