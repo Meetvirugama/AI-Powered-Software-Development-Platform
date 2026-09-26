@@ -72,3 +72,35 @@ def test_fake_redis_fixture(fake_redis) -> None:
 
     fake_redis.delete("key1")
     assert fake_redis.exists("key1") == 0
+
+
+def test_github_stub_functions_direct() -> None:
+    """Verify stub_list_repos, stub_get_repo, and stub_installation_token directly with responses."""
+    import responses
+    from backend.tests.mocks.github import (
+        stub_list_repos,
+        stub_get_repo,
+        stub_installation_token,
+    )
+
+    with responses.RequestsMock() as rsps:
+        # 1. Stub list_repos
+        custom_repos = [{"id": 101, "name": "custom-repo", "full_name": "octocat/custom-repo"}]
+        stub_list_repos(rsps, repositories=custom_repos)
+        r1 = requests.get("https://api.github.com/installation/repositories")
+        assert r1.status_code == 200
+        assert r1.json()["total_count"] == 1
+        assert r1.json()["repositories"][0]["name"] == "custom-repo"
+
+        # 2. Stub get_repo
+        stub_get_repo(rsps, owner="octocat", repo="my-repo", repo_data={"id": 202, "name": "my-repo"})
+        r2 = requests.get("https://api.github.com/repos/octocat/my-repo")
+        assert r2.status_code == 200
+        assert r2.json()["name"] == "my-repo"
+
+        # 3. Stub installation_token
+        stub_installation_token(rsps, installation_id=12345, token="ghs_custom_token_999")
+        r3 = requests.post("https://api.github.com/app/installations/12345/access_tokens")
+        assert r3.status_code == 201
+        assert r3.json()["token"] == "ghs_custom_token_999"
+

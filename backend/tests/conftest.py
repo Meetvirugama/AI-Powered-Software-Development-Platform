@@ -186,3 +186,33 @@ async def async_client(db_session: Session, fake_redis: FakeRedis) -> AsyncGener
     async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
     app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def test_user(db_session: Session) -> object:
+    """Create and persist a test User record in the database."""
+    import uuid
+    from app.models.user import User
+
+    user = User(
+        id=uuid.uuid4(),
+        github_id="gh-12345",
+        login="test_dev_user",
+        email="test_dev@example.com",
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def auth_headers(test_user, monkeypatch) -> dict[str, str]:
+    """Generate valid Bearer auth headers for the test_user."""
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-12345")
+    get_settings.cache_clear()
+    from app.core.security import create_access_token
+
+    token, _ = create_access_token(user_id=str(test_user.id))
+    return {"Authorization": f"Bearer {token}"}
+
