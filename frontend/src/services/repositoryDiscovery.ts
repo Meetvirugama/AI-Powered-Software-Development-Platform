@@ -44,6 +44,7 @@
 import { apiClient } from './api';
 import type {
   AvailableRepository,
+  ConnectRepositoryResponse,
   PaginatedAvailableRepositoryResponse,
 } from '../types/api';
 
@@ -158,4 +159,63 @@ export async function listAvailableRepositories(
   });
 
   return adaptResponse(response.data);
+}
+
+// ---------------------------------------------------------------------------
+// Connect repository
+//
+// Assumed backend endpoint (not yet implemented — backed by MSW):
+//   POST /api/v1/github/repositories/:githubRepoId/connect
+//
+// The backend is expected to:
+//   1. Look up the repository in GitHub using the installation token
+//   2. Create a repository record in our DB
+//   3. Queue a sync job immediately
+//   4. Return { repository_id, job_id }
+//
+// Raw response shape (assumed, to be confirmed with Yug/Parth):
+//   { "repository_id": "<uuid>", "job_id": "<uuid>" }
+//
+// If the backend splits this into two requests (POST /github/repositories/connect
+// + POST /repositories/:id/sync), only this function needs updating.
+// ---------------------------------------------------------------------------
+
+interface RawConnectResponse {
+  repository_id: string;
+  job_id: string;
+}
+
+/**
+ * Connect a GitHub repository to the platform.
+ *
+ * POST /api/v1/github/repositories/:githubRepoId/connect
+ *
+ * Triggers:
+ *   1. A new repository record is created in our database.
+ *   2. A sync job is queued immediately (Cloning → Scanning → Indexing → Ready).
+ *
+ * Returns:
+ *   ConnectRepositoryResponse with our internal repository_id and job_id.
+ *   The caller (useConnectRepository hook) uses repository_id to navigate
+ *   to the repository detail page and poll sync status.
+ *
+ * This function is the ONLY place that knows:
+ *   - the exact HTTP endpoint
+ *   - the exact request method and body
+ *   - the raw response field names
+ *
+ * Navigation on success belongs to the UI layer, not here.
+ */
+export async function connectRepository(
+  githubRepoId: string,
+): Promise<ConnectRepositoryResponse> {
+  const response = await apiClient.post<RawConnectResponse>(
+    `/github/repositories/${githubRepoId}/connect`,
+  );
+
+  const raw = response.data;
+  return {
+    repository_id: raw.repository_id,
+    job_id: raw.job_id,
+  };
 }

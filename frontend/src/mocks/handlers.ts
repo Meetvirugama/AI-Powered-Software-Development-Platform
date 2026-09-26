@@ -8,10 +8,18 @@
  *
  *   return new HttpResponse(null, { status: 401 });
  *
- * Day 4 addition:
+ * Day 4 — Prompt 1 additions:
  *   GET /api/v1/github/repositories — repository discovery (GitHub App repos)
- *   This endpoint does not yet exist in the backend. It is mocked here until
- *   Parth/Yug implement GET /api/v1/github/repositories.
+ *
+ * Day 4 — Prompt 2 additions:
+ *   POST /api/v1/github/repositories/:githubRepoId/connect — connect a repo
+ *   GET  /api/v1/repositories/:id                          — single repo detail
+ *
+ * Neither the connect endpoint nor the per-repo detail endpoint is yet
+ * implemented in the backend. Both are mocked here until Yug/Parth confirm
+ * the final contract.
+ *
+ * To simulate a failed connect, append ?fail=1 to the connect URL.
  */
 import { http, HttpResponse } from 'msw';
 
@@ -19,7 +27,7 @@ const BASE = '/api/v1';
 
 // ---------------------------------------------------------------------------
 // Mock data — connected repositories (Day 3)
-// Returned by GET /api/v1/repositories
+// Returned by GET /api/v1/repositories and GET /api/v1/repositories/:id
 // ---------------------------------------------------------------------------
 
 const MOCK_REPOSITORIES = [
@@ -78,10 +86,23 @@ const MOCK_REPOSITORIES = [
     sync_status: 'SYNCED',
     last_synced_at: '2026-09-24T12:15:00Z',
   },
+  // repo-new: represents a freshly connected repository (begins SYNCING).
+  // Returned by the connect mock so the UI can demonstrate sync progress.
+  {
+    id: 'repo-new',
+    github_repo_id: '123456010',
+    owner: 'dev-user',
+    name: 'auth-service',
+    full_name: 'dev-user/auth-service',
+    default_branch: 'main',
+    language: 'Go',
+    sync_status: 'SYNCING',
+    last_synced_at: null,
+  },
 ];
 
 // ---------------------------------------------------------------------------
-// Mock data — available GitHub App repositories (Day 4)
+// Mock data — available GitHub App repositories (Day 4 — Prompt 1)
 //
 // Returned by GET /api/v1/github/repositories (backend not yet implemented).
 //
@@ -302,6 +323,10 @@ const MOCK_AVAILABLE_REPOSITORIES = [
 // ---------------------------------------------------------------------------
 
 export const handlers = [
+  // -------------------------------------------------------------------------
+  // Auth
+  // -------------------------------------------------------------------------
+
   // GET /api/v1/auth/me — returns the authenticated user.
   // Matches backend AuthenticatedUser schema (backend/app/schemas/auth.py).
   http.get(`${BASE}/auth/me`, () => {
@@ -319,6 +344,19 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
+  // -------------------------------------------------------------------------
+  // Health
+  // -------------------------------------------------------------------------
+
+  // GET /api/v1/health — matches backend HealthResponse schema.
+  http.get(`${BASE}/health`, () => {
+    return HttpResponse.json({ status: 'ok', version: '1.0.0' });
+  }),
+
+  // -------------------------------------------------------------------------
+  // Connected repositories (Day 3)
+  // -------------------------------------------------------------------------
+
   // GET /api/v1/repositories — returns a plain list (no server pagination yet).
   // The service layer (services/repositories.ts) wraps this into a paginated shape.
   // Mock includes all four sync statuses so every UI state can be visually tested.
@@ -326,15 +364,44 @@ export const handlers = [
     return HttpResponse.json(MOCK_REPOSITORIES);
   }),
 
-  // GET /api/v1/health — matches backend HealthResponse schema.
-  http.get(`${BASE}/health`, () => {
-    return HttpResponse.json({ status: 'ok', version: '1.0.0' });
+  // GET /api/v1/repositories/:id — single repository detail (Day 4 — Prompt 2).
+  //
+  // Returns the full RepositoryResponse for a connected repository.
+  // Supports all four sync_status values so the progress adapter can be tested:
+  //   repo-1   → SYNCED
+  //   repo-2   → SYNCING   (maps to CLONING in the UI progress adapter)
+  //   repo-3   → FAILED
+  //   repo-4   → NOT_SYNCED
+  //   repo-new → SYNCING   (freshly connected, returned by connect mock)
+  //
+  // Returns 404 for unknown IDs.
+  //
+  // NOTE: This handler is MORE SPECIFIC than GET /repositories and must be
+  // registered BEFORE the list handler in MSW so :id is matched correctly.
+  http.get(`${BASE}/repositories/:id`, ({ params }) => {
+    const { id } = params;
+    const repo = MOCK_REPOSITORIES.find((r) => r.id === id);
+    if (!repo) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'REPOSITORY_NOT_FOUND',
+            message: 'Repository does not exist or you do not have access.',
+            retryable: false,
+          },
+        },
+        { status: 404 },
+      );
+    }
+    return HttpResponse.json(repo);
   }),
 
-  // ---------------------------------------------------------------------------
-  // Day 4 — GET /api/v1/github/repositories
-  //
-  // Repository discovery endpoint (backend not yet implemented).
+  // -------------------------------------------------------------------------
+  // Repository discovery (Day 4 — Prompt 1)
+  // -------------------------------------------------------------------------
+
+  // GET /api/v1/github/repositories — repository discovery endpoint.
+  // Backend not yet implemented. Mocked here until Yug/Parth confirm contract.
   //
   // Supports:
   //   ?page=<n>         — 1-based page number (default: 1)
@@ -342,7 +409,6 @@ export const handlers = [
   //   ?search=<term>    — case-insensitive name filter (server-side)
   //
   // Returns PaginatedAvailableRepositoryResponse shape.
-  // ---------------------------------------------------------------------------
   http.get(`${BASE}/github/repositories`, ({ request }) => {
     const url = new URL(request.url);
     const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '1', 10));
@@ -351,9 +417,10 @@ export const handlers = [
 
     // Server-side search: filter by name (case-insensitive substring match).
     const filtered = search
-      ? MOCK_AVAILABLE_REPOSITORIES.filter((r) =>
-          r.name.toLowerCase().includes(search) ||
-          r.full_name.toLowerCase().includes(search),
+      ? MOCK_AVAILABLE_REPOSITORIES.filter(
+          (r) =>
+            r.name.toLowerCase().includes(search) ||
+            r.full_name.toLowerCase().includes(search),
         )
       : MOCK_AVAILABLE_REPOSITORIES;
 
@@ -370,5 +437,78 @@ export const handlers = [
       page_size: pageSize,
       total_pages,
     });
+  }),
+
+  // -------------------------------------------------------------------------
+  // Connect repository (Day 4 — Prompt 2)
+  // -------------------------------------------------------------------------
+
+  // POST /api/v1/github/repositories/:githubRepoId/connect
+  // Backend not yet implemented. Mocked here until Yug/Parth confirm contract.
+  //
+  // Simulates the backend:
+  //   1. Looking up the repository via GitHub API (installation token)
+  //   2. Creating a repository record in our DB
+  //   3. Queuing a sync job immediately
+  //   4. Returning { repository_id, job_id }
+  //
+  // Success path (201):
+  //   Returns ConnectRepositoryResponse.
+  //   repository_id matches repo-new in MOCK_REPOSITORIES so that
+  //   GET /api/v1/repositories/repo-new returns a realistic SYNCING response.
+  //
+  // Failure paths:
+  //   ?fail=1           → 500 CONNECT_FAILED   (generic failure, retryable)
+  //   Already-connected → 409 ALREADY_CONNECTED (not retryable)
+  //
+  // Error format matches the standard backend error envelope:
+  //   { "error": { "code": "...", "message": "...", "retryable": bool } }
+  http.post(`${BASE}/github/repositories/:githubRepoId/connect`, ({ params, request }) => {
+    const { githubRepoId } = params;
+    const url = new URL(request.url);
+
+    // ?fail=1 forces a generic failure for UI error-state testing.
+    const forceFail = url.searchParams.get('fail') === '1';
+
+    // These IDs are already connected — simulate duplicate-connect error.
+    const alreadyConnectedIds = ['123456001', '123456002', '123456003'];
+    const isAlreadyConnected = alreadyConnectedIds.includes(githubRepoId as string);
+
+    if (forceFail) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'CONNECT_FAILED',
+            message: 'Failed to connect the repository. Please try again.',
+            retryable: true,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
+    if (isAlreadyConnected) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ALREADY_CONNECTED',
+            message: 'This repository is already connected to the platform.',
+            retryable: false,
+          },
+        },
+        { status: 409 },
+      );
+    }
+
+    // Success: return repository_id + queued job_id.
+    // repository_id = repo-new so the caller can poll
+    // GET /api/v1/repositories/repo-new and see SYNCING status.
+    return HttpResponse.json(
+      {
+        repository_id: 'repo-new',
+        job_id: 'job-mock-001',
+      },
+      { status: 201 },
+    );
   }),
 ];
