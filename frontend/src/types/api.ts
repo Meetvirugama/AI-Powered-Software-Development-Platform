@@ -5,6 +5,10 @@
  *   - backend/app/schemas/auth.py       (AuthenticatedUser)
  *   - backend/app/schemas/health.py     (HealthResponse)
  *   - backend/app/schemas/repository.py (RepositoryResponse, PaginatedResponse)
+ *
+ * Day 4 additions:
+ *   - AvailableRepository               (GitHub App–accessible repository)
+ *   - PaginatedAvailableRepositoryResponse
  */
 
 // ---------------------------------------------------------------------------
@@ -89,4 +93,70 @@ export interface PaginatedRepositoryResponse {
   total: number;
   page: number;
   page_size: number;
+}
+
+// ---------------------------------------------------------------------------
+// Repository Discovery — Day 4
+//
+// These types represent GitHub repositories accessible to the installed
+// GitHub App but NOT necessarily connected to the platform yet.
+//
+// Conceptually SEPARATE from `Repository` (connected repository):
+//   - `Repository`          → stored in DB, has sync_status, id is our UUID
+//   - `AvailableRepository` → sourced from GitHub API, id is GitHub's integer
+//
+// Assumed backend endpoint (not yet implemented — backed by MSW):
+//   GET /api/v1/github/repositories?page=1&page_size=20&search=<term>
+//
+// IMPORTANT: The exact backend response contract may still change.
+// The service layer (services/repositoryDiscovery.ts) is the ONLY place
+// that knows the exact HTTP endpoint and field names. Hook and UI must
+// always consume AvailableRepository, never raw API response shapes.
+// ---------------------------------------------------------------------------
+
+/**
+ * A GitHub repository accessible via the installed GitHub App.
+ *
+ * Contains only fields needed by the Day 4 Repository Selector:
+ * - Enough to identify and display the repository
+ * - Whether it is already connected to the platform
+ *
+ * Derived from GitHubRepository in
+ * backend/app/integrations/github/base.py with `is_connected` added
+ * by the backend endpoint.
+ */
+export interface AvailableRepository {
+  /** GitHub's numeric repository ID (string for JSON safety). */
+  github_repo_id: string;
+  /** Repository owner login (user or org). */
+  owner: string;
+  /** Short repository name, e.g. "platform-backend". */
+  name: string;
+  /** Full name in owner/repo format, e.g. "dev-user/platform-backend". */
+  full_name: string;
+  /** Default branch name (e.g. "main"). */
+  default_branch: string;
+  /** Detected primary language, or null if unknown. */
+  language: string | null;
+  /**
+   * True when this GitHub repository is already connected to the platform
+   * (i.e. it exists in our `repositories` table).
+   * Used by the selector to show "Connected" vs. "Connect" states.
+   */
+  is_connected: boolean;
+}
+
+/**
+ * Paginated response for repository discovery.
+ *
+ * The backend is assumed to return server-side pagination metadata.
+ * If the backend contract changes, only services/repositoryDiscovery.ts
+ * needs to update the adapter — the hook and UI always consume this shape.
+ */
+export interface PaginatedAvailableRepositoryResponse {
+  items: AvailableRepository[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
 }
