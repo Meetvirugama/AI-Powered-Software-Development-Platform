@@ -204,11 +204,12 @@ export function useRepositoryFiles(
   id: string | undefined,
   page: number = 1,
   pageSize: number = 50,
+  options?: { enabled?: boolean },
 ) {
   return useQuery<PaginatedRepositoryFileResponse>({
     queryKey: repositoryKeys.files(id ?? '', page, pageSize),
     queryFn: () => getRepositoryFiles(id!, { page, pageSize }),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
 
@@ -218,10 +219,13 @@ export function useRepositoryFiles(
 // Day 5 requires top-level dependencies.
 // ---------------------------------------------------------------------------
 
-export function useRepositoryDependencies(id: string | undefined) {
+export function useRepositoryDependencies(
+  id: string | undefined,
+  options?: { enabled?: boolean },
+) {
   return useQuery<RepositoryDependency[]>({
     queryKey: repositoryKeys.dependencies(id ?? ''),
     queryFn: () => getRepositoryDependencies(id!),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
