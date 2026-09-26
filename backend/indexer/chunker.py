@@ -1,3 +1,4 @@
+import hashlib
 from uuid import UUID
 
 from backend.scanner.symbols import Symbol
@@ -15,6 +16,12 @@ class SymbolChunker:
         """Return the project's lightweight token-count estimate."""
         return len(content.split())
 
+    def _content_hash(self, content: str) -> str:
+        """Return the SHA-256 hash of chunk content."""
+        return hashlib.sha256(
+            content.encode("utf-8")
+        ).hexdigest()
+
     def _split_large_symbol(
         self,
         symbol_content: str,
@@ -29,20 +36,34 @@ class SymbolChunker:
         lines = symbol_content.splitlines()
 
         if self._token_count(symbol_content) <= MAX_CHUNK_TOKENS:
-            return [(symbol_content, start_line, start_line + len(lines) - 1)]
+            return [
+                (
+                    symbol_content,
+                    start_line,
+                    start_line + len(lines) - 1,
+                )
+            ]
 
         context_lines = lines[:4]
         body_lines = lines[4:]
 
         if not body_lines:
-            return [(symbol_content, start_line, start_line + len(lines) - 1)]
+            return [
+                (
+                    symbol_content,
+                    start_line,
+                    start_line + len(lines) - 1,
+                )
+            ]
 
         chunks: list[tuple[str, int, int]] = []
         current_body: list[str] = []
 
         for line in body_lines:
             candidate_body = current_body + [line]
-            candidate = "\n".join(context_lines + candidate_body)
+            candidate = "\n".join(
+                context_lines + candidate_body
+            )
 
             if (
                 current_body
@@ -52,10 +73,19 @@ class SymbolChunker:
                     context_lines + current_body
                 )
                 chunk_start = start_line
-                chunk_end = start_line + 3 + len(current_body) - 1
+                chunk_end = (
+                    start_line
+                    + 3
+                    + len(current_body)
+                    - 1
+                )
 
                 chunks.append(
-                    (chunk_content, chunk_start, chunk_end)
+                    (
+                        chunk_content,
+                        chunk_start,
+                        chunk_end,
+                    )
                 )
 
                 current_body = [line]
@@ -67,10 +97,19 @@ class SymbolChunker:
                 context_lines + current_body
             )
             chunk_start = start_line
-            chunk_end = start_line + 3 + len(current_body) - 1
+            chunk_end = (
+                start_line
+                + 3
+                + len(current_body)
+                - 1
+            )
 
             chunks.append(
-                (chunk_content, chunk_start, chunk_end)
+                (
+                    chunk_content,
+                    chunk_start,
+                    chunk_end,
+                )
             )
 
         return chunks
@@ -91,7 +130,9 @@ class SymbolChunker:
             if symbol.kind in {"function", "method", "class"}:
                 start = symbol.start_line - 1
                 end = symbol.end_line
-                symbol_content = "\n".join(lines[start:end])
+                symbol_content = "\n".join(
+                    lines[start:end]
+                )
 
                 chunk_type = (
                     "class"
@@ -117,8 +158,12 @@ class SymbolChunker:
                             end_line=symbol.end_line,
                             language=language,
                             chunk_type=chunk_type,
-                            token_count=self._token_count(chunk_content),
-                            content_hash="",
+                            token_count=self._token_count(
+                                chunk_content
+                            ),
+                            content_hash=self._content_hash(
+                                chunk_content
+                            ),
                             metadata={},
                         )
                     )
@@ -141,7 +186,9 @@ class SymbolChunker:
                                 token_count=self._token_count(
                                     chunk_content
                                 ),
-                                content_hash="",
+                                content_hash=self._content_hash(
+                                    chunk_content
+                                ),
                                 metadata={
                                     "split_from_large_symbol": True,
                                 },
@@ -152,10 +199,12 @@ class SymbolChunker:
 
         if module_symbols:
             start_line = min(
-                symbol.start_line for symbol in module_symbols
+                symbol.start_line
+                for symbol in module_symbols
             )
             end_line = max(
-                symbol.end_line for symbol in module_symbols
+                symbol.end_line
+                for symbol in module_symbols
             )
 
             module_content = "\n".join(
@@ -172,8 +221,12 @@ class SymbolChunker:
                     end_line=end_line,
                     language=language,
                     chunk_type="module",
-                    token_count=self._token_count(module_content),
-                    content_hash="",
+                    token_count=self._token_count(
+                        module_content
+                    ),
+                    content_hash=self._content_hash(
+                        module_content
+                    ),
                     metadata={},
                 )
             )
