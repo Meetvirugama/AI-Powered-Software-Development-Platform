@@ -155,6 +155,12 @@ export function RepositoryDetail() {
               : 'hover:bg-primary/90'
           )}
           aria-disabled={(!progress.isComplete) || progress.isFailed}
+          tabIndex={(!progress.isComplete) || progress.isFailed ? -1 : undefined}
+          onClick={(e) => {
+            if (!progress.isComplete || progress.isFailed) {
+              e.preventDefault();
+            }
+          }}
         >
           <MessageSquare className="h-4 w-4" />
           Chat with this repository
@@ -224,9 +230,9 @@ export function RepositoryDetail() {
                   <ul className="space-y-3">
                     {dependencies.map((dep, idx) => (
                       <li key={idx} className="flex flex-col gap-0.5">
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-sm font-medium text-foreground">{dep.name}</span>
-                          <span className="text-xs font-mono text-muted-foreground">{dep.version}</span>
+                        <div className="flex justify-between items-baseline gap-2">
+                          <span className="text-sm font-medium text-foreground truncate">{dep.name}</span>
+                          <span className="text-xs font-mono text-muted-foreground shrink-0">{dep.version}</span>
                         </div>
                         <span className="text-xs text-muted-foreground">{dep.ecosystem}</span>
                       </li>
@@ -239,11 +245,11 @@ export function RepositoryDetail() {
 
           {/* Right Column: File Tree */}
           <div className="md:col-span-2">
-            <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden h-full">
-              <div className="bg-muted/30 px-4 py-3 border-b border-border flex items-center justify-between">
+            <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden h-full flex flex-col">
+              <div className="bg-muted/30 px-4 py-3 border-b border-border flex items-center justify-between shrink-0">
                 <h3 className="font-semibold text-sm text-foreground">File Explorer (Preview)</h3>
               </div>
-              <div className="p-4">
+              <div className="p-4 flex-1 overflow-y-auto max-h-[600px] min-h-[300px]">
                 {filesLoading ? (
                   <div className="flex justify-center py-8"><LoadingSpinner size="md" label="Loading files…" /></div>
                 ) : filesError ? (
