@@ -80,10 +80,10 @@ async def search_repository(
     payload: RepositorySearchRequest,
     request: Request,
     db: Session = Depends(get_db),
-    pipeline: RetrievalPipeline = Depends(get_rag_pipeline),
 ) -> RepositorySearchResponse:
     """Search only code indexed for a repository the authenticated user owns."""
     _owned_repository(repository_id, request, db)
+    pipeline = get_rag_pipeline(request)
     chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
     return RepositorySearchResponse(
         query=payload.query,
