@@ -2,6 +2,8 @@ import asyncio
 import json
 from typing import Any
 
+from .models import Chunk
+
 
 BATCH_SIZE = 100
 MAX_RETRIES = 3
@@ -15,17 +17,20 @@ class EmbeddingQueue:
         self.redis = redis
         self.embedding_service = embedding_service
 
-    def enqueue(self, chunk: Any) -> None:
-        """Add a chunk to the Redis embedding queue."""
-        payload = {
-            "chunk_id": str(chunk.id) if hasattr(chunk, "id") else None,
-            "content": chunk.content,
-        }
+    def enqueue(self, chunks: list[Chunk]) -> None:
+        """Add chunks to the Redis embedding queue."""
+        for chunk in chunks:
+            payload = {
+                "chunk_id": str(chunk.id)
+                if hasattr(chunk, "id")
+                else None,
+                "content": chunk.content,
+            }
 
-        self.redis.rpush(
-            QUEUE_NAME,
-            json.dumps(payload),
-        )
+            self.redis.rpush(
+                QUEUE_NAME,
+                json.dumps(payload),
+            )
 
     async def process_batch(self) -> list[list[float]]:
         """Process up to 100 queued chunks."""
