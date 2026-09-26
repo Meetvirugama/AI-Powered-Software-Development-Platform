@@ -1,6 +1,7 @@
 """Public repository-management response models."""
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -87,3 +88,33 @@ class RepositorySearchResponse(BaseModel):
 
     query: str
     results: list[RepositorySearchResult]
+
+
+class ChatHistoryMessage(BaseModel):
+    """A prior user or assistant turn supplied with a repository chat request."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("content")
+    @classmethod
+    def content_must_contain_non_whitespace(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("content must contain non-whitespace characters")
+        return value
+
+
+class RepositoryChatRequest(BaseModel):
+    """Question and optional conversation context for repository-aware chat."""
+
+    question: str = Field(min_length=1, max_length=4_000)
+    history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=50)
+
+    @field_validator("question")
+    @classmethod
+    def question_must_contain_non_whitespace(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("question must contain non-whitespace characters")
+        return value
