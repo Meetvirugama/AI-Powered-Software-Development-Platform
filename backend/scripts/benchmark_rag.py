@@ -25,53 +25,51 @@ async def run_benchmark():
     print("          RAG Quality Benchmark Runner            ")
     print("==================================================\n")
     
-    test_repo_id = uuid4()
+    test_repo_id = UUID("11111111-1111-1111-1111-111111111111")
     print(f"Target Repository ID: {test_repo_id}")
     print(f"Total Questions: {len(BENCHMARK_DATASET)}\n")
     
     file_hits = 0
     symbol_hits = 0
     
-    # We will use Meet's LexicalRetriever which searches the DB using PostgreSQL FTS.
-    retriever = LexicalRetriever()
+    from app.core.config import get_settings
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url.replace("postgresql+psycopg", "postgresql+asyncpg"))
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     
-    for i, item in enumerate(BENCHMARK_DATASET, 1):
-        q = item["question"]
-        expected = item["expected_file"]
+    async with async_session() as db:
+        # We will use Meet's LexicalRetriever which searches the DB using PostgreSQL FTS.
+        retriever = LexicalRetriever(db=db)
+    
+        for i, item in enumerate(BENCHMARK_DATASET, 1):
+            q = item["question"]
+            expected = item["expected_file"]
+            
+            print(f"Q{i}: {q}")
+            print(f"  Expected: {expected}")
+            
+            # DAY 7 AI INTEGRATION: Call the LexicalRetriever to query the database
+            results = await retriever.retrieve(query=q, repository_id=test_repo_id, top_k=5)
+            retrieved_files = [chunk.file_path.split('/')[-1] for chunk in results] 
+            
+            if expected in retrieved_files:
+                print("  [HIT] File found in top results!")
+                file_hits += 1
+            else:
+                print(f"  [MISS] Retriever returned: {retrieved_files}")
+            print()
+            
+        print("==================================================")
+        print("                 FINAL RESULTS                    ")
+        print("==================================================")
+        print(f"File Hit Rate:   {file_hits}/{len(BENCHMARK_DATASET)} ({(file_hits/len(BENCHMARK_DATASET))*100}%)")
+        print(f"Symbol Hit Rate: {symbol_hits}/{len(BENCHMARK_DATASET)} ({(symbol_hits/len(BENCHMARK_DATASET))*100}%)")
+        print("==================================================")
         
-        print(f"Q{i}: {q}")
-        print(f"  Expected: {expected}")
-        
-        # TODO (Divu): DAY 7 AI INTEGRATION
-        # Once the IncrementalIndexer and EmbeddingQueue are fully wired up,
-        # uncomment the following lines to execute real RAG queries:
-        #
-        # results = await retriever.retrieve(query=q, repository_id=test_repo_id, top_k=5)
-        # retrieved_files = [chunk.file_path.split('/')[-1] for chunk in results]
-        
-        # Simulating empty returns since the database is currently empty:
-        retrieved_files = [] 
-        
-        if expected in retrieved_files:
-            print("  [HIT] File found in top results!")
-            file_hits += 1
+        if file_hits >= 8:
+            print("✅ PASS: Target >= 80% file_hit rate achieved.")
         else:
-            print(f"  [MISS] Retriever returned: {retrieved_files}")
-        print()
-        
-    print("==================================================")
-    print("                 FINAL RESULTS                    ")
-    print("==================================================")
-    print(f"File Hit Rate:   {file_hits}/{len(BENCHMARK_DATASET)} ({(file_hits/len(BENCHMARK_DATASET))*100}%)")
-    print(f"Symbol Hit Rate: {symbol_hits}/{len(BENCHMARK_DATASET)} ({(symbol_hits/len(BENCHMARK_DATASET))*100}%)")
-    print("==================================================")
-    
-    if file_hits >= 8:
-        print("✅ PASS: Target >= 80% file_hit rate achieved.")
-    else:
-        print("❌ FAIL: Did not meet the 80% target.")
-        print("\n[!] WARNING: Score is 0% because the DB currently has no chunks!")
-        print("[!] Divu must finish the embedding pipeline before this script can return real scores.")
+            print("❌ FAIL: Did not meet the 80% target.")
 
 if __name__ == "__main__":
     asyncio.run(run_benchmark())
