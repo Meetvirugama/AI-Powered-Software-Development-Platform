@@ -81,6 +81,64 @@ export interface Repository {
   sync_status: SyncStatus;
   /** ISO-8601 datetime string or null. */
   last_synced_at: string | null;
+
+  // -------------------------------------------------------------------------
+  // Day 5 Mock Additions
+  // The following fields are required by the Day 5 Repository Explorer UI
+  // but are not yet exposed by the backend `RepositoryResponse`.
+  // They are mocked on the frontend until the backend contract is updated.
+  // -------------------------------------------------------------------------
+  description?: string | null;
+  framework?: string | null;
+  file_count?: number;
+  symbol_count?: number;
+  chunk_count?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Files — matches backend/app/schemas/repository.py :: RepositoryFileResponse
+// ---------------------------------------------------------------------------
+
+/**
+ * An indexed file within a repository.
+ * Mirrors backend RepositoryFileResponse exactly.
+ */
+export interface RepositoryFile {
+  id: string;
+  path: string;
+  language: string | null;
+  size_bytes: number;
+  line_count: number;
+  content_hash: string;
+  /** ISO-8601 datetime string or null. */
+  last_indexed_at: string | null;
+}
+
+/**
+ * Paginated wrapper for repository files.
+ * Matches backend PaginatedResponse[RepositoryFileResponse].
+ */
+export interface PaginatedRepositoryFileResponse {
+  items: RepositoryFile[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// ---------------------------------------------------------------------------
+// Dependencies — Day 5 Mock
+// ---------------------------------------------------------------------------
+
+/**
+ * A top-level dependency for a repository.
+ *
+ * MOCKED: The backend does not yet expose dependencies via any endpoint.
+ * This is a temporary frontend contract to support the Day 5 Explorer UI.
+ */
+export interface RepositoryDependency {
+  name: string;
+  version: string;
+  ecosystem: string; // e.g. "npm", "pip", "cargo", "gomod"
 }
 
 /**
