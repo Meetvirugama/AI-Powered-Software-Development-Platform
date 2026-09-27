@@ -35,14 +35,27 @@ async def run_benchmark():
     file_hits = 0
     symbol_hits = 0
     
-    from app.core.config import get_settings
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url)
-    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    # Use SQLite for local testing without Docker
+    db_path = os.path.join(os.path.dirname(__file__), "..", "test.db")
+    from sqlalchemy import create_engine
+    engine = create_engine(f"sqlite:///{db_path}")
+    sync_session = sessionmaker(engine, expire_on_commit=False)
     
-    async with async_session() as db:
-        # We will use Meet's LexicalRetriever which searches the DB using PostgreSQL FTS.
-        retriever = LexicalRetriever(db=db)
+    with sync_session() as db:
+        # Fetch all chunks into memory using raw SQL to bypass SQLAlchemy's SQLite UUID mapping issues
+        from sqlalchemy import text
+        import json
+        
+        result = db.execute(
+            text("SELECT metadata, content FROM code_chunks")
+        ).fetchall()
+        
+        all_chunks = []
+        for row in result:
+            meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            all_chunks.append({"metadata": meta, "content": row[1]})
+            
+        print(f"DEBUG: Found {len(all_chunks)} chunks in the database for repo {test_repo_id}")
     
         for i, item in enumerate(BENCHMARK_DATASET, 1):
             q = item["question"]
@@ -51,9 +64,23 @@ async def run_benchmark():
             print(f"Q{i}: {q}")
             print(f"  Expected: {expected}")
             
-            # DAY 7 AI INTEGRATION: Call the LexicalRetriever to query the database
-            results = await retriever.retrieve(query=q, repository_id=test_repo_id, top_k=5)
-            retrieved_files = [chunk.file_path.split('/')[-1] for chunk in results] 
+            # ponytail: Pure Python Lexical Fallback
+            # LexicalRetriever uses PostgreSQL to_tsvector which crashes in SQLite.
+            # To allow testing without Docker, we fetch all chunks into memory and 
+            # do a naive string match. 
+            # Upgrade path: Once a CI pipeline with Postgres is set up, or developers
+            # have Docker installed, remove this and restore the real retriever.retrieve() call.
+            q_words = [w.lower() for w in q.split() if len(w) > 3]
+            scored_chunks = []
+            for chunk in all_chunks:
+                content_lower = chunk["content"].lower()
+                score = sum(1 for w in q_words if w in content_lower)
+                scored_chunks.append((score, chunk))
+            
+            scored_chunks.sort(key=lambda x: x[0], reverse=True)
+            results = [c for s, c in scored_chunks[:5] if s > 0]
+            
+            retrieved_files = [chunk["metadata"].get('file_path', '').split('/')[-1] for chunk in results] 
             
             if expected in retrieved_files:
                 print("  [HIT] File found in top results!")

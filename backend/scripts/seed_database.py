@@ -8,7 +8,47 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from app.core.database import SessionLocal
 from app.models import User, GitHubInstallation, Repository, RepositoryFile, CodeChunk
 
+from sqlalchemy import create_engine
+from app.core.database import Base
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
+
+try:
+    from pgvector.sqlalchemy import Vector
+    @compiles(Vector, "sqlite")
+    def _compile_vector_sqlite(type_, compiler, **kw):
+        return "TEXT"
+except ImportError:
+    pass
+
 def seed():
+    # Use SQLite for local testing without Docker
+    db_path = os.path.join(os.path.dirname(__file__), "..", "test.db")
+    engine = create_engine(f"sqlite:///{db_path}")
+    
+    # Filter out postgresql-specific indexes if creating on SQLite
+    for table in Base.metadata.tables.values():
+        indexes_to_remove = [
+            idx
+            for idx in table.indexes
+            if any(
+                "to_tsvector" in str(getattr(expr, "text", expr))
+                or idx.dialect_options.get("postgresql", {}).get("using") in ("hnsw", "gin")
+                for expr in idx.expressions
+            )
+        ]
+        for idx in indexes_to_remove:
+            table.indexes.remove(idx)
+            
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
     
     # 1. Create a dummy user

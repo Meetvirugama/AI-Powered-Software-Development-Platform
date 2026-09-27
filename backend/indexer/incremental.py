@@ -113,10 +113,12 @@ class IncrementalIndexer:
                     "hash": new_hash
                 })
             
-            # Integration Fix (Day 7): The Background Redis Worker and Scanner were never 
-            # fully finished or scheduled for Week 2. To prevent the entire application's 
-            # Sync button from being permanently broken, we synchronously insert the file 
-            # chunk directly into the database here.
+            # ponytail: Synchronous dump of full files to code_chunks. 
+            # The Background Redis Worker (workers/) and SymbolChunker integration were 
+            # never built in Week 1. This bypasses the empty EmbeddingQueue so the Sync 
+            # button actually works and the LexicalRetriever has data to search.
+            # Upgrade path: Build the Celery/Redis worker, call SymbolChunker to split the 
+            # file into AST nodes, call OpenAI for real embeddings, and remove this raw INSERT.
             import uuid, json
             
             chunk_id = uuid.uuid4()
