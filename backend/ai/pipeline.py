@@ -277,14 +277,17 @@ class RAGPipeline:
                 response = await self.llm.generate(req)
 
                 # Strip markdown code fences if the LLM wraps JSON in ```json ... ```
+                # Input examples:
+                #   ```json\n{...}\n```   →  split on ``` gives ["", "json\n{...}\n", ""]
+                #   We want the middle part after the opening fence.
                 content = response.content
                 if content.startswith("```"):
-                    content = content.split("```", 2)[-1]
-                    if content.startswith("json"):
-                        content = content[4:]
-                    # Remove trailing ```
-                    if "```" in content:
-                        content = content.rsplit("```", 1)[0]
+                    # Remove the opening fence line (e.g. "```json\n" or "```\n")
+                    after_open = content.split("\n", 1)
+                    content = after_open[1] if len(after_open) > 1 else ""
+                    # Remove the closing fence if present
+                    if content.rstrip().endswith("```"):
+                        content = content.rstrip()[:-3]
                 content = content.strip()
 
                 try:
