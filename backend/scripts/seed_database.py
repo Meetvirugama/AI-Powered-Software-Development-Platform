@@ -1,6 +1,10 @@
 import os
+import sys
 import uuid
 import hashlib
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from app.core.database import SessionLocal
 from app.models import User, GitHubInstallation, Repository, RepositoryFile, CodeChunk
 
@@ -13,8 +17,7 @@ def seed():
         id=user_id,
         email=f"test_{user_id}@example.com",
         github_id=str(uuid.uuid4().int)[:10],
-        github_username="testuser",
-        access_token="fake"
+        login="testuser"
     )
     db.add(user)
     
@@ -24,8 +27,7 @@ def seed():
         id=install_id,
         user_id=user_id,
         installation_id=str(uuid.uuid4().int)[:10],
-        account_name="test_account",
-        target_type="User"
+        account_login="test_account"
     )
     db.add(install)
     
@@ -64,6 +66,9 @@ def seed():
             id=file_id,
             repository_id=repo_id,
             path=filename,
+            language="python",
+            size_bytes=len(content.encode('utf-8')),
+            line_count=len(content.splitlines()),
             content_hash=content_hash
         )
         db.add(repo_file)

@@ -1,8 +1,11 @@
 import asyncio
 import os
-from uuid import uuid4
+import sys
+from uuid import uuid4, UUID
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from ai.retrieval.lexical import LexicalRetriever
 
@@ -34,7 +37,7 @@ async def run_benchmark():
     
     from app.core.config import get_settings
     settings = get_settings()
-    engine = create_async_engine(settings.database_url.replace("postgresql+psycopg", "postgresql+asyncpg"))
+    engine = create_async_engine(settings.database_url)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     
     async with async_session() as db:
