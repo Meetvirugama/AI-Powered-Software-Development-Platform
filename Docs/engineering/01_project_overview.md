@@ -1,5 +1,5 @@
 # 01. Project Overview
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Owner:** Team | **Status:** Approved
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Owner:** Team | **Status:** Approved
 
 ---
 
@@ -99,10 +99,10 @@ flowchart TD
 | **Purpose** | Connect the platform to GitHub for auth, repos, webhooks, PRs |
 | **User** | Developer |
 | **Priority** | P0 |
-| **Status** | 🔵 In Progress |
+| **Status** | 🟢 Auth API Done; GitHub App + webhooks In Progress |
 | **Dependencies** | GitHub App credentials in `.env` |
-| **Related APIs** | `GET /api/v1/auth/github/login`, `GET /api/v1/auth/github/callback` |
-| **Related DB Tables** | `users`, `github_installations`, `repositories` (planned) |
+| **Related APIs** | `GET /api/v1/auth/github/login`, `GET /api/v1/auth/github/callback`, `GET /api/v1/auth/me`, `POST /api/v1/auth/logout` |
+| **Related DB Tables** | `users`, `github_installations`, `repositories` (all implemented) |
 
 ### F-02: Repository Engine (Scanner)
 | Field | Value |
@@ -130,9 +130,10 @@ flowchart TD
 | **Purpose** | Answer developer questions about their codebase with grounded sources |
 | **User** | Developer |
 | **Priority** | P1 |
-| **Status** | 🔵 In Progress (Vector done; Lexical/Fusion/Rerank stubs) |
+| **Status** | 🟢 Done — full RAG pipeline (hybrid retrieval + reranking + LLM + grounding) |
 | **Dependencies** | `code_chunks` DB table, EmbeddingService, LLMGateway |
-| **Related Modules** | `backend/ai/retrieval/`, `backend/ai/context/`, `backend/ai/llm/` |
+| **Related Modules** | `backend/ai/retrieval/`, `backend/ai/context/`, `backend/ai/llm/`, `backend/ai/pipeline.py` |
+| **Related APIs** | `POST /api/v1/repositories/{id}/chat`, `POST /api/v1/repositories/{id}/search` |
 
 ### F-05: LLM Gateway
 | Field | Value |

@@ -1,5 +1,5 @@
 # 13. Architecture Decision Records
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 ---
 
@@ -167,12 +167,13 @@ Option 3 — Full hybrid pipeline:
 **Trade-offs:**
 - More complex pipeline with more failure points
 - Cross-encoder adds ~100ms latency (runs locally)
-- RRF and reranker are stubs (Day 5 implementation)
 
 **Consequences:**
 - Default `top_k=30` for each retriever (RRF input)
 - Default `top_n=8` for reranker (LLM context)
 - `RRFFusion` uses k=60 constant (do not change without benchmarking)
+
+**Status:** 🟢 All components fully implemented (2026-09-28)
 
 **Related Components:**
 [`vector.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/vector.py), [`lexical.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/lexical.py), [`fusion.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/fusion.py), [`reranker.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/reranker.py)

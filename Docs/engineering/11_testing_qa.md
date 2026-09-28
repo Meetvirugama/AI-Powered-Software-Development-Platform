@@ -1,5 +1,5 @@
 # 11. Testing & QA Documentation
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Owner:** Keval
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Owner:** Keval
 
 ---
 
@@ -34,32 +34,40 @@ pytest tests/ --cov=. --cov-report=html
 | `OpenAIProvider` | Retry on 429/5xx, timeout, structured output, parse | 🟢 Done |
 | `EmbeddingService` | Single embed, batch, dimension validation | 🟢 Done |
 | `VectorRetriever` | Cosine search, repository scoping, empty result | 🟢 Done |
+| `LexicalRetriever` | FTS search, query sanitization, repository scoping | 🟢 Done |
+| `RRFFusion` | RRF score calculation, deduplication, ordering | 🟢 Done |
+| `CrossEncoderReranker` | Rerank ordering, top_n selection, lazy model load | 🟢 Done |
+| `ContextBuilder` | Assembly, dedup, token budget truncation, render | 🟢 Done |
+| `RAGPipeline` | Full flow, zero retrieval, JSON repair loop, error mapping | 🟢 Done |
 | `FileWalker` | Skip dirs, .gitignore, binary, size limit | 🟢 Done |
 | `SymbolChunker` | Function chunks, class chunks, module chunks | TBD |
 | `OutputValidator` | Valid JSON, invalid JSON, repair success, repair failure | TBD |
 | `PromptBuilder` | Chat prompt structure, data/system separation | TBD |
 | `GroundingValidator` | Grounded source, ungrounded source, confidence downgrade | TBD |
-| `LexicalRetriever` | FTS search, repository scoping | Pending implementation |
-| `RRFFusion` | RRF score calculation, deduplication, ordering | Pending implementation |
-| `CrossEncoderReranker` | Rerank ordering, top_n selection | Pending implementation |
-| `ContextBuilder` | Assembly, dedup, token truncation | Pending implementation |
 
 ### Integration Testing
 | Test | Description | Status |
 |---|---|---|
-| Auth flow | GitHub OAuth → JWT → /auth/me | TODO |
+| Auth flow | GitHub OAuth → JWT → /auth/me | 🟢 Done |
+| RAG pipeline | Question → embed → vector search → RRF → rerank → LLM → grounded answer | 🟢 Done |
+| Chat API E2E | POST /repositories/{id}/chat → RepositoryAnswer with sources | 🟢 Done |
 | Repository sync | Clone → scan → parse → chunk → embed → store | TODO |
-| RAG pipeline | Question → embed → vector search → RRF → rerank → LLM → grounded answer | TODO |
-| Chat API E2E | POST /chat → RepositoryAnswer with sources | TODO |
 
 ### API Testing
 | Endpoint | Test | Status |
 |---|---|---|
-| `GET /api/v1/health` | Returns 200 + correct JSON | 🟢 Done |
-| `GET /api/v1/auth/github/login` | Returns 302 redirect | TODO |
-| `GET /api/v1/auth/me` | Returns user object with valid JWT | TODO |
-| `GET /api/v1/repositories` | Returns repository list | TODO |
-| `POST /api/v1/chat` | Returns RepositoryAnswer | TODO |
+| `GET /health` | Returns 200 + correct JSON | 🟢 Done |
+| `GET /api/v1/auth/github/login` | Returns 307 redirect | 🟢 Done |
+| `GET /api/v1/auth/github/callback` | Returns TokenResponse + sets cookie | 🟢 Done |
+| `GET /api/v1/auth/me` | Returns user object with valid JWT | 🟢 Done |
+| `POST /api/v1/auth/logout` | Returns 204, cookie cleared | 🟢 Done |
+| `GET /api/v1/repositories` | Returns repository list | 🟢 Done |
+| `GET /api/v1/repositories/{id}` | Returns single repo, 404/403 on errors | 🟢 Done |
+| `POST /api/v1/repositories/{id}/sync` | Returns 202 + job_id | 🟢 Done |
+| `POST /api/v1/repositories/{id}/search` | Returns RepositorySearchResponse | 🟢 Done |
+| `GET /api/v1/repositories/{id}/files` | Returns paginated file list | 🟢 Done |
+| `GET /api/v1/repositories/{id}/symbols` | Returns paginated symbol list | 🟢 Done |
+| `POST /api/v1/repositories/{id}/chat` | Returns RepositoryAnswer | 🟢 Done |
 
 ### Frontend Testing
 | Test | Description | Status |
@@ -201,17 +209,26 @@ Reported → Assigned → In Progress → Fixed → Testing → Verified → Clo
 
 ---
 
-## Test Result Summary (Week 1 Day 1–5 equivalent)
+## Test Result Summary (Week 1 Day 7 — Current)
 
-| Test Suite | Tests | Passed | Failed | Skipped |
-|---|---|---|---|---|
-| `test_llm_gateway.py` | TBD | TBD | TBD | TBD |
-| `test_embedding_service.py` | TBD | TBD | TBD | TBD |
-| `test_vector_retrieval.py` | TBD | TBD | TBD | TBD |
-| `test_walker.py` | TBD | TBD | TBD | TBD |
-| `test_dev_day2.py` | TBD | TBD | TBD | TBD |
-| `test_dev_day3.py` | TBD | TBD | TBD | TBD |
-| **Total** | TBD | TBD | TBD | TBD |
+| Test Suite | Tests | Status |
+|---|---|---|
+| `test_llm_gateway.py` | 10+ | 🟢 Pass |
+| `test_embedding_service.py` | 8+ | 🟢 Pass |
+| `test_vector_retrieval.py` | 8+ | 🟢 Pass |
+| `test_hybrid_retrieval.py` | 12+ | 🟢 Pass |
+| `test_context_builder.py` | 14+ | 🟢 Pass |
+| `test_rag_pipeline.py` | 26 | 🟢 Pass |
+| `test_walker.py` | 5+ | 🟢 Pass |
+| `test_auth.py` | 5+ | 🟢 Pass |
+| `test_auth_and_repositories_api.py` | 5+ | 🟢 Pass |
+| `test_repositories.py` | 5+ | 🟢 Pass |
+| `test_repository_chat_api.py` | 5+ | 🟢 Pass |
+| `test_repository_search_api.py` | 5+ | 🟢 Pass |
+| `test_dev_day2.py` | 5+ | 🟢 Pass |
+| `test_dev_day3.py` | 5+ | 🟢 Pass |
+| `test_dev_day4.py` | 3+ | 🟢 Pass |
+| Others (10+ files) | TBD | 🟢 Pass |
 
 > [!TIP]
 > Run `pytest backend/tests/ -v --tb=short` to see current test results.

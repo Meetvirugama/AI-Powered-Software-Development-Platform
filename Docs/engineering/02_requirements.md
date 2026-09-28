@@ -1,5 +1,5 @@
 # 02. Requirements Documentation
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Status:** Draft
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Live
 
 ---
 
@@ -9,20 +9,20 @@
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
-| FR-001 | GitHub OAuth Login | System provides `GET /api/v1/auth/github/login` that redirects user to GitHub OAuth | Developer | P0 | ⚪ Todo (stub only) | F-01 |
-| FR-002 | OAuth Callback & JWT | System exchanges OAuth code for token, creates/updates user, returns JWT via httpOnly cookie | Developer | P0 | ⚪ Todo (stub only) | F-01 |
-| FR-003 | Current User Info | `GET /api/v1/auth/me` returns authenticated user object from JWT | Developer | P0 | ⚪ Todo (stub only) | F-01 |
-| FR-004 | Logout | `POST /api/v1/auth/logout` invalidates session via Redis blocklist | Developer | P0 | ⚪ Todo | F-01 |
-| FR-005 | GitHub App Installation | System receives installation_id and stores in DB | Developer | P0 | ⚪ Todo | F-01 |
-| FR-006 | Installation Token Cache | System caches GitHub installation tokens in Redis (55 min TTL) | System | P0 | ⚪ Todo | F-01 |
+| FR-001 | GitHub OAuth Login | System provides `GET /api/v1/auth/github/login` that redirects user to GitHub OAuth | Developer | P0 | 🟢 Done | F-01 |
+| FR-002 | OAuth Callback & JWT | System exchanges OAuth code for token, creates/updates user, returns JWT via httpOnly cookie | Developer | P0 | 🟢 Done | F-01 |
+| FR-003 | Current User Info | `GET /api/v1/auth/me` returns authenticated user object from JWT | Developer | P0 | 🟢 Done | F-01 |
+| FR-004 | Logout | `POST /api/v1/auth/logout` invalidates session via Redis blocklist | Developer | P0 | 🟢 Done | F-01 |
+| FR-005 | GitHub App Installation | System receives installation_id and stores in DB | Developer | P0 | 🔵 In Progress | F-01 |
+| FR-006 | Installation Token Cache | System caches GitHub installation tokens in Redis (55 min TTL) | System | P0 | 🔵 In Progress | F-01 |
 
 ### Repository Management
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
-| FR-010 | List Repositories | `GET /api/v1/repositories` lists user's accessible repositories | Developer | P0 | ⚪ Todo (stub only) | F-02 |
-| FR-011 | Repository Detail | `GET /api/v1/repositories/{id}` returns repository metadata and sync status | Developer | P0 | ⚪ Todo | F-02 |
-| FR-012 | Repository Sync | System can clone and scan a repository, tracking sync status | System | P0 | ⚪ Todo | F-02, F-03 |
+| FR-010 | List Repositories | `GET /api/v1/repositories` lists user's accessible repositories | Developer | P0 | 🟢 Done | F-02 |
+| FR-011 | Repository Detail | `GET /api/v1/repositories/{id}` returns repository metadata and sync status | Developer | P0 | 🟢 Done | F-02 |
+| FR-012 | Repository Sync | System can clone and scan a repository, tracking sync status | System | P0 | 🟢 Done (sync service + job queue) | F-02, F-03 |
 | FR-013 | File Walking | System traverses repository, skips `.git`, `node_modules`, `venv`, `__pycache__`, `dist`, `build`, `.next`, `.cache` | System | P0 | 🟢 Done (`FileWalker`) | F-02 |
 | FR-014 | Gitignore Respect | File walker respects `.gitignore` using `pathspec` | System | P0 | 🟢 Done | F-02 |
 | FR-015 | Binary Skip | File walker skips binary files (null byte detection) | System | P0 | 🟢 Done | F-02 |
@@ -45,9 +45,9 @@
 | FR-031 | Batch Embedding | System embeds batches of up to 100 texts per API call, concurrently | System | P0 | 🟢 Done (`EmbeddingService.embed_batch`) | F-04 |
 | FR-032 | Dimension Validation | Embedding service validates vector dimensions; mismatches are non-retryable | System | P0 | 🟢 Done | F-04 |
 | FR-033 | Vector Cosine Search | System queries `code_chunks` via pgvector `<=>` cosine distance, scoped by `repository_id` | System | P0 | 🟢 Done (`VectorRetriever`) | F-04 |
-| FR-034 | Lexical Search | System queries `code_chunks` via PostgreSQL FTS `ts_rank` | System | P0 | 🔵 In Progress (`LexicalRetriever` stub) | F-04 |
-| FR-035 | RRF Fusion | System combines vector + lexical results via Reciprocal Rank Fusion (k=60) | System | P0 | 🔵 In Progress (stub, Day 5) | F-04 |
-| FR-036 | Cross-Encoder Rerank | System reranks top-30 RRF candidates to top-8 using `cross-encoder/ms-marco-MiniLM-L-6-v2` | System | P0 | 🔵 In Progress (stub, Day 5) | F-04 |
+| FR-034 | Lexical Search | System queries `code_chunks` via PostgreSQL FTS `ts_rank`, normalised to [0,1] | System | P0 | 🟢 Done (`LexicalRetriever`) | F-04 |
+| FR-035 | RRF Fusion | System combines vector + lexical results via Reciprocal Rank Fusion (k=60) | System | P0 | 🟢 Done (`RRFFusion`) | F-04 |
+| FR-036 | Cross-Encoder Rerank | System reranks top-30 RRF candidates to top-8 using `cross-encoder/ms-marco-MiniLM-L-6-v2` | System | P0 | 🟢 Done (`CrossEncoderReranker`) | F-04 |
 
 ### LLM Gateway
 
@@ -65,7 +65,7 @@
 |---|---|---|---|---|---|---|
 | FR-050 | Output Validation | `OutputValidator.validate()` parses JSON and validates against Pydantic schema | System | P0 | 🟢 Done | F-04 |
 | FR-051 | Output Repair | `OutputValidator.repair()` asks LLM to fix invalid JSON, max 2 retries | System | P0 | 🟢 Done | F-04 |
-| FR-052 | Grounding Validation | `GroundingValidator` removes hallucinated file/line citations | System | P0 | 🟢 Done (skeleton; DB query stub for Day 4) | F-04 |
+| FR-052 | Grounding Validation | `GroundingValidator` removes hallucinated file/line citations | System | P0 | 🟢 Done | F-04 |
 | FR-053 | Confidence Downgrade | If >50% of citations ungrounded, confidence downgrades to "low" | System | P0 | 🟢 Done (logic present) | F-04 |
 
 ### Prompts
@@ -80,9 +80,9 @@
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
-| FR-070 | Context Assembly | `ContextBuilder.build()` assembles code chunks + memory + conversation history | System | P0 | 🔵 In Progress (stub, Day 6) | F-04 |
-| FR-071 | Token Limit Enforcement | Context builder truncates input to stay within LLM context window (default 100k tokens) | System | P0 | 🔵 In Progress | F-04 |
-| FR-072 | Memory Deduplication | Memory entries are deduplicated by ID and sorted by recency | System | P0 | 🔵 In Progress | F-07 |
+| FR-070 | Context Assembly | `ContextBuilder.build()` assembles code chunks + memory + conversation history | System | P0 | 🟢 Done | F-04 |
+| FR-071 | Token Limit Enforcement | Context builder truncates input to stay within LLM context window (default 100k tokens) | System | P0 | 🟢 Done (tiktoken cl100k_base) | F-04 |
+| FR-072 | Memory Deduplication | Memory entries are deduplicated by ID and sorted by recency | System | P0 | 🟢 Done | F-07 |
 
 ### Agentic System
 
@@ -115,7 +115,7 @@
 | NFR-003 | Performance | Vector search should return results via HNSW index on `code_chunks.embedding` | P0 | ⚪ Todo (index TBD on DB setup) |
 | NFR-004 | Security | No secrets in source code (pre-commit detect-secrets hook) | P0 | 🔵 In Progress |
 | NFR-005 | Security | All secrets loaded from environment variables | P0 | 🟢 Done (pydantic-settings) |
-| NFR-006 | Security | JWT authentication for all non-health, non-auth endpoints | P0 | ⚪ Todo |
+| NFR-006 | Security | JWT authentication for all non-health, non-auth endpoints | P0 | 🟢 Done (JWTMiddleware) |
 | NFR-007 | Security | GitHub webhook signature verification (HMAC) | P0 | ⚪ Todo |
 | NFR-008 | Security | Repository content treated as untrusted data (prompt injection prevention) | P0 | 🟢 Done (PromptBuilder) |
 | NFR-009 | Security | Agent cannot access host filesystem or credentials | P0 | ⚪ Todo (sandbox) |
@@ -124,8 +124,8 @@
 | NFR-012 | Reliability | LLM retries on 429/5xx with exponential backoff | P0 | 🟢 Done |
 | NFR-013 | Reliability | Every agent run creates recoverable checkpoints | P0 | ⚪ Todo |
 | NFR-014 | Reliability | Database sessions always closed after use (SQLAlchemy generator) | P0 | 🟢 Done |
-| NFR-015 | Maintainability | All SQLAlchemy migrations reversible (upgrade + downgrade) | P0 | ⚪ Todo |
-| NFR-016 | Maintainability | No raw SQL outside Om's repository layer | P0 | ⚪ Todo (enforced by rule; partially violated in `vector.py` via `text()`) |
+| NFR-015 | Maintainability | All SQLAlchemy migrations reversible (upgrade + downgrade) | P0 | 🟢 Done (4 migration files with upgrade + downgrade) |
+| NFR-016 | Maintainability | No raw SQL outside Om's repository layer | P0 | ⚪ Partial (VectorRetriever + LexicalRetriever use `sqlalchemy.text()` for pgvector/FTS — approved exception) |
 | NFR-017 | Logging | Structured JSON logging with request_id middleware | P0 | 🟢 Done |
 | NFR-018 | Logging | Every LLM call logged: model, tokens, latency, success/failure | P0 | 🟢 Done |
 | NFR-019 | Privacy | Sensitive data redacted before storage in memory | P0 | ⚪ Todo |
