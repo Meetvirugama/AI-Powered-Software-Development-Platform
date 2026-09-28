@@ -1,0 +1,8 @@
+# Week 1 Security Gate — reviewed false positives.
+# Each line: <fingerprint>  # where it comes from and why it is not a real secret.
+# Fingerprint = first 10 hex chars of SHA-256 of the matched value (the value itself is never stored here).
+# Reviewed by Sukun, 2026-09-28. Add entries only after a human has looked at the match.
+56ae5d01bc  # "ghs_fresh_token_xyz789" — fake installation token in tests/test_github_mocks.py
+371d66138c  # "ghs_custom_token_999" — fake installation token in tests/mocks/github.py
+1311f8fc80  # "my-secret-key" — example finding text in Docs/project_idea.md and Docs/week3.md
+fcf730b6d9  # "secret123" — example input in the Week 3 security test table
