@@ -1,5 +1,5 @@
 # 06. UML Diagrams
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 ---
 
@@ -7,16 +7,15 @@
 
 | Diagram | Type | Status | Last Updated |
 |---|---|---|---|
-| Use Case Diagram | Use Case | ✓ Current | 2026-09-24 |
-| Activity: RAG Pipeline | Activity | ✓ Current | 2026-09-24 |
+| Use Case Diagram | Use Case | ✓ Current | 2026-09-28 |
+| Activity: RAG Pipeline | Activity | ✓ Current (full implementation) | 2026-09-28 |
 | Activity: Agentic Loop | Activity | ✓ Based on design | 2026-09-24 |
-| Class Diagram (AI Layer) | Class | ✓ Current | 2026-09-24 |
-| Class Diagram (App Layer) | Class | Partial (stubs) | 2026-09-24 |
-| Sequence: LLM Gateway Call | Sequence | ✓ Current | 2026-09-24 |
-| Sequence: Repository Chat | Sequence | ✓ Current | 2026-09-24 |
+| Class Diagram (AI Layer) | Class | ✓ Current | 2026-09-28 |
+| Class Diagram (Scanner/Indexer) | Class | ✓ Current | 2026-09-28 |
+| Sequence: LLM Gateway Call | Sequence | ✓ Current | 2026-09-28 |
 | State: Agent Execution | State | Based on design | 2026-09-24 |
-| State: Repository Sync | State | Based on design | 2026-09-24 |
-| Component Diagram | Component | ✓ Current | 2026-09-24 |
+| State: Repository Sync | State | ✓ Current (SyncStatus enum implemented) | 2026-09-28 |
+| Component Diagram | Component | ✓ Current | 2026-09-28 |
 
 ---
 
