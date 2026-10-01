@@ -56,3 +56,9 @@
     color: hsl(var(--foreground));
   }
 }
+
+/* Streaming cursor blink animation — used by RepositoryChat */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}

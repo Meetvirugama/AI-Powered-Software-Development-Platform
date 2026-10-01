@@ -638,4 +638,90 @@ export const handlers = [
       { status: 201 },
     );
   }),
+
+  // -------------------------------------------------------------------------
+  // Chat — Day 6 (Prompt 1 data layer)
+  //
+  // POST /api/v1/repositories/:id/chat
+  //
+  // MOCKED: The real backend RAG/chat endpoint is not yet implemented.
+  // This handler returns a deterministic, realistic-looking response so the
+  // Day 6 UI can be developed and tested against a stable contract.
+  //
+  // To simulate an error, include "fail" anywhere in the question body.
+  //
+  // Backend assumptions (to be confirmed with Yug/Parth):
+  //   - Request:  POST /api/v1/repositories/:id/chat  { "question": "..." }
+  //   - Response: { "answer": "...", "sources": [ { "file_path", "line_start", "line_end", ... } ] }
+  // -------------------------------------------------------------------------
+
+  http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+
+    // Parse request body to check for forced error simulation.
+    let question = '';
+    try {
+      const body = await request.json() as { question?: string };
+      question = body?.question ?? '';
+    } catch {
+      // Malformed body — treat as empty question.
+    }
+
+    // Force-error simulation: include "fail" in the question.
+    if (question.toLowerCase().includes('fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'CHAT_ERROR',
+            message: 'The assistant encountered an error processing your question.',
+            retryable: true,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
+    // Deterministic mock response based on repository ID.
+    // In production this is replaced by the real RAG pipeline response.
+    const repoName =
+      MOCK_REPOSITORIES.find((r) => r.id === id)?.name ?? 'this repository';
+
+    const mockAnswer =
+      `In ${repoName}, authentication is handled through the backend authentication module. ` +
+      `The \`/api/v1/auth\` route group manages OAuth login via GitHub, ` +
+      `token validation, and session management using HTTP-only cookies. ` +
+      `The \`AuthService\` class in \`backend/app/services/auth_service.py\` ` +
+      `encapsulates the JWT creation and verification logic. ` +
+      `Route-level protection is enforced through a FastAPI dependency ` +
+      `injected into each protected endpoint.`;
+
+    const mockSources = [
+      {
+        file_path: 'backend/app/api/v1/auth.py',
+        line_start: 1,
+        line_end: 45,
+        symbol: 'router',
+        snippet: 'router = APIRouter(prefix="/auth", tags=["auth"])',
+      },
+      {
+        file_path: 'backend/app/services/auth_service.py',
+        line_start: 22,
+        line_end: 68,
+        symbol: 'AuthService',
+        snippet: 'class AuthService:\n    def create_access_token(...)',
+      },
+      {
+        file_path: 'backend/app/core/dependencies.py',
+        line_start: 10,
+        line_end: 30,
+        symbol: 'get_current_user',
+        snippet: 'async def get_current_user(token: str = Depends(oauth2_scheme))',
+      },
+    ];
+
+    return HttpResponse.json({
+      answer: mockAnswer,
+      sources: mockSources,
+    });
+  }),
 ];
