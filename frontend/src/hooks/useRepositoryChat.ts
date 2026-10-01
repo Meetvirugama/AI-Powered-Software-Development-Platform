@@ -1,43 +1,36 @@
 /**
- * useRepositoryChat — chat mutation hook for Day 6.
+ * useRepositoryChat — chat hook for Day 6 (streaming-capable).
  *
- * Architecture decisions:
+ * Architecture:
  *
- * 1. MUTATION, not query.
- *    Chat is triggered by user action, not auto-fetched on mount.
- *    TanStack Query's useMutation is the correct primitive.
+ * 1. Conversation state is LOCAL (useState in this hook).
+ *    Messages are ephemeral for Week 1. If server-side history is added later,
+ *    a TanStack Query layer can wrap this without rewriting the UI.
  *
- * 2. Conversation state is LOCAL.
- *    The messages array lives in React component state (useState in the
- *    hook), not in Zustand and not in TanStack Query cache.
- *    Reasons:
- *      - Conversations are ephemeral (not persisted to the server yet).
- *      - There is no cross-component need to share conversation state.
- *      - Using TanStack Query cache for mutable conversation history
- *        would require awkward manual cache updates.
- *    If persistence (chat history API) is added later, a TanStack Query
- *    layer can be introduced without rewriting the UI.
+ * 2. STREAMING via streamRepositoryQuestion() in services/chat.ts.
+ *    The page and components do not know about the transport.
+ *    The hook mediates between the streaming adapter and the message list.
  *
- * 3. Repository data is NOT duplicated.
- *    Callers reuse useRepository(id) for repository metadata.
- *    This hook handles ONLY the chat mutation and conversation state.
+ * 3. Message lifecycle:
+ *    PENDING    → network request in flight, no content yet
+ *    STREAMING  → chunks arriving, content growing (isStreaming=true)
+ *    COMPLETE   → final response received (isStreaming=false, sources set)
+ *    ERROR      → request or stream failed
  *
- * 4. Streaming readiness.
- *    When the backend adds SSE streaming, only src/services/chat.ts
- *    changes. This hook's sendMessage interface stays the same:
- *    it optimistically appends a placeholder assistant message with
- *    isStreaming=true, then replaces it once complete.
+ * 4. Repository data is NOT duplicated.
+ *    Callers use useRepository(id) separately for repository metadata.
+ *
+ * 5. Cancel on unmount.
+ *    The hook stores the streaming cancel function and calls it in cleanup.
  */
-import { useState, useCallback } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { askRepositoryQuestion } from '../services/chat';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { streamRepositoryQuestion } from '../services/chat';
 import type { ChatMessage, ChatResponse } from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
-/** Generate a client-side message ID. Falls back to Math.random if crypto unavailable. */
 function newMessageId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -46,92 +39,60 @@ function newMessageId(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Hook
+// Hook public interface
 // ---------------------------------------------------------------------------
 
 export interface UseRepositoryChatReturn {
   /** Ordered list of messages in the current conversation. */
   messages: ChatMessage[];
-  /** True while a question is in flight. */
-  isPending: boolean;
-  /** The last error returned by the chat endpoint, or null. */
-  error: string | null;
   /**
-   * Send a question and append the response to the conversation.
-   * Safe to call while isPending is false.
+   * True while a question is in flight (either fetching or actively streaming).
+   * Blocks duplicate sends.
    */
+  isPending: boolean;
+  /** Error message from the last failed request, or null. */
+  error: string | null;
+  /** Send a question. No-op while isPending is true. */
   sendMessage: (question: string) => void;
-  /** Clear the current conversation. */
+  /** Clear all messages and reset state. */
   clearConversation: () => void;
 }
 
-/**
- * useRepositoryChat
- *
- * Manages the chat conversation state and mutation for a single repository.
- *
- * @param repositoryId  Our internal repository UUID from the route params.
- *
- * Usage:
- *   const { messages, isPending, error, sendMessage, clearConversation } =
- *     useRepositoryChat(id);
- */
+// ---------------------------------------------------------------------------
+// Hook implementation
+// ---------------------------------------------------------------------------
+
 export function useRepositoryChat(
   repositoryId: string | undefined,
 ): UseRepositoryChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const mutation = useMutation<ChatResponse, Error, string>({
-    mutationFn: (question: string) => {
-      if (!repositoryId) {
-        return Promise.reject(new Error('Repository ID is required.'));
-      }
-      return askRepositoryQuestion(repositoryId, { question });
-    },
+  // Store the cancel function returned by streamRepositoryQuestion so we can
+  // clean up if the component unmounts mid-stream or sendMessage is recalled.
+  const cancelRef = useRef<(() => void) | null>(null);
 
-    onSuccess: (data, question) => {
-      setError(null);
-
-      // The user message was already appended optimistically in sendMessage.
-      // Now append the assistant response.
-      const assistantMessage: ChatMessage = {
-        id: newMessageId(),
-        role: 'assistant',
-        content: data.answer,
-        timestamp: new Date().toISOString(),
-        sources: data.sources,
-        isStreaming: false,
-      };
-
-      setMessages((prev) => {
-        // Replace the optimistic placeholder (last message is the user question,
-        // which we already added). Append the assistant message after it.
-        return [...prev, assistantMessage];
-      });
-
-      // Suppress unused variable warning — question is used for context only.
-      void question;
-    },
-
-    onError: (err) => {
-      setError(err.message ?? 'Failed to get a response. Please try again.');
-
-      // Remove the optimistically-added user message on hard failure so the
-      // user can retry without a duplicate entry.
-      setMessages((prev) => prev.slice(0, -1));
-    },
-  });
+  // Cancel any in-flight stream when the hook unmounts.
+  useEffect(() => {
+    return () => {
+      cancelRef.current?.();
+    };
+  }, []);
 
   const sendMessage = useCallback(
     (question: string) => {
       const trimmed = question.trim();
-      if (!trimmed || mutation.isPending) return;
+      if (!trimmed || isPending || !repositoryId) return;
+
+      // Cancel any previous stream (defensive; isPending guard should prevent this).
+      cancelRef.current?.();
+      cancelRef.current = null;
 
       setError(null);
+      setIsPending(true);
 
-      // Optimistically add the user message immediately so the UI feels
-      // responsive before the network round-trip completes.
+      // 1. Optimistically add the user message.
       const userMessage: ChatMessage = {
         id: newMessageId(),
         role: 'user',
@@ -141,23 +102,84 @@ export function useRepositoryChat(
         isStreaming: false,
       };
 
-      setMessages((prev) => [...prev, userMessage]);
-      mutation.mutate(trimmed);
+      // 2. Add a placeholder assistant message in streaming state.
+      const assistantId = newMessageId();
+      const assistantPlaceholder: ChatMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        sources: [],
+        isStreaming: true,
+      };
+
+      setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+
+      // 3. Start streaming.
+      const cancel = streamRepositoryQuestion(
+        repositoryId,
+        { question: trimmed },
+        {
+          // Each chunk: append delta to the active assistant message content.
+          onChunk: (delta: string) => {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantId
+                  ? { ...msg, content: msg.content + delta, isStreaming: true }
+                  : msg,
+              ),
+            );
+          },
+
+          // Completion: finalise the message, attach sources.
+          onComplete: (response: ChatResponse) => {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantId
+                  ? {
+                      ...msg,
+                      content: response.answer, // use full canonical answer
+                      sources: response.sources ?? [],
+                      isStreaming: false,
+                    }
+                  : msg,
+              ),
+            );
+            setIsPending(false);
+            cancelRef.current = null;
+          },
+
+          // Error: mark the assistant placeholder as failed, keep conversation.
+          onError: (err: Error) => {
+            setMessages((prev) =>
+              prev.map((msg) =>
+                msg.id === assistantId
+                  ? { ...msg, isStreaming: false }
+                  : msg,
+              ),
+            );
+            setError(
+              err.message ||
+                'The assistant could not complete the response. Please try again.',
+            );
+            setIsPending(false);
+            cancelRef.current = null;
+          },
+        },
+      );
+
+      cancelRef.current = cancel;
     },
-    [mutation],
+    [isPending, repositoryId],
   );
 
   const clearConversation = useCallback(() => {
+    cancelRef.current?.();
+    cancelRef.current = null;
     setMessages([]);
     setError(null);
-    mutation.reset();
-  }, [mutation]);
+    setIsPending(false);
+  }, []);
 
-  return {
-    messages,
-    isPending: mutation.isPending,
-    error,
-    sendMessage,
-    clearConversation,
-  };
+  return { messages, isPending, error, sendMessage, clearConversation };
 }

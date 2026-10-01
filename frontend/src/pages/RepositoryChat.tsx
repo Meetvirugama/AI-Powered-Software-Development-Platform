@@ -35,10 +35,13 @@ export function RepositoryChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to the bottom whenever the message list or pending state changes.
+  // Auto-scroll to the bottom when messages change (new message or chunk appended).
+  // Using messages as a dep means this fires on every chunk during streaming.
+  // We deliberately do NOT force-scroll if isPending-only changed, so users
+  // who scroll up to read history aren't interrupted mid-stream.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isPending]);
+  }, [messages]);
 
   // Auto-resize the textarea as the user types.
   useEffect(() => {
@@ -144,12 +147,11 @@ export function RepositoryChat() {
               <MessageBubble key={msg.id} message={msg} />
             ))}
 
-            {/* Inline error beneath the last user message */}
+            {/* Inline error beneath the last message */}
             {error && !isPending && (
               <AssistantError
                 message={error}
                 onRetry={() => {
-                  // Re-send the last user message from the list if available.
                   const lastUser = [...messages]
                     .reverse()
                     .find((m) => m.role === 'user');
@@ -158,8 +160,12 @@ export function RepositoryChat() {
               />
             )}
 
-            {/* Typing indicator while waiting for the response */}
-            {isPending && <TypingIndicator />}
+            {/* Show the typing indicator only while waiting for the very first chunk.
+                Once the assistant placeholder message exists (isStreaming=true),
+                the bubble itself renders the cursor — no separate indicator needed. */}
+            {isPending && !messages.some((m) => m.role === 'assistant' && m.isStreaming) && (
+              <TypingIndicator />
+            )}
           </>
         )}
 
@@ -308,22 +314,36 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               : 'bg-muted text-foreground rounded-tl-sm',
           )}
         >
-          <MessageContent content={message.content} />
+          {message.content ? (
+            <MessageContent content={message.content} />
+          ) : (
+            // Empty content before first chunk arrives
+            <span className="text-muted-foreground/60 text-xs italic">Thinking…</span>
+          )}
+          {/* Blinking cursor while the assistant is streaming */}
+          {message.isStreaming && (
+            <span
+              className="inline-block ml-0.5 w-0.5 h-4 align-text-bottom bg-current opacity-70 animate-[blink_1s_step-end_infinite]"
+              aria-hidden="true"
+            />
+          )}
         </div>
 
-        {/* Timestamp */}
-        <time
-          dateTime={message.timestamp}
-          className="text-xs text-muted-foreground px-1"
-        >
-          {new Date(message.timestamp).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </time>
+        {/* Timestamp — hidden while streaming to avoid layout shift */}
+        {!message.isStreaming && (
+          <time
+            dateTime={message.timestamp}
+            className="text-xs text-muted-foreground px-1"
+          >
+            {new Date(message.timestamp).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+            })}
+          </time>
+        )}
 
-        {/* Sources — only for assistant messages */}
-        {!isUser && message.sources && message.sources.length > 0 && (
+        {/* Sources — only shown for complete (non-streaming) assistant messages */}
+        {!isUser && !message.isStreaming && message.sources && message.sources.length > 0 && (
           <SourceList sources={message.sources} />
         )}
       </div>

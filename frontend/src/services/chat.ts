@@ -9,38 +9,32 @@
  *   Body:    { "question": string }
  *   Returns: ChatResponse { answer: string, sources: ChatSource[] }
  *
- * Streaming readiness:
- *   The function signature and return type are designed so that when the
- *   backend confirms a streaming/SSE contract, ONLY this file needs updating.
- *   The hook (useRepositoryChat) and the UI (RepositoryChat.tsx) consume
- *   ChatResponse and ChatMessage — they do not depend on the transport.
+ * Streaming architecture:
  *
- *   To add SSE streaming later:
- *     1. Replace the Axios POST here with a fetch() + ReadableStream reader.
- *     2. Emit chunk events via a provided callback (onChunk: (delta: string) => void).
- *     3. Update the hook to set isStreaming=true on the placeholder message,
- *        then set it to false when streaming is complete.
- *     4. No changes are required in RepositoryChat.tsx or api.ts.
+ *   streamRepositoryQuestion() — mock streaming adapter.
+ *
+ *   This function calls the Axios endpoint (which hits MSW in dev) to get the
+ *   full response, then replays it word-by-word using setTimeout to simulate
+ *   a streaming UX. The hook receives incremental chunks via the onChunk
+ *   callback and the complete payload via onComplete.
+ *
+ *   When the backend implements real streaming (SSE or fetch ReadableStream):
+ *     1. Replace the setTimeout simulation below with a real fetch + stream reader.
+ *     2. Pipe each decoded text delta to onChunk.
+ *     3. Signal completion (with sources) via onComplete.
+ *     4. The hook (useRepositoryChat) and UI (RepositoryChat.tsx) stay unchanged.
+ *
+ *   The AbortSignal parameter is wired so that the real implementation can
+ *   cancel inflight network requests when the user navigates away.
  */
 import { apiClient } from './api';
 import type { ChatRequest, ChatResponse } from '../types/api';
 
-/**
- * Send a question about a repository and receive an assistant response.
- *
- * POST /api/v1/repositories/:repositoryId/chat
- *
- * @param repositoryId  Our internal repository UUID.
- * @param request       The chat request payload containing the user's question.
- * @returns             ChatResponse with the assistant's answer and sources.
- *
- * BACKEND ASSUMPTION (unconfirmed):
- *   - Endpoint path: /api/v1/repositories/:id/chat
- *   - Request body field name: "question"
- *   - Response field names: "answer", "sources"
- *   Update only this function when the backend confirms the contract.
- */
-export async function askRepositoryQuestion(
+// ---------------------------------------------------------------------------
+// Non-streaming helper (kept for internal use in the streaming adapter)
+// ---------------------------------------------------------------------------
+
+async function fetchChatResponse(
   repositoryId: string,
   request: ChatRequest,
 ): Promise<ChatResponse> {
@@ -49,4 +43,83 @@ export async function askRepositoryQuestion(
     request,
   );
   return response.data;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming adapter
+// ---------------------------------------------------------------------------
+
+export interface StreamCallbacks {
+  /** Called with each incremental text chunk. */
+  onChunk: (delta: string) => void;
+  /** Called when streaming is complete. Receives the full final response. */
+  onComplete: (response: ChatResponse) => void;
+  /** Called if the request or stream fails. */
+  onError: (error: Error) => void;
+}
+
+/**
+ * Send a question and simulate a streaming response.
+ *
+ * In development/MSW, this fetches the complete response and replays it
+ * chunk-by-chunk via setTimeout to provide a realistic streaming UX.
+ *
+ * Returns a cancel function. Call it to abort an in-flight simulation.
+ * When real backend streaming is implemented, this cancel function will
+ * call AbortController.abort() on the underlying fetch.
+ *
+ * MOCK BEHAVIOUR (to replace with real streaming later):
+ *   - Full response is fetched from MSW.
+ *   - Answer is split on whitespace into word-level tokens.
+ *   - Each token is emitted with a ~30ms delay to simulate token generation.
+ *   - Sources are delivered via onComplete at the end.
+ */
+export function streamRepositoryQuestion(
+  repositoryId: string,
+  request: ChatRequest,
+  callbacks: StreamCallbacks,
+): () => void {
+  let cancelled = false;
+  const timers: ReturnType<typeof setTimeout>[] = [];
+
+  // Kick off the actual HTTP request immediately.
+  fetchChatResponse(repositoryId, request)
+    .then((response) => {
+      if (cancelled) return;
+
+      // Split answer into tokens (words + trailing spaces preserved).
+      const tokens = response.answer.match(/(\S+\s*)/g) ?? [response.answer];
+      const CHUNK_DELAY_MS = 30;
+
+      tokens.forEach((token, i) => {
+        const t = setTimeout(() => {
+          if (!cancelled) {
+            callbacks.onChunk(token);
+          }
+        }, i * CHUNK_DELAY_MS);
+        timers.push(t);
+      });
+
+      // Signal completion after all chunks have been emitted.
+      const completionDelay = tokens.length * CHUNK_DELAY_MS + 80;
+      const finalTimer = setTimeout(() => {
+        if (!cancelled) {
+          callbacks.onComplete(response);
+        }
+      }, completionDelay);
+      timers.push(finalTimer);
+    })
+    .catch((err: unknown) => {
+      if (!cancelled) {
+        callbacks.onError(
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      }
+    });
+
+  // Return a cancel function.
+  return () => {
+    cancelled = true;
+    timers.forEach(clearTimeout);
+  };
 }
