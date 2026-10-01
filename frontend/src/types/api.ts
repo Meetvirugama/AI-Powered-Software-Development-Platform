@@ -315,107 +315,125 @@ export interface SyncProgress {
 }
 
 // ---------------------------------------------------------------------------
-// Chat — Day 6
+// Chat — Day 7 (aligned with real backend contract)
 //
-// Frontend contract for the repository chat feature.
+// Backend endpoint (confirmed):
+//   POST /api/v1/repositories/{repository_id}/chat
 //
-// Assumed backend endpoint (not yet confirmed — mocked via MSW):
-//   POST /api/v1/repositories/:id/chat
-//   Body:    { "question": string }
-//   Returns: ChatResponse
+// Request — RepositoryChatRequest (backend/app/schemas/repository.py):
+//   { question: string, history: ChatHistoryMessage[] }
 //
-// IMPORTANT: The backend contract is not yet confirmed with Yug/Parth.
-// Only src/services/chat.ts knows the exact endpoint. Hooks and UI
-// always consume ChatMessage / ChatResponse — never raw HTTP shapes.
+// Response — RepositoryAnswer (backend/ai/schemas/output.py):
+//   { answer: string, sources: SourceReference[], confidence: "high"|"medium"|"low" }
 //
-// Streaming note:
-//   The current contract uses a simple request-response shape to keep the
-//   data layer replaceable. The types and service are structured so that
-//   when the backend confirms a streaming/SSE contract, only
-//   src/services/chat.ts needs to change — the hook and UI remain stable.
+// Source — SourceReference (backend/ai/schemas/output.py):
+//   { file: string, start_line: number, end_line: number, symbol?: string | null }
 //
-//   If SSE streaming is added later, each streamed chunk will extend the
-//   assistant ChatMessage in place (by appending to `content`).
-//   The `isStreaming` field on ChatMessage is reserved for that.
+// IMPORTANT: Only src/services/chat.ts knows the exact endpoint and wire format.
+// Hooks and UI always consume ChatMessage — never raw HTTP shapes.
 // ---------------------------------------------------------------------------
 
 /**
- * A single source reference cited by the assistant.
- *
- * Represents evidence from an indexed repository file.
- * All fields except `file_path` are optional because the backend may
- * not always be able to determine precise line numbers or symbols.
- *
- * MOCKED: Field names are assumed. Align with backend schema when confirmed.
- */
-export interface ChatSource {
-  /** Repository-relative file path, e.g. "src/api/auth.py". */
-  file_path: string;
-  /** First line of the relevant excerpt (1-indexed). null if not available. */
-  line_start: number | null;
-  /** Last line of the relevant excerpt (1-indexed). null if not available. */
-  line_end: number | null;
-  /** Optional symbol name referenced (e.g. function, class). */
-  symbol?: string | null;
-  /** Optional brief excerpt snippet for preview. */
-  snippet?: string | null;
-}
-
-/**
- * Role of the message author in the chat conversation.
- * Mirrors the convention used by most LLM APIs.
+ * Role of a chat participant.
+ * Matches the backend Literal["user", "assistant"] constraint.
  */
 export type ChatRole = 'user' | 'assistant';
 
 /**
- * A single message in the chat conversation.
+ * A single turn in the conversation history sent to the backend.
  *
- * Kept in local React component state only — not persisted to the server.
- * The `id` is a client-generated identifier used as a React key.
+ * Mirrors backend ChatHistoryMessage (backend/app/schemas/repository.py).
+ * Must NOT include timestamps, ids, sources, or any other UI-only fields.
+ */
+export interface ChatHistoryMessage {
+  role: ChatRole;
+  content: string;
+}
+
+/**
+ * Request payload for the repository chat endpoint.
+ *
+ * Mirrors backend RepositoryChatRequest (backend/app/schemas/repository.py).
+ *   - question: 1–4000 chars, no whitespace-only
+ *   - history:  max 50 messages, each content 1–20000 chars
+ */
+export interface RepositoryChatRequest {
+  question: string;
+  history: ChatHistoryMessage[];
+}
+
+/**
+ * A source citation returned by the backend RAG pipeline.
+ *
+ * Mirrors backend SourceReference (backend/ai/schemas/output.py).
+ *   - file:       repository-relative path, e.g. "src/auth/service.ts"
+ *   - start_line: first line (1-indexed)
+ *   - end_line:   last line (inclusive)
+ *   - symbol:     optional symbol name (class/function)
+ *
+ * NOTE: "snippet" was a Day 6 frontend assumption — it does not exist in the
+ * backend schema. Removed in Day 7 to match the real contract.
+ */
+export interface ChatSource {
+  /** Repository-relative file path. */
+  file: string;
+  /** First line of the cited range (1-indexed). */
+  start_line: number;
+  /** Last line of the cited range (inclusive). */
+  end_line: number;
+  /** Optional symbol name at this location, if known. */
+  symbol?: string | null;
+}
+
+/**
+ * Confidence level of the repository answer.
+ * Mirrors backend Literal["high", "medium", "low"].
+ */
+export type ChatConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * Response from the repository chat endpoint.
+ *
+ * Mirrors backend RepositoryAnswer (backend/ai/schemas/output.py).
+ */
+export interface RepositoryChatResponse {
+  /** Natural-language answer referencing only repository context. */
+  answer: string;
+  /** File + line citations supporting the answer. Empty if no sources found. */
+  sources: ChatSource[];
+  /** Grounding confidence: "high" | "medium" | "low". */
+  confidence: ChatConfidence;
+}
+
+/**
+ * A single message in the UI conversation.
+ *
+ * This is a UI-only type — it is NEVER sent to the backend as-is.
+ * The hook converts ChatMessage[] → ChatHistoryMessage[] when building requests.
+ *
+ * UI-only fields: id, timestamp, isStreaming, confidence.
  */
 export interface ChatMessage {
-  /** Client-generated unique identifier (e.g. crypto.randomUUID()). */
+  /** Client-generated unique identifier (React key). */
   id: string;
-  /** Who produced this message. */
   role: ChatRole;
-  /** The text content of the message. */
   content: string;
-  /** ISO-8601 timestamp of when the message was created on the client. */
+  /** ISO-8601 timestamp set on the client at creation. */
   timestamp: string;
   /**
-   * Source references cited for this message.
-   * Only populated for assistant messages.
+   * Source citations attached to assistant messages after the response completes.
+   * Empty while streaming/pending.
    */
   sources?: ChatSource[];
   /**
-   * Reserved for streaming support.
-   * When true, this message is still being streamed and `content` is partial.
-   * Currently always false — set to true when SSE streaming is implemented.
+   * Confidence level of the assistant answer.
+   * Only populated for assistant messages when the response has completed.
+   */
+  confidence?: ChatConfidence;
+  /**
+   * True while the assistant is in a streaming/pending state.
+   * Set to false once the complete response is received.
+   * Reserved for future real streaming support.
    */
   isStreaming?: boolean;
-}
-
-/**
- * Request body sent to the chat endpoint.
- *
- * POST /api/v1/repositories/:id/chat
- * MOCKED: The exact field name ("question" vs "query" vs "message") is
- * assumed and must be confirmed with the backend team.
- */
-export interface ChatRequest {
-  /** The user's question about the repository. */
-  question: string;
-}
-
-/**
- * Response from the chat endpoint.
- *
- * Contains the assistant's answer and an optional list of source references.
- * MOCKED: Field names are assumed. Align with backend schema when confirmed.
- */
-export interface ChatResponse {
-  /** The assistant's answer text. */
-  answer: string;
-  /** Source file references that support the answer. May be empty. */
-  sources: ChatSource[];
 }

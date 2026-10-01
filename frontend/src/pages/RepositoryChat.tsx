@@ -14,7 +14,7 @@ import {
   RefreshCw,
   Trash2,
 } from 'lucide-react';
-import type { ChatMessage, ChatSource } from '../types/api';
+import type { ChatMessage, ChatSource, ChatConfidence } from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Page
@@ -377,6 +377,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </time>
         )}
 
+        {/* Confidence badge — only for complete assistant messages */}
+        {!isUser && !message.isStreaming && message.confidence && (
+          <ConfidenceBadge confidence={message.confidence} />
+        )}
+
         {/* Sources — only shown for complete (non-streaming) assistant messages */}
         {!isUser && !message.isStreaming && message.sources && message.sources.length > 0 && (
           <SourceList sources={message.sources} />
@@ -435,6 +440,29 @@ function MessageContent({ content }: { content: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// ConfidenceBadge — shows the backend-provided confidence level
+// ---------------------------------------------------------------------------
+
+const confidenceConfig: Record<ChatConfidence, { label: string; className: string }> = {
+  high:   { label: 'High confidence',   className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+  medium: { label: 'Medium confidence', className: 'bg-amber-500/10  text-amber-600  border-amber-500/20'  },
+  low:    { label: 'Low confidence',    className: 'bg-muted         text-muted-foreground border-border'   },
+};
+
+function ConfidenceBadge({ confidence }: { confidence: ChatConfidence }) {
+  const { label, className } = confidenceConfig[confidence];
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${className}`}
+      title={`Answer confidence: ${confidence}`}
+      aria-label={label}
+    >
+      {label}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SourceList — renders the cited repository sources
 // ---------------------------------------------------------------------------
 
@@ -453,27 +481,20 @@ function SourceList({ sources }: { sources: ChatSource[] }) {
                 className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5"
                 aria-hidden="true"
               />
+              {/* Use real backend field: src.file */}
               <span className="font-mono text-foreground break-all">
-                {src.file_path}
+                {src.file}
               </span>
             </div>
-            {src.line_start != null && (
-              <p className="text-muted-foreground pl-5.5">
-                Lines {src.line_start}
-                {src.line_end != null && src.line_end !== src.line_start
-                  ? `–${src.line_end}`
-                  : ''}
-              </p>
-            )}
+            {/* Use real backend fields: start_line / end_line */}
+            <p className="text-muted-foreground pl-5">
+              Lines {src.start_line}
+              {src.end_line !== src.start_line ? `–${src.end_line}` : ''}
+            </p>
             {src.symbol && (
-              <p className="text-muted-foreground pl-5.5 font-mono">
+              <p className="text-muted-foreground pl-5 font-mono">
                 {src.symbol}
               </p>
-            )}
-            {src.snippet && (
-              <pre className="mt-1 overflow-x-auto rounded bg-muted/50 px-2 py-1 font-mono text-muted-foreground">
-                {src.snippet}
-              </pre>
             )}
           </li>
         ))}
