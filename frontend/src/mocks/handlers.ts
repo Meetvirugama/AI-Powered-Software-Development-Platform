@@ -640,28 +640,27 @@ export const handlers = [
   }),
 
   // -------------------------------------------------------------------------
-  // Chat — Day 6 (Prompt 1 data layer)
+  // Chat — Day 7
   //
   // POST /api/v1/repositories/:id/chat
   //
-  // MOCKED: The real backend RAG/chat endpoint is not yet implemented.
-  // This handler returns a deterministic, realistic-looking response so the
-  // Day 6 UI can be developed and tested against a stable contract.
+  // Matches the real backend contract:
+  //   Request:  { question: string, history: { role, content }[] }
+  //   Response: { answer: string, sources: SourceReference[], confidence: "high"|"medium"|"low" }
   //
-  // To simulate an error, include "fail" anywhere in the question body.
+  // Source fields match backend SourceReference (backend/ai/schemas/output.py):
+  //   { file: string, start_line: number, end_line: number, symbol?: string | null }
   //
-  // Backend assumptions (to be confirmed with Yug/Parth):
-  //   - Request:  POST /api/v1/repositories/:id/chat  { "question": "..." }
-  //   - Response: { "answer": "...", "sources": [ { "file_path", "line_start", "line_end", ... } ] }
+  // Error simulation: include "fail" in the question body.
   // -------------------------------------------------------------------------
 
   http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
     const { id } = params as { id: string };
 
-    // Parse request body to check for forced error simulation.
+    // Parse request body — real contract: { question, history }
     let question = '';
     try {
-      const body = await request.json() as { question?: string };
+      const body = await request.json() as { question?: string; history?: unknown[] };
       question = body?.question ?? '';
     } catch {
       // Malformed body — treat as empty question.
@@ -682,7 +681,6 @@ export const handlers = [
     }
 
     // Deterministic mock response based on repository ID.
-    // In production this is replaced by the real RAG pipeline response.
     const repoName =
       MOCK_REPOSITORIES.find((r) => r.id === id)?.name ?? 'this repository';
 
@@ -695,33 +693,33 @@ export const handlers = [
       `Route-level protection is enforced through a FastAPI dependency ` +
       `injected into each protected endpoint.`;
 
+    // Sources use the REAL backend field names: file, start_line, end_line, symbol.
     const mockSources = [
       {
-        file_path: 'backend/app/api/v1/auth.py',
-        line_start: 1,
-        line_end: 45,
+        file: 'backend/app/api/v1/auth.py',
+        start_line: 1,
+        end_line: 45,
         symbol: 'router',
-        snippet: 'router = APIRouter(prefix="/auth", tags=["auth"])',
       },
       {
-        file_path: 'backend/app/services/auth_service.py',
-        line_start: 22,
-        line_end: 68,
+        file: 'backend/app/services/auth_service.py',
+        start_line: 22,
+        end_line: 68,
         symbol: 'AuthService',
-        snippet: 'class AuthService:\n    def create_access_token(...)',
       },
       {
-        file_path: 'backend/app/core/dependencies.py',
-        line_start: 10,
-        line_end: 30,
+        file: 'backend/app/core/dependencies.py',
+        start_line: 10,
+        end_line: 30,
         symbol: 'get_current_user',
-        snippet: 'async def get_current_user(token: str = Depends(oauth2_scheme))',
       },
     ];
 
     return HttpResponse.json({
       answer: mockAnswer,
       sources: mockSources,
+      confidence: 'high',
     });
   }),
 ];
+
