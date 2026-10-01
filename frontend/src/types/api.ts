@@ -313,3 +313,109 @@ export interface SyncProgress {
   /** True when sync failed. */
   isFailed: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Chat — Day 6
+//
+// Frontend contract for the repository chat feature.
+//
+// Assumed backend endpoint (not yet confirmed — mocked via MSW):
+//   POST /api/v1/repositories/:id/chat
+//   Body:    { "question": string }
+//   Returns: ChatResponse
+//
+// IMPORTANT: The backend contract is not yet confirmed with Yug/Parth.
+// Only src/services/chat.ts knows the exact endpoint. Hooks and UI
+// always consume ChatMessage / ChatResponse — never raw HTTP shapes.
+//
+// Streaming note:
+//   The current contract uses a simple request-response shape to keep the
+//   data layer replaceable. The types and service are structured so that
+//   when the backend confirms a streaming/SSE contract, only
+//   src/services/chat.ts needs to change — the hook and UI remain stable.
+//
+//   If SSE streaming is added later, each streamed chunk will extend the
+//   assistant ChatMessage in place (by appending to `content`).
+//   The `isStreaming` field on ChatMessage is reserved for that.
+// ---------------------------------------------------------------------------
+
+/**
+ * A single source reference cited by the assistant.
+ *
+ * Represents evidence from an indexed repository file.
+ * All fields except `file_path` are optional because the backend may
+ * not always be able to determine precise line numbers or symbols.
+ *
+ * MOCKED: Field names are assumed. Align with backend schema when confirmed.
+ */
+export interface ChatSource {
+  /** Repository-relative file path, e.g. "src/api/auth.py". */
+  file_path: string;
+  /** First line of the relevant excerpt (1-indexed). null if not available. */
+  line_start: number | null;
+  /** Last line of the relevant excerpt (1-indexed). null if not available. */
+  line_end: number | null;
+  /** Optional symbol name referenced (e.g. function, class). */
+  symbol?: string | null;
+  /** Optional brief excerpt snippet for preview. */
+  snippet?: string | null;
+}
+
+/**
+ * Role of the message author in the chat conversation.
+ * Mirrors the convention used by most LLM APIs.
+ */
+export type ChatRole = 'user' | 'assistant';
+
+/**
+ * A single message in the chat conversation.
+ *
+ * Kept in local React component state only — not persisted to the server.
+ * The `id` is a client-generated identifier used as a React key.
+ */
+export interface ChatMessage {
+  /** Client-generated unique identifier (e.g. crypto.randomUUID()). */
+  id: string;
+  /** Who produced this message. */
+  role: ChatRole;
+  /** The text content of the message. */
+  content: string;
+  /** ISO-8601 timestamp of when the message was created on the client. */
+  timestamp: string;
+  /**
+   * Source references cited for this message.
+   * Only populated for assistant messages.
+   */
+  sources?: ChatSource[];
+  /**
+   * Reserved for streaming support.
+   * When true, this message is still being streamed and `content` is partial.
+   * Currently always false — set to true when SSE streaming is implemented.
+   */
+  isStreaming?: boolean;
+}
+
+/**
+ * Request body sent to the chat endpoint.
+ *
+ * POST /api/v1/repositories/:id/chat
+ * MOCKED: The exact field name ("question" vs "query" vs "message") is
+ * assumed and must be confirmed with the backend team.
+ */
+export interface ChatRequest {
+  /** The user's question about the repository. */
+  question: string;
+}
+
+/**
+ * Response from the chat endpoint.
+ *
+ * Contains the assistant's answer and an optional list of source references.
+ * MOCKED: Field names are assumed. Align with backend schema when confirmed.
+ */
+export interface ChatResponse {
+  /** The assistant's answer text. */
+  answer: string;
+  /** Source file references that support the answer. May be empty. */
+  sources: ChatSource[];
+}
