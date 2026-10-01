@@ -34,13 +34,33 @@ export function RepositoryChat() {
   const [draft, setDraft] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to the bottom when messages change (new message or chunk appended).
-  // Using messages as a dep means this fires on every chunk during streaming.
-  // We deliberately do NOT force-scroll if isPending-only changed, so users
-  // who scroll up to read history aren't interrupted mid-stream.
+  // Auto-scroll: always scroll to bottom when a new message is ADDED to the list
+  // (user sends a question, or the assistant placeholder appears).
+  // During streaming, only keep scrolling if the user is already near the bottom
+  // (within 150 px) — so manually scrolling up to read history isn't disrupted.
+  const prevMessageCountRef = useRef(0);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const messageCount = messages.length;
+    const isNewMessage = messageCount > prevMessageCountRef.current;
+    prevMessageCountRef.current = messageCount;
+
+    if (isNewMessage) {
+      // A new message was added — always scroll to bottom.
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+
+    // Chunk update during streaming — only scroll if already near the bottom.
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+    if (distanceFromBottom <= 150) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages]);
 
   // Auto-resize the textarea as the user types.
@@ -131,12 +151,27 @@ export function RepositoryChat() {
       </header>
 
       {/* ---------------------------------------------------------------- */}
+      {/* Accessibility: polite announcement for completed assistant messages */}
+      {/* This is separate from the message list so it only announces once   */}
+      {/* per completed message, not on every streaming chunk.               */}
+      {/* ---------------------------------------------------------------- */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {(() => {
+          const last = [...messages].reverse().find(
+            (m) => m.role === 'assistant' && !m.isStreaming && m.content,
+          );
+          return last ? 'Assistant responded.' : '';
+        })()}
+      </div>
+
+      {/* ---------------------------------------------------------------- */}
       {/* Messages area                                                     */}
       {/* ---------------------------------------------------------------- */}
       <div
+        ref={scrollContainerRef}
         className="flex-1 overflow-y-auto px-4 py-6 space-y-6"
         role="log"
-        aria-live="polite"
+        aria-live="off"
         aria-label="Chat conversation"
       >
         {messages.length === 0 && !isPending ? (
