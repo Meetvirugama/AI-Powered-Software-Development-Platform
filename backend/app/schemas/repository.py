@@ -118,3 +118,36 @@ class RepositoryChatRequest(BaseModel):
         if not value:
             raise ValueError("question must contain non-whitespace characters")
         return value
+
+
+# ---------------------------------------------------------------------------
+# GitHub App discovery / connect schemas
+# ---------------------------------------------------------------------------
+
+class AvailableRepository(BaseModel):
+    """A repository accessible via the user's GitHub App installation."""
+
+    github_repo_id: str
+    owner: str
+    name: str
+    full_name: str
+    default_branch: str
+    language: str | None
+    is_connected: bool = False
+
+
+class PaginatedAvailableRepositoryResponse(BaseModel):
+    """Paginated list of repositories discoverable via GitHub App."""
+
+    items: list[AvailableRepository]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class ConnectRepositoryResponse(BaseModel):
+    """Response after successfully connecting a repository."""
+
+    repository_id: str
+    job_id: str

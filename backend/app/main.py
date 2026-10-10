@@ -1,5 +1,6 @@
 """FastAPI application factory and public OpenAPI contract."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -23,13 +24,61 @@ from app.core.security_headers import SecurityHeadersMiddleware
 from fastapi.exceptions import RequestValidationError
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     """Initialize process-wide infrastructure before serving requests."""
     configure_logging(settings.log_level)
+
+    # ── Groq LLM Gateway ────────────────────────────────────────────────────
+    try:
+        from ai.llm.client import LLMGateway
+        from ai.llm.groq_provider import GroqProvider
+
+        groq_keys = [k for k in (settings.groq_api_keys or "").split(",") if k.strip()]
+        if groq_keys:
+            provider = GroqProvider(api_keys=groq_keys)
+            app.state.llm_gateway = LLMGateway(provider=provider)
+            logger.info("llm_gateway_ready", extra={"keys": len(groq_keys)})
+        else:
+            logger.warning("llm_gateway_skipped: no GROQ_API_KEYS configured")
+            app.state.llm_gateway = None
+    except Exception as exc:
+        logger.error("llm_gateway_init_failed", extra={"error": str(exc)})
+        app.state.llm_gateway = None
+
+    # ── RAG Pipeline ────────────────────────────────────────────────────────
+    try:
+        from ai.pipeline import RAGPipeline
+
+        app.state.rag_pipeline = RAGPipeline(
+            retriever=None,        # retriever wired after Week 1 indexing is complete
+            llm_gateway=app.state.llm_gateway,
+        )
+        logger.info("rag_pipeline_ready")
+    except Exception as exc:
+        logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
+        app.state.rag_pipeline = None
+
+    # ── GitHub App Service ───────────────────────────────────────────────────
+    try:
+        from app.integrations.github.service import GitHubService
+        from app.core.redis import get_redis_async
+
+        app.state.github_service = GitHubService(
+            redis=await get_redis_async(),
+            settings=settings,
+        )
+        logger.info("github_service_ready")
+    except Exception as exc:
+        logger.warning("github_service_init_failed", extra={"error": str(exc)})
+        app.state.github_service = None
+
     yield
+
+    logger.info("app_shutdown")
 
 
 app = FastAPI(

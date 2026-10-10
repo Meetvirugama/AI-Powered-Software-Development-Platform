@@ -36,6 +36,13 @@ class RepositoryRepository:
         stmt = select(Repository).where(Repository.id == repo_id, Repository.user_id == user_id)
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def get_by_github_id_and_user(self, github_repo_id: str, user_id: uuid.UUID) -> Optional[Repository]:
+        stmt = select(Repository).where(
+            Repository.github_repo_id == github_repo_id,
+            Repository.user_id == user_id,
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
     def list_by_user(self, user_id: uuid.UUID) -> List[Repository]:
         stmt = select(Repository).where(Repository.user_id == user_id)
         return list(self.session.scalars(stmt).all())

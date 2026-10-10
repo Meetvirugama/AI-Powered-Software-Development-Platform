@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
 
+    # --- AI / LLM API keys -------------------------------------------------
+    groq_api_keys: str | None = None       # comma-separated list
+    gemini_api_keys: str | None = None     # comma-separated list
+
     # --- API security (W1 Day 6) -------------------------------------------
     # Comma-separated list of frontend origins allowed to call the API with
     # cookies. Never use "*" here: browsers reject "*" with credentials, and it
