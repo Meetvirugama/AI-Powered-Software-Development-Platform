@@ -1,5 +1,5 @@
 # 10. Development Tasks — Master Task Board
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 > [!NOTE]
 > Task data is derived from `Docs/daily_tasks.md`, `Docs/week1.md`, and current source code state.
@@ -47,12 +47,12 @@ By Day 7: a user can connect a GitHub repository, the platform clones and scans 
 | Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|
 | W1-03 | GitHub App setup | Parth | P0 | TODO | — | App registered, env vars documented |
-| W1-04a | `GET /auth/github/login` | Yug | P0 | STUB | W1-03 | OAuth redirect |
-| W1-04b | `GET /auth/github/callback` | Yug | P0 | STUB | W1-03, W1-02b | Exchange code → JWT |
-| W1-04c | `GET /auth/me` | Yug | P0 | STUB | W1-04b | Return user from JWT |
-| W1-04d | `POST /auth/logout` | Yug | P0 | TODO | W1-04b | Redis JWT blocklist |
-| W1-04e | `JWTMiddleware` | Yug | P0 | TODO | W1-04b | Auth on all non-auth routes |
-| W1-04f | Standard error handler | Yug | P0 | TODO | W1-01 | `{error:{code, message, retryable}}` |
+| W1-04a | `GET /auth/github/login` | Yug | P0 | DONE | W1-03 | OAuth redirect with CSRF state cookie |
+| W1-04b | `GET /auth/github/callback` | Yug | P0 | DONE | W1-03, W1-02b | Exchange code → upsert user → JWT cookie |
+| W1-04c | `GET /auth/me` | Yug | P0 | DONE | W1-04b | Return user from JWT |
+| W1-04d | `POST /auth/logout` | Yug | P0 | DONE | W1-04b | Redis JWT blocklist |
+| W1-04e | `JWTMiddleware` | Yug | P0 | DONE | W1-04b | Auth on all non-auth routes |
+| W1-04f | Standard error handler | Yug | P0 | DONE | W1-01 | `{error:{code, message, retryable}}` |
 
 ---
 
@@ -115,13 +115,14 @@ By Day 7: a user can connect a GitHub repository, the platform clones and scans 
 | W1-12c | `EmbeddingService` | Meet | P0 | DONE | — | Single + batch, dimension validation |
 | W1-12d | `OpenAIEmbeddingProvider` | Meet | P0 | DONE | W1-12c | text-embedding-3-small |
 | W1-13a | `VectorRetriever` | Meet | P0 | DONE | W1-OM-09 | pgvector cosine search, repository_id scoping |
-| W1-13b | `LexicalRetriever` | Meet | P0 | STUB | W1-OM-09 | PostgreSQL FTS ts_rank |
-| W1-13c | `RRFFusion` | Meet | P0 | STUB | W1-13a, W1-13b | k=60, Day 5 |
-| W1-13d | `CrossEncoderReranker` | Meet | P0 | STUB | W1-13c | ms-marco-MiniLM-L-6-v2, Day 5 |
-| W1-14 | `ContextBuilder.build()` | Meet | P0 | STUB | W1-13d | Day 6: dedup, token count, truncation |
+| W1-13b | `LexicalRetriever` | Meet | P0 | DONE | W1-OM-09 | PostgreSQL FTS ts_rank, normalised to [0,1] |
+| W1-13c | `RRFFusion` | Meet | P0 | DONE | W1-13a, W1-13b | k=60, top-30 fused candidates |
+| W1-13d | `CrossEncoderReranker` | Meet | P0 | DONE | W1-13c | ms-marco-MiniLM-L-6-v2, lazy model load |
+| W1-14 | `ContextBuilder.build()` | Meet | P0 | DONE | W1-13d | tiktoken budget, dedup memory, token truncation |
+| W1-14b | `RAGPipeline.chat()` | Meet | P0 | DONE | W1-14 | Day 7 full end-to-end, JSON repair loop |
 | W1-15a | `PromptBuilder` | Dev | P0 | DONE | — | `build_chat_prompt`, `build_summary_prompt` |
 | W1-15b | `OutputValidator.validate()` + `.repair()` | Dev | P0 | DONE | W1-12a | 2-retry repair loop |
-| W1-15c | `GroundingValidator.validate_sources()` | Dev | P0 | STUB | W1-OM-07 | DB query stub until Day 4 |
+| W1-15c | `GroundingValidator.validate_sources()` | Dev | P0 | DONE | W1-OM-07 | Removes hallucinated citations |
 | W1-15d | AI output schemas | Dev | P0 | DONE | — | `RepositoryAnswer`, `SourceReference`, `ErrorResponse` |
 
 ---
@@ -130,7 +131,10 @@ By Day 7: a user can connect a GitHub repository, the platform clones and scans 
 
 | Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
 |---|---|---|---|---|---|---|
-| W1-16 | `POST /api/v1/chat` | Yug | P0 | STUB | W1-15 | Full RAG pipeline wired to API |
+| W1-16 | `POST /api/v1/repositories/{id}/chat` | Yug | P0 | DONE | W1-15 | Full RAG pipeline wired to API |
+| W1-16b | `POST /api/v1/repositories/{id}/search` | Yug | P0 | DONE | W1-13 | Hybrid search via RAG pipeline |
+| W1-16c | `GET /api/v1/repositories/{id}/files` | Yug | P0 | DONE | W1-OM-07 | Paginated file list |
+| W1-16d | `GET /api/v1/repositories/{id}/symbols` | Yug | P0 | DONE | W1-OM-08 | Paginated symbol list |
 | W1-17a | Repository Chat page | Dhramraj | P1 | STUB | W1-16 | Chat UI with sources display |
 | W1-05a | Frontend project skeleton | Dhramraj | P0 | DONE | — | Vite + React + TypeScript + Zustand |
 | W1-05b | Auth store + Protected route | Dhramraj | P0 | DONE | — | `useAuthStore`, `ProtectedRoute` |
@@ -152,9 +156,13 @@ By Day 7: a user can connect a GitHub repository, the platform clones and scans 
 | W1-18d | `test_embedding_service.py` | Keval | P0 | DONE | W1-12c | Embedding service tests |
 | W1-18e | `test_vector_retrieval.py` | Keval | P0 | DONE | W1-13a | Vector retriever tests |
 | W1-18f | `test_walker.py` | Keval | P0 | DONE | W1-07a | FileWalker tests |
-| W1-18g | Auth API tests | Keval | P0 | TODO | W1-04 | |
-| W1-18h | Repository API tests | Keval | P0 | TODO | W1-OM-06 | |
-| W1-18i | Chat API integration test | Keval | P0 | TODO | W1-16 | End-to-end RAG test |
+| W1-18g | `test_hybrid_retrieval.py` | Keval | P0 | DONE | W1-13b,c,d | LexicalRetriever, RRFFusion, Reranker |
+| W1-18h | `test_context_builder.py` | Keval | P0 | DONE | W1-14 | ContextBuilder token budget |
+| W1-18i | `test_rag_pipeline.py` | Keval | P0 | DONE | W1-14b | 26 tests end-to-end RAG pipeline |
+| W1-18j | `test_auth.py` | Keval | P0 | DONE | W1-04 | Auth API tests |
+| W1-18k | `test_repositories.py` | Keval | P0 | DONE | W1-OM-06 | Repository API tests |
+| W1-18l | `test_repository_chat_api.py` | Keval | P0 | DONE | W1-16 | Chat API tests |
+| W1-18m | `test_repository_search_api.py` | Keval | P0 | DONE | W1-16b | Search API tests |
 
 ---
 
@@ -192,13 +200,13 @@ graph TD
 
 | Member | Active Tasks | Completed |
 |---|---|---|
-| **Meet** | W1-13b, W1-13c, W1-13d, W1-14 | W1-12a, W1-12b, W1-12c, W1-12d, W1-13a |
-| **Yug** | W1-04a–f, W1-16 | W1-01, W1-01a–d |
-| **Om** | W1-02a–b, W1-OM-01–09, W1-11 | W1-02 (base) |
+| **Meet** | — | W1-12a, W1-12b, W1-12c, W1-12d, W1-13a, W1-13b, W1-13c, W1-13d, W1-14, W1-14b |
+| **Yug** | — | W1-01, W1-01a–d, W1-04a–f, W1-16, W1-16b–d |
+| **Om** | W1-02a–b (pgvector) | W1-02 (base), W1-OM-01–09 |
 | **Parth** | W1-03, W1-06a–c | — |
-| **Dhramraj** | W1-05d–g, W1-17a | W1-05a–c |
+| **Dhramraj** | W1-05d–g, W1-17a (API integration) | W1-05a–c |
 | **Prit** | W1-07b, W1-08a–c, W1-09 | W1-07a |
 | **Divu** | W1-10b–c | W1-10a |
-| **Dev** | W1-15c | W1-15a, W1-15b, W1-15d |
-| **Keval** | W1-18g–i | W1-18a–f |
+| **Dev** | — | W1-15a, W1-15b, W1-15c, W1-15d |
+| **Keval** | — | W1-18a–m (13 test files) |
 | **Sukun** | W1-19 | — |

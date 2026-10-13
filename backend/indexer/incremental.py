@@ -113,11 +113,43 @@ class IncrementalIndexer:
                     "hash": new_hash
                 })
             
-            # Simulated Orchestration for re-scan, re-chunk, re-embed:
-            # symbols = self.scanner.scan(content)
-            # chunks = self.chunker.chunk_symbols(repository_id, file_id, symbols, content, file_info.language)
-            # for chunk in chunks:
-            #     self.queue.enqueue(chunk)
+            # ponytail: Synchronous dump of full files to code_chunks. 
+            # The Background Redis Worker (workers/) and SymbolChunker integration were 
+            # never built in Week 1. This bypasses the empty EmbeddingQueue so the Sync 
+            # button actually works and the LexicalRetriever has data to search.
+            # Upgrade path: Build the Celery/Redis worker, call SymbolChunker to split the 
+            # file into AST nodes, call OpenAI for real embeddings, and remove this raw INSERT.
+            import uuid, json
+            
+            chunk_id = uuid.uuid4()
+            token_count = len(content.split())
+            chunk_hash = compute_content_hash(content)
+            
+            chunk_query = text(
+                """
+                INSERT INTO code_chunks 
+                (id, repository_id, file_id, content, token_count, embedding, start_line, end_line, content_hash, metadata)
+                VALUES (:id, :repo_id, :file_id, :content, :tokens, :embedding, :start, :end, :hash, :metadata)
+                """
+            )
+            
+            # Using a 1536-dimensional zero vector as a placeholder since Meet's LexicalRetriever 
+            # uses FTS on the content and doesn't rely on the vector.
+            zero_embedding = [0.0] * 1536
+            metadata_json = json.dumps({"file_path": str(file_info.path)})
+            
+            await self._db.execute(chunk_query, {
+                "id": chunk_id,
+                "repo_id": repository_id,
+                "file_id": file_id,
+                "content": content,
+                "tokens": token_count,
+                "embedding": str(zero_embedding),
+                "start": 1,
+                "end": max(1, len(content.splitlines())),
+                "hash": chunk_hash,
+                "metadata": metadata_json
+            })
 
             indexed_count += 1
 

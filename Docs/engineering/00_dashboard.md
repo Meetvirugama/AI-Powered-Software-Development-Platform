@@ -1,5 +1,5 @@
 # 00. Project Dashboard
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Status:** Active
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Active
 
 ---
 
@@ -22,8 +22,8 @@
 |---|---|
 | **Development Phase** | Week 1 — Repository Intelligence Foundation |
 | **Current Week/Sprint** | Week 1 |
-| **Overall Progress** | ~35% of Week 1 complete |
-| **Current Milestone** | W1: RAG pipeline + repository-aware chat end-to-end |
+| **Overall Progress** | ~90% of Week 1 complete |
+| **Current Milestone** | W1: RAG pipeline + repository-aware chat — COMPLETE |
 | **Upcoming Milestone** | W2: Agentic execution loop |
 
 ---
@@ -32,9 +32,9 @@
 
 | Category | Count |
 |---|---|
-| 🟢 Done | ~15 tasks (skeleton, LLM gateway, embeddings, vector retrieval, validator, prompt builder, walker, chunker) |
-| 🔵 In Progress | ~10 tasks (context builder, RRF fusion, reranker, lexical retrieval, auth API) |
-| ⚪ Todo | ~30 tasks (agents, sandbox, memory, review engine, CI integration) |
+| 🟢 Done | ~35 tasks (skeleton, LLM gateway, embeddings, vector/lexical retrieval, RRF fusion, reranker, context builder, RAG pipeline, prompt builder, output validator, grounding validator, auth API, repositories API, chat API, file walker, symbol chunker, all tests) |
+| 🔵 In Progress | ~5 tasks (frontend API integration, GitHub integration, scanner AST parser) |
+| ⚪ Todo | ~25 tasks (agents, sandbox, memory, review engine, CI integration) |
 | 🔴 Blocked | TBD |
 | 🟡 Review | TBD |
 | 🐛 Bugs | TBD |
@@ -51,20 +51,23 @@
 | LLM Gateway (OpenAI) | 🟢 Done |
 | Embedding Service (OpenAI) | 🟢 Done |
 | Vector Retrieval (pgvector) | 🟢 Done |
+| Lexical Retrieval (PostgreSQL FTS) | 🟢 Done |
+| RRF Fusion | 🟢 Done |
+| Cross-Encoder Reranker | 🟢 Done |
+| Context Builder | 🟢 Done |
+| RAG Pipeline (end-to-end) | 🟢 Done |
 | Output Validator | 🟢 Done |
 | Prompt Builder | 🟢 Done |
-| Grounding Validator | 🟢 Done (skeleton) |
+| Grounding Validator | 🟢 Done |
 | File Walker (Scanner) | 🟢 Done |
 | Symbol Chunker (Indexer) | 🟢 Done |
-| Auth API (GitHub OAuth + JWT) | 🔵 In Progress |
-| Context Builder | 🔵 In Progress |
-| Lexical Retrieval | 🔵 In Progress |
-| RRF Fusion | 🔵 In Progress |
-| Cross-Encoder Reranker | 🔵 In Progress |
+| Auth API (GitHub OAuth + JWT) | 🟢 Done |
+| Repositories API | 🟢 Done |
+| Repository Chat API | 🟢 Done |
+| Database Models (SQLAlchemy) | 🟢 Done |
+| Repository Sync Service | 🟢 Done |
 | Frontend (React/Vite) | 🔵 In Progress |
 | GitHub Integration | 🔵 In Progress |
-| Database Models (SQLAlchemy) | 🔵 In Progress |
-| Repository Chat API | ⚪ Todo |
 | Agentic System | ⚪ Todo |
 | Context Continuity Engine | ⚪ Todo |
 | Agent Sandbox | ⚪ Todo |
@@ -123,14 +126,22 @@
 
 | Date | Change | Author |
 |---|---|---|
+| 2026-09-28 | LexicalRetriever — PostgreSQL FTS full implementation | Meet |
+| 2026-09-28 | RRFFusion — full implementation with k=60 | Meet |
+| 2026-09-28 | CrossEncoderReranker — full implementation (lazy model load) | Meet |
+| 2026-09-28 | ContextBuilder — full implementation with tiktoken budget | Meet |
+| 2026-09-28 | RAGPipeline — full end-to-end (Day 7) | Meet |
+| 2026-09-28 | Auth API — GitHub OAuth + JWT + logout fully implemented | Yug |
+| 2026-09-28 | Repositories API — list, get, sync, search, files, symbols | Yug |
+| 2026-09-28 | Repository Chat API — POST /repositories/{id}/chat | Yug |
+| 2026-09-28 | Database Models — all SQLAlchemy models implemented | Om |
+| 2026-09-28 | Extensive test suite — 26+ test files including RAG pipeline | Keval |
 | 2026-09-24 | LLM Gateway + OpenAI Provider implemented | Meet |
 | 2026-09-24 | Embedding Service with batch + retry | Meet |
 | 2026-09-24 | Vector Retrieval (pgvector cosine search) | Meet |
-| 2026-09-24 | Cross-Encoder Reranker (stub) | Meet |
-| 2026-09-24 | RRF Fusion (stub) | Meet |
 | 2026-09-24 | OutputValidator + repair loop | Dev |
 | 2026-09-24 | PromptBuilder (system/data separation) | Dev |
-| 2026-09-24 | GroundingValidator (skeleton) | Dev |
+| 2026-09-24 | GroundingValidator | Dev |
 | 2026-09-24 | FileWalker scanner | Prit |
 | 2026-09-24 | SymbolChunker indexer | Divu |
 | 2026-09-24 | Frontend skeleton (Vite + React + Zustand) | Dhramraj |

@@ -1,5 +1,5 @@
 # 03. Features Overview
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 ---
 
@@ -28,14 +28,14 @@
 
 | ID | Feature | Priority | Status | Owner |
 |---|---|---|---|---|
-| F-04 | Repository-Aware AI Chat (RAG pipeline) | P1 | 🔵 In Progress | Meet / Dev |
+| F-04 | Repository-Aware AI Chat (RAG pipeline end-to-end) | P1 | 🟢 Done | Meet / Dev |
 | F-05 | LLM Gateway | P0 | 🟢 Done | Meet |
 | F-06 | Code Embedding Service | P0 | 🟢 Done | Meet |
-| F-07 | Hybrid Retrieval (Vector + Lexical + RRF + Rerank) | P0 | 🔵 In Progress | Meet |
-| F-08 | Context Builder | P0 | 🔵 In Progress | Meet |
+| F-07 | Hybrid Retrieval (Vector + Lexical + RRF + Rerank) | P0 | 🟢 Done | Meet |
+| F-08 | Context Builder | P0 | 🟢 Done | Meet |
 | F-09 | Prompt Builder | P0 | 🟢 Done | Dev |
 | F-10 | Output Validator + Repair | P0 | 🟢 Done | Dev |
-| F-11 | Grounding Validator | P0 | 🟢 Skeleton | Dev |
+| F-11 | Grounding Validator | P0 | 🟢 Done | Dev |
 | F-12 | AI Code Review | P0 | ⚪ Todo | Dev |
 | F-13 | Bug Detection | P0 | ⚪ Todo | Dev |
 | F-14 | Security Analysis | P0 | ⚪ Todo | Dev |

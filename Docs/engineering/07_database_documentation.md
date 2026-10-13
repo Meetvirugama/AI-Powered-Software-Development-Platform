@@ -1,10 +1,8 @@
 # 07. Database Documentation
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Status:** Draft
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Live
 
-> [!WARNING]
-> Database models are **not yet implemented** in `backend/app/models/`. This document is based on the design specification in `Docs/daily_tasks.md` (Om's Day 1–3 tasks). Tables marked `⚪ Planned` do not yet exist.
->
-> When Om creates migrations, update this document to match the actual schema.
+> [!NOTE]
+> Database models are implemented in `backend/app/models/`. Tables reflect the actual SQLAlchemy model definitions as of 2026-09-28.
 
 ---
 
@@ -131,7 +129,7 @@ erDiagram
 
 **Indexes:** `UNIQUE (github_id)`
 **Used by:** Auth API, all user-scoped queries
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -148,7 +146,7 @@ erDiagram
 
 **Indexes:** `UNIQUE (installation_id)`
 **Used by:** GitHub integration, InstallationTokenManager
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -172,7 +170,7 @@ erDiagram
 **Enums:** `SyncStatus: NOT_SYNCED | SYNCING | SYNCED | FAILED`
 **Indexes:** `(user_id)`, `UNIQUE (github_repo_id)`
 **Used by:** Repository API, sync worker, scanner
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -191,7 +189,7 @@ erDiagram
 
 **Indexes:** `(repository_id)`, `UNIQUE (repository_id, path)`
 **Used by:** GroundingValidator, scanner, indexer
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -211,7 +209,7 @@ erDiagram
 
 **Indexes:** `(repository_id)`, `(file_id)`
 **Used by:** Indexer, dependency graph, blast radius analysis
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -226,7 +224,7 @@ erDiagram
 
 **Indexes:** `(source_id)`, `(target_id)`
 **Used by:** Dependency graph, blast radius analysis
-**Status:** ⚪ Planned
+**Status:** 🟢 Done
 
 ---
 
@@ -256,8 +254,8 @@ erDiagram
 **Critical constraint:** Every SELECT on this table MUST include `WHERE repository_id = :repository_id`. (Enforced by `VectorRetriever` SQL, team rule.)
 
 **Used by:** VectorRetriever, LexicalRetriever, GroundingValidator
-**Related APIs:** Chat API (planned)
-**Status:** ⚪ Planned (dimension 1536 assumed for `text-embedding-3-small`)
+**Related APIs:** Chat API, Search API
+**Status:** 🟢 Done (dimension 1536 for `text-embedding-3-small`)
 
 ---
 

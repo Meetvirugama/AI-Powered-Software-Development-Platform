@@ -1,11 +1,11 @@
 # RAG Quality Benchmark Results
-**Date:** 2026-09-25
+**Date:** 2026-09-28  
 **Target:** >= 80% file_hit rate
 
 ## Benchmark Dataset (10 Questions)
-We evaluate the retrieval pipeline against the `python_sample` repository. 
+We evaluate the retrieval pipeline against the `python_sample` repository (located at `backend/tests/fixtures/python_sample/`).
 
-To make this a rigorous benchmark, we are using 10 specific questions mapping to 10 distinct files.
+To make this a rigorous benchmark, we use 10 specific questions mapping to 10 distinct files.
 
 | # | Question | Expected File | File Hit? | Symbol Hit? |
 |---|---|---|---|---|
@@ -22,10 +22,12 @@ To make this a rigorous benchmark, we are using 10 specific questions mapping to
 
 ## Results Summary
 - **Total Questions:** 10
-- **File Hit Rate:** TBD
+- **File Hit Rate:** TBD (benchmark script must be run against live DB)
 - **Symbol Hit Rate:** TBD
-- **Final Status:** TBD
+- **Final Status:** Pending end-to-end run
 
-> [!WARNING]
-> **STATUS: BLOCKED (Waiting for Day 7)**
-> The benchmark framework and all test datasets have been successfully created. However, calculating the true accuracy score is currently blocked. We are waiting for Divu to finish the `EmbeddingQueue` pipeline so the database is populated with real chunks. We will run `scripts/benchmark_rag.py` again on **Day 7 (AI Integration Day)** to record the final scores here.
+> [!NOTE]
+> **STATUS: READY TO RUN**
+> The fixture repository exists at `backend/tests/fixtures/python_sample/`. The full RAG pipeline (LexicalRetriever + VectorRetriever + RRFFusion + CrossEncoderReranker + ContextBuilder) is implemented as of 2026-09-28.
+>
+> To run the benchmark: ensure the `python_sample` fixture is indexed into the `code_chunks` table, then run `scripts/benchmark_rag.py`. Update the table above with results.

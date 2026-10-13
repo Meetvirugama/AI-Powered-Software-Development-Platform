@@ -1,5 +1,5 @@
 # 05. System Architecture
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Status:** Draft
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Live
 
 ---
 
@@ -70,32 +70,36 @@ flowchart TD
 
 | Module | Path | Owner | Status |
 |---|---|---|---|
-| API Router | `backend/app/api/v1/` | Yug | 🟢 Skeleton done |
+| API Router | `backend/app/api/v1/` | Yug | 🟢 Done |
 | Core Config | `backend/app/core/config.py` | Yug | 🟢 Done |
 | Core Database | `backend/app/core/database.py` | Yug | 🟢 Done |
 | Core Logging | `backend/app/core/logging.py` | Yug | 🟢 Done |
-| App Models | `backend/app/models/` | Om | ⚪ Todo |
-| App Repositories | `backend/app/repositories/` | Om | ⚪ Todo |
-| App Schemas | `backend/app/schemas/` | Yug + Dev | 🟢 Partial |
-| App Services | `backend/app/services/` | Module owners | ⚪ Todo |
-| GitHub Integration | `backend/app/integrations/github/` | Parth | ⚪ Todo |
+| Auth API | `backend/app/api/v1/auth.py` | Yug | 🟢 Done |
+| Repositories API | `backend/app/api/v1/repositories.py` | Yug | 🟢 Done |
+| Chat API | `backend/app/api/v1/chat.py` | Yug | 🟢 Done |
+| App Models | `backend/app/models/` | Om | 🟢 Done |
+| App Repositories | `backend/app/repositories/` | Om | 🟢 Done |
+| App Schemas | `backend/app/schemas/` | Yug + Dev | 🟢 Done |
+| App Services | `backend/app/services/` | Module owners | 🟢 Done (sync) |
+| GitHub Integration | `backend/app/integrations/github/` | Parth | 🔵 In Progress |
 | Workers | `backend/app/workers/` | Yug | ⚪ Todo |
 | LLM Gateway | `backend/ai/llm/` | Meet | 🟢 Done |
 | Embedding Service | `backend/ai/embeddings/` | Meet | 🟢 Done |
 | Vector Retriever | `backend/ai/retrieval/vector.py` | Meet | 🟢 Done |
-| Lexical Retriever | `backend/ai/retrieval/lexical.py` | Meet | 🔵 Stub |
-| RRF Fusion | `backend/ai/retrieval/fusion.py` | Meet | 🔵 Stub |
-| Cross-Encoder Reranker | `backend/ai/retrieval/reranker.py` | Meet | 🔵 Stub |
-| Context Builder | `backend/ai/context/builder.py` | Meet | 🔵 Stub |
+| Lexical Retriever | `backend/ai/retrieval/lexical.py` | Meet | 🟢 Done |
+| RRF Fusion | `backend/ai/retrieval/fusion.py` | Meet | 🟢 Done |
+| Cross-Encoder Reranker | `backend/ai/retrieval/reranker.py` | Meet | 🟢 Done |
+| Context Builder | `backend/ai/context/builder.py` | Meet | 🟢 Done |
+| RAG Pipeline | `backend/ai/pipeline.py` | Meet | 🟢 Done |
 | Prompt Builder | `backend/ai/schemas/prompt_builder.py` | Dev | 🟢 Done |
 | Output Validator | `backend/ai/schemas/validator.py` | Dev | 🟢 Done |
-| Grounding Validator | `backend/ai/schemas/grounding.py` | Dev | 🟢 Skeleton |
+| Grounding Validator | `backend/ai/schemas/grounding.py` | Dev | 🟢 Done |
 | Output Schemas | `backend/ai/schemas/output.py` | Dev | 🟢 Done |
-| Prompts | `backend/ai/prompts/` | Dev | 🟢 Files exist |
+| Prompts | `backend/ai/prompts/` | Dev | 🟢 Done |
 | Scanner | `backend/scanner/` | Prit | 🔵 Walker done |
 | Indexer | `backend/indexer/` | Divu | 🟢 Chunker done |
 | Agent (future) | `backend/agent/` | Multiple | ⚪ Todo |
-| Tests | `backend/tests/` | Keval | 🔵 In Progress |
+| Tests | `backend/tests/` | Keval | 🟢 26+ test files |
 
 ---
 

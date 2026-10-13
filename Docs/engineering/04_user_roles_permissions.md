@@ -1,8 +1,8 @@
 # 04. User Roles & Permissions
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24 | **Status:** Draft
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Live
 
 > [!NOTE]
-> Role system is not yet implemented in the backend. Auth API is a stub. The roles below are derived from the project design documents (`project_idea.md`, `team_rules.md`).
+> Role-based access (Team Lead vs Developer) is not yet enforced in the backend. The Auth API is fully implemented (GitHub OAuth + JWT). The roles below reflect the design from `team_rules.md`.
 
 ---
 
@@ -102,5 +102,5 @@ Based on [`backend/app/api/v1/auth.py`](file:///Users/meetvirugama/Desktop/AI-Po
 - **`isAuthenticated`:** Derived from whether `user` is non-null (not from raw token)
 - **Route protection:** `ProtectedRoute` component wraps all `/app/*` routes
 
-> [!IMPORTANT]
-> The auth API router exists as a stub only. GitHub OAuth endpoints are **not yet implemented**. The frontend has MSW mocks set up for development.
+> [!NOTE]
+> The Auth API is fully implemented. GitHub OAuth login, callback, `/auth/me`, and logout endpoints are all working. The frontend has MSW mocks for development use alongside the real API.
