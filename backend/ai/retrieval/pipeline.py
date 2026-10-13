@@ -91,7 +91,7 @@ class RAGPipeline:
             return []
 
         try:
-            return self.reranker.rerank(query=clean_query, chunks=fused, top_n=top_k)
+            return self.reranker.rerank(query=clean_query, candidates=fused, top_n=top_k)
         except Exception as exc:
             logger.warning("Cross-encoder reranking error: %s", exc)
             return fused[:top_k]
