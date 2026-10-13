@@ -135,18 +135,13 @@ def _request_user_id(request: Request) -> UUID:
 
 
 def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
-    user_id = _request_user_id(request)
-    repo_repo = RepositoryRepository(db)
-    
-    # 1. Check if the repository exists globally
-    repository = repo_repo.get_by_id(repository_id) # Adjust method name to match your DB layer
+    repository = RepositoryRepository(db).get_for_user(repository_id, _request_user_id(request))
     if repository is None:
-        raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository does not exist.")
-        
-    # 2. Check if the current user actually owns it
-    if repository.user_id != user_id: # Adjust attribute to match your schema
-        raise APIError(403, ErrorCode.FORBIDDEN, "You do not have access to this repository.")
-        
+        raise APIError(
+            404,
+            ErrorCode.REPOSITORY_NOT_FOUND,
+            "Repository does not exist or you do not have access.",
+        )
     return repository
 
 def _repository_response(repository: Repository) -> RepositoryResponse:
