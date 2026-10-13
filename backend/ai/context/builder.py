@@ -89,10 +89,16 @@ class AgentContext:
 # Section formatters
 # ---------------------------------------------------------------------------
 
-def _format_chunk(chunk: "CodeChunk") -> str:
+def _format_chunk(chunk: "CodeChunk" | str) -> str:
     """Render a CodeChunk into the REPOSITORY DATA section."""
-    header = f"--- {chunk.file_path} (lines {chunk.start_line}–{chunk.end_line}) ---"
-    return f"{header}\n{chunk.content}"
+    if isinstance(chunk, str):
+        return chunk
+    file_path = getattr(chunk, "file_path", "unknown")
+    start_line = getattr(chunk, "start_line", 0)
+    end_line = getattr(chunk, "end_line", 0)
+    content = getattr(chunk, "content", str(chunk))
+    header = f"--- {file_path} (lines {start_line}–{end_line}) ---"
+    return f"{header}\n{content}"
 
 
 def _format_memory(entry: MemoryEntry) -> str:

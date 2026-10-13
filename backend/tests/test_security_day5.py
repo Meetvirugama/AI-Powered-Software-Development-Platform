@@ -63,7 +63,12 @@ def test_api_accepts_normal_path(path_client):
 def test_resolve_within_root_blocks_symlink_dir(tmp_path):
     outside = tmp_path / "outside"; outside.mkdir(); (outside / "secret").write_text("x")
     repo = tmp_path / "repo"; repo.mkdir()
-    (repo / "link").symlink_to(outside, target_is_directory=True)
+    try:
+        (repo / "link").symlink_to(outside, target_is_directory=True)
+    except OSError as e:
+        if getattr(e, "winerror", None) == 1314:
+            pytest.skip("Symlink privilege not held on Windows")
+        raise
     with pytest.raises(UnsafePathError):
         resolve_within_root(repo, "link/secret")
 
@@ -86,8 +91,13 @@ def test_walker_skips_symlink_escape(tmp_path):
     (outside / "authorized_keys").write_text("ssh-rsa AAAA host-key\n")
     repo = tmp_path / "repo"; repo.mkdir()
     (repo / "main.py").write_text("print(1)\n")
-    (repo / "authorized_keys").symlink_to(outside / "authorized_keys")
-    (repo / "keys_dir").symlink_to(outside, target_is_directory=True)
+    try:
+        (repo / "authorized_keys").symlink_to(outside / "authorized_keys")
+        (repo / "keys_dir").symlink_to(outside, target_is_directory=True)
+    except OSError as e:
+        if getattr(e, "winerror", None) == 1314:
+            pytest.skip("Symlink privilege not held on Windows")
+        raise
     paths = {f.path.replace(os.sep, "/") for f in FileWalker().walk(str(repo))}
     assert paths == {"main.py"}
 

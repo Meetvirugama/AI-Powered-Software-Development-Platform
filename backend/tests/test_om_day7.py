@@ -1,8 +1,9 @@
+import os
 import uuid
 from datetime import datetime
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.models import (
@@ -13,11 +14,19 @@ from app.models.base import Base
 
 # Note: This test requires a real PostgreSQL database with pgvector installed to pass.
 # For local development with docker-compose, postgres is on localhost:5432
-TEST_DATABASE_URL = "postgresql://platform:platform@localhost:5432/agent_platform"
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://platform:platform@localhost:5432/agent_platform",
+)
 
 @pytest.fixture(scope="session")
 def engine():
-    engine = create_engine(TEST_DATABASE_URL)
+    engine = create_engine(TEST_DATABASE_URL, connect_args={"connect_timeout": 2})
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:
+        pytest.skip("PostgreSQL test database not available")
     # create_all will create tables that don't exist yet
     Base.metadata.create_all(engine)
     yield engine
