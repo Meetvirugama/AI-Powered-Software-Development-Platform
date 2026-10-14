@@ -1,844 +1,940 @@
-# Deep backend audit and Week 1 implementation plan for Antigravity
+# Professional frontend audit — SoftwearProject
 
-I inspected `Docs/week1.md` inside your uploaded ZIP and compared its Week 1 requirements against the actual backend modules, API routes, models, migrations, scanner, indexer, GitHub integration, AI pipeline, and tests.
+Your target should be a professional AI coding workspace inspired by the workflow of Antigravity and Claude Code, but with its own identity, layout, visual language, and interactions.
 
-The key point is that your backend is not just a FastAPI application. Week 1 requires a complete repository-intelligence system, from GitHub authentication to indexed code and grounded answers. Antigravity must audit that entire execution path, not simply clean up `backend/app/`.
+I inspected the frontend source in `Archive.zip`, including `Docs/week1.md`, React routes, pages, API services, hooks, stores, styling, mocks, and the backend route definitions that the frontend depends on.
 
-## 1. Initial backend audit: confirmed blockers
+My conclusion: you have a useful React foundation, but the frontend is not yet a cohesive, production-quality AI developer workspace. The biggest problems are mismatched contracts, incomplete live integration, authentication error handling, missing features, and a design that still resembles a basic dashboard rather than a code-intelligence environment.
 
-Critical — the sync queue has no worker
+## 1. What Week 1 actually requires
 
-`backend/app/services/repository_sync.py` enqueues jobs in Redis, but `backend/app/workers/` contains only `__init__.py`. The API can accept a sync request and return a job ID, but there is no implemented worker to complete clone → scan → chunk → embed → persist.
+According to `Docs/week1.md`, your frontend must support five screens and a complete user journey:
 
-Critical — the ORM and migrations disagree
+1\. Login
 
-`CodeChunk` and `MemoryEntry` are registered ORM models, but the supplied Alembic migrations do not create `code_chunks` or `memory_entries`. The vector column is also hard-coded to 1,536 dimensions, conflicting with the configurable embedding design required by Week 1.
+GitHub OAuth, callback handling, session verification, and clear error states.
 
-Critical — the search endpoint calls an unavailable pipeline method
+2\. Dashboard
 
-`backend/app/api/v1/repositories.py` expects `pipeline.retrieve(...)`, while the inspected `RAGPipeline` exposes `chat(...)` and an internal `_retrieve(...)`. The startup configuration also explicitly injects `retriever=None`.
+Connected repositories, language, last synchronization, status, and useful quick actions.
 
-Critical — indexing uses placeholder vectors
+3\. Repository selector
 
-`backend/indexer/incremental.py` inserts zero vectors and one chunk per file, bypassing the symbol-aware chunker and real embedding pipeline. New file inserts omit required `repository_files` fields, and deleted files are not reconciled in the inspected indexing loop.
+Discover GitHub repositories, search, connect, and show synchronization progress.
 
-Critical — the GitHub installation flow is incomplete
+4\. Repository explorer
 
-The GitHub API routes expect stored installation records, but the registered route set does not expose the installation callback/webhook needed to complete the documented registration flow. OAuth login and GitHub App installation are separate operations.
+Repository metadata, file tree, language/framework information, symbols, and dependencies.
 
-Critical — security and deployment configuration need repair
+5\. Repository chat
 
-The archive includes a GitHub App private-key file, which must be treated as compromised if it is real. The setup documentation also refers to a missing `.env.example`, and the default database port does not match the Docker Compose host-port mapping previously identified in the archive.
+Repository-aware questions, response streaming, clickable source references, loading states, and retryable errors.
 
-### One additional testing limitation
+The fifth screen is especially important. This is not supposed to be a generic chatbot with a GitHub logo. It should feel like a developer working with an AI that understands the selected repository.
 
-I attempted to run the backend test suite, but collection stopped immediately because the `responses` package is missing from the audit environment. That is a blocked test run, not evidence that all tests pass or that all tests fail. Antigravity must install the correct test dependencies and report the actual results.
+## 2. Confirmed frontend issues
 
-## 2. How the audit must align with `Docs/week1.md`
+Critical — repository discovery has stale integration assumptions
 
-The implementation should be evaluated against the project's existing requirements, not a newly invented backend architecture.
+`frontend/src/services/repositoryDiscovery.ts` still says its endpoints do not exist and that they are backed by MSW mocks. However, the archived backend defines `GET /api/v1/github/repositories` and `POST /api/v1/github/repositories/{github_repo_id}/connect`.
 
-| Week 1 area   | Required outcome                                               | Current concern                                                        |
-| ------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| W1-01 / W1-02 | Project configuration, PostgreSQL, pgvector, Redis, migrations | Schema and runtime configuration inconsistencies                       |
-| W1-03 / W1-04 | GitHub integration and authenticated API                       | Installation registration and end-to-end auth need verification        |
-| W1-06         | Async repository synchronization                               | Queue producer exists; worker implementation is missing                |
-| W1-07–W1-09   | File walker, AST parsing, symbols, dependency graph            | Scanner stubs, dependency declarations, and integration require review |
-| W1-10–W1-12   | Symbol-aware chunks, queue, embeddings                         | Incremental indexer bypasses the intended pipeline                     |
-| W1-13         | Vector search, lexical search, RRF, reranking                  | Pipeline wiring and database persistence are incomplete                |
-| W1-14–W1-15   | Memory and RAG context                                         | Memory schema and retrieval integration are incomplete                 |
-| W1-16         | Chat API                                                       | Search and chat interfaces are inconsistent                            |
-| W1-18 / W1-19 | Tests, security, isolation, observability                      | Tests are not yet verified end to end; security gate must be run       |
+Update the frontend contract based on the actual backend response schemas, not the old comments or assumed mock contract.
 
-The target is the Week 1 Definition of Done: a user connects a repository, the platform safely analyzes and indexes it, and repository-aware chat returns answers with verifiable source references.
+High — authentication treats network errors as logout
 
-Provider constraint: retain only Gemini and Groq as hosted AI services. Replace the Week 1 document's old OpenAI-specific examples and requirements where necessary, without changing the intended architecture or expanding the scope.
+`frontend/src/hooks/useAuth.ts` catches every `/auth/me` failure and clears the authenticated user. A temporary network or server failure is therefore treated the same as an invalid session, potentially redirecting a legitimate user to login.
 
-## 3. Complete Antigravity prompt — deep backend audit and repair
+Distinguish `401` from network failures and server errors. Show a retryable session-check error when authentication cannot be verified.
 
-This prompt covers the complete backend, not just the AI folder. Give Antigravity access to the extracted project, including `Docs/week1.md`, so it can inspect and modify the actual source files.
+High — the configured API URL is ignored
 
-# Deep Backend Audit, Repair and Week 1 Completion
+`frontend/.env.local` defines `VITE_API_BASE_URL`, but `frontend/src/services/api.ts` hard-codes `baseURL: '/api/v1'`.
 
-## Project
+Centralize the base URL and use a development proxy deliberately. Do not expose secrets through Vite environment variables.
 
-Repository: the existing project in the provided workspace/ZIP.
+High — the chat is not actually streaming
 
-Primary specification: `Docs/week1.md`
+`useRepositoryChat.ts` creates a pending assistant message, but `services/chat.ts` waits for a complete JSON response. The typing state is a loading placeholder, not token-by-token streaming, despite the Week 1 chat UI requirement.
 
-Main backend directory: `backend/`
+Either implement the streaming contract jointly with the backend or label the current behavior honestly until streaming is available. Never simulate real streaming by progressively displaying a completed response.
 
-Related components: `backend/app/`, `backend/ai/`, `backend/scanner/`, `backend/indexer/`, `backend/migrations/`, `backend/tests/`, root configuration files, Docker Compose, and frontend API contracts.
+High — real-time connection handling is incomplete
 
-## 1. Main objective
+`frontend/src/realtime/index.ts` closes the EventSource on error, and the hook has no reconnection backoff. The connection can remain down until the component remounts.
 
-Perform a very deep, evidence-based audit of the entire backend. Align every implementation decision with `Docs/week1.md`, identify defects, missing functionality, unnecessary code, security weaknesses, broken integrations, inconsistent schemas, and missing tests.
+The backend route and event schema must also be verified before relying on SSE for sync status.
 
-Then implement the necessary fixes in the existing codebase.
+High — incomplete service modules
 
-**Do not stop after producing an audit report or implementation plan.** Inspect the code, make changes, run tests, fix failures, and verify the end-to-end Week 1 workflow.
+`pullRequests.ts`, `tasks.ts`, `execution.ts`, `reviews.ts`, and `blastRadius.ts` are empty files. They should either be explicitly deferred to later weeks or removed until required. Do not expose nonfunctional features in the Week 1 interface.
 
-The final system must support:
+These are source-level findings from the archive, not assumptions about what the frontend looks like when rendered in your browser.
 
-GitHub authentication → repository selection → secure synchronization → file scanning → AST/symbol extraction → dependency graph → symbol-aware chunking → Gemini embeddings → PostgreSQL/pgvector persistence → lexical and vector search → RRF fusion → reranking → context and memory assembly → Gemini/Groq generation → output validation → verified citations → API response.
+## 3. Page-by-page professional audit
 
-### Hard constraints
+### A. Login and authentication
 
-1. Use `Docs/week1.md` as the authoritative Week 1 specification.
-2. Use only Gemini and Groq for hosted AI generation/embedding services. Do not require OpenAI or another hosted AI provider.
-3. Preserve useful existing implementations. Do not rewrite the entire project unnecessarily.
-4. Do not begin autonomous agent execution, code execution, automatic pull requests, or Week 2 features. Finish the Week 1 foundation first.
-5. Do not invent completed features, test results, API capabilities, credentials, or provider availability.
-6. Never silently convert a failed operation into success.
-7. Keep API contracts compatible with the existing frontend where possible. Document and test any required changes.
-8. Never expose real secrets in code, logs, test fixtures, reports, or generated documentation.
+Files: `pages/Login.tsx`, `pages/AuthCallback.tsx`, `hooks/useAuth.ts`, `services/auth.ts`, `layouts/ProtectedRoute.tsx`.
 
-## 2. Phase A — Complete repository inventory and requirements traceability
+Problems to address:
 
-Inspect every relevant source file, not just the main application file.
+- The login screen is a minimal centered card rather than a branded developer-tool entry point.
+- OAuth callback behavior needs to be matched exactly to the backend redirect and cookie-setting behavior.
+- A session-check failure is currently interpreted as unauthenticated regardless of cause.
+- The logout handler in `AppLayout.tsx` awaits the logout request before navigating. If the request fails, the local session is cleared by the hook, but navigation can fail to execute because the rejected promise propagates.
+- Authentication checks should not run unnecessarily in multiple mounted components.
+- There is no polished recovery UI for callback failures, denied permissions, expired sessions, or a temporarily unavailable backend.
+
+Target: a restrained, professional sign-in screen with a clear product identity, one primary GitHub action, permission explanation, and actionable errors. Keep the cookie-based authentication model; never store the JWT in `localStorage`.
+
+### B. Dashboard
+
+File: `pages/Dashboard.tsx`.
+
+What is good:
+
+- Repository cards are reusable.
+- Loading, error, empty, and pagination states already exist.
+- The page uses TanStack Query for server data.
+
+What needs improvement:
+
+- The page is primarily a repository grid; it does not yet establish a clear overview of the developer's workspace.
+- Sync failures and stale repositories need clearer status treatment and recovery actions.
+- Quick actions should be based on real functionality, not decorative cards.
+- Repository counts and activity summaries must be derived from backend data, not invented statistics.
+- Pagination and background refetching need to preserve the user's current context.
+- The page should adapt to small laptop viewports without creating excessive scrolling.
+
+Target: a workspace overview with connected repositories, actual indexing states, recent repository activity when available, and an obvious route to ask a question or connect another repository.
+
+### C. Repository selector
+
+Files: `pages/Repositories.tsx`, `services/repositoryDiscovery.ts`, `hooks/useAvailableRepositories.ts`, `hooks/useConnectRepository.ts`.
+
+What is good:
+
+- Debounced search is implemented.
+- The UI distinguishes connected from available repositories.
+- Connection errors are tracked per repository.
+- The code uses query-cache invalidation after successful connection.
+
+What needs improvement:
+
+- The response contract is still documented as assumed in places even though the backend contains relevant routes.
+- The page must distinguish GitHub installation problems from an empty repository list.
+- A single `isConnecting` flag can make mutation feedback ambiguous when multiple cards are rendered; ensure the UI disables and indicates only the relevant operation or intentionally serializes connects.
+- After connecting a repository, the UI must not imply indexing is complete merely because the connect endpoint returned successfully.
+- Search, pagination, and connect actions must remain consistent as background queries refresh.
+
+Target: a repository discovery workbench with a strong search field, connected/unconnected state, per-repository connect actions, and a real synchronization state.
+
+### D. Repository explorer
+
+File: `pages/RepositoryDetail.tsx`.
+
+This page is one of the largest integration risks because it consumes multiple endpoints and displays repository data that is not all present in the current backend response schema.
+
+The frontend defines optional fields for description, framework, file count, symbol count, and chunk count, while explicitly documenting some of them as mocked additions. The dependency service also states that the backend does not expose the expected endpoint.
+
+Required fixes:
+
+- Remove fabricated metadata and placeholder dependencies from the production path.
+- Show a genuine loading or unavailable state when metadata is not available.
+- Avoid issuing file/dependency queries before the repository reaches an appropriate indexing state.
+- Poll sync status only while the job is active, with bounded frequency and cleanup on unmount.
+- Show the last successful sync separately from the current attempt.
+- Provide a usable file tree with clear empty/error states and a route into repository chat.
+- Display file, symbol, and chunk counts only when backed by real data.
+
+Target: a compact codebase overview with a repository header, sync status, real file tree, meaningful metadata, and a clear “Ask this codebase” action.
+
+### E. Repository chat
+
+Files: `pages/RepositoryChat.tsx`, `hooks/useRepositoryChat.ts`, `services/chat.ts`.
+
+This is the core product screen and deserves the largest design and engineering investment.
+
+Current strengths:
+
+- The chat is repository-scoped.
+- Conversation state is kept locally.
+- The request sends a validated question/history structure.
+- Source metadata is represented by a TypeScript type.
+- The composer supports Enter to send and Shift+Enter for a newline.
+- There is an initial loading/pending state and a retry affordance.
+
+Problems:
+
+- The backend returns a complete answer rather than a real stream.
+- The UI's `isStreaming` name overstates the behavior.
+- Conversation state is lost when the component is unmounted or refreshed.
+- The source type defines file and line references, but each source needs to be a genuine interactive control that opens the correct repository file and location.
+- Error handling should preserve the failed question and let the user retry without duplicating messages.
+- The current layout relies on negative margins and a fixed viewport calculation. Nested scroll containers and small laptop windows need explicit testing.
+- There is no clear evidence of markdown/code rendering quality, syntax highlighting, copy controls, or accessible source navigation.
+- Long responses, empty retrieval, model/provider errors, and indexing-in-progress states need deliberate handling.
+
+Target: a coding assistant conversation panel, not a generic messaging screen. Answers should support readable markdown, code blocks, copy actions, source chips, and clear retrieval/grounding states when the backend provides that information.
+
+## 4. Design direction: inspired by Antigravity and Claude Code, not copied
+
+Use these products as workflow references, not visual templates. Your product should have its own name, component design, icons, spacing, colors, and interaction patterns.
+
+[Primeros pasos con Google Antigravity  |  Google Codelabs](https://images.openai.com/static-rsc-4/sDQtOKubIE_FsI2SMZl44trC3Yl1Lk5KbhM_hgvSNGtzcDdyQC2Pfqh4ZszEu9L6k7WWUtsvWM0eoo0VRevib6OXeWzBUNaEcVQ6zSjM2SShL4zc-KH6MYznDRG4ExKxnRs9pMOODJWbKzWopji4mibIUgIqW5p3Biiw0t5yo04?purpose=inline)
+
+Reference: Antigravity
+
+Borrow the concept of an integrated developer workspace: clear project context, tools close to the work, status visibility, and an environment that feels built for engineering.
+
+[Claude Code can just do things - Dane Grant](https://images.openai.com/static-rsc-4/5PblcZLjY6etXFkgYxN3w2dZrbxiAKhtUpny21HKneJWrHpcWAhalWKZ0X18DYtKWsz5cbzsByz0FA2iaAPW1t7cciWHjILeiv81MF-Wv69I9nETIfGgXcnTK0exV99gBUGvvzqu-szAjHqdyet2XF7YjLTeLqamRmPDJi023Bw?purpose=inline)
+
+Reference: Claude Code
+
+Borrow the workflow principle of a focused coding conversation grounded in project context. Keep the question, answer, code evidence, and follow-up actions connected.
+
+### Recommended product identity
+
+Use a dark, low-glare Code Intelligence Workbench design:
+
+- Deep charcoal background rather than pure black.
+- Slightly lighter panels with subtle borders.
+- One restrained accent color for primary actions and selected navigation.
+- Monospace typography for paths, symbols, line numbers, and code.
+- A clean sans-serif font for explanations, headings, and controls.
+- Compact but readable spacing.
+- Minimal shadows and restrained gradients.
+- Clear hierarchy instead of excessive glass effects, glowing borders, or animated decoration.
+
+Do not clone either product's exact layout, logos, terminology, screenshots, or distinctive visual assets.
+
+### Proposed application shell
+
+### Code Intelligence
+
+Workspace
+
+WORKSPACE
+
+Overview
+
+Repositories
+
+CURRENT PROJECT
+
+my-codebase
+
+src/auth.ts
+
+src/api.ts
+
+REPOSITORY INTELLIGENCE
+
+## Understand your codebase
+
+Explore architecture, search symbols, and ask questions grounded in indexed source files.
+
+Ask your repository
+
+Where is authentication implemented?
+
+Conceptual layout only — not a screenshot of your current application.
+
+This is the overall direction, not a final visual specification. The real chat screen should use more horizontal room for conversation and evidence than the overview page.
+
+## 5. Professional design specification
+
+The design should be consistent across all five screens, with the chat and repository explorer sharing the same application shell.
+
+### Global layout
+
+Desktop application shell
+
+Target
+
+Navigation
+
+200–240 px
+
+Workspace, repositories, settings
+
+Main workspace
+
+Flexible width
+
+Dashboard, file explorer, or chat
+
+Evidence panel
+
+Optional
+
+Sources, symbols, file details
+
+Suggested proportions, not fixed pixel requirements. The evidence panel should collapse on narrower screens.
+
+Use a viewport-filling shell with independently scrollable content panels. On a normal laptop, the main workspace should fit within the available viewport; long file trees, conversations, and source lists should scroll inside their own panels instead of creating multiple competing page scrollbars.
+
+### Design tokens
+
+| Token            | Recommendation                                                 |
+| ---------------- | -------------------------------------------------------------- |
+| Main background  | Deep charcoal                                                  |
+| Panel background | Slightly lighter charcoal                                      |
+| Borders          | Subtle neutral gray                                            |
+| Primary accent   | Restrained blue or blue-violet                                 |
+| Success          | Muted green                                                    |
+| Warning          | Amber                                                          |
+| Error            | Muted red                                                      |
+| Typography       | Clean sans-serif; monospace for code                           |
+| Radius           | Consistent 6–10 px                                             |
+| Motion           | Short, purposeful transitions; respect reduced-motion settings |
+
+Do not hard-code colors throughout individual components. Centralize tokens and use shared primitives for buttons, inputs, cards, status indicators, tooltips, dialogs, and loading states.
+
+### Page layout rules
+
+- Login: minimal, branded, focused on GitHub authentication.
+- Dashboard: compact workspace overview and connected repository cards.
+- Repositories: search, filter, connect, and sync status.
+- Explorer: repository header, compact file tree, real metadata, and chat action.
+- Chat: conversation center, repository context in the left panel, and collapsible evidence/source details.
+
+Avoid filling every screen with cards. Use typography, whitespace, subtle dividers, and clear interaction hierarchy.
+
+## 6. API integration and state management audit
+
+The existing architecture is worth retaining: React, React Router, TanStack Query, Zustand, Axios, and TypeScript. A professional redesign should not require replacing these tools.
+
+| Component                         | Required change                                                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `services/api.ts`                 | Use configurable base URL, consistent error normalization, request timeout, and safe handling of session expiry.                            |
+| `services/auth.ts`                | Match the real backend session and logout contract.                                                                                         |
+| `services/repositories.ts`        | Match actual response schemas; do not assume server pagination when the endpoint returns a plain list.                                      |
+| `services/repositoryDiscovery.ts` | Remove stale mock assumptions and align field names and status codes with the implemented backend.                                          |
+| `services/chat.ts`                | Keep the response contract accurate; add streaming only when a real streaming API exists.                                                   |
+| `hooks/useAuth.ts`                | Distinguish unauthenticated, loading, and service-unavailable states.                                                                       |
+| `hooks/useRepositories.ts`        | Handle polling, cache invalidation, pagination, and synchronization states correctly.                                                       |
+| `hooks/useRepositoryChat.ts`      | Prevent duplicate submissions, preserve retryable questions, clean up requests, and handle completed versus streaming responses accurately. |
+| `realtime/index.ts`               | Implement bounded reconnection and verify event contracts.                                                                                  |
+| `types/api.ts`                    | Make backend-derived types accurate and remove assumptions disguised as confirmed schemas.                                                  |
+| `mocks/handlers.ts`               | Keep mock data for isolated development/testing only; never mix mock and live data silently.                                                |
+
+### Important synchronization issue
+
+The frontend currently maps the entire `SYNCING` state to `CLONING`, because the backend does not provide distinct stages in the repository status enum. This is an acceptable temporary display only if clearly communicated.
+
+To show `Cloning → Scanning → Indexing → Ready` truthfully, the backend must expose actual job progress. Do not animate through stages merely to make the interface look active.
+
+### Important streaming issue
+
+`Docs/week1.md` requires a streaming chat experience, but the current chat service uses an ordinary POST request that returns a complete answer.
+
+Antigravity should:
+
+1. Inspect the actual backend chat response and any existing SSE routes.
+2. Decide on one supported streaming contract with the backend.
+3. If implemented, handle partial content, cancellation, connection failure, final citations, and completion events.
+4. If the backend cannot stream yet, keep a high-quality pending state and explicitly report streaming as incomplete.
+
+The UI must never display fake token-by-token streaming.
+
+## 7. Accessibility, responsiveness, and reliability
+
+A professional frontend must work beyond a single desktop screenshot.
+
+- Support keyboard navigation and visible focus states.
+- Use semantic buttons and links, with accessible labels for icon-only controls.
+- Ensure dialogs, popovers, and menus are keyboard accessible.
+- Use appropriate live announcements for completed chat responses and errors without repeatedly announcing every render.
+- Respect reduced-motion preferences.
+- Ensure code blocks and long paths do not force the entire page wider than the viewport.
+- Test at laptop, tablet, and mobile widths.
+- Keep the chat composer visible while the conversation panel scrolls.
+- Ensure the sidebar collapses appropriately on smaller screens.
+- Handle browser refresh on nested routes.
+- Preserve intended redirects after authentication.
+- Add request cancellation and prevent stale responses from overwriting newer state.
+- Avoid unnecessary polling, repeated `/auth/me` calls, and duplicate requests.
+- Display useful empty, loading, error, and success states for every asynchronous screen.
+
+## 8. Build and testing status
+
+I attempted `npm run build` in the extracted archive.
+
+- The TypeScript build step completed far enough to reach Vite.
+- Vite then failed because the archived `node_modules` lacked the platform-specific Rolldown native binding required by the Linux audit environment.
+
+This is an environment/dependency installation problem; it does not establish that the frontend source fails to compile on your MacBook.
+
+The final audit should run a clean dependency installation on the target development environment, then execute:
+
+```
+cd frontend
+npm ci
+npm run build
+npm run lint
+```
+
+Antigravity should also add tests for authentication state, repository connection, query-cache invalidation, sync progress, chat retry behavior, citation links, and error states. Add browser-level end-to-end tests for the primary user journey if the project's existing tooling supports them.
+
+## 9. Ready-to-paste Antigravity prompt
+
+This is the implementation prompt. It directs Antigravity to audit the existing frontend, align it with `Docs/week1.md`, fix functional issues, and redesign the UI around a distinct AI coding workspace inspired by the workflows of Antigravity and Claude Code.
+
+# Task: Professional Frontend Audit, Functional Repair, and Code Intelligence Workspace Redesign
+
+## Project context
+
+Project: existing SoftwearProject codebase.
+
+Primary requirements: `Docs/week1.md`.
+
+Frontend: `frontend/`.
+
+Backend contract: inspect the actual FastAPI routes, Pydantic schemas, response models, authentication behavior, synchronization jobs, and chat API before changing frontend integration.
+
+Reference products: Google Antigravity and Claude Code, for workflow inspiration only.
+
+## Main objective
+
+Perform a complete, professional frontend audit and implement the required changes.
+
+The target is a polished AI Code Intelligence Workspace that feels like a serious developer tool, not a generic admin dashboard or ordinary chatbot.
+
+Take inspiration from the integrated developer workflows of Antigravity and Claude Code, but create an original visual identity, layout, components, navigation, and interactions. Do not copy their screenshots, logos, exact layouts, distinctive assets, or branding.
+
+**Do not stop after providing an audit report. Inspect the actual code, implement necessary changes, run checks, fix failures, and verify the complete Week 1 user journey.**
+
+Preserve the existing React, TypeScript, Vite, React Router, TanStack Query, Zustand, Axios, and Tailwind architecture unless a specific technical problem justifies a change.
+
+Do not rewrite the application unnecessarily.
+
+## Phase 1 — Complete frontend inventory
+
+Inspect the entire `frontend/src/` directory, configuration, dependencies, and relevant backend files.
 
 Audit at least:
 
-- `Docs/week1.md` and other relevant project documentation.
-- `backend/app/main.py`.
-- `backend/app/api/v1/`.
-- `backend/app/core/`.
-- `backend/app/models/`.
-- `backend/app/schemas/`.
-- `backend/app/repositories/`.
-- `backend/app/services/`.
-- `backend/app/integrations/github/`.
-- `backend/app/workers/`.
-- `backend/ai/`.
-- `backend/scanner/`.
-- `backend/indexer/`.
-- `backend/migrations/`.
-- `backend/tests/` and test mocks.
-- `backend/requirements.txt`, root requirements, `pytest.ini`, Alembic configuration, Docker Compose, `.gitignore`, and `.env.example` if present.
-- Relevant frontend API services and types for contract compatibility.
+- `App.tsx` and `main.tsx`
+- All pages in `pages/`
+- All components in `components/`
+- `layouts/`
+- `services/`
+- `hooks/`
+- `stores/`
+- `types/api.ts`
+- `realtime/`
+- `mocks/`
+- `index.css`
+- Tailwind configuration
+- Vite configuration
+- TypeScript configuration
+- `package.json` and lockfile
+- Frontend environment files
+- `Docs/week1.md`
+- Corresponding backend routes and schemas
 
-For every module:
+For every module, identify:
 
-1. Explain its intended responsibility.
-2. Inspect every class, method, database query, import, external call, and important branch.
-3. Trace which components call it.
-4. Check whether it is actually used by the running application.
-5. Identify duplicate implementations, stubs, dead code, placeholder data, unsafe defaults, inconsistent contracts, and incomplete error handling.
-6. Identify dependencies that are missing, unnecessary, duplicated, or incompatible.
-7. Check asynchronous behavior, transaction boundaries, resource cleanup, and failure recovery.
-8. Compare implementation with the corresponding Week 1 task and acceptance criteria.
+1. Actual responsibility.
+2. Whether it is used.
+3. Broken imports and incorrect assumptions.
+4. Missing functionality.
+5. Incorrect backend contracts.
+6. Duplicate logic and unnecessary abstractions.
+7. Mocked data and unfinished implementations.
+8. Authentication and state-management problems.
+9. Responsive layout and accessibility problems.
+10. Relevant Week 1 requirements and acceptance tests.
 
-Produce a traceability matrix containing:
+Classify each finding as CRITICAL, HIGH, MEDIUM, LOW, or DEFERRED.
 
-- Week 1 task ID and requirement.
-- Required behavior.
-- Relevant source files.
-- Current implementation status: COMPLETE, PARTIAL, BROKEN, MISSING, or DEFERRED.
-- Evidence for the status.
-- Dependencies and blockers.
-- Required change.
-- Tests that prove completion.
+Produce a file-by-file audit report and a Week 1 requirements traceability matrix.
 
-Do not mark a task COMPLETE simply because a class or route exists.
+## Phase 2 — Align with Docs/week1.md
 
-## 3. Phase B — Repair configuration, startup, and infrastructure
+Week 1 requires five functional screens:
 
-Inspect the application lifecycle and make startup behavior reliable.
+1. Login and GitHub OAuth callback.
+2. Dashboard with connected repositories and sync status.
+3. Repository selector with GitHub discovery, search, and connection.
+4. Repository explorer with metadata, files, symbols, and dependencies where available.
+5. Repository chat with loading states, streaming where supported, and clickable source references.
 
-### Configuration
+Preserve this scope.
 
-- Consolidate configuration into the existing settings class.
-- Add and validate required environment variables.
-- Create `.env.example` containing placeholders only.
-- Ensure `.env`, private keys, caches, virtual environments, and generated artifacts are ignored by Git.
-- Align PostgreSQL host ports and `DATABASE_URL`.
-- Validate Redis configuration and connectivity.
-- Configure database connection pooling appropriately for the actual workload.
-- Add validation for production secrets and unsafe configuration.
-- Remove duplicate configuration systems and unused variables only after checking references.
+Do not add nonfunctional pull-request management, autonomous agents, code execution, reviews, tasks, or other Week 2/3 functionality to the Week 1 navigation.
 
-### Startup and shutdown
+Inspect the existing empty service files:
 
-Inspect `backend/app/main.py`.
+- `services/pullRequests.ts`
+- `services/tasks.ts`
+- `services/execution.ts`
+- `services/reviews.ts`
+- `services/blastRadius.ts`
 
-- Initialize database, Redis, GitHub, embedding, retrieval, and AI dependencies through a clear lifecycle.
-- Inject fully configured services into application state or the existing dependency-injection mechanism.
-- Do not initialize `RAGPipeline` with `retriever=None` in a supposedly functional configuration.
-- Avoid swallowing initialization exceptions and silently running a broken application.
-- Provide a documented degraded mode only when the remaining features can genuinely operate.
-- Close HTTP clients, Redis connections, and model resources cleanly during shutdown.
-- Ensure startup and shutdown are safe and deterministic.
-- Avoid logging secrets or sensitive provider error payloads.
+Remove or defer them explicitly if they have no Week 1 responsibility. Do not delete any module without checking imports and planned dependencies.
 
-### Health checks
+## Phase 3 — Redesign the application shell
 
-Separate basic liveness from readiness.
+Create a coherent Code Intelligence Workspace.
 
-- Liveness indicates that the process is running.
-- Readiness verifies the dependencies necessary for the advertised functionality.
-- Report database, Redis, GitHub, embedding, and LLM configuration status without exposing credentials.
-- Distinguish an unconfigured optional provider from a required dependency failure.
-- Use accurate HTTP status codes.
+### Visual identity
 
-## 4. Phase C — Database and migration audit
+Use a restrained dark developer-workspace aesthetic:
 
-Compare every SQLAlchemy ORM model with the complete Alembic migration history.
+- Deep charcoal backgrounds.
+- Slightly lighter panel surfaces.
+- Subtle neutral borders.
+- One consistent accent color.
+- Clean sans-serif typography for the interface.
+- Monospace typography for file paths, symbols, line numbers, and code.
+- Consistent spacing, radii, and icon sizes.
+- Clear typography hierarchy.
+- Minimal shadows and decorative effects.
+- Purposeful transitions that respect reduced-motion preferences.
+
+Avoid excessive gradients, glowing borders, glass effects, oversized cards, decorative statistics, and generic AI-generated dashboard styling.
+
+Do not copy Antigravity or Claude Code's exact interface. Create an original design system.
+
+### Application shell
+
+Implement a consistent shell with:
+
+- Collapsible left navigation.
+- Product identity and workspace context.
+- Repository navigation.
+- Current repository context when applicable.
+- Main workspace.
+- Optional contextual evidence panel.
+- Clear account/session controls.
+- Accessible tooltips and menus.
+
+The navigation should distinguish workspace overview, repositories, and the currently selected repository.
+
+Use the full available viewport on desktop and laptop screens. Keep panels independently scrollable, with the chat composer pinned where appropriate. Avoid unnecessary nested page scrolling.
+
+On narrower screens, collapse the navigation and contextual panels cleanly.
+
+Use the existing routing and component structure where possible.
+
+## Phase 4 — Establish design tokens and reusable primitives
+
+Centralize design tokens in the existing styling system.
+
+Define consistent values for:
+
+- Background and panel surfaces.
+- Foreground and muted text.
+- Borders and dividers.
+- Primary and secondary actions.
+- Success, warning, and error states.
+- Focus rings.
+- Typography scale.
+- Spacing.
+- Radius.
+- Transitions.
+- Z-index and overlay behavior.
+
+Create or refactor reusable primitives as needed:
+
+- Button
+- IconButton
+- Input
+- Textarea
+- Tooltip
+- StatusBadge
+- RepositoryCard
+- LoadingSkeleton
+- EmptyState
+- ErrorState
+- RetryAction
+- Dialog
+- Dropdown
+- Tabs
+- FileTreeItem
+- SourceReference
+- CodeBlock
+- Toast or notification
+
+Avoid duplicate UI implementations across pages. Do not introduce a second component library without a demonstrated need.
+
+Use semantic HTML and accessible controls.
+
+## Phase 5 — Repair authentication
 
 Inspect:
 
-- `User`
-- `GitHubInstallation`
-- `Repository`
-- `RepositoryFile`
-- `CodeSymbol`
-- `SymbolEdge`
-- `CodeChunk`
-- `SyncJob`
-- `MemoryEntry`
+- `pages/Login.tsx`
+- `pages/AuthCallback.tsx`
+- `hooks/useAuth.ts`
+- `stores/useAuthStore.ts`
+- `services/auth.ts`
+- `layouts/ProtectedRoute.tsx`
+- `layouts/AppLayout.tsx`
+- Backend authentication routes and cookie configuration
 
-For each model, compare columns, data types, nullability, defaults, indexes, uniqueness, foreign keys, and enum values against the migrations.
+Fix the real integration rather than merely restyling the screens.
 
-### Known problems to investigate and fix
+Requirements:
 
-- `code_chunks` and `memory_entries` are declared in the ORM but are absent from the supplied creation migrations.
-- `CodeChunk.embedding` is fixed at 1,536 dimensions, despite the requirement for configurable dimensions.
-- The content schema and lexical-search index must support the actual queries used by the retriever.
-- The database migration history must match the ORM definitions, including metadata and timestamps.
-- Any raw SQL insertion must supply every required column.
-- Foreign keys and repository/file relationships must remain consistent when files are updated or deleted.
-- Repository ownership and installation relationships must be enforced.
-- Existing enum migrations must work on a fresh database.
-
-### Required actions
-
-1. Add or revise migrations without silently discarding user data.
-2. Preserve migration history and create forward migrations for schema corrections.
-3. Verify a completely fresh database can migrate successfully.
-4. Verify downgrade behavior where appropriate.
-5. Verify the ORM can create, query, update, and delete the intended records.
-6. Test all required indexes and vector dimensions.
-7. Add appropriate unique constraints and transaction boundaries.
-8. Ensure repository-scoped queries include authorization scope.
-
-Never use `Base.metadata.create_all()` as a substitute for a correct production migration history.
-
-## 5. Phase D — Authentication and API security
-
-Inspect the entire authentication flow, including `auth.py`, `JWTMiddleware`, token utilities, Redis blocklisting, and GitHub OAuth.
-
-### Authentication requirements
-
-- Validate OAuth state correctly and prevent CSRF.
-- Validate GitHub responses and handle timeouts and provider errors.
-- Store or update user identity consistently.
-- Enforce JWT signature, expiry, required claims, and the configured algorithm.
-- Use a strong secret or appropriate signing mechanism.
-- Keep browser session cookies HTTP-only and configure Secure/SameSite correctly for the deployment environment.
-- Ensure logout invalidates the session according to the project's security requirements.
-- Handle Redis failures without falsely claiming that logout succeeded.
-- Review whether returning access tokens in the JSON response is necessary for the current frontend contract; avoid unnecessary token exposure.
-- Ensure public routes are explicitly defined and protected routes cannot bypass authentication.
-- Verify CORS, request IDs, rate limits, and security headers.
-
-Do not weaken authentication to make development tests pass.
-
-### Repository isolation
-
-Audit every repository-scoped endpoint and database query.
-
-Required endpoints include:
-
-- Repository list and detail.
-- Repository sync and sync status.
-- File and symbol listing.
-- Search and chat.
-- GitHub repository listing and connection.
-- Any file-content, symbol, memory, or chunk endpoint that exists.
-
-Every request must verify that the authenticated user has access to the selected repository before reading or modifying its data.
-
-Test the following matrix:
-
-- User A accessing User A's repository: allowed.
-- User A accessing User B's repository: denied.
-- Nonexistent repository: consistent not-found behavior.
-- Invalid or missing session: rejected.
-- Repository ID manipulated in query parameters or request bodies: still denied.
-
-Use one consistent ownership policy. Prefer not revealing another user's repository existence unless the existing API contract explicitly requires a different response.
-
-## 6. Phase E — GitHub App integration
-
-Inspect every file under `backend/app/integrations/github/`, the GitHub routes, installation model/repository, OAuth flow, Redis token cache, and repository sync service.
-
-### Separate OAuth from GitHub App installation
-
-GitHub OAuth login identifies the user. GitHub App installation grants the application repository permissions. These are separate operations.
-
-Implement and connect the actual installation callback or webhook flow needed to associate an installation with the authenticated user. Verify installation ownership before allowing repository access.
-
-Check whether the application needs webhook handling in Week 1. If implemented, verify webhook signatures, event parsing, idempotency, and installation-removal behavior.
-
-### Token manager
-
-- Generate GitHub App JWTs correctly.
-- Mint installation access tokens through the correct GitHub endpoint.
-- Cache tokens safely in Redis.
-- Use an appropriate TTL below the real expiration time.
-- Handle expired tokens, cache failures, and permission errors.
-- Never log tokens or private keys.
-- Avoid storing credentials in the database.
-- Handle concurrent token refresh without creating unnecessary token requests.
-
-### Repository API wrapper
-
-Verify actual implementations for:
-
-- Listing repositories for a specific installation.
-- Fetching repository metadata.
-- Reading the default branch.
-- Listing branches where needed.
-- Handling pagination.
-- Handling 401, 403, 404, 429, 5xx, and network errors.
-- Respecting rate-limit headers and `Retry-After`.
-
-Do not return connected repositories as though they represent a successful live GitHub query when GitHub integration is unavailable.
-
-### Secure cloning
-
-Implement and verify a secure shallow clone mechanism.
-
-- Use the correct installation token and repository.
-- Support the default branch and an explicitly validated branch override.
-- Keep workspace paths inside a configured root.
-- Reject path traversal and symlink escapes.
-- Apply a timeout and resource limits.
-- Clean up partial clones after failure.
-- Avoid exposing tokens in command-line arguments, process listings, or logs.
-- Use safe subprocess invocation without shell interpolation.
-- Verify repository metadata before marking a clone successful.
-
-Never treat a client-supplied owner/name as sufficient authorization.
-
-## 7. Phase F — Repository scanner and dependency graph
-
-Inspect all of `backend/scanner/`, including:
-
-- `walker.py`
-- `detector.py`
-- `parser.py`
-- `symbols.py`
-- `graph.py`
-- `test_mapper.py`
-
-Also inspect `backend/requirements.txt`.
-
-### FileWalker
-
-The Week 1 requirements specify skipping `.git`, `node_modules`, binary files, and files larger than 1 MB.
-
-Implement and test:
-
-- Recursive traversal.
-- Configurable excluded directories and patterns.
-- File-size limits.
-- Binary detection.
-- Safe handling of unreadable files.
-- Symlink handling.
-- Safe relative paths.
-- Stable results and deterministic sorting.
-- Appropriate error reporting without crashing the entire scan.
-
-Inspect `walker.py` and `detector.py` for unfinished `pass` branches.
-
-### Language detection
-
-Verify detection for Python, JavaScript, TypeScript, Java, and Go, as required by Week 1.
-
-- Use a deterministic fallback for unknown file types.
-- Do not treat an unknown extension as a confirmed supported language.
-- Ensure language detection and parser selection agree.
-
-### Tree-sitter parsing
-
-- Verify required parser packages are declared in backend dependencies.
-- Check the installed tree-sitter API versions and grammar compatibility.
-- Ensure unsupported languages and syntax errors do not crash the entire repository scan.
-- Handle missing parsers explicitly.
-- Do not silently return a successful parse when no parser exists.
-
-### Symbol extraction
-
-For supported languages, extract:
-
-- Functions and methods.
-- Classes and relevant declarations.
-- Stable symbol names and kinds.
-- Correct original line ranges.
-- Signatures where available.
-- Parent/child relationships where supported.
-
-Check line numbering carefully, including zero-based parser positions versus one-based source lines.
-
-### Dependency graph
-
-Inspect import parsing, inheritance, and call relationships.
-
-- Avoid fabricated edges when a target symbol cannot be resolved.
-- Handle relative imports and language-specific syntax.
-- Deduplicate edges.
-- Validate source and target symbol IDs.
-- Persist edges through the repository layer.
-- Provide a queryable graph, not only an in-memory list.
-
-Do not claim complete call-graph resolution where static analysis cannot resolve dynamic behavior.
-
-## 8. Phase G — Chunking, embedding queue, and incremental indexing
-
-Inspect all of `backend/indexer/`, the code chunk model, embedding service, repositories, and database schema.
-
-### Symbol-aware chunking
-
-Use the stable scanner symbol schema as required by the Week 1 dependency rules.
-
-- Generate chunks at meaningful function/class/module boundaries.
-- Preserve file path, language, symbol ID, start/end lines, and content hash.
-- Split large symbols at logical boundaries or safe line windows.
-- Enforce input/token limits.
-- Avoid duplicating entire files in addition to every symbol without a clear retrieval reason.
-- Handle files without extractable symbols through a documented fallback.
-
-### Embedding queue
-
-Inspect `embedding_queue.py`.
-
-The current implementation removes items from Redis before embedding succeeds and returns vectors without persisting their results to their corresponding chunks.
-
-Fix this reliability problem.
-
-- Use a durable processing pattern with acknowledgements or equivalent recovery.
-- Preserve the chunk ID and repository/file metadata throughout the job.
-- Retry transient failures with bounded backoff.
-- Ensure permanently failing items are recorded and do not disappear silently.
-- Persist generated vectors to the correct chunk rows.
-- Prevent duplicate processing from producing duplicate chunks.
-- Respect Gemini's actual batch and input limits.
-- Do not rely on arbitrary fixed batch assumptions without validating them.
-
-### Incremental indexing
-
-Inspect `backend/indexer/incremental.py`.
-
-Replace the current placeholder workflow, which inserts whole-file chunks with zero vectors.
-
-Implement:
-
-1. Read files from the trusted cloned workspace.
-2. Calculate content hashes.
-3. Skip unchanged files.
-4. Parse changed files and regenerate symbols/chunks.
-5. Generate real Gemini embeddings.
-6. Replace obsolete chunk data transactionally.
-7. Remove records for deleted files.
-8. Update file metadata and index status.
-9. Recover from failed jobs without corrupting previously valid data.
-
-Fix incomplete `repository_files` inserts, including required size and line-count metadata.
-
-Review the current use of `AsyncSession` against the application's synchronous SQLAlchemy session setup. Use one coherent database access strategy in each execution path; do not mix sync and async session semantics incorrectly.
-
-For Week 1, a reliable full reindex is acceptable if incremental indexing cannot be completed safely. However, the implementation must not pretend to support incremental indexing when it does not.
-
-## 9. Phase H — Complete the Gemini/Groq AI and RAG integration
-
-Use the separate AI-folder audit as a prerequisite, but verify its integration with the backend rather than assuming it is correct.
-
-### Provider constraint
-
-- Gemini: primary text generation and embedding service.
-- Groq: secondary text generation provider.
-- No OpenAI API key requirement or other hosted AI provider.
-- Verify current supported model IDs and actual account access.
-- Respect free-tier quotas; do not evade rate limits by rotating accounts.
-
-### Required backend integration
+- Match the actual backend OAuth start and callback URLs.
+- Verify how the backend redirects after setting the HTTP-only session cookie.
+- Keep JWTs out of localStorage and sessionStorage.
+- Keep credentials out of frontend code.
+- Handle successful login, denied permissions, invalid state, expired session, and callback failure.
+- Distinguish HTTP 401 from network errors, 5xx responses, and temporary session-check failures.
+- Do not clear valid local user state on every transient server error.
+- Provide a retryable error screen when session verification cannot complete.
+- Avoid duplicate `/auth/me` requests caused by component mounting.
+- Ensure logout clears local session state and navigates correctly even if the logout request fails.
+- Preserve safe redirects after authentication.
+- Ensure protected routes do not render protected data before session verification completes.
+
+Test login, refresh, logout, invalid session, and temporary backend outage.
+
+## Phase 6 — Repair API integration and TypeScript contracts
+
+Inspect the actual backend endpoints and Pydantic response schemas.
+
+Known issues to investigate:
+
+1. `services/api.ts` hard-codes `/api/v1` even though `VITE_API_BASE_URL` is configured.
+2. `services/repositoryDiscovery.ts` contains stale comments claiming relevant endpoints are not implemented, despite the archived backend defining repository discovery and connection routes.
+3. Repository discovery response fields and pagination assumptions may not match the real backend.
+4. `services/repositories.ts` uses client-side pagination because the connected repository endpoint returns a plain list.
+5. Repository description, framework, counts, and dependencies include mocked or optional frontend assumptions.
+6. The chat response currently returns a complete answer, not a token stream.
+7. The frontend SSE client expects an events endpoint whose backend availability and schema must be verified.
+
+Required actions:
+
+- Centralize API base URL configuration.
+- Keep `withCredentials` for cookie authentication.
+- Do not expose secrets through `VITE_` environment variables.
+- Normalize backend errors consistently.
+- Configure request timeouts.
+- Preserve request cancellation where supported.
+- Use typed service functions.
+- Match real field names, response envelopes, pagination, and status codes.
+- Remove stale comments and speculative contracts after verification.
+- Keep UI-facing adapters only where they serve a real compatibility purpose.
+- Avoid `any` and unsafe type assertions in production code.
+- Avoid showing mocked metadata in the real backend workflow.
+
+Update API types from the actual backend schemas rather than maintaining multiple competing contracts.
+
+Do not silently switch between mocked and live responses.
+
+## Phase 7 — Dashboard
+
+Redesign `pages/Dashboard.tsx` as a workspace overview.
+
+Include:
+
+- A clear page heading and repository context.
+- Connected repository list.
+- Repository name, language, last successful sync, and actual sync status.
+- Useful quick actions to connect a repository, explore a repository, or ask a question.
+- Loading, empty, error, retry, and background-refetch states.
+- Pagination when needed.
+- Responsive repository cards or rows.
+- Clear failed-sync recovery actions.
+
+Only display counts and recent activity when supported by real backend data. Do not invent repository statistics, activity, model usage, or success rates.
+
+Keep the layout compact and useful rather than filling the screen with decorative metric cards.
+
+## Phase 8 — Repository selector
+
+Redesign `pages/Repositories.tsx` and its related hooks/services.
+
+Requirements:
+
+- Search and filtering.
+- Debounced requests.
+- Stable pagination.
+- Clear connected and unconnected states.
+- Per-repository connection loading state.
+- Prevent duplicate submissions.
+- Display actionable connection errors.
+- Correct cache invalidation after successful connection.
+- Navigate using the internal repository UUID returned by the backend.
+- Distinguish an empty result from a GitHub App installation or permission error.
+- Avoid marking a repository ready merely because the connect endpoint succeeded.
+
+Verify the actual GitHub discovery and connect endpoints.
+
+The interface should communicate that connecting and indexing are different operations.
+
+## Phase 9 — Repository explorer
+
+Redesign `pages/RepositoryDetail.tsx`.
+
+Create a compact codebase overview with:
+
+- Repository name and owner.
+- Default branch.
+- Language and supported metadata.
+- Current sync/indexing status.
+- Last successful synchronization time.
+- File tree with readable paths.
+- Symbol information where available.
+- Dependency information only when supported by real API data.
+- A prominent action to ask questions about the repository.
+- Appropriate empty, loading, failed-sync, and unavailable-data states.
+
+Requirements:
+
+- Do not fabricate descriptions, frameworks, file counts, symbol counts, chunk counts, or dependencies.
+- Do not request unavailable endpoints.
+- Do not issue expensive queries before the repository is ready.
+- Poll sync status only while a job is active.
+- Stop polling on unmount or terminal status.
+- Use bounded polling intervals.
+- Preserve the last known successful sync information when a new sync fails.
+- Make the file tree keyboard accessible.
+- Show long paths without breaking the layout.
+- Provide a coherent navigation path from a selected file or symbol to repository chat.
+
+If file-content retrieval is not implemented by the backend, do not pretend that a file can be opened in a real code editor.
+
+## Phase 10 — Repository chat: highest priority
 
 Inspect:
 
-- `backend/ai/pipeline.py`
-- `backend/ai/llm/`
-- `backend/ai/embeddings/`
-- `backend/ai/retrieval/`
-- `backend/ai/context/`
-- `backend/ai/schemas/`
-- `backend/ai/prompts/`
-- `backend/app/api/v1/repositories.py`
-- `backend/app/api/v1/chat.py`
-- `backend/app/main.py`
+- `pages/RepositoryChat.tsx`
+- `hooks/useRepositoryChat.ts`
+- `services/chat.ts`
+- Chat-related TypeScript types.
+- Backend chat endpoint and response schema.
+- Any existing backend SSE or streaming implementation.
+
+Build a high-quality repository-aware conversation interface.
+
+### Layout
+
+- Compact repository header.
+- Conversation history in the main panel.
+- Composer anchored at the bottom.
+- Clear repository context.
+- Optional collapsible sources/evidence panel.
+- Appropriate independent scrolling.
+- Responsive behavior for laptop, tablet, and mobile.
 
-Fix these known contract problems:
+### Conversation behavior
 
-1. Startup configures only Groq even though Gemini settings exist.
-2. Startup injects `retriever=None`.
-3. The search route calls `pipeline.retrieve(...)`, but the RAG pipeline does not expose that public method.
-4. The pipeline and validator have hard-coded OpenAI model assumptions.
-5. Grounding can report a source as verified when no database session is available.
-6. The embedding and indexing paths are not connected to real stored vectors.
-
-Wire the real embedding service, database-backed vector retriever, lexical retriever, RRF fusion, optional reranker, context builder, LLM gateway, output validation, and grounding validator.
-
-### Retrieval behavior
-
-Follow the Week 1 design:
-
-- Vector search retrieves up to 30 candidates.
-- PostgreSQL full-text search retrieves up to 30 candidates.
-- RRF uses the documented constant `k=60`.
-- Fuse unique candidates.
-- Optionally rerank the top 30 with the existing local cross-encoder.
-- Select up to 8 relevant chunks for the final context.
-
-Validate the local reranker dependency and runtime before requiring it. The basic pipeline must still behave honestly if reranking is unavailable.
-
-Ensure query-time embeddings use the same compatible model and dimensions as indexed document embeddings.
-
-## 10. Phase I — Context, memory, and grounded chat
-
-### Context builder
-
-Use the existing context builder and verify that it assembles:
-
-- Retrieved code chunks.
-- Relevant project memory.
-- Related file metadata.
-- A bounded amount of recent chat history.
-
-Rules:
-
-- Repository content must be kept separate from system instructions.
-- Context must respect the selected model's actual token budget.
-- Memory must be repository-scoped, deduplicated, and ordered according to its documented policy.
-- User-supplied history must be validated and size-limited.
-- Untrusted repository text must not override system instructions.
-
-### Memory persistence
-
-Compare `MemoryEntry`, `memory_repository.py`, migrations, and context-builder integration.
-
-- Add missing migrations.
-- Scope memory by repository and authorization.
-- Define the intended lifecycle and statuses.
-- Do not invent memory entries from arbitrary untrusted text without validation.
-- Ensure unavailable memory does not silently become fabricated context.
-- If memory is intentionally deferred, mark it deferred and remove misleading active-path claims.
-
-### Grounding
-
-Implement actual source verification.
-
-- Verify that each citation belongs to the selected repository.
-- Verify file identity and indexed version.
-- Validate line ranges against the actual file metadata.
-- Confirm that cited evidence was retrieved and supplied to the model.
-- Remove invalid citations or report insufficient evidence.
-- Never claim verification when the database is unavailable.
-
-### API response
-
-Preserve the existing `RepositoryAnswer` contract where possible.
-
-The answer must contain the actual answer text and verified file/line sources. Keep provider metadata and usage telemetry internal unless the existing public contract explicitly exposes them.
-
-## 11. Phase J — Repository APIs and consistent errors
-
-Inspect every route under `backend/app/api/v1/` and all corresponding request/response schemas.
-
-Required Week 1 routes include:
-
-- Health and readiness.
-- GitHub login, callback, current user, and logout.
-- GitHub repository discovery and connection.
-- Connected repository list and detail.
-- Repository synchronization.
-- File and symbol listing.
-- Repository search.
-- Repository chat.
-
-Ensure route handlers are thin and delegate business logic to services/repositories.
-
-Fix the duplicated ownership logic in `repositories.py` and `chat.py`. Use consistent repository-scoped authorization and error behavior.
-
-### API contracts
-
-- Validate all input through Pydantic schemas.
-- Bound pagination, question length, history size, and top-k.
-- Use appropriate HTTP status codes, including 202 for queued jobs.
-- Ensure every response matches its declared schema.
-- Keep error envelopes consistent across exceptions and middleware.
-- Use shared error codes rather than ad hoc strings.
-- Ensure sync status and job state accurately reflect actual work.
-- Make OpenAPI documentation reflect the implemented contracts.
-
-Verify the frontend's current request/response assumptions before changing API fields.
-
-## 12. Phase K — Async jobs, status, and transaction safety
-
-Implement the missing synchronization worker under `backend/app/workers/` and connect it to the Redis queue.
-
-The worker should execute:
-
-Queued job → validate repository/installation → clone → scan → parse → extract symbols and dependency edges → chunk → embed → persist → update status.
-
-Required job behavior:
-
-- `QUEUED` → `RUNNING` → `COMPLETED` or `FAILED`.
-- Persist meaningful, sanitized error information.
-- Handle duplicate jobs and retries safely.
-- Prevent two workers from corrupting the same repository index.
-- Handle cancellation or process restart where practical.
-- Clean up temporary workspaces.
-- Update repository status and last-synced time accurately.
-- Ensure the job is not marked complete before all required indexing steps finish.
-
-Use Redis with the existing architecture; do not introduce Celery or another queue framework unless there is a demonstrated requirement.
-
-Review transaction boundaries around job creation and enqueueing. Avoid a persisted job that appears runnable when enqueueing failed. Document any remaining delivery guarantees.
-
-Provide an actual status endpoint or make the existing repository detail endpoint return accurate status information consistent with the frontend.
-
-## 13. Phase L — Security gate
-
-Inspect `backend/app/core/input_security.py`, authentication middleware, rate limiting, security headers, GitHub cloning, file access, indexing, prompts, and persistence.
-
-### Secrets
-
-The archive contains a GitHub App private-key file. If it is real, treat it as compromised and rotate/revoke it.
-
-- Remove real credentials from distributed source files.
-- Ensure `.env` and private keys are ignored.
-- Create `.env.example` with placeholders.
-- Check repository history where available.
-- Redact tokens and credentials from logs and exceptions.
-- Never expose Gemini/Groq keys to the frontend.
-
-### Repository content secret scanning
-
-Implement or verify secret scanning before content enters embeddings, database storage, LLM context, or memory.
-
-- Detect configured secret patterns.
-- Redact values before indexing.
-- Log only the safe detection metadata.
-- Avoid false claims that heuristic scanning detects every secret.
-- Test that secret values do not reach embedding calls or prompts.
-
-### Path safety
-
-Verify paths from cloned repositories, file access, indexing, and generated citations.
-
-- Reject absolute paths and traversal.
-- Resolve symlinks safely.
-- Keep all access within the trusted repository workspace.
-- Do not use unvalidated repository-relative paths as absolute filesystem paths.
-- Handle malicious filenames safely.
-
-### Prompt injection
-
-Treat README files, comments, and repository content as untrusted data. Do not execute repository code. Test that malicious source content cannot override system instructions or expose secrets.
-
-### Rate limiting and headers
-
-Verify the configured per-IP/per-user rate limits and ensure limits are applied to the intended routes.
-
-Check:
-
-- CORS restricted to configured origins.
-- `X-Content-Type-Options`.
-- `X-Frame-Options`.
-- Appropriate HSTS behavior only over HTTPS.
-- Request ID correlation.
-- Safe error messages.
-- Authentication and authorization on every protected route.
-
-Produce a Week 1 security gate report with actual evidence.
-
-## 14. Phase M — Tests and CI
-
-First inspect the existing tests and their intended contracts. Do not delete tests merely because they currently fail.
-
-Resolve missing test dependencies, including the `responses` dependency identified during the initial test collection attempt. Declare the required testing packages in the correct dependency file.
-
-Run tests in stages.
-
-### Unit tests
-
-- Configuration and model validation.
-- Authentication and JWT utilities.
-- Repository ownership checks.
-- GitHub response normalization and error handling.
-- Token caching and refresh.
-- File walking and language detection.
-- Tree-sitter parsing and symbol extraction.
-- Dependency graph construction.
-- Chunking and content hashes.
-- Embedding service and vector dimensions.
-- Lexical/vector retrieval and RRF.
-- Context budgets and grounding.
-- Queue state transitions and retry behavior.
-
-### Integration tests
-
-- Fresh database migrations.
-- ORM persistence for every required model.
-- GitHub API calls using mocks.
-- Authenticated repository connection.
-- Queue creation and worker consumption.
-- Scanner-to-indexer integration.
-- Real database-backed lexical and vector search.
-- Repository-scoped chat with mocked Gemini/Groq.
-- Output schema validation and citation grounding.
-- Repository isolation for every scoped endpoint.
-
-### End-to-end test
-
-Use a small deterministic test repository.
-
-1. Authenticate a user or use a controlled test identity.
-2. Connect or register the test repository through the supported integration path.
-3. Trigger synchronization.
-4. Verify that the worker completes the job.
-5. Confirm files, symbols, dependency edges, chunks, and embeddings are stored.
-6. Run lexical search and vector search.
-7. Run hybrid retrieval and reranking.
-8. Ask: `Where is authentication implemented?`
-9. Verify that the returned source paths and line ranges exist and support the answer.
-10. Confirm that a different user cannot retrieve the same private repository's data.
-
-Use mocked AI providers for ordinary tests. Run a live API test only when valid credentials and network access are available.
-
-Run the frontend build and contract checks if backend API changes affect frontend integration.
-
-Report results as PASSED, FAILED, BLOCKED, or NOT RUN. Never claim an unexecuted test passed.
-
-## 15. Phase N — Code cleanup and unnecessary code
-
-Perform cleanup only after tracing references and integration dependencies.
-
-For every file, classify it as:
-
-- KEEP.
-- FIX.
-- REPLACE.
-- REMOVE.
-- DEFER TO WEEK 2/3.
-
-Check for:
-
-- Duplicate services or business logic.
+- Support Enter to send and Shift+Enter for a newline.
+- Prevent duplicate submissions.
+- Disable submission while the request is active.
+- Preserve the failed question for retry.
+- Provide a cancel/stop action only when the request can genuinely be cancelled.
+- Handle long answers and code blocks.
+- Support accessible keyboard navigation.
+- Show loading skeletons and useful error states.
+- Avoid duplicate user or assistant messages after failures.
+- Preserve conversation state while navigating within the intended scope.
+- Do not claim conversation persistence if it is only in local component state.
+
+### Response rendering
+
+- Render Markdown safely.
+- Support readable code blocks and copy controls.
+- Preserve whitespace and code formatting.
+- Display sources with file path, line range, and symbol when available.
+- Make verified source references clickable.
+- Use real routes or file-detail actions; do not add dead buttons.
+- Clearly communicate insufficient evidence or unavailable grounding when provided by the backend.
+- Do not display invented confidence values or fabricated citations.
+
+### Streaming
+
+Week 1 requests streaming, but the current chat service uses a regular POST returning a complete JSON response.
+
+Inspect the actual backend capability before implementation.
+
+If a real SSE or streaming endpoint exists, implement it correctly, including:
+
+- Partial response updates.
+- Cancellation.
+- Network errors.
+- Completion events.
+- Final citation metadata.
+- Cleanup when the component unmounts.
+
+If the backend does not support streaming, keep a truthful pending/loading state and report streaming as an outstanding integration task. Do not fake token-by-token streaming by progressively rendering a completed answer.
+
+## Phase 11 — Synchronization and realtime updates
+
+Inspect:
+
+- `realtime/events.ts`
+- `realtime/index.ts`
+- `hooks/useRealtimeRepositories.ts`
+- Backend event routes and event payload schemas.
+- Repository sync job/status schemas.
+
+Fix the lifecycle of the SSE connection.
+
+- Connect only when the authenticated session and backend endpoint are valid.
+- Close the connection on logout or unmount.
+- Add bounded reconnection with backoff and cleanup.
+- Avoid reconnect loops.
+- Validate event payloads before using them.
+- Invalidate the correct TanStack Query keys.
+- Do not rely on guessed event names or payload shapes.
+- Fall back to bounded polling if realtime events are unavailable.
+
+The backend currently exposes coarse synchronization states. Show Cloning, Scanning, Indexing, and Ready only when those stages are backed by actual backend job progress.
+
+Never animate fake progress.
+
+## Phase 12 — State management and performance
+
+Preserve the existing separation:
+
+- TanStack Query for server data.
+- Zustand for small shared UI/session state.
+- Local React state for transient component concerns.
+
+Audit all query keys, cache invalidation, retries, polling, and cancellation.
+
+Requirements:
+
+- Avoid duplicate requests.
+- Avoid storing the same server data in both Zustand and TanStack Query.
+- Reset user-specific caches when logging out.
+- Prevent stale requests from overwriting current route data.
+- Use stable list keys.
+- Avoid unnecessary component re-renders.
+- Debounce search correctly.
+- Avoid excessive refetching.
+- Lazy-load routes only where it improves real performance.
+- Ensure the application remains responsive with large repository lists and long conversations.
+
+Do not optimize based on guesses. Verify the actual source of unnecessary work.
+
+## Phase 13 — Responsive behavior and accessibility
+
+Test at desktop, laptop, tablet, and mobile widths.
+
+Requirements:
+
+- The main workspace fits the available desktop viewport.
+- Side panels collapse or become overlays on narrow screens.
+- Chat composer remains accessible.
+- File paths and code blocks do not cause page-wide horizontal overflow.
+- Long conversations scroll within the conversation panel.
+- Every icon-only action has an accessible name.
+- Buttons and links work by keyboard.
+- Focus states remain visible.
+- Dialogs and menus are keyboard accessible.
+- Status changes and completed responses are announced appropriately.
+- Color is not the only way to communicate state.
+- Contrast is sufficient.
+- Reduced-motion preferences are respected.
+
+Avoid competing nested scrollbars and fixed heights that clip content on short laptop screens.
+
+## Phase 14 — Remove dead code and production mocks
+
+Search the complete frontend for:
+
+- Empty service files.
+- Unused components and hooks.
+- Duplicate services.
+- Stale API comments.
+- Placeholder values.
+- Fake response data.
+- Mock endpoints in production paths.
+- Dead navigation links.
+- Inert buttons.
 - Unused imports and dependencies.
-- Stub methods and unfinished branches.
-- Placeholder responses and zero vectors.
-- Dead endpoints.
-- Redundant models or schemas.
-- Duplicate authorization logic.
-- Outdated model/provider assumptions.
-- Generated files, caches, native dependencies, and artifacts included in source archives.
+- Hard-coded URLs.
+- Incorrect assumptions hidden behind TypeScript types.
 
-Remove obsolete OpenAI-only dependencies after migrating all active callers. Retain Groq-compatible message contracts where useful.
+Retain MSW only for explicit development and testing scenarios. Enable it intentionally through a documented development setting, not silently in production.
 
-Do not delete legitimate future scaffolding just because it is not needed for Week 1. Clearly document deferred components.
+Never display mock repository data alongside live data.
 
-Do not make broad style-only refactors that obscure functional changes.
+Do not delete a file until all references, tests, and intended future responsibilities have been checked.
 
-## 16. Phase O — Required deliverables
+## Phase 15 — Tests and verification
 
-Produce all of the following:
+Run:
 
-### A. Backend audit report
+```
+cd frontend
+npm ci
+npm run build
+npm run lint
+```
 
-A file-by-file report with:
+Resolve dependency installation problems appropriately for the target environment. Do not assume archived native modules are portable between operating systems.
 
-- File path and responsibility.
-- Current behavior.
-- Confirmed defect and evidence.
-- Severity: CRITICAL, HIGH, MEDIUM, LOW.
-- Week 1 task ID.
-- Dependencies and root cause.
-- Exact fix made or recommended.
-- Test proving the behavior.
+Add tests using the existing tooling where practical.
 
-### B. Week 1 traceability matrix
+Test:
 
-Mark every relevant checkbox in `Docs/week1.md` as COMPLETE, PARTIAL, BROKEN, MISSING, or DEFERRED, with evidence.
+1. Login and callback states.
+2. Authentication check success, 401, network error, and server error.
+3. Logout behavior.
+4. Protected routes.
+5. Repository discovery, search, pagination, and connection.
+6. Cache invalidation.
+7. Sync status and polling cleanup.
+8. Repository explorer loading, empty, and error states.
+9. Chat success, retry, duplicate-submit prevention, and cancellation where supported.
+10. Source-reference navigation.
+11. SSE reconnect and cleanup where applicable.
+12. Responsive navigation and accessible controls.
+13. API contract consistency with the backend.
+14. Full user flow from login to repository chat.
 
-Update documentation only when implementation changes justify the update. Do not mark requirements complete simply because the plan has been written.
+Use mocked API responses for repeatable tests. Add browser-level end-to-end tests if the existing environment supports them.
 
-### C. Code changes
+Report tests as PASSED, FAILED, BLOCKED, or NOT RUN. Do not claim a test passed if it was not executed.
 
-Modify the actual project files, migrations, tests, and configuration necessary to complete Week 1.
+## Phase 16 — Required deliverables
 
-### D. Change log
+Produce:
 
-List added, modified, removed, and deferred files with reasons.
+1. File-by-file frontend audit report.
+2. Week 1 requirements traceability matrix.
+3. Implemented frontend redesign.
+4. List of added, modified, removed, and deferred files.
+5. Updated design tokens and reusable components.
+6. Corrected API contracts and state handling.
+7. Updated environment/setup instructions.
+8. Actual test and build results.
+9. Screenshots of the implemented application at desktop and mobile widths, if browser tooling is available.
+10. A list of remaining backend blockers and incomplete Week 1 features.
 
-### E. Setup instructions
+## Execution order
 
-Provide accurate commands for:
+1. Inspect all source files and trace API contracts.
+2. Produce the audit and establish the baseline.
+3. Fix authentication and API integration.
+4. Establish design tokens and the application shell.
+5. Redesign the dashboard and repository selector.
+6. Redesign the repository explorer.
+7. Prioritize and complete the repository chat.
+8. Fix synchronization/realtime lifecycle.
+9. Remove dead code and misleading mocks.
+10. Run tests, fix defects, and verify the full journey.
+11. Update the traceability matrix and report remaining blockers.
 
-- Environment setup.
-- PostgreSQL and Redis startup.
-- Fresh migrations.
-- API startup.
-- Worker startup.
-- Frontend startup.
-- Test execution.
-- End-to-end verification.
+**Final acceptance criterion:** the frontend must be visually cohesive, responsive, accessible, and genuinely connected to the real Week 1 backend workflow. It must look and behave like an original professional AI code-intelligence workspace, with Antigravity and Claude Code serving only as workflow references.
 
-### F. Test report
+Start with the real code and `Docs/week1.md`, then implement and verify the changes. Do not stop after writing recommendations.
 
-Include actual commands, pass/fail counts, failures, blockers, and remaining manual verification.
+## 10. Recommended priority
 
-### G. Remaining risks
+I would have Antigravity finish these three outcomes first:
 
-List any Week 1 requirement that cannot be completed safely or verified in the available environment. Explain its impact and the next required action.
+1. Functional correctness: OAuth, repository discovery, connection, synchronization status, and API contracts.
+2. Core developer experience: a distinctive application shell, compact repository explorer, and high-quality grounded chat.
+3. Reliability and polish: streaming when supported, real source navigation, retry behavior, responsive layouts, and tests.
 
-## 17. Execution order
-
-Work in this dependency order:
-
-1. Inventory, requirements matrix, and baseline tests.
-2. Secrets, configuration, and dependency fixes.
-3. Database models and migrations.
-4. Authentication and repository isolation.
-5. GitHub installation and secure cloning.
-6. File walker, parser, symbols, and dependency graph.
-7. Symbol-aware chunking and persistence.
-8. Gemini embeddings and reliable queue processing.
-9. Worker and repository synchronization.
-10. Lexical/vector search, RRF, and reranking.
-11. Context, memory, and Gemini/Groq RAG integration.
-12. API contract and frontend integration.
-13. Security gate and comprehensive tests.
-14. Documentation, cleanup, and final acceptance report.
-
-Respect the dependency rules in `Docs/week1.md`. In particular, stabilize the symbol schema before finalizing chunking, verify indexed chunks before retrieval, and do not start autonomous agent execution before the knowledge layer works.
-
-## Final acceptance criteria
-
-The backend is ready for Week 2 only when the Week 1 Definition of Done is demonstrated on a fresh, reproducible setup.
-
-The system must connect and synchronize a repository, safely scan and parse it, persist symbols and chunks, generate real Gemini embeddings, support PostgreSQL lexical and vector retrieval, combine results with RRF, rerank relevant chunks where supported, assemble bounded context with memory, generate through Gemini/Groq, and return verifiable source citations.
-
-Authentication, authorization, job status, secret handling, error responses, migrations, and tests must be part of the acceptance gate.
-
-**Start by auditing the actual code against `Docs/week1.md`, then implement and verify the fixes. Do not stop at an architecture proposal.**
-
-## 4. How to run this with Antigravity efficiently
-
-I recommend letting Antigravity execute this in stages rather than attempting a huge blind rewrite.
-
-1. First pass — audit and traceability. Have it read `Docs/week1.md`, inspect the complete backend, produce the defect matrix, and establish the baseline test results. No large code edits yet.
-2. Second pass — infrastructure and ingestion. Fix configuration, migrations, GitHub installation, scanner, chunker, embedding queue, and the missing worker. Verify that a small repository can be indexed.
-3. Third pass — search and chat. Wire real embeddings, lexical/vector retrieval, RRF, reranking, context, Gemini/Groq, and grounding. Verify a known repository question.
-4. Fourth pass — security and final tests. Verify repository isolation, secret redaction, path safety, rate limits, fresh migrations, and the frontend/backend contract.
-
-My priority for your project: do not begin Week 2 until you can demonstrate the complete path from a connected repository to a grounded chat answer. That is the strongest evidence that the Week 1 backend foundation is genuinely working.
+The strongest result will come from building a cohesive workspace around real repository data—not from adding more visual effects or more pages.&#x20;

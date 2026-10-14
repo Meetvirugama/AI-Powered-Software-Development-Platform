@@ -41,6 +41,7 @@ from ai.llm.schemas import (
     LLMResponse,
     LLMTimeoutError,
     LLMUnavailableError,
+    LLMValidationError,
     Message,
 )
 from ai.schemas.grounding import GroundingValidator
@@ -125,6 +126,7 @@ class RAGPipeline:
         model: str = _DEFAULT_MODEL,
         max_retrieval_top_k: int = _DEFAULT_TOP_K,
         max_repair_attempts: int = _DEFAULT_MAX_REPAIR_ATTEMPTS,
+        db_session: Any = None,
     ) -> None:
         self.retriever = retriever
         self.context_builder = context_builder or ContextBuilder(max_context_tokens=max_context_tokens)
@@ -134,6 +136,7 @@ class RAGPipeline:
         self._model = model
         self._max_retrieval_top_k = max_retrieval_top_k
         self._max_repair_attempts = max_repair_attempts
+        self._db_session = db_session
 
     # ------------------------------------------------------------------
     # Properties & Configuration
@@ -224,13 +227,14 @@ class RAGPipeline:
                 confidence="low",
             )
 
-        # ---- Step 1: Retrieval -------------------------------------------
+        # ---- Step 1: Retrieval & Repo Metadata ---------------------------
         retrieval_start = time.monotonic()
         chunks = await self._retrieve(cleaned_question, repo_uuid)
+        related_files = await self._get_repository_files(repo_uuid)
         retrieval_latency_ms = (time.monotonic() - retrieval_start) * 1000
 
         # ---- Step 2: Graceful fallback for zero retrieval ------------------
-        if not chunks:
+        if not chunks and not related_files:
             logger.warning(
                 "rag_pipeline_zero_results",
                 extra={
@@ -250,6 +254,7 @@ class RAGPipeline:
             chunks=chunks,
             memory=memory,
             history=chat_history,
+            related_files=related_files,
         )
 
         # ---- Step 4: Prompt construction ---------------------------------
@@ -348,6 +353,62 @@ class RAGPipeline:
         """Internal retrieval delegating to public retrieve()."""
         return await self.retrieve(query, repository_id, top_k=self._max_retrieval_top_k)
 
+    async def _get_repository_files(self, repo_uuid: UUID) -> list[Any]:
+        """Fetch repository files from DB to provide repository overview context."""
+        db = self._db_session or getattr(self.grounding_validator, "_db", None)
+        if db is None:
+            return []
+        try:
+            from app.models.repository_file import RepositoryFile as DBRepoFile
+            from sqlalchemy import select
+            import inspect
+
+            session_factory = None
+            session = db
+            if callable(session) and not hasattr(session, "execute"):
+                session_factory = session
+                session = None
+
+            stmt = select(DBRepoFile).where(DBRepoFile.repository_id == repo_uuid)
+            rows = []
+            if session_factory is not None:
+                async with session_factory() as s:
+                    res = await s.execute(stmt)
+                    scalars = getattr(res, "scalars", None)
+                    if callable(scalars):
+                        rows = scalars().all()
+                    else:
+                        rows = res.all()
+            elif hasattr(session, "execute"):
+                if inspect.iscoroutinefunction(session.execute):
+                    res = await session.execute(stmt)
+                else:
+                    res = session.execute(stmt)
+                scalars = getattr(res, "scalars", None)
+                if callable(scalars):
+                    rows = scalars().all()
+                else:
+                    rows = res.all()
+
+            from ai.context.builder import RepositoryFile
+            return [
+                RepositoryFile(
+                    id=str(r.id),
+                    path=r.path,
+                    language=r.language or "unknown",
+                    size_bytes=r.size_bytes or 0,
+                    line_count=r.line_count or 0,
+                    content_hash=r.content_hash or "",
+                )
+                for r in rows
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "rag_pipeline_fetch_files_skipped",
+                extra={"error": str(exc), "repo_id": str(repo_uuid)},
+            )
+            return []
+
     @staticmethod
     def _normalise_history(
         history: list[ChatMessage | dict | Any],
@@ -434,8 +495,13 @@ class RAGPipeline:
 
         for attempt in range(self._max_repair_attempts):
             try:
-                response = await self.llm.generate(req)
-                content = self._clean_json_content(getattr(response, "content", ""))
+                try:
+                    response = await self.llm.generate(req)
+                    raw_content = getattr(response, "content", "")
+                except LLMValidationError as val_err:
+                    raw_content = getattr(val_err, "raw_response", None) or str(val_err)
+
+                content = self._clean_json_content(raw_content)
 
                 try:
                     data = json.loads(content)
@@ -443,7 +509,6 @@ class RAGPipeline:
 
                 except (json.JSONDecodeError, ValueError, TypeError) as parse_err:
                     if attempt == self._max_repair_attempts - 1:
-                        # Final attempt — give up
                         logger.error(
                             "rag_pipeline_json_repair_exhausted",
                             extra={
@@ -464,7 +529,7 @@ class RAGPipeline:
                         extra={"attempt": attempt + 1, "error": str(parse_err)},
                     )
                     req.messages.append(
-                        Message(role="assistant", content=response.content)
+                        Message(role="assistant", content=raw_content)
                     )
                     req.messages.append(
                         Message(

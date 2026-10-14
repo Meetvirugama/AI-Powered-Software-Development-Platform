@@ -164,14 +164,8 @@ export function useRepositoryChat(
               err instanceof Error
                 ? err.message
                 : 'The assistant could not complete the response. Please try again.';
-            // Finalise the placeholder so it renders a stable empty state.
-            setMessages((current) =>
-              current.map((msg) =>
-                msg.id === assistantId
-                  ? { ...msg, isStreaming: false }
-                  : msg,
-              ),
-            );
+            // Remove the failed placeholder message so no empty bubble remains.
+            setMessages((current) => current.filter((msg) => msg.id !== assistantId));
             setError(message);
             setIsPending(false);
           });

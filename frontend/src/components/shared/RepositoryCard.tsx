@@ -30,19 +30,19 @@ function syncStatusConfig(status: SyncStatus): StatusConfig {
       return {
         label: 'Synced',
         icon: <CheckCircle2 className="h-3.5 w-3.5" />,
-        className: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+        className: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
       };
     case 'SYNCING':
       return {
         label: 'Syncing…',
         icon: <RefreshCw className="h-3.5 w-3.5 animate-spin" />,
-        className: 'text-blue-600 bg-blue-50 border-blue-200',
+        className: 'text-primary bg-primary/10 border-primary/30',
       };
     case 'FAILED':
       return {
         label: 'Failed',
         icon: <XCircle className="h-3.5 w-3.5" />,
-        className: 'text-destructive bg-destructive/10 border-destructive/20',
+        className: 'text-destructive bg-destructive/10 border-destructive/30',
       };
     case 'NOT_SYNCED':
       return {

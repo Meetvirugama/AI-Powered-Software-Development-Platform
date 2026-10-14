@@ -262,7 +262,9 @@ class LLMValidationError(LLMError):
         detail: str = "",
         *,
         provider: str | None = None,
+        raw_response: str | None = None,
     ) -> None:
+        self.raw_response = raw_response
         msg = (
             f"LLM response failed schema validation. {detail}".strip()
             if detail
