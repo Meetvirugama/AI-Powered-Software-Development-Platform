@@ -415,6 +415,22 @@ class ContextBuilder:
         """
         sections: list[str] = []
 
+        # ---- Repository files & structure -----------------------------------
+        if ctx.related_files:
+            total_lines = sum(f.line_count for f in ctx.related_files)
+            file_lines = [
+                "REPOSITORY OVERVIEW & FILE INVENTORY:",
+                "-------------------------------------",
+                f"Total files: {len(ctx.related_files)}",
+                f"Total lines: {total_lines}",
+                "Files in repository:",
+            ]
+            for f in ctx.related_files[:100]:
+                file_lines.append(f"- {f.path} ({f.language or 'unknown'}, {f.line_count} lines)")
+            if len(ctx.related_files) > 100:
+                file_lines.append(f"... and {len(ctx.related_files) - 100} more files")
+            sections.append("\n".join(file_lines))
+
         # ---- Code chunks ----------------------------------------------------
         if ctx.code_chunks:
             chunk_texts = "\n\n".join(_format_chunk(c) for c in ctx.code_chunks)

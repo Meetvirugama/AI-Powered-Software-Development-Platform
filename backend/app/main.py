@@ -116,6 +116,7 @@ async def lifespan(app: FastAPI):
             llm_gateway=app.state.llm_gateway,
             grounding_validator=grounding_validator,
             model=settings.gemini_chat_model,
+            db_session=AsyncSessionLocal,
         )
         logger.info("rag_pipeline_ready", extra={"has_retriever": retriever is not None})
     except Exception as exc:
