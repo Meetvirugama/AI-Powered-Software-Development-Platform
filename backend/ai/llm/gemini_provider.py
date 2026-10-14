@@ -161,8 +161,18 @@ class GeminiProvider(LLMProvider):
 
                     # Validate JSON schema if required
                     if request.response_schema is not None:
+                        raw = content_text.strip()
+                        if raw.startswith("```"):
+                            lines = raw.splitlines()
+                            if len(lines) >= 2 and lines[0].startswith("```"):
+                                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+                        if "{" in raw and "}" in raw:
+                            start = raw.find("{")
+                            end = raw.rfind("}") + 1
+                            raw = raw[start:end]
+
                         try:
-                            parsed_json = json.loads(content_text)
+                            parsed_json = json.loads(raw)
                             if hasattr(request.response_schema, "model_validate"):
                                 request.response_schema.model_validate(parsed_json)
                         except Exception as val_exc:

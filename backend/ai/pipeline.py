@@ -41,6 +41,7 @@ from ai.llm.schemas import (
     LLMResponse,
     LLMTimeoutError,
     LLMUnavailableError,
+    LLMValidationError,
     Message,
 )
 from ai.schemas.grounding import GroundingValidator
@@ -434,8 +435,13 @@ class RAGPipeline:
 
         for attempt in range(self._max_repair_attempts):
             try:
-                response = await self.llm.generate(req)
-                content = self._clean_json_content(getattr(response, "content", ""))
+                try:
+                    response = await self.llm.generate(req)
+                    raw_content = getattr(response, "content", "")
+                except LLMValidationError as val_err:
+                    raw_content = getattr(val_err, "raw_response", None) or str(val_err)
+
+                content = self._clean_json_content(raw_content)
 
                 try:
                     data = json.loads(content)
@@ -443,7 +449,6 @@ class RAGPipeline:
 
                 except (json.JSONDecodeError, ValueError, TypeError) as parse_err:
                     if attempt == self._max_repair_attempts - 1:
-                        # Final attempt — give up
                         logger.error(
                             "rag_pipeline_json_repair_exhausted",
                             extra={
@@ -464,7 +469,7 @@ class RAGPipeline:
                         extra={"attempt": attempt + 1, "error": str(parse_err)},
                     )
                     req.messages.append(
-                        Message(role="assistant", content=response.content)
+                        Message(role="assistant", content=raw_content)
                     )
                     req.messages.append(
                         Message(
