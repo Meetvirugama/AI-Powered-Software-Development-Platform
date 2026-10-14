@@ -47,3 +47,11 @@ class GitHubInstallationRepository:
         self.session.commit()
         self.session.refresh(record)
         return record
+
+    def delete_by_installation_id(self, installation_id: str) -> bool:
+        record = self.get_by_installation_id(installation_id)
+        if record:
+            self.session.delete(record)
+            self.session.commit()
+            return True
+        return False

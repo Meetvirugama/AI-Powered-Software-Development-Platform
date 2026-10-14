@@ -80,3 +80,27 @@ class RepositoryRepository:
             self.session.commit()
             self.session.refresh(job)
         return job
+
+    def delete(self, repo_id: uuid.UUID) -> bool:
+        """Delete a repository and all related dependent records."""
+        repo = self.get_by_id(repo_id)
+        if not repo:
+            return False
+        from app.models.code_chunk import CodeChunk
+        from app.models.code_symbol import CodeSymbol
+        from app.models.symbol_edge import SymbolEdge
+        from app.models.repository_file import RepositoryFile
+        from app.models.sync_job import SyncJob
+        from app.models.memory_entry import MemoryEntry
+        from sqlalchemy import delete
+
+        self.session.execute(delete(CodeChunk).where(CodeChunk.repository_id == repo_id))
+        self.session.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repo_id))
+        self.session.execute(delete(SymbolEdge).where(SymbolEdge.repository_id == repo_id))
+        self.session.execute(delete(RepositoryFile).where(RepositoryFile.repository_id == repo_id))
+        self.session.execute(delete(SyncJob).where(SyncJob.repository_id == repo_id))
+        self.session.execute(delete(MemoryEntry).where(MemoryEntry.repository_id == repo_id))
+        self.session.delete(repo)
+        self.session.commit()
+        return True
+

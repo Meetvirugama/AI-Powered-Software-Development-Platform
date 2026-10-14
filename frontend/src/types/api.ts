@@ -125,6 +125,27 @@ export interface PaginatedRepositoryFileResponse {
   page_size: number;
 }
 
+export interface CodeSymbol {
+  id: string;
+  file_id: string;
+  name: string;
+  kind: string;
+  start_line: number;
+  end_line: number;
+  signature: string | null;
+  parent_id: string | null;
+}
+
+export interface RepositoryFileContent {
+  id: string;
+  path: string;
+  language: string | null;
+  size_bytes: number;
+  line_count: number;
+  content: string;
+  symbols: CodeSymbol[];
+}
+
 // ---------------------------------------------------------------------------
 // Dependencies — Day 5 Mock
 // ---------------------------------------------------------------------------

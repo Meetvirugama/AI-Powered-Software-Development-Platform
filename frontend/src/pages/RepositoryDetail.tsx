@@ -1,8 +1,12 @@
-import { useParams, Link } from 'react-router-dom';
+import { useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   useRepository,
   useRepositoryFiles,
   useRepositoryDependencies,
+  useSyncRepository,
+  useDeleteRepository,
+  useRepositoryFileContent,
   syncProgressFromStatus,
 } from '../hooks/useRepositories';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
@@ -22,6 +26,9 @@ import {
   Database,
   Code,
   File,
+  Trash2,
+  RotateCw,
+  X,
 } from 'lucide-react';
 import type { SyncStage, RepositoryFile } from '../types/api';
 
@@ -37,11 +44,20 @@ const SYNC_POLL_INTERVAL_MS = 3000;
 
 export function RepositoryDetail() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+
+  const [selectedFile, setSelectedFile] = useState<RepositoryFile | null>(null);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+
+  // ------------------------------------------------------------------
+  // Mutations
+  // ------------------------------------------------------------------
+  const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
+  const { mutate: deleteRepo, isPending: isDeletePending } = useDeleteRepository();
 
   // ------------------------------------------------------------------
   // Data Fetching
   // ------------------------------------------------------------------
-  
   const { data: repo, isLoading: repoLoading, isError: repoError, error: repoErrorData } = useRepository(id);
   const progress = repo ? syncProgressFromStatus(repo.sync_status) : null;
   const isPolling = progress?.isActive ?? false;
@@ -52,17 +68,31 @@ export function RepositoryDetail() {
   });
 
   // Only fetch files and dependencies if the repository is successfully synced
-  const { 
-    data: filesData, 
-    isLoading: filesLoading, 
-    isError: filesError 
-  } = useRepositoryFiles(id, 1, 100, { enabled: isReady }); // use larger page size to ensure we get root files
+  const {
+    data: filesData,
+    isLoading: filesLoading,
+    isError: filesError,
+  } = useRepositoryFiles(id, 1, 100, { enabled: isReady });
 
-  const { 
-    data: dependencies, 
-    isLoading: depsLoading, 
-    isError: depsError 
+  const {
+    data: dependencies,
+    isLoading: depsLoading,
+    isError: depsError,
   } = useRepositoryDependencies(id, { enabled: isReady });
+
+  function handleSync() {
+    if (id) triggerSync(id);
+  }
+
+  function handleDelete() {
+    if (id) {
+      deleteRepo(id, {
+        onSuccess: () => {
+          navigate('/app/dashboard');
+        },
+      });
+    }
+  }
 
   // ------------------------------------------------------------------
   // Loading & Error States
@@ -93,20 +123,86 @@ export function RepositoryDetail() {
     );
   }
 
+  const isSyncActive = repo.sync_status === 'SYNCING' || isSyncPending;
+
   // ------------------------------------------------------------------
   // Main Render
   // ------------------------------------------------------------------
 
   return (
     <div className="space-y-8 max-w-5xl">
-      {/* Back link */}
-      <Link
-        to="/app/dashboard"
-        className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Dashboard
-      </Link>
+      {/* Top Bar: Navigation & Action Header */}
+      <div className="flex items-center justify-between">
+        <Link
+          to="/app/dashboard"
+          className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back to Dashboard
+        </Link>
+
+        {/* Header Action Buttons */}
+        <div className="flex items-center gap-2">
+          {/* Re-sync Button */}
+          <button
+            onClick={handleSync}
+            disabled={isSyncActive}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50"
+            title="Re-synchronize repository"
+          >
+            <RotateCw className={cn('h-3.5 w-3.5', isSyncActive && 'animate-spin text-primary')} />
+            <span>{isSyncActive ? 'Syncing…' : 'Re-sync'}</span>
+          </button>
+
+          {/* Disconnect Button */}
+          <button
+            onClick={() => setShowConfirmDelete(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors"
+            title="Disconnect repository"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Disconnect</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Disconnect Confirmation Alert */}
+      {showConfirmDelete && (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 space-y-3"
+        >
+          <div className="flex items-start justify-between">
+            <div>
+              <h3 className="font-semibold text-foreground text-sm">Disconnect {repo.name}?</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                This will delete the repository indexing data, symbols, and vector chunks from this platform.
+              </p>
+            </div>
+            <button
+              onClick={() => setShowConfirmDelete(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => setShowConfirmDelete(false)}
+              className="px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-accent"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={isDeletePending}
+              className="px-3 py-1.5 rounded-lg bg-destructive text-destructive-foreground text-xs font-medium hover:bg-destructive/90 disabled:opacity-50"
+            >
+              {isDeletePending ? 'Deleting…' : 'Confirm Disconnect'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Header Section */}
       <div className="flex flex-col gap-6 border-b border-border pb-6 sm:flex-row sm:items-start sm:justify-between">
@@ -115,7 +211,7 @@ export function RepositoryDetail() {
             <h1 className="text-3xl font-bold text-foreground">{repo.name}</h1>
             <p className="mt-1 text-base text-muted-foreground">{repo.full_name}</p>
           </div>
-          
+
           <p className="text-sm text-foreground max-w-2xl">
             {repo.description || <span className="italic text-muted-foreground">No description provided.</span>}
           </p>
@@ -134,8 +230,8 @@ export function RepositoryDetail() {
               </div>
             )}
             <div className="flex items-center gap-1.5">
-              <RefreshCw className="h-4 w-4" />
-              <span>{progress.label}</span>
+              <RefreshCw className={cn('h-4 w-4', isSyncActive && 'animate-spin text-primary')} />
+              <span>{isSyncActive ? 'Syncing…' : progress.label}</span>
             </div>
             {repo.last_synced_at && (
               <div className="flex items-center gap-1.5">
@@ -150,12 +246,12 @@ export function RepositoryDetail() {
           to={`/app/repositories/${repo.id}/chat`}
           className={cn(
             'inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0',
-            (!progress.isComplete) || progress.isFailed
+            !progress.isComplete || progress.isFailed
               ? 'pointer-events-none opacity-50'
-              : 'hover:bg-primary/90'
+              : 'hover:bg-primary/90',
           )}
-          aria-disabled={(!progress.isComplete) || progress.isFailed}
-          tabIndex={(!progress.isComplete) || progress.isFailed ? -1 : undefined}
+          aria-disabled={!progress.isComplete || progress.isFailed}
+          tabIndex={!progress.isComplete || progress.isFailed ? -1 : undefined}
           onClick={(e) => {
             if (!progress.isComplete || progress.isFailed) {
               e.preventDefault();
@@ -169,11 +265,38 @@ export function RepositoryDetail() {
 
       {/* Sync Status / Content Area */}
       {!isReady ? (
-        <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-foreground mb-2">Repository Syncing</h2>
-          <p className="text-sm text-muted-foreground mb-6">
-            The repository is currently being processed. Explorer features will be available once syncing is complete.
-          </p>
+        <div className="rounded-xl border border-border bg-card p-6 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-foreground">
+                {progress.isFailed
+                  ? 'Synchronization Failed'
+                  : isSyncActive
+                  ? 'Repository Synchronization in Progress'
+                  : 'Repository Not Synced'}
+              </h2>
+              <p className="text-sm text-muted-foreground mt-1">
+                {progress.isFailed
+                  ? 'An issue occurred during repository indexing. Click Retry to re-run the sync process.'
+                  : isSyncActive
+                  ? 'Files are being cloned, scanned, and indexed into the AI vector database.'
+                  : 'This repository has not been indexed yet. Start synchronization to enable file explorer and AI chat.'}
+              </p>
+            </div>
+
+            {/* Prominent Retry Sync Button */}
+            {(progress.isFailed || repo.sync_status === 'NOT_SYNCED') && (
+              <button
+                onClick={handleSync}
+                disabled={isSyncActive}
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0 self-start sm:self-auto"
+              >
+                <RefreshCw className={cn('h-4 w-4', isSyncActive && 'animate-spin')} />
+                <span>{isSyncActive ? 'Starting Sync…' : 'Retry Synchronization'}</span>
+              </button>
+            )}
+          </div>
+
           <SyncProgressIndicator
             currentStage={progress.stage}
             isFailed={progress.isFailed}
@@ -181,7 +304,6 @@ export function RepositoryDetail() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          
           {/* Left Column: Stats & Dependencies */}
           <div className="space-y-8 md:col-span-1">
             {/* Statistics */}
@@ -221,7 +343,9 @@ export function RepositoryDetail() {
               </div>
               <div className="p-4">
                 {depsLoading ? (
-                  <div className="flex justify-center py-4"><LoadingSpinner size="sm" /></div>
+                  <div className="flex justify-center py-4">
+                    <LoadingSpinner size="sm" />
+                  </div>
                 ) : depsError ? (
                   <p className="text-sm text-destructive">Failed to load dependencies.</p>
                 ) : !dependencies || dependencies.length === 0 ? (
@@ -243,104 +367,253 @@ export function RepositoryDetail() {
             </div>
           </div>
 
-          {/* Right Column: File Tree */}
+          {/* Right Column: Interactive File Tree */}
           <div className="md:col-span-2">
             <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden h-full flex flex-col">
               <div className="bg-muted/30 px-4 py-3 border-b border-border flex items-center justify-between shrink-0">
-                <h3 className="font-semibold text-sm text-foreground">File Explorer (Preview)</h3>
+                <h3 className="font-semibold text-sm text-foreground">File Explorer (Click to View Code)</h3>
+                <span className="text-xs text-muted-foreground">{filesData?.total ?? 0} files indexed</span>
               </div>
               <div className="p-4 flex-1 overflow-y-auto max-h-[600px] min-h-[300px]">
                 {filesLoading ? (
-                  <div className="flex justify-center py-8"><LoadingSpinner size="md" label="Loading files…" /></div>
+                  <div className="flex justify-center py-8">
+                    <LoadingSpinner size="md" label="Loading files…" />
+                  </div>
                 ) : filesError ? (
                   <p className="text-sm text-destructive py-4">Failed to load repository files.</p>
                 ) : !filesData || filesData.items.length === 0 ? (
                   <p className="text-sm text-muted-foreground italic py-4">No files indexed yet.</p>
                 ) : (
-                  <FileTree files={filesData.items} />
+                  <FileTree
+                    files={filesData.items}
+                    onSelectFile={(file) => setSelectedFile(file)}
+                  />
                 )}
               </div>
             </div>
           </div>
-
         </div>
+      )}
+
+      {/* File Preview Modal */}
+      {selectedFile && id && (
+        <FilePreviewModal
+          repositoryId={id}
+          file={selectedFile}
+          onClose={() => setSelectedFile(null)}
+        />
       )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// File Tree Component (2-level limit)
+// File Tree Component (Interactive)
 // ---------------------------------------------------------------------------
 
-function FileTree({ files }: { files: RepositoryFile[] }) {
-  // Build a simple 2-level tree from the flat list
-  // The backend paginated response doesn't guarantee all files, so we construct
-  // what we can from the current page of data.
-  
+function FileTree({
+  files,
+  onSelectFile,
+}: {
+  files: RepositoryFile[];
+  onSelectFile: (file: RepositoryFile) => void;
+}) {
   const rootFiles: RepositoryFile[] = [];
   const directories = new Map<string, RepositoryFile[]>();
 
   for (const file of files) {
     const parts = file.path.split('/').filter(Boolean);
     const isDir = file.path.endsWith('/');
-    
+
     if (parts.length === 1) {
       if (isDir) {
         if (!directories.has(parts[0])) directories.set(parts[0], []);
       } else {
         rootFiles.push(file);
       }
-    } else if (parts.length === 2) {
-      // It's a child of a root directory
+    } else if (parts.length >= 2) {
       const rootDir = parts[0];
       if (!directories.has(rootDir)) directories.set(rootDir, []);
       directories.get(rootDir)!.push(file);
     }
-    // Ignore parts.length > 2 for this 2-level requirement
   }
 
-  // Sort: directories first, then files alphabetically
   const sortedDirs = Array.from(directories.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   rootFiles.sort((a, b) => a.path.localeCompare(b.path));
 
   const getFileIcon = (filename: string) => {
     if (filename.endsWith('.md')) return <FileText className="h-4 w-4 text-muted-foreground" />;
-    if (filename.match(/\.(js|ts|py|go|rs|jsx|tsx|java|cpp|c)$/)) return <FileCode className="h-4 w-4 text-muted-foreground" />;
+    if (filename.match(/\.(js|ts|py|go|rs|jsx|tsx|java|cpp|c|html|css|json)$/)) {
+      return <FileCode className="h-4 w-4 text-blue-500" />;
+    }
     return <File className="h-4 w-4 text-muted-foreground" />;
   };
 
   return (
-    <div className="text-sm font-mono">
+    <div className="text-sm font-mono select-none">
       {sortedDirs.map(([dirName, children]) => (
         <div key={dirName} className="mb-1">
-          <div className="flex items-center gap-2 py-1.5 px-2 hover:bg-accent rounded-md cursor-default text-foreground">
-            <Folder className="h-4 w-4 text-blue-500 fill-blue-500/20" />
+          <div className="flex items-center gap-2 py-1.5 px-2 hover:bg-accent/60 rounded-md cursor-default text-foreground font-medium">
+            <Folder className="h-4 w-4 text-amber-500 fill-amber-500/20" />
             <span>{dirName}/</span>
           </div>
           {children.length > 0 && (
-            <div className="ml-6 border-l border-border pl-2 my-1">
-              {children.sort((a,b) => a.path.localeCompare(b.path)).map(child => {
-                const childName = child.path.split('/').filter(Boolean)[1];
-                const isChildDir = child.path.endsWith('/');
-                return (
-                  <div key={child.id} className="flex items-center gap-2 py-1 px-2 hover:bg-accent rounded-md cursor-default text-muted-foreground hover:text-foreground transition-colors">
-                    {isChildDir ? <Folder className="h-4 w-4 text-blue-500 fill-blue-500/20" /> : getFileIcon(childName)}
-                    <span className="truncate">{childName}{isChildDir ? '/' : ''}</span>
-                  </div>
-                );
-              })}
+            <div className="ml-5 border-l border-border pl-2 my-1 space-y-0.5">
+              {children
+                .sort((a, b) => a.path.localeCompare(b.path))
+                .map((child) => {
+                  const childName = child.path.startsWith(dirName + '/')
+                    ? child.path.slice(dirName.length + 1)
+                    : child.path;
+                  const isChildDir = child.path.endsWith('/');
+                  return (
+                    <button
+                      key={child.id}
+                      onClick={() => !isChildDir && onSelectFile(child)}
+                      className={cn(
+                        'flex w-full items-center gap-2 py-1 px-2 rounded-md text-left transition-colors',
+                        isChildDir
+                          ? 'cursor-default text-muted-foreground'
+                          : 'cursor-pointer text-foreground hover:bg-accent hover:text-accent-foreground',
+                      )}
+                    >
+                      {isChildDir ? (
+                        <Folder className="h-4 w-4 text-amber-500 fill-amber-500/20" />
+                      ) : (
+                        getFileIcon(childName)
+                      )}
+                      <span className="truncate">{childName}{isChildDir ? '/' : ''}</span>
+                    </button>
+                  );
+                })}
             </div>
           )}
         </div>
       ))}
-      
-      {rootFiles.map(file => (
-        <div key={file.id} className="flex items-center gap-2 py-1.5 px-2 hover:bg-accent rounded-md cursor-default text-foreground transition-colors">
+
+      {rootFiles.map((file) => (
+        <button
+          key={file.id}
+          onClick={() => onSelectFile(file)}
+          className="flex w-full items-center gap-2 py-1.5 px-2 hover:bg-accent rounded-md text-left text-foreground transition-colors cursor-pointer"
+        >
           {getFileIcon(file.path)}
           <span className="truncate">{file.path}</span>
-        </div>
+        </button>
       ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// File Preview Modal (Inspect Code & Extracted Symbols)
+// ---------------------------------------------------------------------------
+
+function FilePreviewModal({
+  repositoryId,
+  file,
+  onClose,
+}: {
+  repositoryId: string;
+  file: RepositoryFile;
+  onClose: () => void;
+}) {
+  const navigate = useNavigate();
+  const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+    >
+      <div className="relative flex flex-col w-full max-w-4xl max-h-[85vh] rounded-xl border border-border bg-card shadow-2xl overflow-hidden">
+        {/* Modal Header */}
+        <div className="flex items-center justify-between border-b border-border px-5 py-3.5 bg-muted/20">
+          <div className="flex items-center gap-3 min-w-0">
+            <FileCode className="h-5 w-5 text-primary shrink-0" />
+            <div className="min-w-0">
+              <h3 className="font-mono text-sm font-semibold text-foreground truncate">
+                {file.path}
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                {file.line_count} lines · {(file.size_bytes / 1024).toFixed(1)} KB
+                {file.language && ` · ${file.language}`}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => {
+                onClose();
+                navigate(`/app/repositories/${repositoryId}/chat`);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 text-primary px-3 py-1.5 text-xs font-medium hover:bg-primary hover:text-primary-foreground transition-colors"
+            >
+              <MessageSquare className="h-3.5 w-3.5" />
+              <span>Ask AI About File</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              aria-label="Close code preview"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Modal Body */}
+        <div className="flex-1 overflow-auto p-5 font-mono text-xs">
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <LoadingSpinner size="md" label="Loading code content…" />
+              <span className="text-muted-foreground text-sm font-sans">Loading file content…</span>
+            </div>
+          ) : isError ? (
+            <p className="text-destructive py-8 font-sans">
+              Could not load file content. Chunks might still be indexing.
+            </p>
+          ) : (
+            <div className="space-y-6">
+              {/* Symbols Section (if any) */}
+              {fileData?.symbols && fileData.symbols.length > 0 && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-2">
+                  <span className="font-sans text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Extracted Symbols ({fileData.symbols.length})
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {fileData.symbols.map((sym) => (
+                      <span
+                        key={sym.id}
+                        className="inline-flex items-center gap-1.5 rounded bg-background border border-border px-2 py-1 text-xs text-foreground"
+                      >
+                        <span className="text-primary font-bold">{sym.kind}</span>
+                        <span>{sym.name}</span>
+                        <span className="text-muted-foreground text-[10px]">
+                          L{sym.start_line}–{sym.end_line}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Code Viewer with Lines */}
+              <div className="rounded-lg border border-border bg-background p-4 overflow-x-auto text-foreground font-mono text-xs leading-relaxed whitespace-pre">
+                {fileData?.content ? (
+                  fileData.content
+                ) : (
+                  <span className="text-muted-foreground italic font-sans">
+                    Empty file or non-indexed binary content.
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -391,7 +664,7 @@ function SyncProgressIndicator({
                     ? 'border-blue-600 text-blue-600 shadow-sm'
                     : isCurrentFailed
                     ? 'border-destructive text-destructive'
-                    : 'border-muted-foreground/30 text-muted-foreground'
+                    : 'border-muted-foreground/30 text-muted-foreground',
                 )}
               >
                 {isCompleted ? (
@@ -414,7 +687,7 @@ function SyncProgressIndicator({
                     ? 'text-blue-600'
                     : isCurrentFailed
                     ? 'text-destructive'
-                    : 'text-muted-foreground'
+                    : 'text-muted-foreground',
                 )}
               >
                 {step.label}
@@ -440,3 +713,4 @@ function SyncProgressIndicator({
     </div>
   );
 }
+

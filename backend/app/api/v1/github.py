@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
+import httpx
+from app.repositories.user_repository import UserRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.repository import (
@@ -55,6 +57,32 @@ async def list_github_repositories(
     # Get user's GitHub installations
     installation_repo = GitHubInstallationRepository(db)
     installations = installation_repo.list_by_user(user_id)
+
+    # Auto-sync installations from GitHub App if not found in database
+    github_service = getattr(request.app.state, "github_service", None)
+    if not installations and github_service:
+        user = UserRepository(db).get_by_id(user_id)
+        if user:
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(
+                        "https://api.github.com/app/installations",
+                        headers=github_service._app_auth_headers(),
+                    )
+                    if resp.is_success:
+                        app_installs = resp.json()
+                        for inst in app_installs:
+                            acc_login = inst.get("account", {}).get("login", "")
+                            if acc_login.lower() == user.login.lower():
+                                installation_repo.upsert(
+                                    user_id=user.id,
+                                    installation_id=str(inst["id"]),
+                                    account_login=acc_login,
+                                    permissions=inst.get("permissions", {}),
+                                )
+                        installations = installation_repo.list_by_user(user_id)
+            except Exception as exc:
+                logger.warning("auto_sync_installations_error", extra={"error": str(exc)})
 
     if not installations:
         return PaginatedAvailableRepositoryResponse(
@@ -221,3 +249,92 @@ async def connect_repository(
         repository_id=str(repository.id),
         job_id=str(job.id),
     )
+
+
+@router.get("/installation/callback", summary="GitHub App installation redirect callback")
+async def github_installation_callback(
+    request: Request,
+    installation_id: str = Query(...),
+    setup_action: str = Query(default="install"),
+    db: Session = Depends(get_db),
+):
+    """Handle redirect from GitHub after user installs the GitHub App."""
+    settings = get_settings()
+    frontend_base = settings.cors_origins[0] if settings.cors_origins else "http://localhost:5173"
+
+    try:
+        user_id = _request_user_id(request)
+        user = UserRepository(db).get_by_id(user_id)
+        if user:
+            GitHubInstallationRepository(db).upsert(
+                user_id=user.id,
+                installation_id=installation_id,
+                account_login=user.login,
+                permissions={},
+            )
+    except Exception as exc:
+        logger.info("installation_callback_without_user", extra={"error": str(exc)})
+
+    return RedirectResponse(
+        url=f"{frontend_base}/app/repositories?installed=true&installation_id={installation_id}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@router.post("/webhook", summary="GitHub App webhook handler")
+async def github_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Process incoming GitHub App webhook events with HMAC signature verification."""
+    import hashlib
+    import hmac
+    import json
+
+    settings = get_settings()
+    body_bytes = await request.body()
+
+    # Verify signature if secret configured
+    if settings.github_webhook_secret:
+        signature_header = request.headers.get("X-Hub-Signature-256")
+        if not signature_header:
+            raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing GitHub webhook signature.")
+        expected_sig = "sha256=" + hmac.new(
+            settings.github_webhook_secret.encode("utf-8"),
+            body_bytes,
+            hashlib.sha256,
+        ).hexdigest()
+        if not hmac.compare_digest(signature_header, expected_sig):
+            raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
+
+    event = request.headers.get("X-GitHub-Event", "ping")
+    if event == "ping":
+        return {"status": "pong"}
+
+    try:
+        payload = json.loads(body_bytes.decode("utf-8"))
+    except Exception:
+        return {"status": "ignored_bad_payload"}
+
+    action = payload.get("action")
+    installation = payload.get("installation", {})
+    inst_id = str(installation.get("id", ""))
+    acc_login = installation.get("account", {}).get("login", "")
+
+    inst_repo = GitHubInstallationRepository(db)
+
+    if event == "installation":
+        if action in ("created", "added"):
+            user = UserRepository(db).get_by_login(acc_login)
+            if user and inst_id:
+                inst_repo.upsert(
+                    user_id=user.id,
+                    installation_id=inst_id,
+                    account_login=acc_login,
+                    permissions=installation.get("permissions", {}),
+                )
+        elif action in ("deleted", "removed"):
+            if inst_id:
+                inst_repo.delete_by_installation_id(inst_id)
+
+    return {"status": "ok", "event": event, "action": action}

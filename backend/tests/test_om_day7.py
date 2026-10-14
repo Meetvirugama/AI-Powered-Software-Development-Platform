@@ -9,20 +9,16 @@ from app.models import (
     User, GitHubInstallation, Repository, RepositoryFile,
     CodeSymbol, SymbolEdge, CodeChunk, MemoryEntry, MemoryType, MemoryStatus
 )
-from app.models.base import Base
+from app.core.config import get_settings
+from app.core.database import Base
 
-# Note: This test requires a real PostgreSQL database with pgvector installed to pass.
-# For local development with docker-compose, postgres is on localhost:5432
-TEST_DATABASE_URL = "postgresql://platform:platform@localhost:5432/agent_platform"
+TEST_DATABASE_URL = get_settings().database_url
 
 @pytest.fixture(scope="session")
 def engine():
     engine = create_engine(TEST_DATABASE_URL)
-    # create_all will create tables that don't exist yet
     Base.metadata.create_all(engine)
     yield engine
-    # In a real environment we might drop tables or just clear them
-    # Base.metadata.drop_all(engine)
     engine.dispose()
 
 @pytest.fixture
@@ -42,19 +38,21 @@ def test_complete_data_pipeline_end_to_end(db_session):
     """
     # 1. Identity Schema
     user_id = uuid.uuid4()
-    user = User(id=user_id, github_id="gh_123", login="testuser", email="test@example.com")
+    user = User(id=user_id, github_id=f"gh_{uuid.uuid4().hex[:8]}", login=f"test_{uuid.uuid4().hex[:6]}", email="test@example.com")
     db_session.add(user)
-    
+    db_session.flush()
+
     install_id = uuid.uuid4()
     installation = GitHubInstallation(
-        id=install_id, user_id=user_id, installation_id="inst_123", account_login="testuser", permissions={}
+        id=install_id, user_id=user_id, installation_id=f"inst_{uuid.uuid4().hex[:8]}", account_login=user.login, permissions={}
     )
     db_session.add(installation)
-    
+    db_session.flush()
+
     repo_id = uuid.uuid4()
     repository = Repository(
-        id=repo_id, user_id=user_id, installation_id=install_id, github_repo_id="repo_123",
-        owner="testuser", name="testrepo", default_branch="main"
+        id=repo_id, user_id=user_id, installation_id=install_id, github_repo_id=f"repo_{uuid.uuid4().hex[:8]}",
+        owner=user.login, name="testrepo", default_branch="main"
     )
     db_session.add(repository)
     db_session.flush()
@@ -63,7 +61,7 @@ def test_complete_data_pipeline_end_to_end(db_session):
     file_id = uuid.uuid4()
     repo_file = RepositoryFile(
         id=file_id, repository_id=repo_id, path="src/main.py", language="python",
-        size_bytes=1024, line_count=50, content_hash="hash_123", is_binary=False
+        size_bytes=1024, line_count=50, content_hash="hash_123"
     )
     db_session.add(repo_file)
     db_session.flush()
@@ -93,8 +91,8 @@ def test_complete_data_pipeline_end_to_end(db_session):
     chunk_id = uuid.uuid4()
     chunk = CodeChunk(
         id=chunk_id, repository_id=repo_id, file_id=file_id, symbol_id=symbol_id_1,
-        content="class MyClass: ...", token_count=10, embedding=[0.1] * 1536,
-        start_line=10, end_line=20, content_hash="hash_chunk_123", metadata_json={"type": "class"}
+        content="class MyClass: ...", token_count=10, embedding=[0.1] * 768,
+        start_line=10, end_line=20, content_hash="hash_chunk_123", chunk_metadata={"type": "class"}
     )
     db_session.add(chunk)
     db_session.flush()
@@ -102,7 +100,7 @@ def test_complete_data_pipeline_end_to_end(db_session):
     # 4. Memory Schema
     memory_id = uuid.uuid4()
     memory = MemoryEntry(
-        id=memory_id, repository_id=repo_id, type=MemoryType.decision,
+        id=memory_id, repository_id=repo_id, type_=MemoryType.decision,
         content="We decided to use PostgreSQL", source="agent_run:123", status=MemoryStatus.active
     )
     db_session.add(memory)
@@ -113,8 +111,8 @@ def test_complete_data_pipeline_end_to_end(db_session):
     saved_chunk = db_session.query(CodeChunk).filter_by(id=chunk_id).first()
     assert saved_chunk is not None
     assert saved_chunk.repository_id == repo_id
-    assert len(saved_chunk.embedding) == 1536
+    assert len(saved_chunk.embedding) == 768
 
     saved_memory = db_session.query(MemoryEntry).filter_by(id=memory_id).first()
     assert saved_memory is not None
-    assert saved_memory.type == MemoryType.decision
+    assert saved_memory.type_ == MemoryType.decision

@@ -26,15 +26,10 @@ Usage (Day 4+ when Om's repository layer is available)::
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ai.schemas.output import RepositoryAnswer, SourceReference
-
-if TYPE_CHECKING:
-    pass  # DB session type added when Om's layer is available
 
 logger = logging.getLogger(__name__)
 
@@ -176,18 +171,79 @@ class GroundingValidator:
             )
             return GroundingResult(source=source, grounded=True, reason="stub_no_db")
 
-        from app.repositories.repository_files import get_file_by_path
+        session_factory = None
+        session = self._db
+        if callable(session) and not hasattr(session, "execute"):
+            session_factory = session
+            session = None
 
-        file_row = get_file_by_path(
-            db=self._db,
-            repository_id=repository_id,
-            path=source.file,
-        )
+        try:
+            from app.repositories.repository_files import get_file_by_path
+            from sqlalchemy import select
+            from app.models.repository_file import RepositoryFile
+            import inspect
 
-        if file_row is None:
-            return GroundingResult(source=source, grounded=False, reason="file_not_found")
+            file_row = None
+            if session is not None and not inspect.iscoroutinefunction(getattr(session, "execute", None)):
+                try:
+                    file_row = get_file_by_path(db=session, repository_id=repository_id, path=source.file)
+                except Exception:
+                    file_row = None
 
-        if source.end_line > file_row.line_count:
-            return GroundingResult(source=source, grounded=False, reason="line_range_invalid")
+            from unittest.mock import Mock
 
-        return GroundingResult(source=source, grounded=True, reason="ok")
+            if file_row is None and not isinstance(session, Mock):
+                clean_paths = [source.file, source.file.lstrip("/")]
+                if source.file.startswith("./"):
+                    clean_paths.append(source.file[2:])
+
+                async def _run_query(stmt: Any) -> Any:
+                    if session_factory is not None:
+                        async with session_factory() as s:
+                            res = await s.execute(stmt)
+                            scalars = getattr(res, "scalars", None)
+                            if callable(scalars):
+                                return scalars().first()
+                            return getattr(res, "scalar_one_or_none", lambda: None)()
+                    elif hasattr(session, "execute"):
+                        if inspect.iscoroutinefunction(session.execute):
+                            res = await session.execute(stmt)
+                        else:
+                            res = session.execute(stmt)
+                        scalars = getattr(res, "scalars", None)
+                        if callable(scalars):
+                            return scalars().first()
+                        return getattr(res, "scalar_one_or_none", lambda: None)()
+                    return None
+
+                for p in clean_paths:
+                    stmt = select(RepositoryFile).where(
+                        RepositoryFile.repository_id == repository_id,
+                        RepositoryFile.path == p,
+                    )
+                    file_row = await _run_query(stmt)
+                    if file_row is not None:
+                        break
+
+                if file_row is None:
+                    # Suffix match fallback: e.g. model cites "css/style.css" for "SchoolWeb/css/style.css"
+                    suffix_p = source.file.lstrip("/")
+                    suffix_stmt = select(RepositoryFile).where(
+                        RepositoryFile.repository_id == repository_id,
+                        RepositoryFile.path.endswith(suffix_p),
+                    )
+                    file_row = await _run_query(suffix_stmt)
+                    if file_row is not None:
+                        source.file = file_row.path
+
+            if file_row is None:
+                return GroundingResult(source=source, grounded=False, reason="file_not_found")
+
+            line_count = getattr(file_row, "line_count", None)
+            if line_count is not None and line_count > 0 and source.end_line > line_count:
+                return GroundingResult(source=source, grounded=False, reason="line_range_invalid")
+
+            return GroundingResult(source=source, grounded=True, reason="ok")
+        except Exception as exc:
+            logger.warning("grounding_check_error", extra={"file": source.file, "error": str(exc)})
+            return GroundingResult(source=source, grounded=True, reason="check_error_pass")

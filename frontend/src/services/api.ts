@@ -15,7 +15,7 @@ import type { ApiError } from '../types/api';
  * NOT implemented here because the project contract uses httpOnly cookies.
  */
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+  baseURL: '/api/v1',
   withCredentials: true, // sends httpOnly auth cookie automatically
   headers: {
     'Content-Type': 'application/json',
@@ -38,6 +38,14 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     const normalised = normaliseError(error);
+    if (
+      error.response?.status === 401 &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login') &&
+      !window.location.pathname.startsWith('/auth')
+    ) {
+      window.location.href = '/login';
+    }
     return Promise.reject(normalised);
   }
 );

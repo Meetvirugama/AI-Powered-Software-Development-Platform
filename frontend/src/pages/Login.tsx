@@ -1,15 +1,13 @@
 import { useState } from 'react';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-
 export function Login() {
   const [isRedirecting, setIsRedirecting] = useState(false);
 
   function handleGitHubLogin() {
     setIsRedirecting(true);
-    // Full browser navigation — the backend handles the OAuth exchange
-    // and sets the HTTP-only auth cookie. Do not use Axios here.
-    window.location.href = `${API_BASE}/auth/github/login`;
+    // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
+    // /api/v1 is proxied to http://localhost:8000 by Vite in development.
+    window.location.href = `/api/v1/auth/github/login`;
   }
 
   return (

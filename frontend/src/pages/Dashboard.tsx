@@ -4,7 +4,8 @@ import { useRepositories } from '../hooks/useRepositories';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
-import { PlusCircle, ChevronLeft, ChevronRight, GitBranch } from 'lucide-react';
+import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,8 +22,16 @@ export function Dashboard() {
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
 
+  // Temporary fetch to detect syncing repos for conditional polling
   const { data, isLoading, isFetching, isError, error, refetch } =
     useRepositories(page, PAGE_SIZE);
+
+  const hasSyncingRepo = data?.items.some((r) => r.sync_status === 'SYNCING') ?? false;
+
+  // Poll when any repo is syncing
+  useRepositories(page, PAGE_SIZE, {
+    refetchInterval: hasSyncingRepo ? 3000 : false,
+  });
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const hasPrev = page > 1;
@@ -40,14 +49,26 @@ export function Dashboard() {
             Your connected GitHub repositories.
           </p>
         </div>
-        <button
-          onClick={() => navigate('/app/repositories')}
-          className="inline-flex items-center gap-2 self-start rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:self-auto"
-          aria-label="Connect a repository"
-        >
-          <PlusCircle className="h-4 w-4" />
-          Add Repository
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="Refresh repository list"
+            aria-label="Refresh repositories"
+          >
+            <RefreshCw className={cn('h-4 w-4', isFetching && 'animate-spin')} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={() => navigate('/app/repositories')}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Connect a repository"
+          >
+            <PlusCircle className="h-4 w-4" />
+            Add Repository
+          </button>
+        </div>
       </div>
 
 
@@ -69,12 +90,20 @@ export function Dashboard() {
             message={error instanceof Error ? error.message : 'Could not load repositories.'}
             className="max-w-md"
           />
-          <button
-            onClick={() => refetch()}
-            className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            Retry
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => refetch()}
+              className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => navigate('/login')}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Log in again
+            </button>
+          </div>
         </div>
       )}
 

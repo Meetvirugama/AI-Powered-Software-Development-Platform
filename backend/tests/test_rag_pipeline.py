@@ -54,21 +54,24 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from ai.context.builder import AgentContext, ChatMessage, ContextBuilder, MemoryEntry
-from ai.llm.schemas import LLMResponse, LLMTimeoutError, LLMUnavailableError, Message
+from ai.llm.schemas import (
+    LLMRateLimitError,
+    LLMResponse,
+    LLMTimeoutError,
+    LLMUnavailableError,
+    Message,
+)
 from ai.pipeline import RAGPipeline
 from ai.retrieval.base import CodeChunk
 from ai.schemas.grounding import GroundingValidator
-from ai.schemas.output import RepositoryAnswer, SourceReference
+from ai.schemas.output import RepositoryAnswer
 from ai.schemas.prompt_builder import PromptBuilder
 from app.core.errors import APIError, ErrorCode
-
 
 # ===========================================================================
 # Fixtures / factories
@@ -179,7 +182,7 @@ class TestChatHappyPath:
     @pytest.mark.asyncio
     async def test_chat_uses_context_builder(self):
         chunks = [_make_chunk()]
-        pipeline, mock_retriever, _ = _make_pipeline(chunks=chunks)
+        pipeline, _mock_retriever, _ = _make_pipeline(chunks=chunks)
 
         mock_cb = MagicMock(spec=ContextBuilder)
         mock_cb.build.return_value = AgentContext(
@@ -559,3 +562,87 @@ class TestAcceptance:
         assert answer.confidence in ("high", "medium"), (
             f"Expected high or medium confidence, got: {answer.confidence}"
         )
+
+
+# ===========================================================================
+# 27–34: SDE-3 Enterprise Capabilities
+# ===========================================================================
+
+
+class TestSDE3PipelineEnhancements:
+    @pytest.mark.asyncio
+    async def test_chat_blank_question_returns_early(self):
+        pipeline, mock_retriever, mock_llm = _make_pipeline()
+        result = await pipeline.chat("   ", uuid.uuid4(), [])
+        assert isinstance(result, RepositoryAnswer)
+        assert result.confidence == "low"
+        assert "valid question" in result.answer.lower()
+        mock_retriever.retrieve.assert_not_called()
+        mock_llm.generate.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_chat_string_repository_id_coerced(self):
+        pipeline, mock_retriever, _ = _make_pipeline()
+        repo_str = "12345678-1234-5678-1234-567812345678"
+        await pipeline.chat("question", repo_str, [])
+        call_kwargs = mock_retriever.retrieve.call_args
+        assert call_kwargs.kwargs.get("repository_id") == uuid.UUID(repo_str)
+
+    @pytest.mark.asyncio
+    async def test_chat_llm_rate_limit_raises_retryable_503(self):
+        pipeline, _, mock_llm = _make_pipeline()
+        mock_llm.generate.side_effect = LLMRateLimitError("Rate limit exceeded")
+        with pytest.raises(APIError) as exc_info:
+            await pipeline.chat("question", uuid.uuid4(), [])
+        assert exc_info.value.code == ErrorCode.SERVICE_UNAVAILABLE
+        assert exc_info.value.retryable is True
+
+    def test_clean_json_content_with_surrounding_prose(self):
+        raw = (
+            "Here is your answer:\n"
+            "```json\n"
+            '{"answer": "ok", "sources": [], "confidence": "high"}\n'
+            "```\n"
+            "Hope this helps!"
+        )
+        cleaned = RAGPipeline._clean_json_content(raw)
+        data = json.loads(cleaned)
+        assert data["answer"] == "ok"
+
+    def test_clean_json_content_unclosed_fence(self):
+        raw = '```json\n{"answer": "ok", "sources": [], "confidence": "high"}'
+        cleaned = RAGPipeline._clean_json_content(raw)
+        data = json.loads(cleaned)
+        assert data["answer"] == "ok"
+
+    def test_normalise_duck_typed_history(self):
+        class CustomTurn:
+            def __init__(self, role: str, content: str) -> None:
+                self.role = role
+                self.content = content
+
+        items = [CustomTurn("user", "Hello from custom object")]
+        normalised = RAGPipeline._normalise_history(items)
+        assert len(normalised) == 1
+        assert normalised[0].role == "user"
+        assert normalised[0].content == "Hello from custom object"
+
+    @pytest.mark.asyncio
+    async def test_chat_custom_model_override(self):
+        pipeline, _, mock_llm = _make_pipeline()
+        await pipeline.chat("question", uuid.uuid4(), [], model="gpt-4o-mini")
+        req_sent = mock_llm.generate.call_args.args[0]
+        assert req_sent.model == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_async_lifecycle(self):
+        mock_retriever = AsyncMock()
+        mock_llm = AsyncMock()
+        pipeline = RAGPipeline(retriever=mock_retriever, llm_gateway=mock_llm)
+
+        async with pipeline as active_p:
+            assert active_p is pipeline
+
+        mock_llm.aclose.assert_awaited_once()
+        mock_retriever.aclose.assert_awaited_once()
+

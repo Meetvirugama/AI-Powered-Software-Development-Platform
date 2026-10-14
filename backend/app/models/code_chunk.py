@@ -18,7 +18,7 @@ class CodeChunk(TimestampedModel, Base):
     symbol_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("code_symbols.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer)
-    embedding: Mapped[Any] = mapped_column(Vector(1536))
+    embedding: Mapped[Any] = mapped_column(Vector(768))
     start_line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String)

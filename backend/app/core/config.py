@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
-    database_url: str = "postgresql+psycopg://platform:platform@localhost:5432/agent_platform"
+    database_url: str = "postgresql+psycopg://platform:platform@localhost:5433/agent_platform"
     redis_url: str = "redis://localhost:6379/0"
 
     github_app_id: str | None = None
@@ -36,14 +36,45 @@ class Settings(BaseSettings):
     github_workspace_root: str | None = None
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 15
+    jwt_expire_minutes: int = 10080
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
 
-    # --- AI / LLM API keys -------------------------------------------------
-    groq_api_keys: str | None = None       # comma-separated list
+    # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
+    ai_primary_provider: str = "gemini"
+    ai_fallback_provider: str = "groq"
+    gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
+    gemini_chat_model: str = "gemini-flash-lite-latest"
+    groq_api_key: str | None = None
+    groq_api_keys: str | None = None       # comma-separated list
+    groq_chat_model: str = "openai/gpt-oss-120b"
+    ai_embedding_provider: str = "gemini"
+    gemini_embedding_model: str = "gemini-embedding-001"
+    embedding_dimensions: int = 768
+    ai_request_timeout_seconds: float = 30.0
+    ai_max_retries: int = 3
+    ai_max_output_tokens: int = 2048
+
+    @property
+    def all_gemini_keys(self) -> list[str]:
+        keys = []
+        if self.gemini_api_key:
+            keys.append(self.gemini_api_key.strip())
+        if self.gemini_api_keys:
+            keys.extend([k.strip() for k in self.gemini_api_keys.split(",") if k.strip()])
+        # Deduplicate preserving order
+        return list(dict.fromkeys(keys))
+
+    @property
+    def all_groq_keys(self) -> list[str]:
+        keys = []
+        if self.groq_api_key:
+            keys.append(self.groq_api_key.strip())
+        if self.groq_api_keys:
+            keys.extend([k.strip() for k in self.groq_api_keys.split(",") if k.strip()])
+        return list(dict.fromkeys(keys))
 
     # --- API security (W1 Day 6) -------------------------------------------
     # Comma-separated list of frontend origins allowed to call the API with

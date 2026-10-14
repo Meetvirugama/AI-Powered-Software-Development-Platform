@@ -1,98 +1,153 @@
 """
-LLM Gateway — single entry point for every LLM call in the system.
-Owner: Meet — W1-12
+LLM Gateway — Single Entry Point for All LLM Inference in the System.
 
-Responsibilities:
-    Day 1 (skeleton): interface + structured logging stub
-    Day 2 (this):     full implementation — retry, structured output, token tracking
-
-Usage::
-
-    from ai.llm.openai_provider import OpenAIProvider
-    from ai.llm.client import LLMGateway
-
-    gateway  = LLMGateway(provider=OpenAIProvider())
-    response = await gateway.generate(request)
-    # response is always a typed LLMResponse — never a raw dict
-
-team_rules.md rule:
-    Every LLM call must log: model, input_tokens, output_tokens, latency_ms, success/failure.
-    The LLM Gateway is the ONLY place in the codebase that calls an LLM API.
+Architecture & System Contracts (team_rules.md):
+- Every LLM call in the platform MUST route through ``LLMGateway.generate()``.
+- No application domain or controller may import vendor LLM SDKs directly.
+- Emits structured telemetry logs on every invocation:
+  model, input_tokens, output_tokens, latency_ms, provider, and success/failure.
+- Encapsulates provider delegation, fallback execution, and lifecycle management.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import Self
 
-from .schemas import LLMError, LLMRequest, LLMResponse
-
-if TYPE_CHECKING:
-    from .provider import LLMProvider
+from .provider import LLMProvider
+from .schemas import (
+    LLMError,
+    LLMRateLimitError,
+    LLMRequest,
+    LLMResponse,
+    LLMTimeoutError,
+    LLMUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class LLMGateway:
     """
-    Wraps an LLMProvider with:
-    - Structured logging on every call (model, tokens, latency, success)
-    - Delegates retry + backoff to the provider (OpenAIProvider handles it)
-    - Structured-output / JSON-mode enforcement (delegated to provider)
-    - Token usage tracking (extracted from LLMResponse)
+    Central orchestrator and gateway for all LLM interactions across the system.
 
-    This is the *only* object that the rest of the codebase should call.
-    Providers are injected at construction time, making the gateway testable.
+    Wraps an ``LLMProvider`` with:
+    - Standardized telemetry and structured logging on every request.
+    - Type verification enforcing ``LLMResponse`` invariants.
+    - Optional fallback provider support during transient provider outages.
+    - Resource lifecycle management.
 
-    Args:
-        provider: A concrete LLMProvider implementation (e.g. OpenAIProvider).
+    Usage::
 
-    Example::
+        from ai.llm.openai_provider import OpenAIProvider
+        from ai.llm.client import LLMGateway
 
-        gateway = LLMGateway(provider=OpenAIProvider())
+        gateway  = LLMGateway(provider=OpenAIProvider())
         response = await gateway.generate(request)
-        print(response.content)        # always a str
-        print(response.input_tokens)   # always populated
     """
 
-    def __init__(self, provider: "LLMProvider") -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        fallback_provider: LLMProvider | None = None,
+    ) -> None:
+        if provider is None:
+            raise ValueError("LLMGateway requires a valid LLMProvider.")
         self._provider = provider
+        self._fallback_provider = fallback_provider
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def provider(self) -> LLMProvider:
+        """Configured primary inference provider."""
+        return self._provider
+
+    @property
+    def provider_name(self) -> str:
+        """Name of the active primary provider."""
+        return self._provider.provider_name
+
+    @property
+    def fallback_provider(self) -> LLMProvider | None:
+        """Optional secondary provider for disaster recovery."""
+        return self._fallback_provider
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """
-        Route a generation request through the provider with full logging.
+        Execute an inference request through the provider with comprehensive telemetry.
 
-        This method guarantees:
-        - Returns a typed ``LLMResponse`` — never a raw ``dict``.
-        - Logs every call with model, input_tokens, output_tokens, latency_ms, success.
-        - On failure, logs the error class name before re-raising.
+        Guarantees:
+        - Returns a validated, typed ``LLMResponse``.
+        - Emits structured logging metrics on both success and failure.
+        - Translates transient outages to optional fallback provider if configured.
 
         Args:
             request: Fully constructed LLMRequest.
 
         Returns:
-            LLMResponse with content, model, token counts, latency.
+            LLMResponse with output content, token usage, and latency.
 
         Raises:
-            LLMTimeoutError:     Provider timed out after all retries.
-            LLMRateLimitError:   Rate-limited after all retries.
-            LLMUnavailableError: Provider unreachable after all retries.
-            LLMValidationError:  Structured output failed schema validation.
+            LLMTimeoutError: If the call times out.
+            LLMRateLimitError: If rate limits are exhausted.
+            LLMUnavailableError: If provider is down or unreachable.
+            LLMValidationError: If structured output fails schema validation.
+            LLMError: For any other unrecoverable provider failure.
         """
-        start = time.monotonic()
+        if not isinstance(request, LLMRequest):
+            raise TypeError(f"Expected LLMRequest instance, got {type(request).__name__}")
+        if not request.messages:
+            raise ValueError("LLMRequest must contain at least one Message turn.")
+
+        start_time = time.monotonic()
         success = False
         response: LLMResponse | None = None
         error_type: str | None = None
+        effective_provider = self._provider
 
         try:
-            response = await self._provider.generate(request)
-            # Defensive: provider contract says LLMResponse, but guard anyway
+            try:
+                response = await self._provider.generate(request)
+            except (LLMUnavailableError, LLMTimeoutError, LLMRateLimitError) as exc:
+                if self._fallback_provider is not None:
+                    logger.warning(
+                        "llm_gateway_primary_failed_trying_fallback",
+                        extra={
+                            "primary": self._provider.provider_name,
+                            "fallback": self._fallback_provider.provider_name,
+                            "error": str(exc),
+                        },
+                    )
+                    effective_provider = self._fallback_provider
+                    fallback_request = request
+                    # If request model was provider-specific or default, adjust for fallback
+                    primary_default = getattr(self._provider, "default_model", None)
+                    if not request.model or request.model == "default" or request.model == primary_default:
+                        fallback_request = LLMRequest(
+                            messages=request.messages,
+                            model=self._fallback_provider.default_model,
+                            temperature=request.temperature,
+                            max_tokens=request.max_tokens,
+                            response_schema=request.response_schema,
+                        )
+                    response = await self._fallback_provider.generate(fallback_request)
+                else:
+                    raise
+
             if not isinstance(response, LLMResponse):
                 raise TypeError(
-                    f"Provider {self._provider.provider_name!r} returned "
+                    f"Provider {effective_provider.provider_name!r} returned "
                     f"{type(response).__name__!r} instead of LLMResponse."
                 )
+
             success = True
             return response
 
@@ -101,16 +156,34 @@ class LLMGateway:
             raise
 
         finally:
-            latency_ms = (time.monotonic() - start) * 1000
+            latency_ms = (time.monotonic() - start_time) * 1000.0
             logger.info(
                 "llm_call",
                 extra={
-                    "provider": self._provider.provider_name,
+                    "provider": effective_provider.provider_name,
                     "model": request.model,
                     "input_tokens": response.input_tokens if response else None,
                     "output_tokens": response.output_tokens if response else None,
+                    "total_tokens": response.total_tokens if response else None,
                     "latency_ms": round(latency_ms, 2),
                     "success": success,
                     "error_type": error_type,
                 },
             )
+
+    async def aclose(self) -> None:
+        """Close provider resources."""
+        await self._provider.aclose()
+        if self._fallback_provider is not None:
+            await self._fallback_provider.aclose()
+
+    async def __aenter__(self: Self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()

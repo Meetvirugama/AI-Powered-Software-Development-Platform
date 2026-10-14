@@ -18,6 +18,17 @@ class RepositoryResponse(BaseModel):
     language: str | None
     sync_status: str
     last_synced_at: datetime | None
+    description: str | None = None
+    framework: str | None = None
+    file_count: int | None = None
+    symbol_count: int | None = None
+    chunk_count: int | None = None
+
+
+class RepositoryDependencyResponse(BaseModel):
+    name: str
+    version: str
+    ecosystem: str
 
 
 class RepositoryFileResponse(BaseModel):
@@ -43,6 +54,18 @@ class CodeSymbolResponse(BaseModel):
     end_line: int
     signature: str | None
     parent_id: str | None
+
+
+class RepositoryFileContentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    path: str
+    language: str | None
+    size_bytes: int
+    line_count: int
+    content: str
+    symbols: list[CodeSymbolResponse] = Field(default_factory=list)
 
 
 class PaginatedResponse(BaseModel):

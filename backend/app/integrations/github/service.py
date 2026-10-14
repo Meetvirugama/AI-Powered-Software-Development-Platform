@@ -235,10 +235,31 @@ class GitHubService(GitHubIntegrationBase):
         )
         return repos
 
-    async def get_repository(self, owner: str, repo: str) -> GitHubRepository:
-        """Fetch full metadata for a single repository."""
-        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}"
-        # NOTE: Uses App-level JWT; for private repos use installation auth instead.
+    async def get_repository(
+        self, owner_or_installation_id: str | int, repo_or_id: str | int
+    ) -> GitHubRepository:
+        """Fetch full metadata for a single repository.
+
+        Supports both:
+          - (owner: str, repo: str) e.g. ("Meetvirugama", "SchoolWebPage")
+          - (installation_id: int, repo_id: int) e.g. (171308854, 1119895424)
+        """
+        is_inst_id = isinstance(owner_or_installation_id, int) or (
+            isinstance(owner_or_installation_id, str) and str(owner_or_installation_id).isdigit()
+        )
+        is_repo_id = isinstance(repo_or_id, int) or (
+            isinstance(repo_or_id, str) and str(repo_or_id).isdigit()
+        )
+
+        if is_inst_id and is_repo_id:
+            installation_id = int(owner_or_installation_id)
+            repo_id = int(repo_or_id)
+            headers = await self._installation_auth_headers(installation_id)
+            url = f"{_GITHUB_API_BASE}/repositories/{repo_id}"
+            data = await self._get(url, headers, installation_id)
+            return self._parse_repo(data)
+
+        url = f"{_GITHUB_API_BASE}/repos/{owner_or_installation_id}/{repo_or_id}"
         data = await self._get(url, self._app_auth_headers())
         return self._parse_repo(data)
 

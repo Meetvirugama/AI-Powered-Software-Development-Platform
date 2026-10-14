@@ -1,52 +1,71 @@
 """
-Abstract LLM provider interface.
-Owner: Meet — W1-12
+Abstract LLM Provider Interface.
 
-Every LLM provider (OpenAI, Anthropic, etc.) must implement this interface.
-The LLMGateway (client.py) wraps a provider and adds logging, retry, and
-structured-output handling on top.
-
-IMPORTANT (team_rules.md):
-    The LLM Gateway is the ONLY place in the codebase that calls an LLM API.
-    No other module imports the LLM SDK directly.
+Defines the contract for all underlying LLM provider SDK adapters (OpenAI, Groq,
+Anthropic, etc.). Concrete providers encapsulate network transport, provider-specific
+parameter mapping, and transient retries. High-level routing, telemetry, and structured
+output validation are governed by LLMGateway.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Self
 
 from .schemas import LLMRequest, LLMResponse
 
 
 class LLMProvider(ABC):
     """
-    Abstract base for an LLM provider.
+    Abstract base class for all LLM inference adapters.
 
-    Implementations must NOT perform retry or logging — those live in LLMGateway.
-    Each implementation wraps exactly one provider SDK.
+    Guarantees:
+    - Encapsulates exact provider SDK or HTTP wire protocol.
+    - Emits strongly-typed ``LLMResponse`` instances.
+    - Translates vendor-specific errors into standardized ``LLMError`` subclasses.
     """
 
     @abstractmethod
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """
-        Send a chat completion request to the underlying provider.
+        Execute chat completion for the given structured request.
 
         Args:
-            request: Fully constructed LLMRequest.
+            request: Fully constructed and validated LLMRequest.
 
         Returns:
-            LLMResponse with content, token counts, and latency.
+            LLMResponse containing generated text, model metadata, and usage tokens.
 
         Raises:
-            LLMTimeoutError: Request exceeded the timeout.
-            LLMRateLimitError: Provider returned 429.
-            LLMUnavailableError: Provider returned 5xx or network failure.
-            LLMValidationError: Response failed schema validation.
+            LLMTimeoutError: If the provider call exceeds the configured deadline.
+            LLMRateLimitError: If provider rate limits are exhausted.
+            LLMUnavailableError: If provider returns 5xx errors or connection drops.
+            LLMAuthenticationError: If API credentials are rejected.
+            LLMValidationError: If structured schema output fails validation.
         """
         ...
 
     @property
     @abstractmethod
     def provider_name(self) -> str:
-        """Human-readable provider name, e.g. 'openai'."""
+        """Canonical identifier for the provider (e.g. 'openai', 'groq')."""
         ...
+
+    @property
+    def default_model(self) -> str:
+        """Recommended or default model name for this provider."""
+        return "default"
+
+    async def aclose(self) -> None:
+        """Release underlying HTTP client sessions and connection pools."""
+
+    async def __aenter__(self: Self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()

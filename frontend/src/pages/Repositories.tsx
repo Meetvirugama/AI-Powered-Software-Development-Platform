@@ -15,6 +15,7 @@ import {
   RefreshCw,
   X,
   AlertCircle,
+  ExternalLink,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -130,11 +131,23 @@ export function Repositories() {
       {/* ---------------------------------------------------------------- */}
       {/* Page header                                                        */}
       {/* ---------------------------------------------------------------- */}
-      <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-bold text-foreground">Connect a Repository</h1>
-        <p className="text-sm text-muted-foreground">
-          GitHub repositories available through your GitHub App installation.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold text-foreground">Connect a Repository</h1>
+          <p className="text-sm text-muted-foreground">
+            GitHub repositories available through your GitHub App installation.
+          </p>
+        </div>
+        <a
+          href="https://github.com/apps/ai-dev-platform-local/installations/new"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto"
+        >
+          <PlusCircle className="h-4 w-4" />
+          Install / Manage GitHub App
+          <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+        </a>
       </div>
 
       {/* ---------------------------------------------------------------- */}
@@ -399,42 +412,64 @@ function AvailableRepositoryCard({
 
 function EmptyNoRepositories() {
   return (
-    <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-16 text-center">
+    <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-16 px-4 text-center">
       <div className="rounded-full bg-muted p-4">
         <GitBranch className="h-8 w-8 text-muted-foreground" />
       </div>
-      <div>
-        <p className="font-medium text-foreground">No repositories found</p>
+      <div className="max-w-md">
+        <p className="font-semibold text-lg text-foreground">No repositories found</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          No GitHub repositories are accessible through your GitHub App installation.
-        </p>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Make sure the GitHub App is installed on the correct organization or user account.
+          No repositories are available because the <strong>AI Dev Platform</strong> GitHub App is not yet installed on your GitHub account or organizations.
         </p>
       </div>
+      <a
+        href="https://github.com/apps/ai-dev-platform-local/installations/new"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors"
+      >
+        <PlusCircle className="h-4 w-4" />
+        Install GitHub App & Select Repositories
+        <ExternalLink className="h-4 w-4 opacity-70" />
+      </a>
     </div>
   );
 }
 
 function EmptySearchResults({ search, onClear }: { search: string; onClear: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-16 text-center">
+    <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-16 px-4 text-center">
       <div className="rounded-full bg-muted p-4">
         <Search className="h-8 w-8 text-muted-foreground" />
       </div>
       <div>
-        <p className="font-medium text-foreground">No results for &ldquo;{search}&rdquo;</p>
+        <p className="font-semibold text-lg text-foreground">No results for &ldquo;{search}&rdquo;</p>
         <p className="mt-1 text-sm text-muted-foreground">
           Try a different search term or clear the filter.
         </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          If your repository isn't listed, ensure it was selected during the GitHub App installation.
+        </p>
       </div>
-      <button
-        onClick={onClear}
-        className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <X className="h-4 w-4" />
-        Clear search
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onClear}
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <X className="h-4 w-4" />
+          Clear search
+        </button>
+        <a
+          href="https://github.com/apps/ai-dev-platform-local/installations/new"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
+        >
+          <PlusCircle className="h-4 w-4" />
+          Add More Repositories
+          <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+        </a>
+      </div>
     </div>
   );
 }
