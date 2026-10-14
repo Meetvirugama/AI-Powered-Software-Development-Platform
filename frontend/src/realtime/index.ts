@@ -16,8 +16,7 @@
  */
 import type { SseEnvelope, SseHandlers } from './events';
 
-const SSE_ENDPOINT =
-  (import.meta.env.VITE_API_BASE_URL || '/api/v1') + '/events';
+const SSE_ENDPOINT = '/api/v1/events';
 
 export class RealtimeClient {
   private eventSource: EventSource | null = null;

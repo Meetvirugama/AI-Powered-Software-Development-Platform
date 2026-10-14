@@ -13,6 +13,9 @@ build/
 
 .DS_Store
 
+# Private keys — never commit!
+*.pem
+
 # Test & coverage artifacts
 .coverage
 .coverage.*

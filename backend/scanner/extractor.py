@@ -1,11 +1,15 @@
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
-import tree_sitter
+try:
+    import tree_sitter
+except ImportError:
+    tree_sitter = None
 
 from .parser import Parser
 from .symbols import FileInfo, Symbol
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,16 +41,16 @@ class SymbolExtractor:
         symbols: List[Symbol] = []
         lines = content.splitlines()
 
-        def get_sig(node: tree_sitter.Node) -> str:
+        def get_sig(node: Any) -> str:
             start_row = node.start_point[0]
             if start_row < len(lines):
                 return lines[start_row].strip()
             return ""
 
-        def get_text(node: tree_sitter.Node) -> str:
+        def get_text(node: Any) -> str:
             return node.text.decode("utf-8")
 
-        def walk(node: tree_sitter.Node, parent_id: Optional[UUID] = None):
+        def walk(node: Any, parent_id: Optional[UUID] = None):
             t = node.type
 
             if t in ("import_statement", "import_from_statement"):

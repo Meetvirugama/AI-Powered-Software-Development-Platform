@@ -17,6 +17,7 @@ from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
 from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
+from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.auth import AuthenticatedUser, TokenResponse
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -55,15 +56,41 @@ def github_login() -> RedirectResponse:
     return redirect
 
 
-@router.get("/github/callback", response_model=TokenResponse, summary="Complete GitHub OAuth login")
+@router.get("/github/callback", response_model=None, summary="Complete GitHub OAuth login or App Installation")
 async def github_callback(
     response: Response,
     request: Request,
-    code: str = Query(min_length=1),
-    state: str = Query(min_length=1),
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    installation_id: str | None = Query(default=None),
+    setup_action: str | None = Query(default=None),
     db: Session = Depends(get_db),
-) -> TokenResponse:
+):
     """Exchange GitHub's code, upsert the user, then issue a short-lived JWT."""
+    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+
+    if installation_id:
+        user_id_str = getattr(request.state, "user_id", None)
+        if user_id_str:
+            try:
+                user = UserRepository(db).get_by_id(UUID(user_id_str))
+                if user:
+                    GitHubInstallationRepository(db).upsert(
+                        user_id=user.id,
+                        installation_id=str(installation_id),
+                        account_login=user.login,
+                        permissions={},
+                    )
+            except Exception:
+                pass
+        return RedirectResponse(
+            url=f"{frontend_base}/app/repositories",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    if not code or not state:
+        raise APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
+
     expected_state = request.cookies.get("oauth_state")
     if not expected_state or not secrets.compare_digest(state, expected_state):
         raise APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
@@ -81,7 +108,12 @@ async def github_callback(
         github_user.get("avatar_url") if isinstance(github_user.get("avatar_url"), str) else None,
     )
     token, expires_in = create_access_token(str(user.id))
-    response.set_cookie(
+    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+    redirect = RedirectResponse(
+        url=f"{frontend_base}/auth/callback",
+        status_code=status.HTTP_302_FOUND,
+    )
+    redirect.set_cookie(
         get_settings().auth_cookie_name,
         token,
         httponly=True,
@@ -90,12 +122,26 @@ async def github_callback(
         max_age=expires_in,
         path="/",
     )
-    response.delete_cookie("oauth_state", path="/api/v1/auth/github")
-    return TokenResponse(
-        access_token=token,
-        expires_in=expires_in,
-        user=_user_response(user),
-    )
+    redirect.delete_cookie("oauth_state", path="/api/v1/auth/github")
+
+    if request.headers.get("accept") == "application/json":
+        response.set_cookie(
+            get_settings().auth_cookie_name,
+            token,
+            httponly=True,
+            secure=get_settings().cookie_secure,
+            samesite="lax",
+            max_age=expires_in,
+            path="/",
+        )
+        response.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        return TokenResponse(
+            access_token=token,
+            expires_in=expires_in,
+            user=_user_response(user),
+        )
+
+    return redirect
 
 
 @router.get("/me", response_model=AuthenticatedUser, summary="Get the current authenticated user")

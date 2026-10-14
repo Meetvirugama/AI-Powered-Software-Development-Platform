@@ -23,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -126,9 +125,9 @@ class TestEmbedSingle:
         with (
             patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=three_429s),
             patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(EmbeddingError) as exc_info,
         ):
-            with pytest.raises(EmbeddingError) as exc_info:
-                await service.embed("some code")
+            await service.embed("some code")
 
         assert exc_info.value.retryable is True, "Rate-limit error should be marked retryable."
 
@@ -145,9 +144,8 @@ class TestEmbedSingle:
             "httpx.AsyncClient.post",
             new_callable=AsyncMock,
             return_value=_make_http_response(200, payload),
-        ):
-            with pytest.raises(EmbeddingError) as exc_info:
-                await service.embed("some code")
+        ), pytest.raises(EmbeddingError) as exc_info:
+            await service.embed("some code")
 
         assert exc_info.value.retryable is False, "Dimension mismatch must be non-retryable."
         assert "1536" in str(exc_info.value), "Error message should mention expected dimension."
@@ -168,9 +166,9 @@ class TestEmbedSingle:
                 side_effect=httpx.TimeoutException("timed out"),
             ),
             patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(EmbeddingError) as exc_info,
         ):
-            with pytest.raises(EmbeddingError) as exc_info:
-                await service.embed("some code")
+            await service.embed("some code")
 
         assert exc_info.value.retryable is True
 
@@ -248,3 +246,102 @@ class TestEmbedBatch:
             result = await service.embed_batch(["single item"])
 
         assert result == [vec]
+
+
+class TestSDE3EmbeddingFeatures:
+    """Tests for SDE-3 production enhancements in embeddings module."""
+
+    @pytest.mark.asyncio
+    async def test_embed_none_text_raises_value_error(self, provider_and_service):
+        _, service = provider_and_service
+        with pytest.raises(ValueError, match="cannot be None"):
+            await service.embed(None)  # type: ignore[arg-type]
+
+    def test_service_configuration_validation(self, provider_and_service):
+        provider, _ = provider_and_service
+        from ai.embeddings.service import EmbeddingService
+
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            EmbeddingService(provider=provider, batch_size=0)
+        with pytest.raises(ValueError, match="max_concurrency must be positive"):
+            EmbeddingService(provider=provider, max_concurrency=-1)
+
+    @pytest.mark.asyncio
+    async def test_retry_after_header_parsed_on_429(self, provider_and_service):
+        from ai.embeddings.client import RateLimitError
+
+        _, service = provider_and_service
+        mock_429 = _make_http_response(429)
+        mock_429.headers = {"Retry-After": "5.5"}
+
+        sleep_calls: list[float] = []
+
+        async def fake_sleep(seconds: float):
+            sleep_calls.append(seconds)
+
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_429),
+            patch("asyncio.sleep", new_callable=AsyncMock, side_effect=fake_sleep),
+            pytest.raises(RateLimitError) as exc_info,
+        ):
+            await service.embed("test")
+
+        assert exc_info.value.retryable is True
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.retry_after == 5.5
+        assert any(s >= 5.5 for s in sleep_calls)
+
+    @pytest.mark.asyncio
+    async def test_authentication_error_is_non_retryable(self, provider_and_service):
+        from ai.embeddings.client import AuthenticationError
+
+        _, service = provider_and_service
+        mock_401 = _make_http_response(401)
+        mock_401.text = "Invalid API key"
+
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=mock_401),
+            pytest.raises(AuthenticationError) as exc_info,
+        ):
+            await service.embed("test")
+
+        assert exc_info.value.retryable is False
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_bounded_concurrency_with_semaphore(self, provider_and_service):
+        import asyncio
+
+        from ai.embeddings.service import EmbeddingService
+
+        provider, _ = provider_and_service
+        service = EmbeddingService(provider=provider, batch_size=10, max_concurrency=2)
+
+        active_concurrent_calls = 0
+        max_seen_concurrent = 0
+
+        async def fake_embed_batch(batch):
+            nonlocal active_concurrent_calls, max_seen_concurrent
+            active_concurrent_calls += 1
+            max_seen_concurrent = max(max_seen_concurrent, active_concurrent_calls)
+            await asyncio.sleep(0.01)
+            active_concurrent_calls -= 1
+            return [_fake_vector() for _ in batch]
+
+        provider.embed_batch = fake_embed_batch
+
+        texts = [f"item_{i}" for i in range(50)]  # 5 batches of 10
+        results = await service.embed_batch(texts)
+
+        assert len(results) == 50
+        assert max_seen_concurrent <= 2, f"Expected concurrency <= 2, saw {max_seen_concurrent}"
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager_lifecycle(self, provider_and_service):
+        _, service = provider_and_service
+        async with service as svc:
+            assert svc.dimensions == 1536
+            assert svc.batch_size == 100
+            assert svc.provider.provider_name == "openai"
+            assert svc.provider.model_name == "text-embedding-3-small"
+

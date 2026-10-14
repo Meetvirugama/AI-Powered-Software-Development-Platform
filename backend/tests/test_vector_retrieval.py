@@ -25,13 +25,10 @@ from __future__ import annotations
 
 import uuid
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from ai.retrieval.base import CodeChunk
-
 
 # ---------------------------------------------------------------------------
 # Helpers
