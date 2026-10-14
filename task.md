@@ -1,940 +1,1049 @@
-# Professional frontend audit — SoftwearProject
-
-Your target should be a professional AI coding workspace inspired by the workflow of Antigravity and Claude Code, but with its own identity, layout, visual language, and interactions.
-
-I inspected the frontend source in `Archive.zip`, including `Docs/week1.md`, React routes, pages, API services, hooks, stores, styling, mocks, and the backend route definitions that the frontend depends on.
-
-My conclusion: you have a useful React foundation, but the frontend is not yet a cohesive, production-quality AI developer workspace. The biggest problems are mismatched contracts, incomplete live integration, authentication error handling, missing features, and a design that still resembles a basic dashboard rather than a code-intelligence environment.
-
-## 1. What Week 1 actually requires
-
-According to `Docs/week1.md`, your frontend must support five screens and a complete user journey:
-
-1\. Login
-
-GitHub OAuth, callback handling, session verification, and clear error states.
-
-2\. Dashboard
-
-Connected repositories, language, last synchronization, status, and useful quick actions.
-
-3\. Repository selector
-
-Discover GitHub repositories, search, connect, and show synchronization progress.
-
-4\. Repository explorer
-
-Repository metadata, file tree, language/framework information, symbols, and dependencies.
-
-5\. Repository chat
-
-Repository-aware questions, response streaming, clickable source references, loading states, and retryable errors.
-
-The fifth screen is especially important. This is not supposed to be a generic chatbot with a GitHub logo. It should feel like a developer working with an AI that understands the selected repository.
-
-## 2. Confirmed frontend issues
-
-Critical — repository discovery has stale integration assumptions
-
-`frontend/src/services/repositoryDiscovery.ts` still says its endpoints do not exist and that they are backed by MSW mocks. However, the archived backend defines `GET /api/v1/github/repositories` and `POST /api/v1/github/repositories/{github_repo_id}/connect`.
-
-Update the frontend contract based on the actual backend response schemas, not the old comments or assumed mock contract.
-
-High — authentication treats network errors as logout
-
-`frontend/src/hooks/useAuth.ts` catches every `/auth/me` failure and clears the authenticated user. A temporary network or server failure is therefore treated the same as an invalid session, potentially redirecting a legitimate user to login.
-
-Distinguish `401` from network failures and server errors. Show a retryable session-check error when authentication cannot be verified.
-
-High — the configured API URL is ignored
-
-`frontend/.env.local` defines `VITE_API_BASE_URL`, but `frontend/src/services/api.ts` hard-codes `baseURL: '/api/v1'`.
-
-Centralize the base URL and use a development proxy deliberately. Do not expose secrets through Vite environment variables.
-
-High — the chat is not actually streaming
-
-`useRepositoryChat.ts` creates a pending assistant message, but `services/chat.ts` waits for a complete JSON response. The typing state is a loading placeholder, not token-by-token streaming, despite the Week 1 chat UI requirement.
-
-Either implement the streaming contract jointly with the backend or label the current behavior honestly until streaming is available. Never simulate real streaming by progressively displaying a completed response.
-
-High — real-time connection handling is incomplete
-
-`frontend/src/realtime/index.ts` closes the EventSource on error, and the hook has no reconnection backoff. The connection can remain down until the component remounts.
-
-The backend route and event schema must also be verified before relying on SSE for sync status.
-
-High — incomplete service modules
-
-`pullRequests.ts`, `tasks.ts`, `execution.ts`, `reviews.ts`, and `blastRadius.ts` are empty files. They should either be explicitly deferred to later weeks or removed until required. Do not expose nonfunctional features in the Week 1 interface.
-
-These are source-level findings from the archive, not assumptions about what the frontend looks like when rendered in your browser.
-
-## 3. Page-by-page professional audit
-
-### A. Login and authentication
-
-Files: `pages/Login.tsx`, `pages/AuthCallback.tsx`, `hooks/useAuth.ts`, `services/auth.ts`, `layouts/ProtectedRoute.tsx`.
-
-Problems to address:
-
-- The login screen is a minimal centered card rather than a branded developer-tool entry point.
-- OAuth callback behavior needs to be matched exactly to the backend redirect and cookie-setting behavior.
-- A session-check failure is currently interpreted as unauthenticated regardless of cause.
-- The logout handler in `AppLayout.tsx` awaits the logout request before navigating. If the request fails, the local session is cleared by the hook, but navigation can fail to execute because the rejected promise propagates.
-- Authentication checks should not run unnecessarily in multiple mounted components.
-- There is no polished recovery UI for callback failures, denied permissions, expired sessions, or a temporarily unavailable backend.
-
-Target: a restrained, professional sign-in screen with a clear product identity, one primary GitHub action, permission explanation, and actionable errors. Keep the cookie-based authentication model; never store the JWT in `localStorage`.
-
-### B. Dashboard
-
-File: `pages/Dashboard.tsx`.
-
-What is good:
-
-- Repository cards are reusable.
-- Loading, error, empty, and pagination states already exist.
-- The page uses TanStack Query for server data.
-
-What needs improvement:
-
-- The page is primarily a repository grid; it does not yet establish a clear overview of the developer's workspace.
-- Sync failures and stale repositories need clearer status treatment and recovery actions.
-- Quick actions should be based on real functionality, not decorative cards.
-- Repository counts and activity summaries must be derived from backend data, not invented statistics.
-- Pagination and background refetching need to preserve the user's current context.
-- The page should adapt to small laptop viewports without creating excessive scrolling.
-
-Target: a workspace overview with connected repositories, actual indexing states, recent repository activity when available, and an obvious route to ask a question or connect another repository.
-
-### C. Repository selector
-
-Files: `pages/Repositories.tsx`, `services/repositoryDiscovery.ts`, `hooks/useAvailableRepositories.ts`, `hooks/useConnectRepository.ts`.
-
-What is good:
-
-- Debounced search is implemented.
-- The UI distinguishes connected from available repositories.
-- Connection errors are tracked per repository.
-- The code uses query-cache invalidation after successful connection.
-
-What needs improvement:
-
-- The response contract is still documented as assumed in places even though the backend contains relevant routes.
-- The page must distinguish GitHub installation problems from an empty repository list.
-- A single `isConnecting` flag can make mutation feedback ambiguous when multiple cards are rendered; ensure the UI disables and indicates only the relevant operation or intentionally serializes connects.
-- After connecting a repository, the UI must not imply indexing is complete merely because the connect endpoint returned successfully.
-- Search, pagination, and connect actions must remain consistent as background queries refresh.
-
-Target: a repository discovery workbench with a strong search field, connected/unconnected state, per-repository connect actions, and a real synchronization state.
-
-### D. Repository explorer
-
-File: `pages/RepositoryDetail.tsx`.
-
-This page is one of the largest integration risks because it consumes multiple endpoints and displays repository data that is not all present in the current backend response schema.
-
-The frontend defines optional fields for description, framework, file count, symbol count, and chunk count, while explicitly documenting some of them as mocked additions. The dependency service also states that the backend does not expose the expected endpoint.
-
-Required fixes:
-
-- Remove fabricated metadata and placeholder dependencies from the production path.
-- Show a genuine loading or unavailable state when metadata is not available.
-- Avoid issuing file/dependency queries before the repository reaches an appropriate indexing state.
-- Poll sync status only while the job is active, with bounded frequency and cleanup on unmount.
-- Show the last successful sync separately from the current attempt.
-- Provide a usable file tree with clear empty/error states and a route into repository chat.
-- Display file, symbol, and chunk counts only when backed by real data.
-
-Target: a compact codebase overview with a repository header, sync status, real file tree, meaningful metadata, and a clear “Ask this codebase” action.
-
-### E. Repository chat
-
-Files: `pages/RepositoryChat.tsx`, `hooks/useRepositoryChat.ts`, `services/chat.ts`.
-
-This is the core product screen and deserves the largest design and engineering investment.
-
-Current strengths:
-
-- The chat is repository-scoped.
-- Conversation state is kept locally.
-- The request sends a validated question/history structure.
-- Source metadata is represented by a TypeScript type.
-- The composer supports Enter to send and Shift+Enter for a newline.
-- There is an initial loading/pending state and a retry affordance.
-
-Problems:
-
-- The backend returns a complete answer rather than a real stream.
-- The UI's `isStreaming` name overstates the behavior.
-- Conversation state is lost when the component is unmounted or refreshed.
-- The source type defines file and line references, but each source needs to be a genuine interactive control that opens the correct repository file and location.
-- Error handling should preserve the failed question and let the user retry without duplicating messages.
-- The current layout relies on negative margins and a fixed viewport calculation. Nested scroll containers and small laptop windows need explicit testing.
-- There is no clear evidence of markdown/code rendering quality, syntax highlighting, copy controls, or accessible source navigation.
-- Long responses, empty retrieval, model/provider errors, and indexing-in-progress states need deliberate handling.
-
-Target: a coding assistant conversation panel, not a generic messaging screen. Answers should support readable markdown, code blocks, copy actions, source chips, and clear retrieval/grounding states when the backend provides that information.
-
-## 4. Design direction: inspired by Antigravity and Claude Code, not copied
-
-Use these products as workflow references, not visual templates. Your product should have its own name, component design, icons, spacing, colors, and interaction patterns.
-
-[Primeros pasos con Google Antigravity  |  Google Codelabs](https://images.openai.com/static-rsc-4/sDQtOKubIE_FsI2SMZl44trC3Yl1Lk5KbhM_hgvSNGtzcDdyQC2Pfqh4ZszEu9L6k7WWUtsvWM0eoo0VRevib6OXeWzBUNaEcVQ6zSjM2SShL4zc-KH6MYznDRG4ExKxnRs9pMOODJWbKzWopji4mibIUgIqW5p3Biiw0t5yo04?purpose=inline)
-
-Reference: Antigravity
-
-Borrow the concept of an integrated developer workspace: clear project context, tools close to the work, status visibility, and an environment that feels built for engineering.
-
-[Claude Code can just do things - Dane Grant](https://images.openai.com/static-rsc-4/5PblcZLjY6etXFkgYxN3w2dZrbxiAKhtUpny21HKneJWrHpcWAhalWKZ0X18DYtKWsz5cbzsByz0FA2iaAPW1t7cciWHjILeiv81MF-Wv69I9nETIfGgXcnTK0exV99gBUGvvzqu-szAjHqdyet2XF7YjLTeLqamRmPDJi023Bw?purpose=inline)
-
-Reference: Claude Code
-
-Borrow the workflow principle of a focused coding conversation grounded in project context. Keep the question, answer, code evidence, and follow-up actions connected.
-
-### Recommended product identity
-
-Use a dark, low-glare Code Intelligence Workbench design:
-
-- Deep charcoal background rather than pure black.
-- Slightly lighter panels with subtle borders.
-- One restrained accent color for primary actions and selected navigation.
-- Monospace typography for paths, symbols, line numbers, and code.
-- A clean sans-serif font for explanations, headings, and controls.
-- Compact but readable spacing.
-- Minimal shadows and restrained gradients.
-- Clear hierarchy instead of excessive glass effects, glowing borders, or animated decoration.
-
-Do not clone either product's exact layout, logos, terminology, screenshots, or distinctive visual assets.
-
-### Proposed application shell
-
-### Code Intelligence
-
-Workspace
-
-WORKSPACE
-
-Overview
-
-Repositories
-
-CURRENT PROJECT
-
-my-codebase
-
-src/auth.ts
-
-src/api.ts
-
-REPOSITORY INTELLIGENCE
-
-## Understand your codebase
-
-Explore architecture, search symbols, and ask questions grounded in indexed source files.
-
-Ask your repository
-
-Where is authentication implemented?
-
-Conceptual layout only — not a screenshot of your current application.
-
-This is the overall direction, not a final visual specification. The real chat screen should use more horizontal room for conversation and evidence than the overview page.
-
-## 5. Professional design specification
-
-The design should be consistent across all five screens, with the chat and repository explorer sharing the same application shell.
-
-### Global layout
-
-Desktop application shell
-
-Target
-
-Navigation
-
-200–240 px
-
-Workspace, repositories, settings
-
-Main workspace
-
-Flexible width
-
-Dashboard, file explorer, or chat
-
-Evidence panel
-
-Optional
-
-Sources, symbols, file details
-
-Suggested proportions, not fixed pixel requirements. The evidence panel should collapse on narrower screens.
-
-Use a viewport-filling shell with independently scrollable content panels. On a normal laptop, the main workspace should fit within the available viewport; long file trees, conversations, and source lists should scroll inside their own panels instead of creating multiple competing page scrollbars.
-
-### Design tokens
-
-| Token            | Recommendation                                                 |
-| ---------------- | -------------------------------------------------------------- |
-| Main background  | Deep charcoal                                                  |
-| Panel background | Slightly lighter charcoal                                      |
-| Borders          | Subtle neutral gray                                            |
-| Primary accent   | Restrained blue or blue-violet                                 |
-| Success          | Muted green                                                    |
-| Warning          | Amber                                                          |
-| Error            | Muted red                                                      |
-| Typography       | Clean sans-serif; monospace for code                           |
-| Radius           | Consistent 6–10 px                                             |
-| Motion           | Short, purposeful transitions; respect reduced-motion settings |
-
-Do not hard-code colors throughout individual components. Centralize tokens and use shared primitives for buttons, inputs, cards, status indicators, tooltips, dialogs, and loading states.
-
-### Page layout rules
-
-- Login: minimal, branded, focused on GitHub authentication.
-- Dashboard: compact workspace overview and connected repository cards.
-- Repositories: search, filter, connect, and sync status.
-- Explorer: repository header, compact file tree, real metadata, and chat action.
-- Chat: conversation center, repository context in the left panel, and collapsible evidence/source details.
-
-Avoid filling every screen with cards. Use typography, whitespace, subtle dividers, and clear interaction hierarchy.
-
-## 6. API integration and state management audit
-
-The existing architecture is worth retaining: React, React Router, TanStack Query, Zustand, Axios, and TypeScript. A professional redesign should not require replacing these tools.
-
-| Component                         | Required change                                                                                                                             |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `services/api.ts`                 | Use configurable base URL, consistent error normalization, request timeout, and safe handling of session expiry.                            |
-| `services/auth.ts`                | Match the real backend session and logout contract.                                                                                         |
-| `services/repositories.ts`        | Match actual response schemas; do not assume server pagination when the endpoint returns a plain list.                                      |
-| `services/repositoryDiscovery.ts` | Remove stale mock assumptions and align field names and status codes with the implemented backend.                                          |
-| `services/chat.ts`                | Keep the response contract accurate; add streaming only when a real streaming API exists.                                                   |
-| `hooks/useAuth.ts`                | Distinguish unauthenticated, loading, and service-unavailable states.                                                                       |
-| `hooks/useRepositories.ts`        | Handle polling, cache invalidation, pagination, and synchronization states correctly.                                                       |
-| `hooks/useRepositoryChat.ts`      | Prevent duplicate submissions, preserve retryable questions, clean up requests, and handle completed versus streaming responses accurately. |
-| `realtime/index.ts`               | Implement bounded reconnection and verify event contracts.                                                                                  |
-| `types/api.ts`                    | Make backend-derived types accurate and remove assumptions disguised as confirmed schemas.                                                  |
-| `mocks/handlers.ts`               | Keep mock data for isolated development/testing only; never mix mock and live data silently.                                                |
-
-### Important synchronization issue
-
-The frontend currently maps the entire `SYNCING` state to `CLONING`, because the backend does not provide distinct stages in the repository status enum. This is an acceptable temporary display only if clearly communicated.
-
-To show `Cloning → Scanning → Indexing → Ready` truthfully, the backend must expose actual job progress. Do not animate through stages merely to make the interface look active.
-
-### Important streaming issue
-
-`Docs/week1.md` requires a streaming chat experience, but the current chat service uses an ordinary POST request that returns a complete answer.
-
-Antigravity should:
-
-1. Inspect the actual backend chat response and any existing SSE routes.
-2. Decide on one supported streaming contract with the backend.
-3. If implemented, handle partial content, cancellation, connection failure, final citations, and completion events.
-4. If the backend cannot stream yet, keep a high-quality pending state and explicitly report streaming as incomplete.
-
-The UI must never display fake token-by-token streaming.
-
-## 7. Accessibility, responsiveness, and reliability
-
-A professional frontend must work beyond a single desktop screenshot.
-
-- Support keyboard navigation and visible focus states.
-- Use semantic buttons and links, with accessible labels for icon-only controls.
-- Ensure dialogs, popovers, and menus are keyboard accessible.
-- Use appropriate live announcements for completed chat responses and errors without repeatedly announcing every render.
-- Respect reduced-motion preferences.
-- Ensure code blocks and long paths do not force the entire page wider than the viewport.
-- Test at laptop, tablet, and mobile widths.
-- Keep the chat composer visible while the conversation panel scrolls.
-- Ensure the sidebar collapses appropriately on smaller screens.
-- Handle browser refresh on nested routes.
-- Preserve intended redirects after authentication.
-- Add request cancellation and prevent stale responses from overwriting newer state.
-- Avoid unnecessary polling, repeated `/auth/me` calls, and duplicate requests.
-- Display useful empty, loading, error, and success states for every asynchronous screen.
-
-## 8. Build and testing status
-
-I attempted `npm run build` in the extracted archive.
-
-- The TypeScript build step completed far enough to reach Vite.
-- Vite then failed because the archived `node_modules` lacked the platform-specific Rolldown native binding required by the Linux audit environment.
-
-This is an environment/dependency installation problem; it does not establish that the frontend source fails to compile on your MacBook.
-
-The final audit should run a clean dependency installation on the target development environment, then execute:
-
-```
-cd frontend
-npm ci
-npm run build
-npm run lint
+# Week 3 — Workflow Automation, GitHub Ecosystem & Production Hardening
+
+**Project:** AI-Powered Software Development Platform  
+**Duration:** 7 working days  
+**Team:** Meet, Dev, Dhramraj, Yug, Om, Parth, Prit, Sukun, Keval, Devu  
+**Prerequisite:** Week 2 Developer Intelligence Suite is integrated and its acceptance tests pass.
+
+---
+
+## 1. Week 3 Objective
+
+Transform the developer-intelligence platform into an integrated AI development workflow that can take a task from an identified problem to a verified code change and a human-reviewable GitHub Draft PR.
+
+### Final workflow
+
+```text
+Connect GitHub Repository
+          |
+          v
+Explore Code / Explain / Detect Bugs / Review
+          |
+          v
+Create GitHub Issue or Submit a Task
+          |
+          v
+Task Planner + Repository Context (RAG)
+          |
+          v
+Validate Structured Implementation Plan
+          |
+          v
+Human Approves Plan
+          |
+          v
+Create Isolated Git Branch + Workspace
+          |
+          v
+Apply Changes Using Approved Agent Tools
+          |
+          v
+Generate or Update Tests
+          |
+          v
+Run Tests in Restricted Sandbox
+          |
+          +------ Tests Fail ------+
+          |                         |
+          v                         |
+Diagnose Failure                    |
+          |                         |
+          v                         |
+Apply Bounded Repair ---------------+
+          |
+          v
+Independent Verification
+          |
+          v
+AI Code Review + Static Analysis
+          |
+          v
+Generate PR Summary + Test Evidence
+          |
+          v
+Push Task Branch
+          |
+          v
+Create GitHub Draft Pull Request
+          |
+          v
+Human Reviews and Decides Next Steps
 ```
 
-Antigravity should also add tests for authentication state, repository connection, query-cache invalidation, sync progress, chat retry behavior, citation links, and error states. Add browser-level end-to-end tests for the primary user journey if the project's existing tooling supports them.
-
-## 9. Ready-to-paste Antigravity prompt
-
-This is the implementation prompt. It directs Antigravity to audit the existing frontend, align it with `Docs/week1.md`, fix functional issues, and redesign the UI around a distinct AI coding workspace inspired by the workflows of Antigravity and Claude Code.
-
-# Task: Professional Frontend Audit, Functional Repair, and Code Intelligence Workspace Redesign
-
-## Project context
-
-Project: existing SoftwearProject codebase.
-
-Primary requirements: `Docs/week1.md`.
-
-Frontend: `frontend/`.
-
-Backend contract: inspect the actual FastAPI routes, Pydantic schemas, response models, authentication behavior, synchronization jobs, and chat API before changing frontend integration.
-
-Reference products: Google Antigravity and Claude Code, for workflow inspiration only.
-
-## Main objective
-
-Perform a complete, professional frontend audit and implement the required changes.
-
-The target is a polished AI Code Intelligence Workspace that feels like a serious developer tool, not a generic admin dashboard or ordinary chatbot.
-
-Take inspiration from the integrated developer workflows of Antigravity and Claude Code, but create an original visual identity, layout, components, navigation, and interactions. Do not copy their screenshots, logos, exact layouts, distinctive assets, or branding.
-
-**Do not stop after providing an audit report. Inspect the actual code, implement necessary changes, run checks, fix failures, and verify the complete Week 1 user journey.**
-
-Preserve the existing React, TypeScript, Vite, React Router, TanStack Query, Zustand, Axios, and Tailwind architecture unless a specific technical problem justifies a change.
-
-Do not rewrite the application unnecessarily.
-
-## Phase 1 — Complete frontend inventory
-
-Inspect the entire `frontend/src/` directory, configuration, dependencies, and relevant backend files.
-
-Audit at least:
-
-- `App.tsx` and `main.tsx`
-- All pages in `pages/`
-- All components in `components/`
-- `layouts/`
-- `services/`
-- `hooks/`
-- `stores/`
-- `types/api.ts`
-- `realtime/`
-- `mocks/`
-- `index.css`
-- Tailwind configuration
-- Vite configuration
-- TypeScript configuration
-- `package.json` and lockfile
-- Frontend environment files
-- `Docs/week1.md`
-- Corresponding backend routes and schemas
-
-For every module, identify:
-
-1. Actual responsibility.
-2. Whether it is used.
-3. Broken imports and incorrect assumptions.
-4. Missing functionality.
-5. Incorrect backend contracts.
-6. Duplicate logic and unnecessary abstractions.
-7. Mocked data and unfinished implementations.
-8. Authentication and state-management problems.
-9. Responsive layout and accessibility problems.
-10. Relevant Week 1 requirements and acceptance tests.
-
-Classify each finding as CRITICAL, HIGH, MEDIUM, LOW, or DEFERRED.
-
-Produce a file-by-file audit report and a Week 1 requirements traceability matrix.
-
-## Phase 2 — Align with Docs/week1.md
-
-Week 1 requires five functional screens:
-
-1. Login and GitHub OAuth callback.
-2. Dashboard with connected repositories and sync status.
-3. Repository selector with GitHub discovery, search, and connection.
-4. Repository explorer with metadata, files, symbols, and dependencies where available.
-5. Repository chat with loading states, streaming where supported, and clickable source references.
-
-Preserve this scope.
-
-Do not add nonfunctional pull-request management, autonomous agents, code execution, reviews, tasks, or other Week 2/3 functionality to the Week 1 navigation.
-
-Inspect the existing empty service files:
-
-- `services/pullRequests.ts`
-- `services/tasks.ts`
-- `services/execution.ts`
-- `services/reviews.ts`
-- `services/blastRadius.ts`
-
-Remove or defer them explicitly if they have no Week 1 responsibility. Do not delete any module without checking imports and planned dependencies.
-
-## Phase 3 — Redesign the application shell
-
-Create a coherent Code Intelligence Workspace.
-
-### Visual identity
-
-Use a restrained dark developer-workspace aesthetic:
-
-- Deep charcoal backgrounds.
-- Slightly lighter panel surfaces.
-- Subtle neutral borders.
-- One consistent accent color.
-- Clean sans-serif typography for the interface.
-- Monospace typography for file paths, symbols, line numbers, and code.
-- Consistent spacing, radii, and icon sizes.
-- Clear typography hierarchy.
-- Minimal shadows and decorative effects.
-- Purposeful transitions that respect reduced-motion preferences.
-
-Avoid excessive gradients, glowing borders, glass effects, oversized cards, decorative statistics, and generic AI-generated dashboard styling.
-
-Do not copy Antigravity or Claude Code's exact interface. Create an original design system.
-
-### Application shell
-
-Implement a consistent shell with:
-
-- Collapsible left navigation.
-- Product identity and workspace context.
-- Repository navigation.
-- Current repository context when applicable.
-- Main workspace.
-- Optional contextual evidence panel.
-- Clear account/session controls.
-- Accessible tooltips and menus.
-
-The navigation should distinguish workspace overview, repositories, and the currently selected repository.
-
-Use the full available viewport on desktop and laptop screens. Keep panels independently scrollable, with the chat composer pinned where appropriate. Avoid unnecessary nested page scrolling.
-
-On narrower screens, collapse the navigation and contextual panels cleanly.
-
-Use the existing routing and component structure where possible.
-
-## Phase 4 — Establish design tokens and reusable primitives
-
-Centralize design tokens in the existing styling system.
-
-Define consistent values for:
-
-- Background and panel surfaces.
-- Foreground and muted text.
-- Borders and dividers.
-- Primary and secondary actions.
-- Success, warning, and error states.
-- Focus rings.
-- Typography scale.
-- Spacing.
-- Radius.
-- Transitions.
-- Z-index and overlay behavior.
-
-Create or refactor reusable primitives as needed:
-
-- Button
-- IconButton
-- Input
-- Textarea
-- Tooltip
-- StatusBadge
-- RepositoryCard
-- LoadingSkeleton
-- EmptyState
-- ErrorState
-- RetryAction
-- Dialog
-- Dropdown
-- Tabs
-- FileTreeItem
-- SourceReference
-- CodeBlock
-- Toast or notification
-
-Avoid duplicate UI implementations across pages. Do not introduce a second component library without a demonstrated need.
-
-Use semantic HTML and accessible controls.
-
-## Phase 5 — Repair authentication
-
-Inspect:
-
-- `pages/Login.tsx`
-- `pages/AuthCallback.tsx`
-- `hooks/useAuth.ts`
-- `stores/useAuthStore.ts`
-- `services/auth.ts`
-- `layouts/ProtectedRoute.tsx`
-- `layouts/AppLayout.tsx`
-- Backend authentication routes and cookie configuration
-
-Fix the real integration rather than merely restyling the screens.
-
-Requirements:
-
-- Match the actual backend OAuth start and callback URLs.
-- Verify how the backend redirects after setting the HTTP-only session cookie.
-- Keep JWTs out of localStorage and sessionStorage.
-- Keep credentials out of frontend code.
-- Handle successful login, denied permissions, invalid state, expired session, and callback failure.
-- Distinguish HTTP 401 from network errors, 5xx responses, and temporary session-check failures.
-- Do not clear valid local user state on every transient server error.
-- Provide a retryable error screen when session verification cannot complete.
-- Avoid duplicate `/auth/me` requests caused by component mounting.
-- Ensure logout clears local session state and navigates correctly even if the logout request fails.
-- Preserve safe redirects after authentication.
-- Ensure protected routes do not render protected data before session verification completes.
-
-Test login, refresh, logout, invalid session, and temporary backend outage.
-
-## Phase 6 — Repair API integration and TypeScript contracts
-
-Inspect the actual backend endpoints and Pydantic response schemas.
-
-Known issues to investigate:
-
-1. `services/api.ts` hard-codes `/api/v1` even though `VITE_API_BASE_URL` is configured.
-2. `services/repositoryDiscovery.ts` contains stale comments claiming relevant endpoints are not implemented, despite the archived backend defining repository discovery and connection routes.
-3. Repository discovery response fields and pagination assumptions may not match the real backend.
-4. `services/repositories.ts` uses client-side pagination because the connected repository endpoint returns a plain list.
-5. Repository description, framework, counts, and dependencies include mocked or optional frontend assumptions.
-6. The chat response currently returns a complete answer, not a token stream.
-7. The frontend SSE client expects an events endpoint whose backend availability and schema must be verified.
-
-Required actions:
-
-- Centralize API base URL configuration.
-- Keep `withCredentials` for cookie authentication.
-- Do not expose secrets through `VITE_` environment variables.
-- Normalize backend errors consistently.
-- Configure request timeouts.
-- Preserve request cancellation where supported.
-- Use typed service functions.
-- Match real field names, response envelopes, pagination, and status codes.
-- Remove stale comments and speculative contracts after verification.
-- Keep UI-facing adapters only where they serve a real compatibility purpose.
-- Avoid `any` and unsafe type assertions in production code.
-- Avoid showing mocked metadata in the real backend workflow.
-
-Update API types from the actual backend schemas rather than maintaining multiple competing contracts.
-
-Do not silently switch between mocked and live responses.
-
-## Phase 7 — Dashboard
-
-Redesign `pages/Dashboard.tsx` as a workspace overview.
-
-Include:
-
-- A clear page heading and repository context.
-- Connected repository list.
-- Repository name, language, last successful sync, and actual sync status.
-- Useful quick actions to connect a repository, explore a repository, or ask a question.
-- Loading, empty, error, retry, and background-refetch states.
-- Pagination when needed.
-- Responsive repository cards or rows.
-- Clear failed-sync recovery actions.
-
-Only display counts and recent activity when supported by real backend data. Do not invent repository statistics, activity, model usage, or success rates.
-
-Keep the layout compact and useful rather than filling the screen with decorative metric cards.
-
-## Phase 8 — Repository selector
-
-Redesign `pages/Repositories.tsx` and its related hooks/services.
-
-Requirements:
-
-- Search and filtering.
-- Debounced requests.
-- Stable pagination.
-- Clear connected and unconnected states.
-- Per-repository connection loading state.
-- Prevent duplicate submissions.
-- Display actionable connection errors.
-- Correct cache invalidation after successful connection.
-- Navigate using the internal repository UUID returned by the backend.
-- Distinguish an empty result from a GitHub App installation or permission error.
-- Avoid marking a repository ready merely because the connect endpoint succeeded.
-
-Verify the actual GitHub discovery and connect endpoints.
-
-The interface should communicate that connecting and indexing are different operations.
-
-## Phase 9 — Repository explorer
-
-Redesign `pages/RepositoryDetail.tsx`.
-
-Create a compact codebase overview with:
-
-- Repository name and owner.
-- Default branch.
-- Language and supported metadata.
-- Current sync/indexing status.
-- Last successful synchronization time.
-- File tree with readable paths.
-- Symbol information where available.
-- Dependency information only when supported by real API data.
-- A prominent action to ask questions about the repository.
-- Appropriate empty, loading, failed-sync, and unavailable-data states.
-
-Requirements:
-
-- Do not fabricate descriptions, frameworks, file counts, symbol counts, chunk counts, or dependencies.
-- Do not request unavailable endpoints.
-- Do not issue expensive queries before the repository is ready.
-- Poll sync status only while a job is active.
-- Stop polling on unmount or terminal status.
-- Use bounded polling intervals.
-- Preserve the last known successful sync information when a new sync fails.
-- Make the file tree keyboard accessible.
-- Show long paths without breaking the layout.
-- Provide a coherent navigation path from a selected file or symbol to repository chat.
-
-If file-content retrieval is not implemented by the backend, do not pretend that a file can be opened in a real code editor.
-
-## Phase 10 — Repository chat: highest priority
-
-Inspect:
-
-- `pages/RepositoryChat.tsx`
-- `hooks/useRepositoryChat.ts`
-- `services/chat.ts`
-- Chat-related TypeScript types.
-- Backend chat endpoint and response schema.
-- Any existing backend SSE or streaming implementation.
-
-Build a high-quality repository-aware conversation interface.
-
-### Layout
-
-- Compact repository header.
-- Conversation history in the main panel.
-- Composer anchored at the bottom.
-- Clear repository context.
-- Optional collapsible sources/evidence panel.
-- Appropriate independent scrolling.
-- Responsive behavior for laptop, tablet, and mobile.
-
-### Conversation behavior
-
-- Support Enter to send and Shift+Enter for a newline.
-- Prevent duplicate submissions.
-- Disable submission while the request is active.
-- Preserve the failed question for retry.
-- Provide a cancel/stop action only when the request can genuinely be cancelled.
-- Handle long answers and code blocks.
-- Support accessible keyboard navigation.
-- Show loading skeletons and useful error states.
-- Avoid duplicate user or assistant messages after failures.
-- Preserve conversation state while navigating within the intended scope.
-- Do not claim conversation persistence if it is only in local component state.
-
-### Response rendering
-
-- Render Markdown safely.
-- Support readable code blocks and copy controls.
-- Preserve whitespace and code formatting.
-- Display sources with file path, line range, and symbol when available.
-- Make verified source references clickable.
-- Use real routes or file-detail actions; do not add dead buttons.
-- Clearly communicate insufficient evidence or unavailable grounding when provided by the backend.
-- Do not display invented confidence values or fabricated citations.
-
-### Streaming
-
-Week 1 requests streaming, but the current chat service uses a regular POST returning a complete JSON response.
-
-Inspect the actual backend capability before implementation.
-
-If a real SSE or streaming endpoint exists, implement it correctly, including:
-
-- Partial response updates.
-- Cancellation.
-- Network errors.
-- Completion events.
-- Final citation metadata.
-- Cleanup when the component unmounts.
-
-If the backend does not support streaming, keep a truthful pending/loading state and report streaming as an outstanding integration task. Do not fake token-by-token streaming by progressively rendering a completed answer.
-
-## Phase 11 — Synchronization and realtime updates
-
-Inspect:
-
-- `realtime/events.ts`
-- `realtime/index.ts`
-- `hooks/useRealtimeRepositories.ts`
-- Backend event routes and event payload schemas.
-- Repository sync job/status schemas.
-
-Fix the lifecycle of the SSE connection.
-
-- Connect only when the authenticated session and backend endpoint are valid.
-- Close the connection on logout or unmount.
-- Add bounded reconnection with backoff and cleanup.
-- Avoid reconnect loops.
-- Validate event payloads before using them.
-- Invalidate the correct TanStack Query keys.
-- Do not rely on guessed event names or payload shapes.
-- Fall back to bounded polling if realtime events are unavailable.
-
-The backend currently exposes coarse synchronization states. Show Cloning, Scanning, Indexing, and Ready only when those stages are backed by actual backend job progress.
-
-Never animate fake progress.
-
-## Phase 12 — State management and performance
-
-Preserve the existing separation:
-
-- TanStack Query for server data.
-- Zustand for small shared UI/session state.
-- Local React state for transient component concerns.
-
-Audit all query keys, cache invalidation, retries, polling, and cancellation.
-
-Requirements:
-
-- Avoid duplicate requests.
-- Avoid storing the same server data in both Zustand and TanStack Query.
-- Reset user-specific caches when logging out.
-- Prevent stale requests from overwriting current route data.
-- Use stable list keys.
-- Avoid unnecessary component re-renders.
-- Debounce search correctly.
-- Avoid excessive refetching.
-- Lazy-load routes only where it improves real performance.
-- Ensure the application remains responsive with large repository lists and long conversations.
-
-Do not optimize based on guesses. Verify the actual source of unnecessary work.
-
-## Phase 13 — Responsive behavior and accessibility
-
-Test at desktop, laptop, tablet, and mobile widths.
-
-Requirements:
-
-- The main workspace fits the available desktop viewport.
-- Side panels collapse or become overlays on narrow screens.
-- Chat composer remains accessible.
-- File paths and code blocks do not cause page-wide horizontal overflow.
-- Long conversations scroll within the conversation panel.
-- Every icon-only action has an accessible name.
-- Buttons and links work by keyboard.
-- Focus states remain visible.
-- Dialogs and menus are keyboard accessible.
-- Status changes and completed responses are announced appropriately.
-- Color is not the only way to communicate state.
-- Contrast is sufficient.
-- Reduced-motion preferences are respected.
-
-Avoid competing nested scrollbars and fixed heights that clip content on short laptop screens.
-
-## Phase 14 — Remove dead code and production mocks
-
-Search the complete frontend for:
-
-- Empty service files.
-- Unused components and hooks.
-- Duplicate services.
-- Stale API comments.
-- Placeholder values.
-- Fake response data.
-- Mock endpoints in production paths.
-- Dead navigation links.
-- Inert buttons.
-- Unused imports and dependencies.
-- Hard-coded URLs.
-- Incorrect assumptions hidden behind TypeScript types.
-
-Retain MSW only for explicit development and testing scenarios. Enable it intentionally through a documented development setting, not silently in production.
-
-Never display mock repository data alongside live data.
-
-Do not delete a file until all references, tests, and intended future responsibilities have been checked.
-
-## Phase 15 — Tests and verification
-
-Run:
-
-```
-cd frontend
-npm ci
-npm run build
-npm run lint
+The agent must not automatically merge a pull request, modify protected branches, bypass approval gates or deploy code.
+
+## 2. Week 3 Feature Ownership
+
+| Feature | Lead | Collaborators |
+|---|---|---|
+| F31 — GitHub Issue Creation | Parth | Yug, Dhramraj, Sukun, Keval |
+| F32 — Task Planner and Approval | Meet | Dev, Yug, Dhramraj, Om |
+| F33 — Isolated Workspace and File Execution | Prit | Devu, Parth, Sukun |
+| F34 — Tool Routing and Policy Enforcement | Devu | Prit, Sukun, Yug |
+| F35 — Test Runner and Bounded Repair | Meet | Dev, Prit, Devu, Keval |
+| F36 — Independent Verification and PR Summary | Dev | Meet, Keval, Om |
+| F37 — GitHub Branch Push and Draft PR | Parth | Yug, Dhramraj, Sukun |
+| F38 — Task Timeline and Workflow UI | Dhramraj | Yug, Om, Keval |
+| F39 — Persistence, Checkpoints and Traceability | Om | Yug, Meet, Parth |
+| F40 — Security, Acceptance and Release Gate | Sukun | Keval and all feature leads |
+
+Every feature lead is responsible for its design, integration, tests, documentation and acceptance criteria. The collaborators own their assigned deliverables.
+
+## 3. Existing Week 2 Components to Reuse
+
+Do not rebuild existing capabilities.
+
+| Week 2 component | Week 3 use |
+|---|---|
+| Code Explanation | Understand implementation details and affected symbols |
+| Bug Detection | Supply defects and remediation context to task planning |
+| Test Generation | Generate or update tests for proposed changes |
+| AI Code Review | Review the final diff and produce findings |
+| Repository context and RAG | Retrieve relevant source files, symbols and dependencies |
+| Analysis schemas | Reuse structured findings and verification metadata |
+| Repository Explorer | Launch issues, tasks, reviews and execution workflows |
+| GitHub repository integration | Fetch authorized source content and PR information |
+| Task/analysis persistence | Extend history with execution runs, checkpoints and PR references |
+| Existing LLM gateway | Use only the approved Gemini and Groq providers |
+
+Before adding a new service, inspect the existing code, confirm the contract and reuse or extend the current implementation.
+
+---
+
+# DAY 1 — GitHub Issue Creation and Task Intake
+
+**Goal:** A developer can turn an existing bug or review finding into a GitHub issue and start a development task from a supported issue or natural-language request.
+
+## Parth — GitHub Issue Integration
+
+- Audit the existing GitHub integration and authentication model.
+- Implement or extend `GitHubService.create_issue(owner, repo, title, body, labels)`.
+- Use the existing GitHub App installation-token mechanism where configured.
+- Validate repository permissions and required issue fields.
+- Format issues with:
+  - Problem summary.
+  - Evidence and source references.
+  - Severity and category.
+  - Reproduction steps or relevant context.
+  - Suggested remediation, when available.
+  - Link to the originating platform finding.
+- Handle missing permissions, invalid labels, API errors and rate limits.
+- Ensure duplicate requests do not create unintended duplicate issues.
+
+**Deliverable:** Tested GitHub issue service with structured errors.
+
+## Yug — Issue Creation API
+
+Implement or extend:
+
+```text
+POST /api/v1/repositories/{id}/issues
 ```
 
-Resolve dependency installation problems appropriately for the target environment. Do not assume archived native modules are portable between operating systems.
+- Accept a validated bug finding or review finding reference.
+- Verify that the finding belongs to the authorized repository.
+- Retrieve the stored finding server-side rather than trusting arbitrary client-provided content.
+- Call the GitHub service.
+- Return the GitHub issue number, URL and creation status.
+- Add authorization, validation and failure tests.
 
-Add tests using the existing tooling where practical.
+**Deliverable:** Working issue-creation endpoint.
 
-Test:
+## Dhramraj — Create Issue UI
 
-1. Login and callback states.
-2. Authentication check success, 401, network error, and server error.
-3. Logout behavior.
-4. Protected routes.
-5. Repository discovery, search, pagination, and connection.
-6. Cache invalidation.
-7. Sync status and polling cleanup.
-8. Repository explorer loading, empty, and error states.
-9. Chat success, retry, duplicate-submit prevention, and cancellation where supported.
-10. Source-reference navigation.
-11. SSE reconnect and cleanup where applicable.
-12. Responsive navigation and accessible controls.
-13. API contract consistency with the backend.
-14. Full user flow from login to repository chat.
+- Add a Create GitHub Issue action to bug and review findings.
+- Display a confirmation or preview of the issue title and body.
+- Show loading, success, duplicate and error states.
+- Display a link to the created GitHub issue.
+- Prevent repeated submissions while the request is running.
 
-Use mocked API responses for repeatable tests. Add browser-level end-to-end tests if the existing environment supports them.
+**Deliverable:** Integrated issue-creation experience.
 
-Report tests as PASSED, FAILED, BLOCKED, or NOT RUN. Do not claim a test passed if it was not executed.
+## Meet — Issue-to-Task Context
 
-## Phase 16 — Required deliverables
+- Define how an issue becomes a structured development task.
+- Retrieve the issue title, body, labels and authorized repository context.
+- Normalize the problem into an implementation objective.
+- Preserve the original issue reference and its requirements.
 
-Produce:
+**Deliverable:** Issue intake contract for the task planner.
 
-1. File-by-file frontend audit report.
-2. Week 1 requirements traceability matrix.
-3. Implemented frontend redesign.
-4. List of added, modified, removed, and deferred files.
-5. Updated design tokens and reusable components.
-6. Corrected API contracts and state handling.
-7. Updated environment/setup instructions.
-8. Actual test and build results.
-9. Screenshots of the implemented application at desktop and mobile widths, if browser tooling is available.
-10. A list of remaining backend blockers and incomplete Week 1 features.
+## Dev — Planning Input Validation
 
-## Execution order
+- Define the validated task input schema.
+- Distinguish requirements, assumptions, constraints and expected behavior.
+- Detect insufficient or contradictory task descriptions.
+- Prevent unsupported assumptions from silently becoming implementation requirements.
 
-1. Inspect all source files and trace API contracts.
-2. Produce the audit and establish the baseline.
-3. Fix authentication and API integration.
-4. Establish design tokens and the application shell.
-5. Redesign the dashboard and repository selector.
-6. Redesign the repository explorer.
-7. Prioritize and complete the repository chat.
-8. Fix synchronization/realtime lifecycle.
-9. Remove dead code and misleading mocks.
-10. Run tests, fix defects, and verify the full journey.
-11. Update the traceability matrix and report remaining blockers.
+**Deliverable:** Validated task-intake schema.
 
-**Final acceptance criterion:** the frontend must be visually cohesive, responsive, accessible, and genuinely connected to the real Week 1 backend workflow. It must look and behave like an original professional AI code-intelligence workspace, with Antigravity and Claude Code serving only as workflow references.
+## Om — Issue and Task Persistence
 
-Start with the real code and `Docs/week1.md`, then implement and verify the changes. Do not stop after writing recommendations.
+- Define the relationship between GitHub issues and platform tasks.
+- Store the issue number, URL, repository and source finding reference.
+- Prevent accidental cross-repository associations.
+- Preserve the external issue identifier for later traceability.
 
-## 10. Recommended priority
+**Deliverable:** Issue/task persistence support and migration if required.
 
-I would have Antigravity finish these three outcomes first:
+## Prit — Workspace Prerequisites
 
-1. Functional correctness: OAuth, repository discovery, connection, synchronization status, and API contracts.
-2. Core developer experience: a distinctive application shell, compact repository explorer, and high-quality grounded chat.
-3. Reliability and polish: streaming when supported, real source navigation, retry behavior, responsive layouts, and tests.
+- Verify repository checkout and workspace preparation interfaces.
+- Confirm the workspace can be associated with the originating task.
+- Define the source revision metadata required for safe execution.
 
-The strongest result will come from building a cohesive workspace around real repository data—not from adding more visual effects or more pages.&#x20;
+**Deliverable:** Workspace preparation contract.
+
+## Devu — Tool and Policy Integration
+
+- Confirm that GitHub write operations go through explicitly authorized service methods.
+- Ensure agent tools cannot call issue creation without the appropriate permission.
+- Return normalized tool errors for unauthorized or failed operations.
+
+**Deliverable:** GitHub write-operation policy integration.
+
+## Sukun — GitHub Security
+
+- Validate repository authorization before creating an issue.
+- Prevent arbitrary repository-owner or repository-name substitution.
+- Ensure GitHub tokens remain server-side.
+- Add tests for unauthorized repositories and malicious issue content.
+
+**Deliverable:** GitHub issue security tests.
+
+## Keval — Issue Acceptance Tests
+
+- Test issue creation from a bug finding.
+- Test issue creation from a review finding.
+- Test missing permissions, invalid input, rate limits and duplicate submissions.
+- Verify that a failed request does not appear successful in the UI.
+
+**Day 1 exit gate:** A supported finding can be converted into a real GitHub issue in an authorized test repository, and the issue can be traced back to its originating finding.
+
+---
+
+# DAY 2 — Development Task Planner and Human Approval
+
+**Goal:** The platform converts a natural-language task or GitHub issue into a validated, reviewable implementation plan.
+
+## Meet — TaskPlanner
+
+Implement the task-planning service.
+
+Responsibilities:
+
+- Accept a natural-language request or a supported GitHub issue.
+- Retrieve relevant code using the existing RAG pipeline.
+- Identify likely affected files, functions and dependencies.
+- Produce ordered implementation steps.
+- Define test and verification strategies.
+- Identify assumptions, missing information and risk.
+- Keep the plan within configured context and model-call budgets.
+- Avoid claiming that nonexistent files or functions were inspected.
+
+**Deliverable:** Repository-aware TaskPlanner.
+
+## Dev — Planner Schema and Validation
+
+- Define `PlannerSchema` and implementation-step schemas.
+- Validate affected file paths and required fields.
+- Check that dependencies between steps are coherent.
+- Validate the proposed test strategy.
+- Reject malformed or unsupported plans.
+- Ensure a regenerated plan receives a new version identifier.
+- Prevent stale approval from authorizing a different plan.
+
+**Deliverable:** Validated plan contract and tests.
+
+## Yug — Task APIs and Lifecycle
+
+Implement or extend:
+
+```text
+POST /api/v1/tasks
+GET  /api/v1/tasks/{task_id}
+POST /api/v1/tasks/{task_id}/approve
+POST /api/v1/tasks/{task_id}/reject
+```
+
+- Connect task creation to the planner.
+- Persist the task and plan.
+- Enforce task ownership and repository authorization.
+- Implement valid state transitions.
+- Require the correct plan version for approval.
+- Make repeated approval requests idempotent.
+
+**Deliverable:** Working task-planning and approval APIs.
+
+## Dhramraj — New Task and Plan Approval UI
+
+- Build the New Task page.
+- Support natural-language task input and available GitHub issue selection.
+- Display the plan summary, affected files, ordered steps, risks and tests.
+- Add approve and reject actions.
+- Display validation failures and missing information.
+- Disable approval when the plan is invalid or outdated.
+
+**Deliverable:** Complete task-intake and approval interface.
+
+## Om — Task and Plan History
+
+- Persist tasks, plan versions and approval decisions.
+- Store the approving user and timestamp.
+- Associate tasks with repository and originating issue.
+- Preserve previous plan versions for auditability.
+
+**Deliverable:** Durable plan history.
+
+## Parth — Issue Data Retrieval
+
+- Retrieve authorized GitHub issue metadata.
+- Handle closed issues, inaccessible issues and missing content.
+- Preserve the original issue reference.
+- Prevent cross-repository issue selection.
+
+**Deliverable:** Validated issue retrieval for task intake.
+
+## Prit — Workspace Readiness
+
+- Validate that the repository revision identified by the task exists.
+- Ensure workspace creation uses the correct repository.
+- Prepare the interfaces required by Day 3 execution.
+
+**Deliverable:** Verified workspace setup integration.
+
+## Devu — Planning Tool Contracts
+
+- Expose repository search, file reading and symbol lookup through validated tool interfaces.
+- Ensure all tool calls respect repository scope and access policies.
+- Prevent the model from inventing tool results.
+
+**Deliverable:** TaskPlanner tool integration.
+
+## Sukun — Approval Gate
+
+- Enforce approval on the server, not only in the frontend.
+- Reject write and execution operations for unapproved plans.
+- Verify that users can approve only tasks they are authorized to control.
+- Test attempts to reuse an old approval after the plan changes.
+
+**Deliverable:** Approval-gate security tests.
+
+## Keval — Planner Acceptance
+
+- Test natural-language and issue-based task creation.
+- Test invalid and contradictory requests.
+- Test stale plans, unauthorized approvals and repeated requests.
+- Verify that no workspace write occurs before approval.
+
+**Day 2 exit gate:** A user can create a task, review its validated plan and approve or reject it. No unapproved task can modify repository files.
+
+---
+
+# DAY 3 — Isolated Workspace, Tool Routing and Code Execution
+
+**Goal:** An approved task can apply changes in an isolated workspace through validated tools.
+
+## Prit — WorkspaceManager
+
+Implement or extend the workspace manager.
+
+Responsibilities:
+
+- Create an isolated workspace for each task.
+- Check out the correct repository and base revision.
+- Scope all file operations to the workspace root.
+- Implement `read_file`, `write_file`, `apply_patch` and `get_diff`.
+- Reject path traversal, symlink escapes and unauthorized writes.
+- Preserve file integrity when a patch fails.
+- Record changed files and operation results.
+- Define cleanup behavior for successful, failed and cancelled tasks.
+
+**Deliverable:** Tested WorkspaceManager.
+
+## Devu — ToolRouter
+
+- Register available agent tools with stable schemas.
+- Validate tool arguments before dispatch.
+- Enforce policy checks before every action.
+- Route file operations to the WorkspaceManager.
+- Return structured tool results and errors.
+- Apply execution timeouts and output limits.
+- Prevent tools from bypassing repository and workspace authorization.
+
+**Deliverable:** Working tool registry and execution router.
+
+## Parth — Git Branch Management
+
+Implement or extend the Git service for:
+
+- Creating a task branch from the approved base revision.
+- Checking out the intended branch in the isolated workspace.
+- Verifying repository identity and branch ownership.
+- Detecting unexpected changes to the base branch.
+- Preparing change metadata for later push and PR creation.
+
+Use a stable naming convention such as:
+
+```text
+agent/task-<task-id>
+```
+
+Do not push changes or create a PR until the required verification gates pass.
+
+**Deliverable:** Isolated branch lifecycle.
+
+## Meet — Agent Execution Loop
+
+- Execute only approved plan steps.
+- Retrieve context before modifying code.
+- Select tools based on validated objectives and available tool contracts.
+- Track step completion and remaining execution budget.
+- Stop on ambiguity, unsafe actions or exhausted limits.
+- Require actual tool evidence before marking an operation complete.
+
+**Deliverable:** Bounded agent execution loop.
+
+## Dev — Execution Validation
+
+- Validate execution-step results.
+- Compare completed work against the approved plan.
+- Detect missing steps and unsupported completion claims.
+- Define structured execution outcomes.
+- Ensure errors and incomplete operations remain visible.
+
+**Deliverable:** Execution-result validation.
+
+## Yug — Execution APIs
+
+Implement or extend:
+
+```text
+POST /api/v1/tasks/{task_id}/execute
+POST /api/v1/tasks/{task_id}/pause
+POST /api/v1/tasks/{task_id}/resume
+POST /api/v1/tasks/{task_id}/cancel
+GET  /api/v1/tasks/{task_id}/events
+```
+
+- Enforce valid state transitions.
+- Prevent duplicate concurrent execution of a task.
+- Persist execution status.
+- Verify task ownership for all operations.
+- Handle interrupted workers and invalid requests.
+
+**Deliverable:** Task execution lifecycle APIs.
+
+## Dhramraj — Execution Timeline UI
+
+Display task progress through stages such as:
+
+```text
+Planning → Approved → Editing → Testing → Verifying
+```
+
+- Show current step and completed steps.
+- Display tool activity and meaningful errors.
+- Add pause, resume and cancel controls where supported.
+- Clearly distinguish a running task from a successful one.
+- Show human-intervention and failure states.
+
+**Deliverable:** Execution timeline connected to real task events.
+
+## Om — Checkpoints and Execution History
+
+- Persist execution runs and step results.
+- Record checkpoint references and source revisions.
+- Store changed-file metadata.
+- Preserve failed-run information.
+- Ensure task state and execution history remain consistent.
+
+**Deliverable:** Persistent execution history.
+
+## Sukun — Execution Security
+
+- Enforce read/write permissions at the tool boundary.
+- Block unsafe filesystem paths and unauthorized repository access.
+- Define command-execution permissions.
+- Ensure untrusted repository content cannot grant new permissions.
+- Verify cancellation and timeout behavior.
+
+**Deliverable:** Workspace and tool-security tests.
+
+## Keval — Execution Acceptance Tests
+
+- Test approved and unapproved tasks.
+- Test branch isolation and patch application.
+- Test path traversal and invalid tool arguments.
+- Test duplicate execution, cancellation and partial failure.
+- Verify the correct task and revision appear in history.
+
+**Day 3 exit gate:** An approved task can modify files through validated tools in an isolated branch and workspace. Every operation is traceable to its task.
+
+---
+
+# DAY 4 — Restricted Test Execution and Bounded Auto-Fix
+
+**Goal:** Execute permitted tests, diagnose failures and perform a limited number of repair attempts.
+
+## Prit — Restricted Test Runner
+
+Implement a test runner that executes only permitted test commands in an isolated environment.
+
+- Support the project's approved test commands, including `pytest` or `npm test` when configured.
+- Use an isolated container or equivalent restricted execution environment.
+- Enforce timeouts, output-size limits and resource restrictions.
+- Restrict filesystem access and network access according to policy.
+- Terminate processes on cancellation or timeout.
+- Return structured results with exit code, duration and sanitized output.
+
+Do not execute arbitrary model-generated shell commands without validation.
+
+**Deliverable:** Restricted test runner.
+
+## Devu — Command and Tool Policies
+
+- Implement command allowlists.
+- Validate working directories and arguments.
+- Block unauthorized shell commands and dangerous command patterns.
+- Enforce workspace boundaries.
+- Normalize timeout, execution and infrastructure errors.
+- Prevent the agent from bypassing restrictions by calling a different tool.
+
+**Deliverable:** Enforced command-policy layer.
+
+## Meet — Bounded Repair Loop
+
+Implement the failure-diagnosis and repair workflow.
+
+1. Run the permitted tests.
+2. Collect actual failure output.
+3. Identify the relevant code and failure context.
+4. Generate a targeted repair plan.
+5. Validate the proposed patch.
+6. Apply the patch through the approved tool interface.
+7. Re-run the appropriate tests.
+8. Stop when tests pass, the repair budget is exhausted or human intervention is required.
+
+Set a configurable default maximum of **three repair attempts**. A retry must not silently reset the budget.
+
+**Deliverable:** Bounded self-fix loop.
+
+## Dev — Failure Diagnosis and Repair Validation
+
+- Define structured test results and repair diagnoses.
+- Distinguish test failures, timeouts and infrastructure failures.
+- Require evidence from actual test output.
+- Validate that proposed fixes relate to the original task.
+- Prevent identical failed patches from being repeatedly applied.
+- Ensure passing tests do not automatically imply that the original requirements are satisfied.
+
+**Deliverable:** Failure diagnosis and repair-validation logic.
+
+## Yug — Test and Repair APIs
+
+- Expose execution status and test results through the task API.
+- Persist repair-attempt metadata.
+- Validate task state before starting a test run.
+- Ensure cancelled or completed tasks cannot accidentally restart.
+- Return structured failure information.
+
+**Deliverable:** Integrated test/repair API workflow.
+
+## Dhramraj — Test and Repair Timeline
+
+- Show test commands, exit codes, durations and results.
+- Display repair attempts and their outcomes.
+- Distinguish test failures from infrastructure failures.
+- Display when the agent has exhausted its repair budget.
+- Show the required human-intervention state.
+
+**Deliverable:** Integrated testing and repair UI.
+
+## Om — Test Run Persistence
+
+- Persist test runs and repair attempts.
+- Associate each run with the correct task step and code revision.
+- Preserve previous failed attempts.
+- Record whether the final result is passed, failed or inconclusive.
+
+**Deliverable:** Test and repair history.
+
+## Parth — Branch Integrity
+
+- Verify that the workspace remains on the intended task branch.
+- Associate test results with the correct working-tree state.
+- Ensure changes are not pushed prematurely.
+- Record branch and base-revision metadata.
+
+**Deliverable:** Branch-integrity checks.
+
+## Sukun — Sandbox Security
+
+- Test command allowlists and denied commands.
+- Test process termination and resource limits.
+- Prevent access to host secrets and unauthorized filesystem paths.
+- Restrict network access according to policy.
+- Ensure malicious repository code cannot disable the sandbox.
+
+**Deliverable:** Sandbox security test report.
+
+## Keval — Test and Repair QA
+
+- Test successful runs and failing tests.
+- Test repair success, repair failure and exhausted retries.
+- Test timeouts and invalid commands.
+- Verify that the retry limit is enforced across task recovery.
+- Verify that failed tests cannot be reported as passed.
+
+**Day 4 exit gate:** Tests execute within the approved restricted environment. Failures can trigger bounded repairs, and every attempt is recorded accurately.
+
+---
+
+# DAY 5 — Independent Verification, Code Review and Draft PR Creation
+
+**Goal:** Produce a verified change set and create a GitHub Draft PR for human review.
+
+## Dev — IndependentVerifier and PR Summary
+
+Implement an independent verifier that checks:
+
+- The original task requirements.
+- The approved plan and completed steps.
+- The actual final diff.
+- Test results and relevant evidence.
+- Findings from the Week 2 AI Code Review engine.
+- Remaining risks and incomplete requirements.
+
+Verification must return one of:
+
+```text
+PASS
+FAIL
+INCONCLUSIVE
+```
+
+Generate a structured PR summary containing:
+
+- Problem and task objective.
+- Implementation summary.
+- Changed files.
+- Tests executed and their actual outcomes.
+- Verification result and evidence.
+- Known limitations and remaining risks.
+
+The verifier must not trust the agent's own completion claim as sufficient evidence.
+
+**Deliverable:** Independent verification service and PR-summary generator.
+
+## Meet — Requirement-to-Code Verification
+
+- Compare the final implementation with the original request.
+- Verify that all required plan steps have evidence.
+- Identify missing or out-of-scope changes.
+- Use repository context and test evidence to diagnose incomplete work.
+- Escalate ambiguous requirements instead of declaring unsupported success.
+
+**Deliverable:** Requirement-level verification integration.
+
+## Parth — GitHub Push and Draft PR
+
+Implement or extend:
+
+```text
+GitHubService.push_branch(...)
+GitHubService.create_pull_request(..., draft=True)
+```
+
+Responsibilities:
+
+- Verify the task branch and base branch.
+- Ensure the task branch contains the expected changes.
+- Push only the authorized task branch.
+- Create a GitHub Draft PR against the intended base branch.
+- Include the task summary, changed files, test results and verification status.
+- Link the originating issue when applicable.
+- Store the resulting PR number and URL.
+- Handle permission errors, branch conflicts, rate limits and duplicate requests.
+
+Do not merge the PR automatically.
+
+**Deliverable:** Draft PR creation service with tests.
+
+## Yug — PR Creation API
+
+Implement:
+
+```text
+POST /api/v1/tasks/{task_id}/create-pr
+```
+
+- Validate task ownership and repository access.
+- Require the appropriate task state and verification evidence.
+- Reject tasks that have failed required verification.
+- Make repeated requests idempotent.
+- Return the PR URL, number and creation status.
+- Handle failures without falsely marking the task as PR-created.
+
+**Deliverable:** PR orchestration endpoint.
+
+## Dhramraj — PR Status UI
+
+- Display the final diff and verification report.
+- Show test outcomes and review findings.
+- Display the Draft PR URL and status.
+- Provide a clear indication when PR creation fails.
+- Link the task, originating issue and PR together.
+
+**Deliverable:** PR status card and final review screen.
+
+## Om — Traceability and PR Persistence
+
+- Store the PR number, URL, branch, base revision and head revision.
+- Link the PR to its task and originating issue.
+- Preserve verification and test evidence.
+- Record the final state transition.
+- Prevent inconsistent or duplicate PR records.
+
+**Deliverable:** Persistent task-to-PR traceability.
+
+## Prit — Final Workspace Integrity
+
+- Confirm the diff matches the actual working tree.
+- Reject unexpected changes outside the approved scope.
+- Ensure the final revision is stable before verification.
+- Preserve failed-task workspaces when required for diagnosis.
+
+**Deliverable:** Final workspace-integrity checks.
+
+## Devu — Final Tool and Policy Gate
+
+- Ensure push and PR operations require explicit authorization.
+- Enforce tool policies before each GitHub write operation.
+- Prevent unapproved tasks from pushing branches.
+- Ensure no tool can merge into a protected branch.
+
+**Deliverable:** Final Git operation policy tests.
+
+## Sukun — PR Security
+
+- Verify repository permissions before pushing or opening a PR.
+- Scan changed files for newly introduced secrets.
+- Ensure credentials are not exposed in PR descriptions or logs.
+- Verify that required security checks block PR creation when they fail.
+- Prevent duplicate or unauthorized PR creation.
+
+**Deliverable:** PR security checks.
+
+## Keval — PR Acceptance Tests
+
+- Test successful Draft PR creation.
+- Test failed verification blocking PR creation.
+- Test duplicate requests and GitHub API errors.
+- Verify that PR metadata matches the correct branch and task.
+- Test issue-to-task-to-PR traceability.
+
+**Day 5 exit gate:** A verified task can produce a Draft PR with an accurate summary and traceable test evidence. Failed or inconclusive required verification blocks the normal successful completion path.
+
+---
+
+# DAY 6 — Security, Reliability and Performance Hardening
+
+**Goal:** Validate the integrated platform against abuse cases, interrupted execution and measurable performance requirements.
+
+## Sukun — Security Red Team
+
+Run tests for:
+
+- Path traversal and symlink escapes.
+- Prompt injection in README files, source code and comments.
+- Unauthorized repository access.
+- Unapproved file modifications and Git operations.
+- Malicious test commands.
+- Secret leakage through logs, generated code, review findings and PR descriptions.
+- Repeated or replayed approval requests.
+- Unauthorized task resume, cancellation and PR creation.
+- Resource exhaustion and process termination failures.
+
+Record the severity, reproduction steps, fix and regression test for every confirmed issue.
+
+**Deliverable:** Security report with no unresolved critical issues.
+
+## Meet — Retrieval and Agent Performance
+
+- Measure repository-context retrieval latency.
+- Verify bounded agent execution and model-call budgets.
+- Test behavior under provider rate limits and timeouts.
+- Ensure context retrieval does not repeatedly fetch the same unnecessary files.
+- Measure the execution path with representative repositories.
+
+**Deliverable:** Retrieval and execution performance report.
+
+## Dev — AI Quality and Verification
+
+- Evaluate bug detection and code-review findings against the Week 2 fixtures.
+- Measure false positives and missing findings.
+- Verify that the independent verifier rejects unsupported completion claims.
+- Test repair-loop quality and malformed model output.
+- Confirm only the approved Gemini and Groq providers are used.
+
+**Deliverable:** AI quality and verification report.
+
+## Dhramraj — UX and Workflow Polish
+
+- Verify all loading, error, empty and recovery states.
+- Ensure the task timeline reflects real backend state.
+- Fix broken navigation and duplicated UI controls.
+- Ensure the final diff, verification report and PR link are accessible.
+- Test common desktop/laptop layouts.
+
+**Deliverable:** Polished, integrated workflow UI.
+
+## Yug — API Reliability
+
+- Test invalid state transitions and concurrent requests.
+- Verify idempotency for task approval, execution and PR creation.
+- Standardize API error responses.
+- Test authorization for every task lifecycle endpoint.
+- Ensure failed background jobs do not leave tasks marked successful.
+
+**Deliverable:** API reliability and authorization report.
+
+## Om — Database and Traceability Performance
+
+- Inspect slow task-history and analysis-history queries.
+- Add indexes where supported by actual query patterns.
+- Verify task, issue, branch and PR relationships.
+- Test recovery after interrupted execution.
+- Ensure audit events and checkpoints remain consistent.
+
+**Deliverable:** Database and traceability report.
+
+## Parth — GitHub Failure Recovery
+
+- Test push failures, branch conflicts and PR-creation failures.
+- Handle GitHub rate limits and permission changes.
+- Verify that retries do not create duplicate PRs.
+- Preserve enough metadata to recover safely from partial success.
+
+**Deliverable:** GitHub integration recovery tests.
+
+## Prit — Sandbox Reliability
+
+- Test timeout and process-kill behavior.
+- Verify workspace cleanup and preservation rules.
+- Test restricted execution under resource limits.
+- Ensure a failed cleanup cannot affect other workspaces.
+
+**Deliverable:** Sandbox reliability report.
+
+## Devu — Tool Reliability
+
+- Verify consistent timeout and error handling across tools.
+- Test invalid arguments and policy denials.
+- Ensure every operation returns an accurate structured result.
+- Check that tools cannot bypass sandbox or GitHub restrictions.
+
+**Deliverable:** Tool reliability report.
+
+## Keval — Full Regression
+
+- Run backend unit and integration tests.
+- Run frontend tests and production build.
+- Run the complete end-to-end workflow.
+- Verify security regression tests.
+- Publish failures, skipped scenarios and blockers.
+
+**Deliverable:** Consolidated regression report.
+
+### Performance acceptance
+
+Use measured baselines rather than claiming performance targets without evidence.
+
+- Record retrieval latency and target the previously proposed P95 retrieval latency of less than 400 ms where the benchmark environment supports it.
+- Record task planning, analysis, test execution and PR creation durations separately.
+- Verify bounded memory, execution time and provider calls.
+- Report any unmet target with measurements and a remediation plan.
+
+**Day 6 exit gate:** Critical security and reliability issues are resolved, all important regressions are tracked, and performance is measured against defined targets.
+
+---
+
+# DAY 7 — Final Integration and Live Demonstration
+
+**Goal:** Demonstrate the complete platform using a real authorized test repository and publish the final engineering report.
+
+## Meet — End-to-End Agent Validation
+
+- Verify issue/task intake, context retrieval and plan generation.
+- Confirm execution follows the approved plan.
+- Verify bounded repair and independent verification.
+- Confirm model-provider restrictions are enforced.
+
+## Dev — Final Intelligence and Verification
+
+- Verify Week 2 analysis features remain functional.
+- Confirm the final review and PR summary reflect actual changes and tests.
+- Verify that incomplete or unsupported results are not reported as successful.
+
+## Dhramraj — Final Product Demonstration
+
+- Connect all feature screens.
+- Verify issue, task, timeline, diff and PR navigation.
+- Ensure the final workflow works through the UI without relying on mocked production responses.
+
+## Yug — API and State Validation
+
+- Verify all task and issue APIs.
+- Confirm correct state transitions and authorization.
+- Test duplicate requests and failure recovery.
+
+## Om — Data and Traceability Validation
+
+- Verify that the complete task history is persistent.
+- Confirm issue, task, branch, test, verification and PR records are linked.
+- Validate audit history and checkpoints.
+
+## Parth — GitHub Demo Preparation
+
+- Verify GitHub permissions and test-repository access.
+- Ensure the branch and Draft PR are created from the correct source revision.
+- Verify issue and PR links.
+
+## Prit — Sandbox Demo Preparation
+
+- Verify that test execution is isolated and bounded.
+- Confirm cancellation, timeout and cleanup behavior.
+- Ensure the demonstration uses a safe disposable workspace.
+
+## Devu — Tool Integration
+
+- Verify every required tool is connected to its actual implementation.
+- Confirm policy enforcement, tool results and failure handling.
+- Ensure no placeholder tool is used in the final acceptance path.
+
+## Sukun — Final Security Gate
+
+- Execute the critical security regression suite.
+- Verify secret redaction and repository isolation.
+- Block the release candidate if a critical security issue remains unresolved.
+
+## Keval — Final Acceptance Report
+
+- Run the complete acceptance scenario.
+- Record test results and known limitations.
+- Verify all acceptance criteria below.
+- Publish the final regression and demo report.
+
+---
+
+# 4. Final End-to-End Acceptance Scenario
+
+Use a disposable GitHub test repository with a small application, a known defect and an existing test suite.
+
+### Scenario A — Developer Intelligence to GitHub Issue
+
+1. Connect an authorized GitHub repository.
+2. Open the Repository Explorer.
+3. Explain a selected function.
+4. Run Bug Detection on the target file.
+5. Inspect the finding, evidence and suggested fix.
+6. Create a GitHub issue directly from the finding.
+7. Verify the issue links back to the platform finding.
+
+### Scenario B — Issue to Draft Pull Request
+
+1. Select the created issue or enter an equivalent natural-language task.
+2. Generate a repository-aware implementation plan.
+3. Inspect affected files, proposed steps and test strategy.
+4. Approve the plan as an authorized user.
+5. Verify the task branch and isolated workspace are created.
+6. Execute the approved plan using validated agent tools.
+7. Generate or update relevant tests.
+8. Run tests inside the restricted environment.
+9. Introduce or reproduce a test failure in the fixture and verify bounded repair.
+10. Verify that the repair limit is enforced.
+11. Run independent verification against the original requirement.
+12. Run AI Code Review and the configured static checks against the final diff.
+13. Generate the PR summary with actual test and verification results.
+14. Push the task branch.
+15. Create a GitHub Draft PR.
+16. Verify the PR links to the task and originating issue.
+17. Inspect the final diff, test evidence and review findings.
+
+### Scenario C — Failure and Security Cases
+
+Verify that:
+
+- An unapproved task cannot modify files.
+- An unauthorized user cannot access or approve another user's task.
+- A malicious repository instruction cannot bypass policy.
+- An unsafe command is rejected.
+- Path traversal and unauthorized filesystem access are blocked.
+- Failed required tests prevent normal successful completion.
+- Failed or inconclusive required verification blocks the normal PR-creation path.
+- Repeated requests do not cause duplicate execution or duplicate PRs.
+- GitHub API failures are accurately reported.
+- Cancellation and recovery preserve task history.
+- Credentials do not leak into logs, generated code, findings or PR descriptions.
+- No automatic merge or protected-branch modification occurs.
+
+---
+
+# 5. Definition of Done
+
+A Week 3 feature is complete only when:
+
+- [ ] The actual implementation is connected to the application.
+- [ ] Existing Week 2 services are reused where appropriate.
+- [ ] API contracts and state transitions are documented.
+- [ ] Authentication and repository authorization are enforced.
+- [ ] Failure paths and retries are tested.
+- [ ] Unit and integration tests pass.
+- [ ] Relevant security tests pass.
+- [ ] UI reflects actual backend state.
+- [ ] Database records and audit history remain consistent.
+- [ ] Logs and errors are sanitized.
+- [ ] Code is reviewed and integrated through the agreed workflow.
+- [ ] Acceptance evidence is recorded.
+
+# 6. Week 3 Final Deliverables
+
+By the end of the week, the repository should contain:
+
+1. GitHub issue creation from bug and review findings.
+2. TaskPlanner for natural-language tasks and supported GitHub issues.
+3. Validated plans and human approval workflow.
+4. Isolated workspace and safe file operations.
+5. Task-scoped Git branch creation and change tracking.
+6. Validated tool registry and policy enforcement.
+7. Restricted test runner.
+8. Bounded failure diagnosis and repair loop.
+9. Independent verification with evidence.
+10. Final AI review and PR-summary generation.
+11. GitHub branch push and Draft PR creation.
+12. Task timeline, history and issue-to-PR traceability.
+13. Security, recovery, integration and performance test reports.
+14. Final demonstration and known-issues documentation.
+
+# 7. Explicitly Out of Scope
+
+Do not silently expand Week 3 into unrestricted autonomous development.
+
+The following remain outside the normal Week 3 completion path unless separately approved:
+
+- Automatic merging of pull requests.
+- Automatic deployment to production.
+- Arbitrary shell execution without restrictions.
+- Unrestricted internet access from the sandbox.
+- Unbounded autonomous repair attempts.
+- Automatic modification of protected branches.
+- Claims of complete security or correctness based solely on AI review.
+
+---
+
+## Final Week 3 Milestone
+
+A developer can identify a problem, create a GitHub issue, start a task, review and approve the implementation plan, execute changes in a restricted workspace, run and repair tests within defined limits, inspect independently verified changes, and receive a GitHub Draft PR ready for human review.
+
+**The release gate is the complete working workflow—not merely the completion of individual files or modules.**

@@ -504,98 +504,145 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ---
 
-# WEEK 2 — Agentic Coding + Sandbox ⬜ NOT STARTED
+# WEEK 2 — Developer Intelligence Suite ⬜ NOT STARTED
 
-**Week 2 Goal:** A user can submit a task ("Add a health check endpoint"), the agent understands the repository, generates and executes a plan, runs tests, fixes failures, and the frontend shows the agent's complete activity timeline.
+**Week 2 Goal:** Build four independent, integrated developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with unified Workbench integration, persistence, and automated quality gates.
 
 ---
 
-## WEEK 2 — Day 1 Interface Publish (mandatory by end of Day 1)
+## WEEK 2 — Day 1 Foundation & Schema Day (mandatory by end of Day 1)
 
 | Person | Publish | Status |
 |--------|---------|--------|
-| Meet | `AgentOrchestrator` method signatures, `AgentState` enum | ⬜ Todo |
-| Dev | `PlannerOutput`, `ToolRequest`, `ToolResult`, `VerificationResult` schemas | ⬜ Todo |
-| Divu | `ToolDefinition` schema, `ToolRouter.route()` signature | ⬜ Todo |
-| Sukun | `PolicyEngine.check()` signature, permission matrix | ⬜ Todo |
-| Om | `tasks`, `task_plans`, `agent_runs`, `agent_actions`, `agent_checkpoints` table schemas | ⬜ Todo |
-| Yug | All task + agent REST endpoints in OpenAPI spec | ⬜ Todo |
+| Meet | Shared `IntelligenceContext` interface & token budget rules | ⬜ Todo |
+| Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ⬜ Todo |
+| Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ⬜ Todo |
+| Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
+| Om | `analysis_runs` and `code_findings` database models & Alembic migration | ⬜ Todo |
+| Parth | Authorized file & commit diff retrieval service in `GitHubService` | ⬜ Todo |
+| Prit | AST symbol range resolution & import mapping | ⬜ Todo |
+| Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
+| Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ⬜ Todo |
+| Keval | Baseline defect fixtures & Week 2 regression test plan | ⬜ Todo |
 
-## WEEK 2 — Day 2 Planner Integration (mandatory by end of Day 2)
+## WEEK 2 — Day 2 Feature 1: Code Explanation
 
-- ⬜ Planner callable with: task description + repository_id
-- ⬜ Queries RAG internally
-- ⬜ Dev's schema validation wraps the output
-- ⬜ A planner call on fixture repo produces a valid `PlannerOutput`
+- ⬜ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
+- ⬜ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
+- ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
+- ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
+- ⬜ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations
 
-## WEEK 2 — Day 3 ReAct Execution (most complex day)
+## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 
-- ⬜ Meet's orchestrator calls Divu's `ToolRouter`
-- ⬜ `ToolRouter` calls Sukun's `PolicyEngine`
-- ⬜ `PolicyEngine` returns `ALLOW`/`DENY`
-- ⬜ `ToolRouter` calls Prit's `WorkspaceManager` for file operations
-- ⬜ All logged to Om's `agent_actions` table
+- ⬜ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
+- ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
+- ⬜ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
+- ⬜ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings
+- ⬜ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights
+- ⬜ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
 
-## WEEK 2 — Day 4 Sandbox Security (mandatory gates)
+## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
-- ⬜ Docker container: no access to host filesystem
-- ⬜ CPU/RAM/Disk limits enforced
-- ⬜ Network egress denied
-- ⬜ No host environment variables inside container
+- ⬜ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout
+- ⬜ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
+- ⬜ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
+- ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions
+- ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
+- ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
 
-## WEEK 2 — Day 5–7 (Remaining)
+## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 
-- ⬜ Test generation + execution loop
-- ⬜ Self-diagnosis + fix loop (max 3 retries)
-- ⬜ Agent activity timeline UI
-- ⬜ Agent kill switch
-- ⬜ Budget enforcement (40 iterations, 30 min wall clock, 500k tokens)
-- ⬜ Human approval checkpoint for plan + push
-- ⬜ Full E2E agent task test
+- ⬜ Parth: Retrieve authorized commit metadata and GitHub PR diffs via GitHub App
+- ⬜ Dev: `AICodeReviewEngine` analyzing changes across Correctness, Security, Performance, Reliability, Maintainability
+- ⬜ Devu: `StaticReviewer` running linters on modified files and merging with AI suggestions
+- ⬜ Meet: Multi-file review context — caller impact, imported type changes, and dependency blast radius
+- ⬜ Yug: `POST /api/v1/repositories/{id}/review` supporting single file, commit SHA, and PR diff
+- ⬜ Dhramraj: Unified/split diff review UI with inline findings, risk level indicator, and severity badges
+
+## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
+
+- ⬜ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
+- ⬜ Dev: Schema validation error handling and self-healing repair loops across all 4 services
+- ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
+- ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
+- ⬜ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`)
+- ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
+- ⬜ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates)
 
 ---
 
-# WEEK 3 — Production Hardening + PR + Review ⬜ NOT STARTED
+# WEEK 3 — Workflow Automation, GitHub Ecosystem & Production Hardening ⬜ NOT STARTED
 
-**Week 3 Goal:** Full pipeline from task to GitHub Draft PR works reliably. Code review, blast radius, and all security hardening complete. System is demo-ready.
+**Week 3 Goal:** Transform developer-intelligence into an end-to-end workflow: Bug Finding -> GitHub Issue -> Task Plan -> Approval -> Sandbox Edit -> Test & Repair -> Verification -> GitHub Draft PR.
 
 ---
 
-## WEEK 3 — Day 1 Interface Publish (mandatory by end of Day 1)
+## WEEK 3 — Day 1 GitHub Issue Creation & Task Intake
 
-| Person | Publish | Status |
-|--------|---------|--------|
-| Dev | `ReviewFinding` schema, `IndependentVerifier.verify()` signature | ⬜ Todo |
-| Divu | `StaticReviewer.review()`, `BlastRadiusEngine.compute()` signatures | ⬜ Todo |
-| Parth | `GitHubService.push_branch()`, `GitHubService.create_pull_request()` signatures | ⬜ Todo |
-| Om | `review_findings`, `traceability_links`, `pull_requests` table schemas | ⬜ Todo |
+- ⬜ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens
+- ⬜ Yug: `POST /api/v1/repositories/{id}/issues` validating finding ownership and returning issue URL
+- ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
+- ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
+- ⬜ Dev: Validated task-intake schema separating requirements, assumptions, and constraints
+- ⬜ Om: Issue-to-task persistence relationships and foreign keys
+- ⬜ Sukun: GitHub issue creation security checks & token confidentiality
+- ⬜ Keval: Acceptance tests for issue creation from bug and review findings
 
-## WEEK 3 — Day 3 PR Workflow Gate (mandatory human approval)
+## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
-- ⬜ Agent must be in `WAITING_PUSH_APPROVAL` state before any push
-- ⬜ Frontend shows push confirmation dialog
-- ⬜ User must click "Approve Push"
-- ⬜ Only then does `push_branch()` get called
+- ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
+- ⬜ Dev: `PlannerSchema` and step dependency validation
+- ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
+- ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
+- ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
+- ⬜ Keval: Acceptance tests for valid plans, rejected plans, and unapproved execution attempts
 
-## WEEK 3 — Day 5 Performance Targets (mandatory)
+## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
 
-| Metric | Target | Owner | Status |
-|--------|--------|-------|--------|
-| RAG retrieval P95 | < 400ms | Meet + Om | ⬜ Todo |
-| Sandbox provision P95 | < 2s with prewarm | Prit | ⬜ Todo |
-| Webhook acknowledgement | < 1s | Parth + Yug | ⬜ Todo |
-| Agent wall-clock limit | 30 min enforced | Meet | ⬜ Todo |
+- ⬜ Prit: `WorkspaceManager` managing disposable `.workspaces/task-<id>/` with path traversal guards
+- ⬜ Parth: Task branch isolation creating `agent/task-<id>` from base revision
+- ⬜ Devu: `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas
+- ⬜ Meet: Agent execution loop executing approved plan steps with loop detection
+- ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
+- ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs
+- ⬜ Sukun: Tool-level permission checks and workspace boundary security tests
 
-## WEEK 3 — Day 6 Red Team Day
+## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
-- ⬜ Sukun runs full attack matrix (see `week3.md`)
-- ⬜ Every team member tests their own module against attack scenarios
+- ⬜ Prit: Restricted test runner executing `pytest` or `npm test` with timeout and resource limits
+- ⬜ Devu: Command allowlist enforcement and argument validation
+- ⬜ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts
+- ⬜ Dev: Failure traceback diagnosis and repair patch validation
+- ⬜ Yug: Test and repair progress APIs and failure reporting
+- ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
+- ⬜ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling
 
-## WEEK 3 — Day 7 Demo Day
+## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 
-- ⬜ Full 27-step flow demonstrated with a real GitHub repository
-- ⬜ Task submission → plan → execution → tests → PR created on GitHub
-- ⬜ No manual intervention during demo
+- ⬜ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary
+- ⬜ Meet: Requirement-to-code verification comparing final diff against original plan
+- ⬜ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)`
+- ⬜ Yug: `POST /api/v1/tasks/{id}/create-pr` verifying task passed verification before opening PR
+- ⬜ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR
+- ⬜ Om: End-to-end traceability linking finding -> issue -> task -> commit -> Draft PR
+- ⬜ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff
+
+## WEEK 3 — Day 6 Security, Reliability & Performance Hardening
+
+- ⬜ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks)
+- ⬜ Meet: Retrieval latency optimization (target P95 < 400ms) and agent token budget checks
+- ⬜ Dev: AI quality evaluation, false-positive metrics, and Gemini/Groq provider validation
+- ⬜ Yug: API reliability, concurrent request handling, and error response standardization
+- ⬜ Om: Database query performance, index optimization, and audit event consistency
+- ⬜ Keval: Consolidated regression test suite across backend and frontend builds
+
+## WEEK 3 — Day 7 Final Integration & Live Demonstration
+
+- ⬜ All Leads: Execute full 17-step end-to-end acceptance demo on a real GitHub repository
+- ⬜ Verify complete chain: Finding -> GitHub Issue -> Task Plan -> Approval -> Edit -> Test & Repair -> Verify -> Draft PR
+- ⬜ Verify zero manual interventions between Plan Approval and Draft PR creation
+- ⬜ Keval: Publish final engineering acceptance report and release signoff
 
 ---
 

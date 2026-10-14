@@ -58,8 +58,11 @@ from ai.context.builder import (
     AgentContext,
     ChatMessage,
     ContextBuilder,
+    IntelligenceContext,
     MemoryEntry,
     RepositoryFile,
+    SymbolContext,
+    TargetSnippet,
     _format_chunk,
     count_tokens,
 )
@@ -465,4 +468,49 @@ class TestSDE3Features:
         result = ContextBuilder._dedup_memory([mem1, mem2])
         assert len(result) == 1
         assert result[0].content == "Second"
+
+    def test_intelligence_context_builder_and_render(self):
+        builder = ContextBuilder()
+        target = TargetSnippet(
+            file_path="backend/app/auth.py",
+            content="def login(): return 'token'",
+            start_line=10,
+            end_line=15,
+            symbol_name="login",
+            language="python",
+        )
+        symbols = [
+            SymbolContext(
+                name="verify_credentials",
+                kind="caller",
+                file_path="backend/app/api.py",
+                start_line=20,
+                end_line=25,
+                content="verify_credentials(user, pwd)",
+            )
+        ]
+        files = [RepositoryFile(id="1", path="backend/app/auth.py", language="python", size_bytes=100, line_count=30)]
+        rules = ["Never log passwords"]
+
+        ctx = builder.build_intelligence_context(
+            target=target,
+            related_symbols=symbols,
+            repository_files=files,
+            project_rules=rules,
+            token_budget=5000,
+        )
+
+        assert ctx.target.symbol_name == "login"
+        assert len(ctx.related_symbols) == 1
+        assert ctx.total_tokens > 0
+        assert ctx.token_budget == 5000
+        assert "target" in ctx.to_dict()
+
+        rendered = builder.render_intelligence_data(ctx)
+        assert "TARGET CODE UNDER ANALYSIS:" in rendered
+        assert "backend/app/auth.py" in rendered
+        assert "RELATED SYMBOLS & CALLERS:" in rendered
+        assert "verify_credentials" in rendered
+        assert "PROJECT RULES & CONVENTIONS:" in rendered
+        assert "Never log passwords" in rendered
 
