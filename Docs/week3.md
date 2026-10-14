@@ -1,421 +1,1641 @@
-# Week 3 — Workflow Automation, GitHub Ecosystem & Production Hardening
+# Week 3 — Workflow Automation, GitHub Integration & Production Hardening
+
+## 1. Week 3 Overview
 
 **Project:** AI-Powered Software Development Platform  
-**Duration:** 7 working days  
-**Team:** Meet, Dev, Dhramraj, Yug, Om, Parth, Prit, Sukun, Keval, Devu  
-**Prerequisite:** Week 2 Developer Intelligence Suite is integrated and its acceptance tests pass.
+**Duration:** 7 days  
+**Primary objective:** Connect the Developer Intelligence Suite completed in Week 2 to a controlled, approval-based software development workflow.
 
----
+Week 3 converts the platform from a tool that analyzes code into a platform that can help developers plan, implement, test, verify, and submit code changes through GitHub.
 
-## 1. Week 3 Objective & Architecture
+### 1.1 Expected End-to-End Workflow
 
-Week 3 transforms the platform from developer-intelligence tools into an **end-to-end autonomous software development workflow**. It takes a task from an identified defect or feature request all the way to a verified code change and a human-reviewable GitHub Draft Pull Request.
-
-### Complete Workflow
-
-```mermaid
-flowchart TD
-    subgraph Intake["1. Finding & Issue Intake"]
-        FIND["Bug / Review Finding\n(Week 2 Engines)"] --> ISS_ACT["One-Click Issue Trigger"]
-        ISS_ACT --> GH_ISS["GitHub Issue Created\n(Parth & Yug - F31)"]
-        GH_ISS --> TASK_IN["Task Intake Contract\n(Meet - F32)"]
-        NL_IN["Natural Language Task"] --> TASK_IN
-    end
-
-    subgraph Planning["2. Planning & Human Approval Gate"]
-        TASK_IN --> RAG_CTX["ContextBuilder & RAG\n(Meet)"]
-        RAG_CTX --> PLANNER["TaskPlanner\n(Meet - F32)"]
-        PLANNER --> PLAN_VAL["PlannerSchema Validation\n(Dev)"]
-        PLAN_VAL --> APPROV_GATE{"Human Approval Gate\n(Dhramraj & Sukun)"}
-    end
-
-    subgraph Execution["3. Isolated Execution & Tool Routing"]
-        APPROV_GATE -- Rejected --> CANCEL["Task Cancelled"]
-        APPROV_GATE -- Approved --> WS["Isolated Workspace & Branch\nagent/task-<id> (Prit & Parth - F33)"]
-        WS --> EXEC_LOOP["Agent Execution Loop\n(Meet - F33)"]
-        EXEC_LOOP --> ROUTER["ToolRouter & PolicyEngine\n(Devu & Sukun - F34)"]
-        ROUTER --> TOOLS["read_file / write_file / apply_patch"]
-    end
-
-    subgraph TestingRepair["4. Test Execution & Bounded Repair"]
-        TOOLS --> TEST_RUN["Restricted Test Runner\n(Prit & Devu - F35)"]
-        TEST_RUN --> TEST_EVAL{"Tests Pass?"}
-        TEST_EVAL -- Fail (Attempts < 3) --> REPAIR["Bounded Repair Loop\n(Meet & Dev - F35)"]
-        REPAIR --> TOOLS
-        TEST_EVAL -- Fail (Attempts >= 3) --> ESCALATE["Human Escalation\n(Budget Exhausted)"]
-    end
-
-    subgraph VerificationPR["5. Verification & GitHub Draft PR"]
-        TEST_EVAL -- Pass --> VERIFIER["IndependentVerifier\n(Dev & Meet - F36)"]
-        VERIFIER --> REV_ENG["AI Code Review & Static Scan\n(Week 2 Engines)"]
-        REV_ENG --> PR_GEN["PR Summary Generator\n(Dev - F36)"]
-        PR_GEN --> PR_PUSH["Push Branch & Create Draft PR\n(Parth & Yug - F37)"]
-        PR_PUSH --> GITHUB_PR[("GitHub Draft Pull Request\nReady for Human Review")]
-    end
+```text
+User Requirement / Existing Bug Finding / GitHub Issue
+                         |
+                         v
+              Requirement and Context
+                         |
+                         v
+                  Task Planner
+                         |
+                         v
+              Structured Implementation Plan
+                         |
+                         v
+               Human Approval Required
+                         |
+                         v
+            Isolated Repository Workspace
+                         |
+                         v
+                Controlled Tool Router
+                         |
+                         v
+             Code Modification Loop
+                         |
+                         v
+             Run Allowed Test Commands
+                         |
+               +---------+---------+
+               |                   |
+             Tests Pass        Tests Fail
+               |                   |
+               |             Bounded Repair
+               |             Maximum 3
+               |             Task-Level Attempts
+               |                   |
+               |<------------------+
+               |
+               v
+          Independent Verification
+               |
+               v
+          AI Code Review + Static Checks
+               |
+               v
+       Diff, Security and Impact Validation
+               |
+               v
+          Human Push/PR Authorization
+               |
+               v
+           Authorized Git Branch
+               |
+               v
+          Create Draft Pull Request
+               |
+               v
+       Timeline, Results and Audit History
 ```
 
-> [!CAUTION]
-> **Safety Boundary & Invariant Rules:**
-> - The agent **NEVER** automatically merges a pull request.
-> - The agent **NEVER** modifies protected branches (`main`, `master`, `production`).
-> - The agent **NEVER** executes unapproved plans or shell commands outside allowlisted policies.
-> - The agent **NEVER** continues repairing beyond the 3-attempt ceiling without explicit human intervention.
+The workflow must stop when approval is missing, authorization fails, the retry budget is exhausted, or a security policy is violated.
+
+### 1.2 Main Deliverables
+
+By the end of Week 3, the platform should support:
+
+1. Convert a GitHub issue or user requirement into a structured implementation plan.
+2. Display the plan and require explicit human approval before execution.
+3. Create and manage an isolated workspace for approved tasks.
+4. Route file operations, Git operations, and test execution through a controlled tool system.
+5. Execute approved changes and run allowed tests.
+6. Attempt bounded repairs when tests fail.
+7. Verify changes independently of the code-generation process.
+8. Use Week 2 bug detection and AI code review to evaluate the final changes.
+9. Push changes only to an authorized task branch after the required authorization.
+10. Create a GitHub Draft Pull Request.
+11. Display execution progress, logs, findings, test results, approvals, and errors.
+12. Preserve task history, checkpoints, verification results, and audit records.
+13. Enforce authentication, repository permissions, resource budgets, sandbox restrictions, and secret protection.
 
 ---
 
-## 2. Week 3 Feature Ownership Matrix
+## 2. Scope and Boundaries
 
-| Feature | Lead | Collaborators | Primary Responsibilities |
-|---|---|---|---|
-| **F31 — GitHub Issue Creation** | **Parth** | Yug, Dhramraj, Sukun, Keval | GitHub issue creation from findings, API routes, preview UI, permission validation. |
-| **F32 — Task Planner & Approval Gate** | **Meet** | Dev, Yug, Dhramraj, Om | Repository-aware planning, context integration, step sequencing, approval APIs & state gate. |
-| **F33 — Isolated Workspace & File Execution** | **Prit** | Devu, Parth, Sukun, Meet | Sandboxed directory management, path traversal guards, patch application, Git branch isolation. |
-| **F34 — Tool Routing & Policy Enforcement** | **Devu** | Prit, Sukun, Yug | Command allowlists, tool argument validation, permission matrix, execution timeouts. |
-| **F35 — Test Runner & Bounded Repair** | **Meet** | Dev, Prit, Devu, Keval | Restricted test invocation, failure traceback diagnosis, targeted patching, max 3 repair attempts. |
-| **F36 — Independent Verification & PR Summary** | **Dev** | Meet, Keval, Om | PASS/FAIL/INCONCLUSIVE independent evaluation, evidence-backed PR summary generator. |
-| **F37 — GitHub Branch Push & Draft PR** | **Parth** | Yug, Dhramraj, Sukun | Branch push, GitHub Draft PR opening, linking originating issue and test evidence. |
-| **F38 — Task Timeline & Workflow UI** | **Dhramraj** | Yug, Om, Keval | Unified Task Timeline (Planning → Approved → Editing → Testing → Verifying → PR), diff viewer. |
-| **F39 — Persistence, Checkpoints & Traceability** | **Om** | Yug, Meet, Parth | Task run persistence, step checkpoints, issue-to-task-to-PR relational traceability. |
-| **F40 — Security, Acceptance & Release Gate** | **Sukun** | Keval and all feature leads | Red team attack matrix, prompt injection defenses, credential sanitization, release signoff. |
+### 2.1 Included in Week 3
 
----
-
-## 3. Existing Week 2 Components Reused in Week 3
-
-Week 3 directly consumes the intelligence engines and context infrastructure from Week 2:
-
-| Week 2 Component | Role in Week 3 Autonomous Workflow |
+| Feature | Expected result |
 |---|---|
-| **Code Explanation** | Helps TaskPlanner understand complex symbols and callers before proposing implementation steps. |
-| **Bug Detection** | Feeds confirmed defects directly into One-Click GitHub Issue creation and task intake. |
-| **Test Generation** | Automatically generates new unit tests or updates existing suites during task execution. |
-| **AI Code Review** | Runs against the final workspace diff prior to PR creation to generate structured review findings. |
-| **ContextBuilder & RAG** | Supplies token-bounded repository overview, callers, and chunks to the TaskPlanner. |
-| **Analysis Schemas** | Reuses `BugFinding`, `ReviewReport`, and `SourceReference` structures for end-to-end traceability. |
-| **LLMGateway** | Strictly enforces the Google Gemini and Groq provider policy across all planning and repair steps. |
+| GitHub issue integration | Import an authorized issue and create issues from approved findings |
+| Task planning | Convert requirements into structured implementation steps |
+| Approval workflow | Approve, reject, or revise plans before execution |
+| Workspace management | Isolated working directory or worktree for each task |
+| Tool routing | Execute only approved, validated operations |
+| Code execution | Apply changes inside the task workspace |
+| Test runner | Execute permitted test commands and collect results |
+| Bounded repair | Attempt a limited number of repairs when appropriate |
+| Independent verification | Validate changes using tests, static checks, and review |
+| Git integration | Create a task branch and prepare authorized changes |
+| Draft PR creation | Publish a draft pull request through GitHub |
+| Timeline and history | Show state transitions, logs, results, and checkpoints |
+| Security and reliability | Enforce policy checks, budgets, recovery, and access controls |
+
+### 2.2 Explicitly Out of Scope
+
+The following are not Week 3 acceptance requirements:
+
+- Automatic pull request merging.
+- Automatic deployment to production.
+- Pushing changes directly to the default or protected branch.
+- Executing arbitrary shell commands generated by an LLM.
+- Unrestricted network access from the execution environment.
+- Modifying files before the required task approval.
+- Unlimited AI retries or test-repair loops.
+- Automatically accepting security-sensitive code changes.
+- Introducing a new paid or external LLM provider.
+- Rebuilding the Week 2 RAG pipeline, code explanation, bug detection, test generation, or review engines.
+- Claiming that a task is successful merely because the AI generated code.
+- Treating a successful API response as proof that the resulting code is correct.
+
+**Important:** The workflow can create a Draft PR, but merging, deployment, and final acceptance remain human-controlled.
 
 ---
 
-## 4. Day-by-Day Implementation Roadmap
+## 3. Existing Codebase Audit — Mandatory Before Implementation
 
-### DAY 1 — GitHub Issue Creation and Task Intake
+Before creating new services, inspect the current repository and identify what already exists.
 
-**Goal:** A developer can turn an existing bug or review finding into a GitHub issue and initiate a development task from an issue or natural-language request.
+Likely areas to inspect include:
 
-#### Parth — GitHub Issue Integration (F31 Lead)
-- Implement `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App installation tokens.
-- Format issues with:
-  - Problem summary and severity category.
-  - Line references and verified code snippets.
-  - Reproduction steps and proposed remediation.
-  - Deep link back to the originating platform finding ID.
-- Handle rate limits, missing permissions, and duplicate request idempotency.
+```text
+backend/
+├── app/
+│   ├── api/
+│   │   └── v1/
+│   ├── models/
+│   ├── repositories/
+│   └── integrations/
+│       └── github/
+├── ai/
+│   ├── llm/
+│   ├── context/
+│   ├── retrieval/
+│   ├── schemas/
+│   └── prompts/
+├── scanner/
+├── indexer/
+├── sandbox/                 # Verify actual path
+└── tests/
 
-#### Yug — Issue Creation API
-- Implement `POST /api/v1/repositories/{id}/issues`:
-  - Accepts `finding_id` reference.
-  - Verifies finding belongs to the caller's repository.
-  - Resolves stored finding server-side.
-  - Returns `{ issue_number, issue_url, status: "created" }`.
+frontend/
+└── src/
+    ├── pages/
+    ├── components/
+    ├── hooks/
+    └── services/
 
-#### Dhramraj — Create Issue UI
-- Add "Create GitHub Issue" action in Bug Inspector and Code Review drawers.
-- Show preview modal with editable title and markdown body.
-- Display clickable link to the created GitHub issue with persistent issue badge.
-
-#### Meet — Issue-to-Task Context Intake
-- Implement `IssueTaskAdapter` converting GitHub issue body/labels into structured task objectives.
-- Bind issue metadata (`issue_number`, `issue_url`) into the task context for end-to-end traceability.
-
----
-
-### DAY 2 — Development Task Planner and Human Approval
-
-**Goal:** Convert task intake into a validated, reviewable implementation plan with server-enforced human approval.
-
-#### Meet — TaskPlanner (F32 Lead)
-- Build `TaskPlanner` leveraging `ContextBuilder` and hybrid RAG:
-  - Analyzes task objectives and retrieves relevant codebase context.
-  - Identifies target files, functions, and affected callers.
-  - Generates ordered implementation steps (`StepType`: `READ`, `EDIT`, `TEST`, `VERIFY`).
-  - Estimates risk level, required test strategy, and token budget.
-- Guard against hallucinated file paths by cross-referencing `repository_files`.
-
-#### Dev — Planner Schema & Validation
-- Implement strict Pydantic schemas:
-  - `ImplementationStep`: `step_number`, `action`, `target_file`, `description`, `dependencies`.
-  - `TaskPlan`: `plan_id`, `version`, `goal`, `steps`, `affected_files`, `test_strategy`, `risks`.
-- Enforce plan versioning (any re-planning generates a new version, invalidating prior approval).
-
-#### Yug — Task & Approval Lifecycle APIs
-- Register endpoints:
-  - `POST /api/v1/tasks` (create task and generate plan).
-  - `GET /api/v1/tasks/{task_id}` (retrieve status and active plan).
-  - `POST /api/v1/tasks/{task_id}/approve` (approve plan version).
-  - `POST /api/v1/tasks/{task_id}/reject` (reject plan with feedback).
-- Validate that approval transitions state to `APPROVED` and records `user_id` and timestamp.
-
-#### Sukun — Approval Security Gate
-- Enforce approval checks on the backend: reject any execution attempt if `status != APPROVED`.
-- Verify user authorization: users can only approve tasks in repositories they own.
-
-#### Dhramraj — Task Planning & Approval UI
-- Build the New Task workspace:
-  - Input field for task prompt or GitHub issue selector.
-  - Structured plan view: expandable steps, affected files badges, and risk warnings.
-  - Prominent "Approve & Execute" and "Reject / Revise" buttons.
-
----
-
-### DAY 3 — Isolated Workspace, Tool Routing and Code Execution
-
-**Goal:** Execute approved plan steps inside an isolated branch and workspace via validated, policy-enforced tools.
-
-#### Prit — WorkspaceManager (F33 Lead)
-- Create disposable local workspaces under `.workspaces/task-<task_id>/`.
-- Check out the base repository revision.
-- Implement filesystem operations:
-  - `read_file(path)`
-  - `write_file(path, content)`
-  - `apply_patch(path, patch)`
-  - `get_diff()`
-- Strict boundary check: reject any path containing `..`, absolute paths outside workspace, or symlinks.
-
-#### Parth — Git Branch Isolation
-- Create isolated Git branch: `agent/task-<task_id>` from the repository default branch.
-- Track modified files and prepare clean atomic commits for each completed plan step.
-
-#### Devu — ToolRouter & PolicyEngine (F34 Lead)
-- Build tool registry with strict argument schemas.
-- PolicyEngine intercepts every tool call:
-  - Validates repository scope and read/write permissions.
-  - Enforces per-step timeout (default 30s) and file-size ceiling (max 1MB).
-  - Logs tool invocations with sanitized parameters to `agent_actions`.
-
-#### Meet — Agent Execution Loop
-- Coordinate plan step execution:
-  - Dispatches steps sequentially to `ToolRouter`.
-  - Records step completion status and evidence.
-  - Halts execution immediately upon unexpected tool failure or loop detection (3 identical actions).
-
-#### Yug — Execution Lifecycle APIs
-- Implement execution endpoints:
-  - `POST /api/v1/tasks/{task_id}/execute`
-  - `POST /api/v1/tasks/{task_id}/pause`
-  - `POST /api/v1/tasks/{task_id}/resume`
-  - `POST /api/v1/tasks/{task_id}/cancel`
-  - `GET /api/v1/tasks/{task_id}/events` (SSE stream for live execution logs)
-
-#### Dhramraj — Execution Timeline UI
-- Live activity timeline tracking states:  
-  `Planning → Approved → Editing → Testing → Verifying → Complete`.
-- Display live terminal logs, completed step checkmarks, and Pause/Cancel controls.
-
----
-
-### DAY 4 — Restricted Test Execution and Bounded Auto-Fix
-
-**Goal:** Run framework tests in a restricted environment, diagnose failures, and perform up to 3 automated repair iterations.
-
-#### Prit & Devu — Restricted Test Runner (F35 Support)
-- Execute allowlisted test runners (`pytest`, `unittest`, `npm test`).
-- Enforce strict limits: 60s timeout, 512MB RAM cap, zero external network egress.
-- Capture stdout, stderr, exit code, and execution duration.
-
-#### Meet — Bounded Repair Loop (F35 Lead)
-- Implement automated self-healing loop:
-  1. Trigger test runner on modified files.
-  2. If tests fail, parse error tracebacks and failing assertions.
-  3. Query `ContextBuilder` for the failing function and caller context.
-  4. Prompt Gemini/Groq for a targeted repair patch.
-  5. Apply patch via `WorkspaceManager.apply_patch()`.
-  6. Re-run tests.
-  7. **Ceiling Rule**: Max **3 repair iterations**. If tests still fail after 3 attempts, halt execution and transition task to `NEEDS_HUMAN` with failure diagnosis.
-
-#### Dev — Failure Diagnosis & Patch Validation
-- Verify that proposed patches address the test failure without reverting previously passing tests.
-- Prevent infinite oscillation between two competing patch strategies.
-
-#### Dhramraj — Test & Repair Timeline UI
-- Display test run cards with passing/failing status, execution time, and error logs.
-- Show repair attempt counter (e.g. `Repair Attempt 2 / 3`).
-- Provide human intervention alert if repair attempts are exhausted.
-
----
-
-### DAY 5 — Independent Verification, Code Review and Draft PR Creation
-
-**Goal:** Validate code changes independently against the original requirements and create a GitHub Draft PR.
-
-#### Dev — IndependentVerifier & PR Summary (F36 Lead)
-- Run independent evaluation:
-  - Assesses whether the final diff satisfies all items in `TaskPlan`.
-  - Verifies test run evidence.
-  - Returns `PASS`, `FAIL`, or `INCONCLUSIVE`.
-- Generate comprehensive Markdown PR summary:
-  - Objective and problem statement.
-  - Summary of changes and modified files list.
-  - Test evidence table (commands run, pass/fail status).
-  - Residual risk analysis.
-
-#### Parth — GitHub Push & Draft PR (F37 Lead)
-- Push isolated branch `agent/task-<task_id>` to remote GitHub repository.
-- Open GitHub Draft Pull Request via `GitHubService.create_pull_request(..., draft=True)`.
-- Set PR title, inject generated Markdown summary, and link the originating issue (`Fixes #<issue_number>`).
-- Store PR URL and number in `task_runs`.
-
-#### Yug — PR Creation API
-- `POST /api/v1/tasks/{task_id}/create-pr`:
-  - Validates that task verification returned `PASS`.
-  - Rejects PR creation if verification failed or tests did not pass.
-  - Idempotent: repeated calls return the existing PR metadata without creating duplicate PRs.
-
-#### Dhramraj — PR Status & Review Screen
-- Final review screen displaying:
-  - Side-by-side diff viewer.
-  - Verification badge (`VERIFICATION: PASSED`).
-  - GitHub Draft PR link button (`Open PR #<id> on GitHub`).
-
----
-
-### DAY 6 — Security, Reliability and Performance Hardening
-
-**Goal:** Stress-test against prompt injection, verify multi-tenant isolation, sanitize logs, and measure performance against SLA benchmarks.
-
-#### Sukun — Security Red Team (F40 Lead)
-- Execute comprehensive attack matrix:
-  - Prompt injection embedded in repository files, comments, and commit messages.
-  - Path traversal attempts (`../../etc/passwd`).
-  - Unauthorized task approval and cross-tenant repository access attempts.
-  - Secret leakage scanning across generated code, commit messages, and PR descriptions.
-
-#### Meet — Retrieval & Agent Performance
-- Benchmark context retrieval latency (target P95 < 400ms).
-- Verify bounded token usage across planning, execution, and repair loops.
-- Ensure model calls enforce timeouts and failover between Gemini and Groq.
-
-#### Keval — Full Regression Suite
-- Run complete end-to-end regression across all backend tests and frontend production builds.
-- Confirm zero test regressions from Week 1 and Week 2.
-
----
-
-### DAY 7 — Final Integration & Live Demonstration
-
-**Goal:** Deliver the end-to-end demonstration on a real GitHub repository and publish final documentation.
-
-#### Live Demo Acceptance Flow
-1. Open Workbench on an authorized GitHub repository.
-2. Run Bug Detection on a source file -> Inspect finding -> Click **"Create GitHub Issue"**.
-3. Navigate to **New Task** -> Select the created issue -> Generate implementation plan.
-4. Review the plan -> Click **"Approve Plan"**.
-5. Watch live Execution Timeline: branch created, code edited, tests executed.
-6. Trigger an intentional failure -> Verify bounded repair fixes the failure on Attempt 2.
-7. Verify Independent Verifier outputs `PASS`.
-8. Confirm Draft PR is opened on GitHub with complete markdown summary, test evidence, and issue backlink.
-9. Verify zero manual interventions were needed between Plan Approval and Draft PR.
-
----
-
-## 5. Shared API Specifications for Week 3
-
-```yaml
-paths:
-  /api/v1/repositories/{id}/issues:
-    post:
-      summary: Create a GitHub issue from an intelligence finding
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [finding_id]
-              properties:
-                finding_id: {type: string}
-                title: {type: string}
-                additional_notes: {type: string}
-      responses:
-        201:
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  issue_number: {type: integer}
-                  issue_url: {type: string}
-                  status: {type: string}
-
-  /api/v1/tasks:
-    post:
-      summary: Create a task and generate implementation plan
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [repository_id]
-              properties:
-                repository_id: {type: string, format: uuid}
-                prompt: {type: string}
-                github_issue_number: {type: integer, nullable: true}
-      responses:
-        201:
-          content:
-            application/json:
-              schema: {$ref: '#/components/schemas/TaskWithPlan'}
-
-  /api/v1/tasks/{task_id}/approve:
-    post:
-      summary: Approve task plan and authorize execution
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [plan_version]
-              properties:
-                plan_version: {type: integer}
-      responses:
-        200:
-          content:
-            application/json:
-              schema: {type: object, properties: {status: {type: string, example: "APPROVED"}}}
-
-  /api/v1/tasks/{task_id}/execute:
-    post:
-      summary: Start execution of approved task
-      responses:
-        202:
-          content:
-            application/json:
-              schema: {type: object, properties: {status: {type: string, example: "EXECUTING"}}}
-
-  /api/v1/tasks/{task_id}/create-pr:
-    post:
-      summary: Push task branch and open GitHub Draft PR
-      responses:
-        201:
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  pull_request_number: {type: integer}
-                  pull_request_url: {type: string}
-                  branch_name: {type: string}
-                  status: {type: string}
+Docs/
+├── week1.md
+├── week2.md
+└── week3.md
 ```
 
+The paths above are audit targets, not a claim that every directory or module already exists.
+
+### Required audit questions
+
+1. How is authentication implemented?
+2. How is repository ownership and access authorization checked?
+3. Is a GitHub App, OAuth integration, or another GitHub authentication mechanism already implemented?
+4. Does the project already support repository cloning, file retrieval, branches, commits, or PRs?
+5. Is there an existing task model, agent orchestrator, job queue, or execution state machine?
+6. Does a sandbox already exist? Is it actually isolated?
+7. How are allowed commands and filesystem operations validated?
+8. Does the test infrastructure already support cancellation, timeouts, output limits, and exit codes?
+9. Which database and migration system are used?
+10. Does the frontend already have task details, analysis history, or repository views?
+11. Which Week 2 APIs and schemas are already implemented?
+12. Which features are incomplete, duplicated, broken, or only mocked?
+
+### Audit rules
+
+- Reuse existing working implementations.
+- Repair existing functionality instead of creating duplicate services.
+- Follow the project's existing naming, API versioning, dependency injection, and database conventions.
+- Never assume an endpoint, model, or folder exists without checking the repository.
+- Record actual file paths and integration points in the implementation notes.
+- Update this plan if the audit identifies a genuine architectural constraint.
+
 ---
 
-## 6. Definition of Done & Release Criteria
+## 4. Week 2 Integration Contract
 
-The Week 3 milestone passes when all of the following are demonstrated:
+Week 3 depends on the Developer Intelligence Suite implemented during Week 2.
 
-1. **Complete E2E Chain**: A user can go from Bug Finding -> GitHub Issue -> Task Plan -> Approval -> Sandbox Edit -> Test & Repair -> Verification -> GitHub Draft PR.
-2. **Strict Server-Side Gates**: Unapproved plans cannot modify files; failed verification blocks PR creation.
-3. **Bounded Repair**: Test repair halts and requests human help after exactly 3 attempts.
-4. **Isolated Workspaces**: All file operations occur on dedicated `agent/task-<id>` branches with zero path traversal risk.
-5. **Multi-Tenant Security**: Zero secret leaks, prompt injection fences verified, cross-tenant access blocked.
-6. **Provider Conformance**: All planning, repair, and verification calls exclusively use approved Gemini and Groq models.
-7. **Regression Green**: 100% backend tests passing, >= 70% coverage, and clean frontend production build.
+### 4.1 Reuse These Capabilities
+
+| Week 2 capability | Week 3 use |
+|---|---|
+| Code Explanation | Understand existing implementation before changing it |
+| Bug Detection | Validate whether a reported bug is present and locate relevant code |
+| Test Generation | Propose tests for the requested change |
+| AI Code Review | Review the resulting diff and identify potential regressions |
+| Repository Context / RAG | Supply relevant code, symbols, and documentation |
+| Source References | Connect findings to files and line ranges |
+| Static Analysis | Detect relevant issues without relying entirely on LLM output |
+| Analysis History | Preserve analysis and verification traceability |
+
+### 4.2 Integration Rules
+
+- Call the existing service layer instead of duplicating AI logic.
+- Reuse the existing Gemini and Groq provider gateway.
+- Do not add another LLM provider.
+- Validate model outputs against structured schemas before using them.
+- Treat generated plans and code as untrusted until validated.
+- Use source references and repository revisions to maintain traceability.
+- Distinguish a failed analysis from a successful analysis that found zero issues.
+- Do not treat AI confidence as a replacement for tests or security checks.
+- If a Week 2 capability is unavailable, return an explicit error or mark the corresponding check as unavailable. Do not silently fabricate a successful result.
+
+---
+
+## 5. Team Structure and Feature Ownership
+
+Each person owns a defined feature or technical area. Collaborators contribute to integration, but one owner remains accountable for the deliverable.
+
+| Member | Primary ownership | Main output |
+|---|---|---|
+| Meet | Task planner, approval orchestration, execution lifecycle | Validated plan-to-execution workflow |
+| Dev | Test strategy, independent verification, AI result quality | Verification service and acceptance quality |
+| Dhramraj | Frontend task workflow and timeline | Complete task-management UI |
+| Yug | Backend orchestration and API integration | Connected API and service workflow |
+| Parth | GitHub integration and Git lifecycle | Issue, branch, commit, and Draft PR integration |
+| Om | Persistence, task history, checkpoints | Reliable task state and recovery data |
+| Prit | Workspace and repository execution environment | Isolated task workspace |
+| Devu | Tool router, command policy, static checks | Controlled and validated tool execution |
+| Keval | QA, acceptance, regression, integration testing | End-to-end evidence and release checklist |
+| Sukun | Security architecture and enforcement | Authorization, sandbox policy, and security tests |
+
+### Ownership rules
+
+1. Every feature has one accountable owner.
+2. Shared files and API contracts must be agreed upon before parallel implementation.
+3. Collaborators should not independently create competing implementations of the same service.
+4. A feature is not complete until its owner provides tests and integration evidence.
+5. Security-sensitive changes require review from Sukun.
+6. End-to-end acceptance is coordinated by Keval.
+7. If a task blocks another member, communicate the blocker and provide a minimal mock or interface where safe.
+
+---
+
+## 6. Feature Breakdown
+
+## F31 — GitHub Issue Integration
+
+**Owner:** Parth  
+**Collaborators:** Yug, Dhramraj, Sukun, Keval
+
+### Objective
+
+Allow users to import an authorized GitHub issue as a development task and create a GitHub issue from an approved bug or review finding.
+
+### Functional requirements
+
+- Connect the task to the correct GitHub repository.
+- Validate repository access before reading issue details.
+- Import issue title, body, number, labels, URL, and relevant metadata.
+- Normalize the issue into an internal task representation.
+- Allow a user to inspect the imported issue before planning.
+- Support creating an issue from a selected Week 2 finding when authorized.
+- Preserve the originating issue or finding reference.
+- Handle deleted issues, unavailable repositories, insufficient permissions, API errors, and rate limits.
+- Avoid duplicate imports where possible using a stable repository-plus-issue identifier.
+
+### Suggested API contracts
+
+```http
+POST /api/v1/repositories/{repository_id}/issues/import
+GET  /api/v1/repositories/{repository_id}/issues
+POST /api/v1/repositories/{repository_id}/issues
+```
+
+Example import request:
+
+```json
+{
+  "issue_number": 123
+}
+```
+
+Example normalized response:
+
+```json
+{
+  "task_id": "task_123",
+  "source": {
+    "type": "GITHUB_ISSUE",
+    "issue_number": 123,
+    "url": "https://github.com/owner/repo/issues/123"
+  },
+  "title": "Fix incorrect validation",
+  "status": "CREATED"
+}
+```
+
+The example values illustrate the contract only. Use the project's actual response envelope, ID format, and naming conventions.
+
+### Acceptance criteria
+
+- An authorized user can import an accessible issue.
+- An unauthorized user cannot import an issue from a repository they cannot access.
+- Imported issue data is persisted.
+- Repeated import requests are handled consistently.
+- GitHub errors are surfaced without exposing credentials.
+- The frontend displays the source issue and its task status.
+
+---
+
+## F32 — Task Planner and Human Approval
+
+**Owner:** Meet  
+**Collaborators:** Dev, Yug, Dhramraj, Om
+
+### Objective
+
+Convert an issue or natural-language requirement into a structured, reviewable implementation plan.
+
+### Planner inputs
+
+- User requirement or imported issue.
+- Repository ID and selected base revision.
+- Relevant Week 2 analysis findings.
+- Repository context retrieved from existing RAG/indexing services.
+- Detected language, framework, and test configuration.
+- Applicable execution and security policies.
+
+### Plan output
+
+Each plan should contain:
+
+- Task summary.
+- Problem statement.
+- Assumptions and unresolved questions.
+- Relevant files and symbols.
+- Ordered implementation steps.
+- Expected files to modify.
+- Tests to add or execute.
+- Validation strategy.
+- Risks and possible side effects.
+- Required permissions and tool capabilities.
+- Estimated resource budget, where supported.
+- Plan version and repository base revision.
+
+Example plan:
+
+```json
+{
+  "task_id": "task_123",
+  "plan_version": 1,
+  "base_revision": "abc123",
+  "summary": "Fix incorrect input validation",
+  "steps": [
+    {
+      "step_id": "step_1",
+      "description": "Inspect the validation path",
+      "expected_files": ["src/validation.py"],
+      "verification": ["Existing validation tests pass"]
+    },
+    {
+      "step_id": "step_2",
+      "description": "Implement the minimal validation correction",
+      "expected_files": ["src/validation.py"],
+      "verification": ["New regression test passes"]
+    }
+  ],
+  "status": "PENDING_APPROVAL"
+}
+```
+
+### Approval requirements
+
+- Display the complete plan before execution.
+- Allow the user to approve or reject the plan.
+- Allow plan revisions before approval.
+- Store the exact approved plan version.
+- Invalidate approval if a material change is made to the plan or its relevant base revision.
+- Require renewed approval when the plan changes materially.
+- Record who approved the plan and when.
+- Reject execution requests when the plan is unapproved.
+- Keep approval separate from permission to publish changes to GitHub.
+
+### Suggested API contracts
+
+```http
+POST /api/v1/tasks
+GET  /api/v1/tasks/{task_id}
+POST /api/v1/tasks/{task_id}/plan
+GET  /api/v1/tasks/{task_id}/plan
+POST /api/v1/tasks/{task_id}/approve
+POST /api/v1/tasks/{task_id}/reject
+```
+
+### Acceptance criteria
+
+- The planner returns a validated structured plan.
+- Malformed AI output is rejected or safely retried within a bounded policy.
+- A rejected plan cannot be executed.
+- An edited plan requires approval of the new version.
+- A task cannot be approved by an unauthorized user.
+- The approved plan and base revision are retained in history.
+
+---
+
+## F33 — Isolated Workspace and Repository Operations
+
+**Owner:** Prit  
+**Collaborators:** Devu, Parth, Sukun
+
+### Objective
+
+Provide a controlled working environment where approved task changes can be created without modifying the user's original checkout or protected branch.
+
+### Requirements
+
+- Create a workspace from a validated repository and base revision.
+- Use a dedicated working directory, Git worktree, or equivalent isolation mechanism supported by the project.
+- Assign a unique workspace identifier to each task.
+- Record the workspace's base revision and branch.
+- Validate every filesystem path.
+- Prevent path traversal and writes outside the workspace.
+- Prevent access to unrelated repositories, home directories, SSH keys, environment files, and host credentials.
+- Apply CPU, memory, disk, process, and execution-time limits where supported.
+- Clean up temporary resources safely.
+- Preserve enough state for recovery when the execution environment supports resumability.
+- Handle workspace creation failures without marking the task successful.
+
+### Workspace lifecycle
+
+```text
+NOT_CREATED
+     |
+     v
+CREATING
+     |
+     v
+READY
+     |
+     v
+IN_USE
+     |
+     +-------> STOPPED
+     |
+     +-------> FAILED
+     |
+     v
+CLEANUP_PENDING
+     |
+     v
+CLEANED
+```
+
+Persist the workspace state or derive it consistently from existing task and workspace records.
+
+### Acceptance criteria
+
+- The task workspace uses the expected base revision.
+- Files outside the authorized workspace cannot be modified.
+- Concurrent tasks do not unintentionally share mutable working directories.
+- Workspace creation and cleanup errors are recorded.
+- Cleanup does not delete user-owned files or another task's resources.
+- The workspace can be associated with its task, branch, and execution history.
+
+---
+
+## F34 — Tool Router and Policy Enforcement
+
+**Owner:** Devu  
+**Collaborators:** Prit, Sukun, Yug
+
+### Objective
+
+Ensure every tool operation is validated before it reaches the workspace or execution environment.
+
+### Tool categories
+
+The implementation may expose the following logical capabilities where supported:
+
+- Read file.
+- List repository files.
+- Search symbols or text.
+- Inspect Git status and diff.
+- Apply a validated file patch.
+- Run an approved test command.
+- Run approved static checks.
+- Inspect test output.
+- Create or inspect a task branch.
+- Commit validated task changes.
+- Push an authorized task branch.
+- Create a Draft PR.
+
+Not every capability should be available at every workflow stage.
+
+### Tool execution pipeline
+
+```text
+AI / Task Orchestrator
+          |
+          v
+     Tool Request
+          |
+          v
+     Schema Validation
+          |
+          v
+    Identity and Task Check
+          |
+          v
+      Policy Engine
+          |
+          v
+   Workspace and Budget Check
+          |
+          v
+     Sandboxed Executor
+          |
+          v
+   Output and Error Handling
+          |
+          v
+       Audit Record
+```
+
+### Requirements
+
+- Use an explicit tool registry.
+- Validate tool names and argument schemas.
+- Apply authorization and policy checks before execution.
+- Reject unknown tools.
+- Reject unsafe or malformed paths.
+- Use an allowlist of permitted command templates rather than executing arbitrary LLM-generated shell strings.
+- Use argument arrays and safe process invocation where available.
+- Enforce timeouts, output-size limits, concurrency limits, and resource budgets.
+- Apply a least-privilege policy to each task.
+- Restrict network access by default; allow only explicitly approved access when necessary.
+- Redact secrets and sensitive environment values from logs.
+- Record tool name, task ID, sanitized arguments, execution status, duration, and output references.
+- Do not treat LLM-generated text as a security policy.
+- Fail closed when authorization or policy evaluation fails.
+
+### Acceptance criteria
+
+- Unknown tools are rejected.
+- Invalid arguments are rejected before execution.
+- Unauthorized writes are blocked.
+- Arbitrary commands cannot bypass the router.
+- Tool output is bounded and sanitized.
+- Tool failures are traceable to the relevant task.
+- Security tests demonstrate that prohibited operations are blocked.
+
+---
+
+## F35 — Test Runner and Bounded Repair Loop
+
+**Owner:** Meet  
+**Collaborators:** Dev, Prit, Devu, Keval
+
+### Objective
+
+Execute the appropriate tests for an approved task and allow a bounded repair cycle when a failure can reasonably be addressed.
+
+### Test runner requirements
+
+- Detect or read the project's test configuration.
+- Reuse the repository's existing package manager and test commands.
+- Validate the selected command against the allowed-command policy.
+- Run tests only inside the task workspace.
+- Enforce execution timeouts and output limits.
+- Capture exit code, duration, test counts, and sanitized logs.
+- Preserve test results in task history.
+- Distinguish test failure from test infrastructure failure.
+- Report unsupported or missing test frameworks explicitly.
+- Do not install arbitrary dependencies without authorization.
+
+### Bounded repair loop
+
+```text
+Approved Plan
+     |
+     v
+Apply Planned Change
+     |
+     v
+Run Allowed Tests
+     |
+     +--------------------------+
+     |                          |
+     v                          v
+Tests Pass                 Tests Fail
+     |                          |
+     v                          v
+Continue to             Classify Failure
+Verification                  |
+                              v
+                    Is Repair Permitted?
+                         /        \
+                       No          Yes
+                       |             |
+                       v             v
+                    Stop       Check Retry Budget
+                                    |
+                             +------+------+
+                             |             |
+                          Exhausted     Available
+                             |             |
+                             v             v
+                            Stop      Repair Attempt
+                                           |
+                                           v
+                                     Re-run Tests
+```
+
+### Retry policy
+
+- Maximum of **3 task-level repair attempts**.
+- Do not reset the repair budget because the agent or worker restarts.
+- Record each repair attempt and its associated test results.
+- Stop when the budget is exhausted.
+- Stop immediately on security-policy violations.
+- Stop on unrecoverable workspace or authorization errors.
+- Do not retry deterministic failures indefinitely.
+- Avoid applying an identical failed patch repeatedly.
+- Require the final diff to be revalidated after the final repair.
+- Keep the task in a failed or verification-required state when success cannot be established.
+
+The task-level retry count is a shared budget across the repair workflow, not three independent attempts per agent.
+
+### Acceptance criteria
+
+- Allowed tests execute inside the workspace.
+- Test failures and infrastructure errors are distinguishable.
+- Repair attempts are bounded and persisted.
+- A passing test suite does not bypass security or independent verification.
+- Exhausting the repair budget results in a clear, recoverable task state.
+- The final test result corresponds to the final workspace revision.
+
+---
+
+## F36 — Independent Verification and Final Review
+
+**Owner:** Dev  
+**Collaborators:** Meet, Keval, Om
+
+### Objective
+
+Evaluate the final changes independently of the generation process before they are eligible for publication.
+
+### Verification checks
+
+1. The task corresponds to an approved plan.
+2. The workspace is based on the recorded revision.
+3. The diff contains only permitted files and changes.
+4. No unexpected file deletions or unrelated modifications are present.
+5. Required tests have completed.
+6. Test results correspond to the current final diff.
+7. Static analysis and security checks have been executed where supported.
+8. Week 2 AI Code Review has been invoked successfully where required.
+9. Review findings are normalized and traceable to source locations.
+10. Secrets and sensitive material are not present in the proposed diff.
+11. The branch is not the protected/default branch.
+12. The task has not exceeded its time, token, tool-call, or execution budget.
+
+### Verification result
+
+```json
+{
+  "task_id": "task_123",
+  "verified_revision": "def456",
+  "status": "REQUIRES_HUMAN_REVIEW",
+  "checks": [
+    {
+      "name": "tests",
+      "status": "PASSED"
+    },
+    {
+      "name": "static_analysis",
+      "status": "PASSED"
+    },
+    {
+      "name": "ai_code_review",
+      "status": "COMPLETED"
+    },
+    {
+      "name": "secret_scan",
+      "status": "PASSED"
+    }
+  ],
+  "blocking_findings": [],
+  "warnings": []
+}
+```
+
+The example is illustrative. The real schema must distinguish a check that passed, failed, was skipped, or could not run.
+
+### Verification policy
+
+- Never mark an unavailable check as passed.
+- Do not assume that a completed AI review means the code is correct.
+- Blocking security or policy findings prevent automatic publication.
+- Unresolved correctness findings must be surfaced according to the agreed severity policy.
+- A failed verification result cannot be overridden by changing only the UI status.
+- Any change after verification invalidates the verification result for the previous revision.
+- Human review remains mandatory before final merge or deployment.
+
+### Acceptance criteria
+
+- Verification references the exact revision reviewed.
+- Required checks are recorded with explicit statuses.
+- Blocking findings prevent the workflow from claiming readiness.
+- The final review includes actionable findings and source references where available.
+- Results are persisted and visible in the task timeline.
+
+---
+
+## F37 — Git Branch, Commit, Push and Draft PR
+
+**Owner:** Parth  
+**Collaborators:** Yug, Dhramraj, Sukun
+
+### Objective
+
+Publish a verified task branch and create a GitHub Draft PR only after the required authorization checks pass.
+
+### Required sequence
+
+1. Validate the task and repository authorization.
+2. Confirm the approved plan and base revision.
+3. Confirm the task workspace and branch.
+4. Validate the current diff.
+5. Confirm required tests and verification results.
+6. Confirm no blocking security policy violations exist.
+7. Obtain explicit authorization for publishing changes.
+8. Commit only the intended task changes.
+9. Push only the authorized task branch.
+10. Create a Draft PR against the intended base branch.
+11. Store the PR URL, number, head revision, and base branch.
+12. Update the task timeline and status.
+
+### Suggested API contracts
+
+```http
+POST /api/v1/tasks/{task_id}/branch
+POST /api/v1/tasks/{task_id}/commit
+POST /api/v1/tasks/{task_id}/push
+POST /api/v1/tasks/{task_id}/create-pr
+GET  /api/v1/tasks/{task_id}/pull-request
+```
+
+Use existing project conventions if these operations already exist.
+
+### Draft PR content
+
+The generated description should include:
+
+- Problem summary.
+- Original requirement or issue reference.
+- Approved plan summary.
+- Main changes made.
+- Files affected.
+- Tests executed and results.
+- Verification summary.
+- Known limitations and unresolved findings.
+- Relevant issue links.
+- Clear statement that the PR is a draft and needs human review.
+
+### Git safety requirements
+
+- Never push directly to the default or protected branch.
+- Validate the branch name and target base branch.
+- Ensure the pushed commit matches the verified revision.
+- Do not publish unverified changes.
+- Do not expose tokens in Git URLs, command output, or logs.
+- Handle retries idempotently to avoid duplicate commits or PRs where possible.
+- Check for remote changes and base-revision drift before publishing.
+- If the repository has changed materially, stop and request revalidation or replanning.
+- Do not automatically merge or deploy the PR.
+
+### Acceptance criteria
+
+- The authorized task branch is created successfully.
+- Only intended changes are included in the commit.
+- Push is blocked without publication authorization.
+- Draft PR creation uses the expected base branch and head branch.
+- The PR URL is persisted and shown to the user.
+- GitHub permission and API failures produce actionable errors.
+
+---
+
+## F38 — Task Dashboard and Execution Timeline
+
+**Owner:** Dhramraj  
+**Collaborators:** Yug, Om, Keval
+
+### Objective
+
+Provide a clear interface for reviewing, approving, monitoring, and inspecting automated tasks.
+
+### Required views
+
+#### A. Task list
+
+Display:
+
+- Task title and identifier.
+- Source issue or requirement.
+- Repository.
+- Current status.
+- Last updated time.
+- Owner or initiating user.
+- Active execution indicator.
+- Verification and PR status.
+
+#### B. Task detail
+
+Display:
+
+- Original requirement.
+- Repository and base revision.
+- Generated plan.
+- Approval history.
+- Current task state.
+- Workspace and branch information.
+- Changed files and diff.
+- Test results.
+- AI review and static-analysis findings.
+- Retry attempts and remaining budget.
+- Verification results.
+- GitHub Draft PR link.
+- Execution errors and recovery options.
+
+#### C. Approval interface
+
+Users should be able to:
+
+- Review the plan.
+- Approve or reject it.
+- Inspect changes to a revised plan.
+- See why execution is blocked.
+- Authorize publication separately where required.
+
+#### D. Timeline
+
+Show ordered events such as:
+
+```text
+Task created
+Issue imported
+Plan generated
+Plan approved
+Workspace created
+Changes applied
+Tests executed
+Repair attempt completed
+Independent verification completed
+Publication authorized
+Branch pushed
+Draft PR created
+```
+
+### Frontend rules
+
+- Use real APIs rather than hard-coded successful responses.
+- Implement loading, empty, partial, error, and retry states.
+- Disable actions that are invalid for the current task state.
+- Show long logs and diffs inside bounded, scrollable regions.
+- Do not block the entire page with long-running output.
+- Prevent duplicate submissions while an action is in progress.
+- Handle stale task data by refreshing or reconciling with the backend.
+- Use the existing UI design system and routing conventions.
+- Ensure authorization decisions are enforced by the backend, not only by disabled buttons.
+
+### Acceptance criteria
+
+- Task state and timeline match persisted backend state.
+- Approval and publication actions reflect backend authorization.
+- Errors and blocked states explain the next valid action.
+- The dashboard remains usable during long-running execution.
+- Refreshing the page does not erase task history.
+
+---
+
+## F39 — Persistence, Checkpoints and Recovery
+
+**Owner:** Om  
+**Collaborators:** Yug, Meet, Parth
+
+### Objective
+
+Ensure that task execution, approvals, test results, and publication records remain consistent across application restarts and worker failures.
+
+### Suggested data entities
+
+Adapt these entities to the existing ORM and database schema rather than creating duplicates.
+
+| Entity | Purpose |
+|---|---|
+| `tasks` | Task source, repository, owner, current status |
+| `task_plans` | Plan versions, content, base revision |
+| `task_approvals` | Approver, decision, plan version, timestamp |
+| `task_executions` | Execution attempt, worker state, timing |
+| `workspaces` | Workspace identity, branch, base revision, cleanup state |
+| `tool_invocations` | Tool execution metadata and outcomes |
+| `test_runs` | Test command identity, status, exit code, summary |
+| `repair_attempts` | Attempt number, diagnosis, result |
+| `verification_results` | Verified revision, checks, findings |
+| `task_checkpoints` | Safe recovery information |
+| `task_events` | Ordered timeline and audit history |
+| `pull_requests` | GitHub PR identity, URL, branches, revision |
+
+The table names are recommendations. Reuse the project's existing naming conventions and migrations.
+
+### Persistence requirements
+
+- Use transactions for related state changes where appropriate.
+- Enforce valid task-state transitions at the service layer.
+- Make approval records immutable or preserve their full history.
+- Store plan versions and the approved version explicitly.
+- Associate verification with an exact revision.
+- Make external operations retry-safe where possible.
+- Use idempotency keys or stable operation identifiers for sensitive operations.
+- Store log references or bounded sanitized summaries rather than unlimited raw output.
+- Never persist credentials, access tokens, or secret environment values in checkpoints.
+- Preserve enough metadata to determine what happened before a crash.
+- Prevent a restarted worker from silently resetting retry counters or bypassing approval.
+
+### Recovery scenarios
+
+1. Application restarts after a plan is approved.
+2. Worker crashes during code execution.
+3. Test runner times out.
+4. GitHub API fails after a branch is pushed.
+5. Draft PR creation succeeds but the response is lost.
+6. Verification finishes but task status persistence fails.
+7. Workspace cleanup fails.
+8. Repository base revision changes during task execution.
+
+### Recovery rules
+
+- Recover from persisted state, not an assumed in-memory state.
+- Reconcile external GitHub state before repeating an uncertain operation.
+- Do not repeat a push or PR creation blindly.
+- Never resume execution without validating the approval, workspace, revision, and budget.
+- Record unrecoverable cases for manual intervention.
+- Use explicit states such as `RECOVERY_REQUIRED` when safe automatic recovery is not possible.
+
+### Acceptance criteria
+
+- Task history survives application restarts.
+- Approval and retry history cannot be bypassed through a worker restart.
+- Duplicate external operations are prevented or detected.
+- Recovery never assumes a failed operation had no side effects.
+- Inconsistent task state is detected and reported.
+
+---
+
+## F40 — Security, Integration Testing and Release Acceptance
+
+**Security owner:** Sukun  
+**QA owner:** Keval  
+**Collaborators:** All feature owners
+
+### Security requirements
+
+#### Authentication and authorization
+
+- Authenticate every protected API.
+- Validate repository access for every GitHub operation.
+- Enforce task ownership or the project's approved collaboration permissions.
+- Verify approval authority on the backend.
+- Keep planning approval separate from permission to push or create a PR.
+- Apply rate limits and resource budgets where appropriate.
+
+#### Prompt injection and untrusted repository content
+
+- Treat repository files, issues, comments, README files, generated documentation, and test output as untrusted data.
+- Do not let instructions found in repository content override system or application policy.
+- Do not expose secrets to the model unnecessarily.
+- Do not execute instructions found in source files or issue descriptions as shell commands.
+- Require structured output and validate it before taking actions.
+
+#### Workspace and command security
+
+- Restrict filesystem access to authorized workspace paths.
+- Block path traversal and unauthorized symbolic-link traversal.
+- Apply least privilege to the execution process.
+- Block arbitrary command execution.
+- Restrict network access.
+- Enforce resource limits and execution timeouts.
+- Sanitize process output and logs.
+- Prevent access to host credentials and unrelated workspaces.
+
+#### GitHub security
+
+- Use the existing secure authentication mechanism.
+- Request only necessary permissions.
+- Keep tokens out of source code, frontend bundles, logs, Git remotes, and error messages.
+- Protect the default branch.
+- Validate branch and base-branch identifiers.
+- Require publication authorization before pushing.
+- Do not merge or deploy automatically.
+
+### QA test categories
+
+**Unit tests**
+- Plan validation.
+- State-transition rules.
+- Approval checks.
+- Tool schema validation.
+- Command allowlist.
+- Retry counter.
+- Diff validation.
+- GitHub response parsing.
+
+**Integration tests**
+- Task creation and persistence.
+- Plan generation and approval.
+- Workspace creation.
+- Tool routing and policy enforcement.
+- Test execution and result storage.
+- Verification integration with Week 2 services.
+- Branch creation and Draft PR workflow.
+- Failure recovery.
+
+**Security tests**
+- Unauthorized repository access.
+- Unapproved task execution.
+- Unapproved push or PR creation.
+- Path traversal.
+- Malicious repository instructions.
+- Secret exposure in logs.
+- Unsafe command requests.
+- Excessive output and execution timeout.
+- Cross-task workspace access.
+- Duplicate publication requests.
+
+**End-to-end tests**
+- Requirement to approved plan.
+- Approved plan to passing tests.
+- Failing tests to bounded repair.
+- Final verification to Draft PR.
+- Permission failure to a safe blocked state.
+- Worker interruption to safe recovery.
+
+---
+
+## 7. Shared API and Data Contracts
+
+All team members must agree on these contracts before implementing independent frontend and backend pieces.
+
+### 7.1 Task Lifecycle
+
+Recommended states:
+
+```text
+CREATED
+   |
+   v
+PLANNING
+   |
+   v
+PENDING_APPROVAL
+   |             \
+   | approve      \ reject
+   v               v
+APPROVED         REJECTED
+   |
+   v
+WORKSPACE_SETUP
+   |
+   v
+EXECUTING
+   |
+   v
+TESTING
+   |
+   +-----------> REPAIRING
+   |                 |
+   |                 v
+   |               TESTING
+   |
+   v
+VERIFYING
+   |
+   v
+READY_FOR_PUBLICATION
+   |
+   v
+PUBLISHING
+   |
+   v
+DRAFT_PR_CREATED
+```
+
+Additional terminal or exceptional states may include:
+
+```text
+FAILED
+CANCELLED
+RECOVERY_REQUIRED
+BLOCKED
+```
+
+The implementation must define valid transitions explicitly. Do not allow a frontend request to set an arbitrary task status.
+
+### 7.2 State-transition rules
+
+- `PENDING_APPROVAL` cannot transition directly to `EXECUTING`.
+- A rejected plan cannot be executed.
+- A material plan change requires a new approval.
+- `EXECUTING` requires an approved plan and a valid workspace.
+- `REPAIRING` requires an eligible failure and available retry budget.
+- `VERIFYING` requires a recorded final revision.
+- `READY_FOR_PUBLICATION` requires successful mandatory checks and no blocking policy violation.
+- `PUBLISHING` requires explicit publication authorization.
+- `DRAFT_PR_CREATED` requires confirmation or reconciliation that the PR exists.
+- A cancelled or failed task cannot silently continue.
+- A change after verification requires verification against the new revision.
+- Recovery must recheck the relevant preconditions.
+
+### 7.3 Common task response
+
+Example:
+
+```json
+{
+  "task_id": "task_123",
+  "repository_id": "repo_123",
+  "title": "Fix input validation",
+  "status": "PENDING_APPROVAL",
+  "source_type": "GITHUB_ISSUE",
+  "base_revision": "abc123",
+  "plan_version": 1,
+  "approved_plan_version": null,
+  "repair_attempts_used": 0,
+  "repair_attempts_max": 3,
+  "created_at": "2026-10-15T10:00:00Z",
+  "updated_at": "2026-10-15T10:05:00Z"
+}
+```
+
+### 7.4 Standard error response
+
+Adapt this structure to the existing project's API conventions.
+
+```json
+{
+  "error": {
+    "code": "APPROVAL_REQUIRED",
+    "message": "The task cannot execute until the plan is approved.",
+    "retryable": false,
+    "request_id": "req_123"
+  }
+}
+```
+
+Expected error categories include:
+
+- `AUTHENTICATION_REQUIRED`
+- `REPOSITORY_ACCESS_DENIED`
+- `APPROVAL_REQUIRED`
+- `PLAN_VERSION_MISMATCH`
+- `INVALID_STATE_TRANSITION`
+- `WORKSPACE_CREATION_FAILED`
+- `POLICY_VIOLATION`
+- `COMMAND_NOT_ALLOWED`
+- `EXECUTION_TIMEOUT`
+- `RETRY_BUDGET_EXHAUSTED`
+- `VERIFICATION_FAILED`
+- `PUBLICATION_AUTHORIZATION_REQUIRED`
+- `GITHUB_API_ERROR`
+- `RECOVERY_REQUIRED`
+
+Errors must not contain credentials, raw secret values, or sensitive internal environment data.
+
+### 7.5 Suggested API inventory
+
+```http
+# Tasks and planning
+POST   /api/v1/tasks
+GET    /api/v1/tasks
+GET    /api/v1/tasks/{task_id}
+POST   /api/v1/tasks/{task_id}/plan
+GET    /api/v1/tasks/{task_id}/plan
+POST   /api/v1/tasks/{task_id}/approve
+POST   /api/v1/tasks/{task_id}/reject
+
+# Execution lifecycle
+POST   /api/v1/tasks/{task_id}/execute
+POST   /api/v1/tasks/{task_id}/pause
+POST   /api/v1/tasks/{task_id}/resume
+POST   /api/v1/tasks/{task_id}/cancel
+GET    /api/v1/tasks/{task_id}/events
+
+# Verification and test results
+GET    /api/v1/tasks/{task_id}/tests
+POST   /api/v1/tasks/{task_id}/verify
+GET    /api/v1/tasks/{task_id}/verification
+
+# GitHub operations
+POST   /api/v1/repositories/{repository_id}/issues/import
+POST   /api/v1/repositories/{repository_id}/issues
+POST   /api/v1/tasks/{task_id}/branch
+POST   /api/v1/tasks/{task_id}/commit
+POST   /api/v1/tasks/{task_id}/push
+POST   /api/v1/tasks/{task_id}/create-pr
+GET    /api/v1/tasks/{task_id}/pull-request
+```
+
+This is the target API inventory, not a requirement to create every route if an equivalent route already exists. Choose a single canonical route for each operation, document it, and keep the frontend and backend synchronized.
+
+---
+
+## 8. Seven-Day Implementation Schedule
+
+## Day 1 — Architecture, Contracts and Dependencies
+
+**Goal:** Make parallel development possible without integration conflicts.
+
+### Meet
+- Audit existing task and agent orchestration.
+- Define the plan schema.
+- Define approval and execution preconditions.
+- Document the task lifecycle.
+
+### Dev
+- Define the independent verification contract.
+- Identify the Week 2 services that must be reused.
+- Define how tests, AI review, and static analysis contribute to verification.
+
+### Dhramraj
+- Audit existing task and repository UI.
+- Define the task list, task detail, approval, and timeline layouts.
+- Identify existing frontend service wrappers and reusable components.
+
+### Yug
+- Audit current API routes and dependency injection.
+- Define the canonical task, plan, approval, execution, and event contracts.
+- Document authentication and error handling.
+
+### Parth
+- Audit GitHub authentication, issue APIs, branch handling, and PR integration.
+- Identify repository permission and rate-limit behavior.
+- Document the publication authorization flow.
+
+### Om
+- Audit task-related models, migrations, repositories, and event storage.
+- Map existing tables to the required lifecycle.
+- Identify missing persistence and recovery fields.
+
+### Prit
+- Audit the current workspace and sandbox implementation.
+- Verify filesystem isolation and Git worktree behavior.
+- Document cleanup and resource-limit support.
+
+### Devu
+- Audit tool routing, command execution, static checks, and policy enforcement.
+- Define tool schemas and the allowed-command policy.
+- Identify unsafe direct execution paths.
+
+### Sukun
+- Define the security threat model.
+- Review authorization, approval gates, sandbox assumptions, and secret handling.
+- Identify security blockers before execution work begins.
+
+### Keval
+- Convert the acceptance criteria into test scenarios.
+- Define fixtures, mocks, and integration test prerequisites.
+- Establish the end-to-end release checklist.
+
+**Day 1 deliverables**
+- Existing-code audit notes.
+- Approved API contracts.
+- State-transition specification.
+- Ownership and dependency matrix.
+- Security requirements.
+- Test plan.
+- Identified blockers with owners.
+
+**Exit condition:** Every team member knows the canonical interfaces and the first implementation task. Do not start parallel implementations of conflicting APIs.
+
+---
+
+## Day 2 — Issue Intake, Task Planning and Approval
+
+**Goal:** Create a task from a requirement or GitHub issue and obtain explicit approval for a validated plan.
+
+### Main implementation
+- GitHub issue import.
+- Internal task creation.
+- Context gathering through existing services.
+- Structured plan generation.
+- Plan schema validation.
+- Plan version persistence.
+- Approve/reject workflow.
+- Frontend plan review interface.
+
+### Integration
+- Connect task creation to persistence.
+- Connect planning to Week 2 repository context and intelligence services.
+- Ensure task status transitions are enforced by the backend.
+- Verify that approval records refer to a specific plan version.
+
+**Exit condition:** A user can import or create a task, review its plan, approve or reject it, and see the result after refreshing the page.
+
+---
+
+## Day 3 — Workspace, Tool Policy and Execution Start
+
+**Goal:** Safely start an approved task in an isolated workspace.
+
+### Main implementation
+- Workspace creation and metadata.
+- Base-revision validation.
+- Task branch setup.
+- Tool registry and argument schemas.
+- Authorization and policy checks.
+- Safe file read/write operations.
+- Execution start and stop behavior.
+- Initial timeline events.
+
+### Integration
+- Connect approved tasks to workspace creation.
+- Connect the orchestrator to the policy-enforced tool router.
+- Ensure direct execution cannot bypass approval.
+- Record execution state before starting long-running work.
+
+**Exit condition:** An approved task can enter an isolated workspace and perform permitted operations; unapproved tasks and unsafe tool requests are blocked.
+
+---
+
+## Day 4 — Code Changes, Test Execution and Bounded Repair
+
+**Goal:** Implement a controlled execution loop and capture reliable test outcomes.
+
+### Main implementation
+- Apply validated changes in the workspace.
+- Select existing project test commands.
+- Execute allowed tests.
+- Capture exit codes and bounded logs.
+- Classify test failures versus infrastructure errors.
+- Implement repair eligibility checks.
+- Persist the maximum of three task-level repair attempts.
+- Support cancellation and timeouts.
+- Update frontend execution progress.
+
+### Integration
+- Ensure every repair attempt uses the same task-level budget.
+- Re-run tests against the current workspace revision.
+- Ensure security policy failures stop execution.
+- Prevent successful test results from being associated with a different final revision.
+
+**Exit condition:** The system can run permitted tests, report their outcomes, perform bounded repair when allowed, and stop safely when its budget is exhausted.
+
+---
+
+## Day 5 — Independent Verification, GitHub Push and Draft PR
+
+**Goal:** Complete the workflow from a tested workspace to a reviewable Draft PR.
+
+### Main implementation
+- Diff validation.
+- Static-analysis and security-check integration.
+- Week 2 AI Code Review integration.
+- Verification result persistence.
+- Publication authorization.
+- Task branch and commit validation.
+- Authorized push.
+- Draft PR creation.
+- PR metadata and URL persistence.
+- PR summary generation.
+
+### Integration
+- Ensure verification references the final revision.
+- Block publication when required checks fail or policy violations remain.
+- Verify the correct repository, head branch, and base branch.
+- Handle GitHub timeouts and uncertain operation outcomes safely.
+- Prevent duplicate publication operations.
+
+**Exit condition:** A fully authorized, verified task can create a Draft PR, and the dashboard displays the PR and its verification evidence.
+
+---
+
+## Day 6 — Reliability, Security and Failure Recovery
+
+**Goal:** Remove unsafe paths and make the workflow resilient to failures.
+
+### Main implementation
+- Authorization and policy regression tests.
+- Worker restart recovery.
+- Idempotent GitHub operations.
+- Stale base-revision detection.
+- Workspace cleanup.
+- Resource budgets and timeout handling.
+- Sanitized logs.
+- Duplicate-request protection.
+- Task-state consistency checks.
+- Frontend error and recovery states.
+
+### Mandatory failure scenarios
+- Plan generation fails.
+- Approval is missing.
+- Workspace creation fails.
+- Test execution times out.
+- Repair budget is exhausted.
+- AI output fails schema validation.
+- Repository access is revoked.
+- GitHub API fails after an external operation.
+- Worker crashes while executing.
+- Final diff changes after verification.
+- A prohibited command or path is requested.
+
+**Exit condition:** Failures result in explicit states and safe recovery paths, not silent success or unauthorized execution.
+
+---
+
+## Day 7 — End-to-End Acceptance, Documentation and Demo
+
+**Goal:** Demonstrate that the complete workflow works with real integration points and meaningful evidence.
+
+### Activities
+- Run the complete happy-path scenario.
+- Run the failure and security scenarios.
+- Validate database persistence.
+- Validate GitHub issue, branch, and Draft PR behavior.
+- Verify Week 2 service reuse.
+- Test task cancellation and retry exhaustion.
+- Fix release-blocking bugs.
+- Remove debug routes, temporary mocks, and unsafe bypasses.
+- Update architecture and API documentation.
+- Prepare a concise demo using a controlled test repository.
+
+### Final deliverables
+- Working end-to-end workflow.
+- Passing required unit, integration, security, and acceptance tests.
+- Documented APIs and state transitions.
+- Documented environment variables and setup steps.
+- Database migrations.
+- Known limitations and unsupported scenarios.
+- Demo scenario and evidence.
+- Release checklist signed off by Keval and Sukun.
+
+**Exit condition:** A fresh, documented setup can reproduce the agreed workflow without relying on hidden local state or fake successful responses.
+
+---
+
+## 9. Dependency and Parallelization Matrix
+
+| Work item | Must be available first | Blocks |
+|---|---|---|
+| Shared task contracts | Day 1 architecture | Frontend and backend integration |
+| Task persistence | Task and plan schema | Reliable task history and recovery |
+| Issue import | GitHub access layer | Issue-based planning |
+| Plan approval | Task and plan persistence | Workspace execution |
+| Workspace creation | Repository access and base revision | Safe code modification |
+| Tool router | Workspace interface and policy schema | Controlled execution |
+| Test runner | Workspace and tool policy | Repair and verification |
+| Repair loop | Test result schema and retry persistence | Reliable bounded execution |
+| Independent verification | Final diff and test results | Publication eligibility |
+| Git push | Verified revision and publication authorization | Draft PR creation |
+| Draft PR | GitHub branch/push integration | Final workflow completion |
+| Timeline | Event schema and task API | Full observability |
+| Recovery | Persistent state and operation identifiers | Production readiness |
+
+### Parallel work strategy
+
+- Day 1: All members audit their existing code and agree on interfaces.
+- Day 2: Parth, Meet, Om, and Dhramraj can develop against the shared task contracts.
+- Day 3: Prit and Devu integrate the workspace and tool-policy interfaces while Yug connects the backend orchestration.
+- Day 4: Meet and Dev implement the execution/test lifecycle while Keval builds acceptance tests.
+- Day 5: Parth integrates publication after verification contracts are stable.
+- Day 6: Sukun and Keval lead security and regression testing with every feature owner.
+- Day 7: All owners fix integration blockers; avoid adding nonessential features.
+
+---
+
+## 10. Definition of Done
+
+A feature is complete only when all applicable requirements below are satisfied.
+
+### Functional correctness
+- [ ] The feature performs its advertised action.
+- [ ] The backend uses the canonical API contract.
+- [ ] Real integrations work; mocks are restricted to tests.
+- [ ] Loading, failure, retry, and empty states are handled.
+- [ ] Permissions and state transitions are enforced on the backend.
+
+### Data integrity
+- [ ] Important task and execution state is persisted.
+- [ ] Approvals refer to the correct plan version.
+- [ ] Test and verification results refer to the correct revision.
+- [ ] External GitHub operations can be reconciled after uncertain outcomes.
+- [ ] Sensitive data is excluded from stored logs and checkpoints.
+
+### Testing
+- [ ] Unit tests cover core logic.
+- [ ] Integration tests cover service boundaries.
+- [ ] Security tests cover applicable failure paths.
+- [ ] Regression tests protect existing Week 2 functionality.
+- [ ] The owner provides reproducible test evidence.
+
+### Documentation
+- [ ] API contracts and errors are documented.
+- [ ] Required environment variables are documented without including secret values.
+- [ ] Setup and test instructions are current.
+- [ ] Unsupported capabilities and known limitations are explicit.
+
+### Release safety
+- [ ] No direct protected-branch push.
+- [ ] No automatic merge or deployment.
+- [ ] No execution before required approval.
+- [ ] No arbitrary shell execution outside the policy system.
+- [ ] No unlimited repair loop.
+- [ ] No fake verification success.
+- [ ] No unreviewed security bypass.
+
+---
+
+## 11. Final Acceptance Scenarios
+
+Keval should coordinate these scenarios with the feature owners.
+
+### Scenario A — Successful workflow
+1. Import an authorized GitHub issue.
+2. Generate and display an implementation plan.
+3. Approve the plan.
+4. Create an isolated workspace.
+5. Apply the planned change.
+6. Run permitted tests.
+7. Complete independent verification.
+8. Authorize publication.
+9. Push the task branch.
+10. Create a Draft PR.
+11. Refresh the dashboard and verify persisted history.
+
+**Expected:** The Draft PR exists, the task is traceable to the original issue, and verification evidence is available.
+
+### Scenario B — Plan rejected
+1. Create a task.
+2. Generate its plan.
+3. Reject the plan.
+4. Attempt to execute it.
+
+**Expected:** Execution is blocked by the backend.
+
+### Scenario C — Plan changed after approval
+1. Approve a plan.
+2. Change a material step or base revision.
+3. Attempt execution using the old approval.
+
+**Expected:** The previous approval is no longer valid for the changed plan.
+
+### Scenario D — Test failure and repair exhaustion
+1. Execute a task whose tests fail.
+2. Allow eligible repair attempts.
+3. Exhaust the task-level repair budget.
+
+**Expected:** No more than three repair attempts occur, the final failure is recorded, and publication is blocked.
+
+### Scenario E — Malicious tool request
+1. Request access outside the workspace or an unapproved command.
+2. Attempt execution through the normal task workflow.
+
+**Expected:** The policy engine blocks the operation, records a sanitized audit event, and does not allow the request to bypass the tool router.
+
+### Scenario F — Verification failure
+1. Produce a change with a blocking finding or failed required check.
+2. Attempt to publish it.
+
+**Expected:** Publication is blocked until the issue is resolved and the resulting revision is reverified.
+
+### Scenario G — GitHub API uncertainty
+1. Simulate a timeout during push or Draft PR creation.
+2. Retry the operation.
+
+**Expected:** The system reconciles remote state before retrying and avoids creating unintended duplicate operations.
+
+### Scenario H — Worker restart
+1. Stop a worker during an execution or repair attempt.
+2. Restart the application or worker.
+3. Resume or recover the task.
+
+**Expected:** The system restores or reconciles state without bypassing approval, resetting the repair budget, or repeating external operations blindly.
+
+### Scenario I — Repository permission revoked
+1. Start a valid task.
+2. Revoke the relevant GitHub permission before publication.
+3. Attempt to publish.
+
+**Expected:** The operation fails safely and no unauthorized push or PR creation occurs.
+
+### Scenario J — Revision changes after verification
+1. Verify a task revision.
+2. Modify the workspace or detect a changed base revision.
+3. Attempt publication.
+
+**Expected:** The stale verification is rejected and the changed result must be validated again.
+
+---
+
+## 12. Week 3 Completion Report
+
+At the end of Week 3, prepare a report containing:
+
+1. Features completed and their owners.
+2. Actual API routes implemented.
+3. Database migrations and new entities.
+4. Tests executed and results.
+5. GitHub integration evidence.
+6. Sandbox and policy enforcement evidence.
+7. Example successful Draft PR workflow.
+8. Failure-recovery and security-test results.
+9. Remaining bugs and known limitations.
+10. Features deferred to a later week.
+11. Setup instructions and environment requirements.
+
+Do not mark a feature complete solely because its UI, API route, or model exists. Completion requires a working integration and evidence that the acceptance criteria pass.
+
+## 13. Final Week 3 Goal
+
+At the end of this week, a user should be able to provide a software requirement or GitHub issue, inspect and approve a proposed plan, let the platform work in an isolated environment, observe test and verification results, and authorize the creation of a GitHub Draft PR.
+
+The system must remain **bounded, auditable, permission-aware, and human-controlled** throughout the workflow. It must never confuse generated code with verified code or a completed API call with a safe, correct result.
