@@ -1,4 +1,4 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useRef, useEffect, useState, useCallback, type KeyboardEvent } from 'react';
 import { useRepository } from '../hooks/useRepositories';
 import { useRepositoryChat } from '../hooks/useRepositoryChat';
@@ -27,6 +27,7 @@ import type { ChatMessage, ChatSource, ChatConfidence } from '../types/api';
 
 export function RepositoryChat() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
 
   // Repository metadata — reuses the existing query, no new API call.
   const { data: repo, isLoading: repoLoading } = useRepository(id);
@@ -35,12 +36,22 @@ export function RepositoryChat() {
   const { messages, isPending, error, sendMessage, clearConversation } =
     useRepositoryChat(id);
 
-  // Input state — local to this component only.
-  const [draft, setDraft] = useState('');
+  // Input state — initialized with ?file= query parameter if present.
+  const [draft, setDraft] = useState(() => {
+    const fileParam = new URLSearchParams(window.location.search).get('file');
+    return fileParam ? `Can you explain the structure and logic of \`${fileParam}\`?` : '';
+  });
   const [activeSource, setActiveSource] = useState<ChatSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (searchParams.get('file')) {
+      textareaRef.current?.focus();
+    }
+  }, [searchParams]);
+
 
   // Auto-scroll: always scroll to bottom when a new message is ADDED to the list
   const prevMessageCountRef = useRef(0);

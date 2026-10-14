@@ -18,6 +18,8 @@ export function AppLayout() {
   useRealtimeRepositories();
 
   const isChatRoute = location.pathname.endsWith('/chat');
+  const isDetailRoute = /^\/app\/repositories\/[^/]+$/.test(location.pathname);
+  const isFixedLayout = isChatRoute || isDetailRoute;
 
   async function handleLogout() {
     try {
@@ -115,10 +117,19 @@ export function AppLayout() {
         </header>
 
         {/* Content area */}
-        <main className="flex-1 overflow-auto bg-background">
+        <main
+          className={cn(
+            'flex-1 bg-background min-w-0',
+            isFixedLayout ? 'overflow-hidden flex flex-col h-full' : 'overflow-auto'
+          )}
+        >
           <ErrorBoundary>
             {isChatRoute ? (
-              <div className="h-full flex flex-col">
+              <div className="h-full flex flex-col min-h-0">
+                <Outlet />
+              </div>
+            ) : isDetailRoute ? (
+              <div className="h-full flex flex-col min-h-0 p-3 sm:p-4 lg:p-5 md:overflow-hidden overflow-y-auto">
                 <Outlet />
               </div>
             ) : (
