@@ -1,159 +1,67 @@
 # 03. Features Overview
-> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
+> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Synchronized
 
 ---
 
-## Complete Feature List
+## Complete Feature Matrix
 
 ### Priority Legend
-| Symbol | Priority | Meaning | Target |
+| Symbol | Priority | Meaning | Target Milestone |
 |---|---|---|---|
-| P0 | Critical | Platform does not work without it | Week 1–3 |
-| P1 | Strong | Significantly improves experience | Week 3 or shortly after |
-| P2 | Future | Valuable but not critical | Post-launch |
+| P0 | Critical | Essential core capability | Weeks 1–3 |
+| P1 | Strong | Significantly enhances developer workflow | Weeks 2–3 |
+| P2 | Extended | Advanced capabilities | Post-launch |
 
 ---
 
-## 1. GitHub & Repository Features
+## 1. Repository Intelligence Foundation (Week 1 — COMPLETE)
 
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-01 | GitHub Integration (OAuth, App install, webhook) | P0 | 🔵 In Progress | Parth / Yug |
-| F-02 | Repository Engine (walk, detect, parse, symbols, dep graph) | P0 | 🔵 In Progress | Prit |
-| F-03 | Repository Sync (clone → scan → index pipeline) | P0 | ⚪ Todo | Parth / Prit / Divu |
-
----
-
-## 2. AI Analysis Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-04 | Repository-Aware AI Chat (RAG pipeline end-to-end) | P1 | 🟢 Done | Meet / Dev |
-| F-05 | LLM Gateway | P0 | 🟢 Done | Meet |
-| F-06 | Code Embedding Service | P0 | 🟢 Done | Meet |
-| F-07 | Hybrid Retrieval (Vector + Lexical + RRF + Rerank) | P0 | 🟢 Done | Meet |
-| F-08 | Context Builder | P0 | 🟢 Done | Meet |
-| F-09 | Prompt Builder | P0 | 🟢 Done | Dev |
-| F-10 | Output Validator + Repair | P0 | 🟢 Done | Dev |
-| F-11 | Grounding Validator | P0 | 🟢 Done | Dev |
-| F-12 | AI Code Review | P0 | ⚪ Todo | Dev |
-| F-13 | Bug Detection | P0 | ⚪ Todo | Dev |
-| F-14 | Security Analysis | P0 | ⚪ Todo | Dev |
-| F-15 | Blast Radius / Change Impact Analysis | P0 | ⚪ Todo | Divu |
-| F-16 | Code Explanation | P0 | ⚪ Todo | Dev |
-| F-17 | Agent Quality Score | P1 | ⚪ Todo | Dev |
+| ID | Feature | Priority | Status | Owner | Implementation Summary |
+|---|---|---|---|---|---|
+| F-01 | GitHub Integration (OAuth, App, token manager) | P0 | 🟢 Done | Parth / Yug | `app/integrations/github/`, JWT cookie session |
+| F-02 | Repository Engine (walk, detect, tree-sitter, symbols) | P0 | 🟢 Done | Prit | `backend/scanner/`, 8 languages parsed |
+| F-03 | Repository Sync (clone → scan → index pipeline) | P0 | 🟢 Done | Yug / Parth / Devu | `app/services/repository_sync.py`, Redis queue |
+| F-04 | Hybrid Retrieval (Vector + Lexical + RRF + Rerank) | P0 | 🟢 Done | Meet | pgvector `<=>` cosine + FTS + RRF + Cross-Encoder |
+| F-05 | LLM Gateway (Gemini & Groq) | P0 | 🟢 Done | Meet | `backend/ai/llm/client.py`, schemas & retries |
+| F-06 | Embedding Service & Batching | P0 | 🟢 Done | Meet | `backend/ai/embeddings/service.py`, dimension validation |
+| F-07 | ContextBuilder (Token budget & truncation) | P0 | 🟢 Done | Meet | `backend/ai/context/builder.py`, `cl100k_base` budget |
+| F-08 | PromptBuilder & GroundingValidator | P0 | 🟢 Done | Dev | Data separation, removes hallucinated lines |
+| F-09 | OutputValidator & JSON Repair Loop | P0 | 🟢 Done | Dev | Pydantic validation + LLM-assisted repair |
+| F-10 | Repository Chat & Hybrid Search API | P0 | 🟢 Done | Yug / Meet | `POST /api/v1/repositories/{id}/chat`, `/search` |
+| F-11 | React 19 Workbench Layout | P0 | 🟢 Done | Dhramraj | Fixed-viewport layout, repository explorer, chat |
 
 ---
 
-## 3. Testing & Quality Features
+## 2. Developer Intelligence Suite (Week 2 — ACTIVE)
 
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-18 | Test Generation | P0 | ⚪ Todo | Dev / Agent |
-| F-19 | Test Execution + Result Analysis | P0 | ⚪ Todo | Divu |
-| F-20 | CI Failure Diagnosis | P0 | ⚪ Todo | Dev |
-| F-21 | Independent Verification | P0 | ⚪ Todo | Dev |
-| F-22 | Project Standards Engine | P0 | ⚪ Todo | Sukun |
-
----
-
-## 4. Issues & Pull Requests Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-23 | Issue Creation from AI Finding | P0 | ⚪ Todo | Parth |
-| F-24 | Issue → Automatic Draft PR Agent | P0 | ⚪ Todo | Meet |
+| ID | Feature | Priority | Status | Owner | Deliverable & Contract |
+|---|---|---|---|---|---|
+| F-12 | Shared `IntelligenceContext` & Symbol Resolution | P0 | 🟢 Done | Meet / Prit | `TargetSnippet`, `SymbolContext`, caller references |
+| F-13 | Code Explanation Service | P0 | 🔵 In Progress | Dev / Meet | Purpose, logic flow, key symbols, limitations |
+| F-14 | Dedicated Bug Detection (Static + AI) | P0 | 🔵 In Progress | Dev / Devu | Off-by-one, null safety, resource leak, Ruff/Bandit |
+| F-15 | Framework-Aware Test Generation | P0 | 🔵 In Progress | Dev / Prit | `pytest`, `unittest`, `jest` compatible test files |
+| F-16 | Standalone AI Code Review | P0 | 🔵 In Progress | Dev / Parth | Correctness, security, performance, maintainability diff review |
+| F-17 | Analysis Run & Finding Persistence | P0 | 🔵 In Progress | Om | `analysis_runs` and `code_findings` models |
+| F-18 | Workbench Code Drawers & Actions | P0 | 🔵 In Progress | Dhramraj | Code explanation drawer, bug inspector, test preview |
+| F-19 | Analysis API Routing | P0 | 🔵 In Progress | Yug | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
+| F-20 | Prompt-Injection Shields & Sanitization | P0 | 🔵 In Progress | Sukun | Tagged boundaries, secret redaction in findings |
+| F-21 | Defect Fixtures & Acceptance Suite | P0 | 🔵 In Progress | Keval | Acceptance scenarios A through E verification |
 
 ---
 
-## 5. Agentic Development Features
+## 3. Workflow Automation & GitHub Ecosystem (Week 3 — UPCOMING)
 
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-25 | Agentic Software Engineering System | P0 | ⚪ Todo | Meet |
-| F-26 | Natural-Language Development Tasks | P0 | ⚪ Todo | Meet / Dev |
-| F-27 | Agent Task Planner | P0 | ⚪ Todo | Meet / Dev |
-| F-28 | Agent Execution Sandbox | P0 | ⚪ Todo | Prit |
-| F-29 | Agent Permission / Policy Engine | P0 | ⚪ Todo (skeleton) | Sukun |
-| F-30 | Agent Self-Verification Loop | P0 | ⚪ Todo | Meet |
-| F-31 | Agent Task Queue | P2 | ⚪ Todo | Yug |
-| F-32 | Cross-Agent Handoff | P2 | ⚪ Todo | Meet |
-
----
-
-## 6. Context Continuity / Memory Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-33 | Context Continuity Engine | P0 | ⚪ Todo | Meet / Om |
-| F-34 | Project Memory | P0 | ⚪ Todo | Om / Meet |
-| F-35 | Decision Memory | P0 | ⚪ Todo | Om / Meet |
-| F-36 | Task Memory | P0 | ⚪ Todo | Om / Meet |
-| F-37 | Agent Work Memory | P0 | ⚪ Todo | Om / Meet |
-| F-38 | Failure Memory | P1 | ⚪ Todo | Om / Meet |
-| F-39 | Project Rules Engine | P0 | ⚪ Todo | Sukun |
-| F-40 | Context Checkpoints (Redis) | P0 | ⚪ Todo | Meet |
-| F-41 | Context Retrieval (Memory RAG) | P0 | ⚪ Todo | Meet |
-| F-42 | Context Conflict Detection | P1 | ⚪ Todo | Meet |
-| F-43 | Memory Versioning | P1 | ⚪ Todo | Om |
-| F-44 | Sensitive Context Protection (Secret Redaction) | P0 | ⚪ Todo | Sukun |
-| F-45 | Memory Dashboard | P1 | ⚪ Todo | Dhramraj |
-
----
-
-## 7. Agent Safety Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-46 | Agent Rollback & Recovery | P0 | ⚪ Todo | Meet |
-| F-47 | Agent Kill Switch | P0 | ⚪ Todo | Meet / Yug |
-| F-48 | Agent Budget & Resource Limits | P0 | ⚪ Todo | Meet |
-| F-49 | Human Approval Checkpoints | P0 | ⚪ Todo | Yug |
-
----
-
-## 8. Traceability Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-50 | Requirements → Code → Test → PR Traceability | P0 | ⚪ Todo | Yug |
-| F-51 | Agent Decision / Evidence Trace | P1 | ⚪ Todo | Meet |
-
----
-
-## 9. Dashboard & Observability Features
-
-| ID | Feature | Priority | Status | Owner |
-|---|---|---|---|---|
-| F-52 | Agent Activity Timeline | P0 | ⚪ Todo | Dhramraj |
-| F-53 | Agent Analytics | P2 | ⚪ Todo | Dhramraj |
-| F-54 | Developer Dashboard | P0 | 🔵 In Progress | Dhramraj |
-
----
-
-## Four Memory Levels (Context Continuity Engine)
-
-```mermaid
-flowchart TB
-    WC[Working Context\nCurrent task + conversation\nLives in LLM context window]
-    SC[Session Context\nCurrent run + checkpoints\nLives in Redis]
-    PM[Project Memory\nArchitecture + decisions + rules\nLives in PostgreSQL]
-    EM[Experience Memory\nPast failures + solutions + history\nLives in PostgreSQL]
-
-    WC --> SC --> PM --> EM
-```
-
----
-
-## Agent Budget Limits
-
-| Limit | Default |
-|---|---|
-| Total iterations | 40 |
-| Tool calls per step | 15 |
-| Test retries per failure | 3 |
-| Wall-clock time | 30 minutes |
-| LLM token budget | 500k tokens |
-| Sandbox CPU time | 60 minutes cumulative |
-
-On any limit hit: agent saves checkpoint → PAUSED → notifies developer.
+| ID | Feature | Priority | Status | Owner | Planned Capability |
+|---|---|---|---|---|---|
+| F-22 | GitHub Issue Intake & Creation (F31) | P0 | ⚪ Todo | Parth / Yug | Import issue, create issue from finding |
+| F-23 | Task Planner & Implementation Steps (F32) | P0 | ⚪ Todo | Meet / Dev | Structured plan, affected files, test strategy |
+| F-24 | Mandatory Human Approval Gate (F32) | P0 | ⚪ Todo | Meet / Dhramraj | Server-enforced approval, invalidation on revision |
+| F-25 | Isolated Workspace & Task Branch (F33) | P0 | ⚪ Todo | Prit / Parth | `.workspaces/task-<id>`, `agent/task-<id>` |
+| F-26 | Controlled Tool Router & Policy Engine (F34) | P0 | ⚪ Todo | Devu / Sukun | Command template allowlist, argument validation |
+| F-27 | Restricted Test Runner (F35) | P0 | ⚪ Todo | Prit / Devu | Test execution with timeout and output bounds |
+| F-28 | Bounded Self-Repair Loop (F35) | P0 | ⚪ Todo | Meet / Dev | Targeted repair on failure, ceiling of 3 attempts |
+| F-29 | Independent Verification & AI Review (F36) | P0 | ⚪ Todo | Dev / Keval | Verification check, static scan, PR summary |
+| F-30 | Git Branch Push & GitHub Draft PR (F37) | P0 | ⚪ Todo | Parth / Yug | Human authorization, branch push, Draft PR creation |
+| F-31 | Task Dashboard & Execution Timeline (F38) | P0 | ⚪ Todo | Dhramraj | Live task execution progress, timeline events |
+| F-32 | Checkpoints & Crash Recovery (F39) | P0 | ⚪ Todo | Om / Yug | Task recovery state, idempotent operations |
+| F-33 | Security Attack Matrix & Release Gate (F40) | P0 | ⚪ Todo | Sukun / Keval | End-to-end verification and release sign-off |

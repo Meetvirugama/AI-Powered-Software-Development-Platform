@@ -10,6 +10,7 @@ We use Alembic for managing database migrations with PostgreSQL.
 | `5f6dc031921b` | `5f6dc031921b_identity_schema.py` | Identity schema — users, github_installations, repositories |
 | `aef3bb17eb34` | `aef3bb17eb34_content_tables.py` | Content tables — repository_files, code_symbols, symbol_edges, code_chunks |
 | `cb4e2a7d0f31` | `cb4e2a7d0f31_add_sync_jobs.py` | Adds sync_jobs table for repository sync tracking |
+| `e7b8c9d0f1a2` | `e7b8c9d0f1a2_add_code_chunks_and_memory.py` | Adds memory_entries table, vector indexes, and chunk enhancements |
 
 ## How to Create a Migration
 
@@ -47,15 +48,16 @@ alembic downgrade <revision_id>
 
 ## Table → Migration Map
 
-| DB Table | Created In Migration |
-|---|---|
-| `users` | `5f6dc031921b_identity_schema` |
-| `github_installations` | `5f6dc031921b_identity_schema` |
-| `repositories` | `5f6dc031921b_identity_schema` |
-| `repository_files` | `aef3bb17eb34_content_tables` |
-| `code_symbols` | `aef3bb17eb34_content_tables` |
-| `symbol_edges` | `aef3bb17eb34_content_tables` |
-| `code_chunks` | `aef3bb17eb34_content_tables` |
-| `sync_jobs` | `cb4e2a7d0f31_add_sync_jobs` |
+| DB Table | Created In Migration | Notes |
+|---|---|---|
+| `users` | `5f6dc031921b_identity_schema` | GitHub user profiles & auth |
+| `github_installations` | `5f6dc031921b_identity_schema` | GitHub App installation permissions & tokens |
+| `repositories` | `5f6dc031921b_identity_schema` | Synced repository records & status |
+| `repository_files` | `aef3bb17eb34_content_tables` | File tree & file content metadata |
+| `code_symbols` | `aef3bb17eb34_content_tables` | AST-extracted symbols (functions, classes, methods) |
+| `symbol_edges` | `aef3bb17eb34_content_tables` | Dependency graph & caller-callee edges |
+| `code_chunks` | `aef3bb17eb34_content_tables` | Chunked code with pgvector `vector(1536)` embeddings |
+| `sync_jobs` | `cb4e2a7d0f31_add_sync_jobs` | Background sync job tracking & statuses |
+| `memory_entries` | `e7b8c9d0f1a2_add_code_chunks_and_memory` | Repository memory, architectural decisions, and learnings |
 
-Make sure your local PostgreSQL database (via `docker-compose up -d postgres`) is running before executing these commands.
+Make sure your local PostgreSQL database (via `docker compose up -d`) is running before executing these commands.

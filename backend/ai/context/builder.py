@@ -226,6 +226,66 @@ class AgentContext:
         }
 
 
+@dataclass
+class TargetSnippet:
+    """The primary target code under intelligence analysis."""
+
+    file_path: str
+    content: str
+    start_line: int
+    end_line: int
+    symbol_name: str | None = None
+    language: str = "text"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SymbolContext:
+    """A related caller, callee, imported type, or symbol."""
+
+    name: str
+    kind: str  # "function" | "class" | "caller" | "type" | "import"
+    file_path: str
+    start_line: int
+    end_line: int
+    content: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class IntelligenceContext:
+    """
+    Shared repository intelligence context for:
+    1. Code Explanation
+    2. Bug Detection
+    3. Test Generation
+    4. AI Code Review
+    """
+
+    target: TargetSnippet
+    related_symbols: list[SymbolContext] = field(default_factory=list)
+    relevant_chunks: list[CodeChunk] = field(default_factory=list)
+    repository_files: list[RepositoryFile] = field(default_factory=list)
+    project_rules: list[str] = field(default_factory=list)
+    total_tokens: int = 0
+    token_budget: int = 10_000
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target.to_dict(),
+            "related_symbols": [s.to_dict() for s in self.related_symbols],
+            "relevant_chunks_count": len(self.relevant_chunks),
+            "repository_files_count": len(self.repository_files),
+            "project_rules": self.project_rules,
+            "total_tokens": self.total_tokens,
+            "token_budget": self.token_budget,
+        }
+
+
 # ---------------------------------------------------------------------------
 # Section Formatters
 # ---------------------------------------------------------------------------
@@ -465,6 +525,101 @@ class ContextBuilder:
         for f in ctx.related_files:
             lines.append(f"- {f.path} ({f.language or 'unknown'}, {f.line_count} lines)")
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Week 2: Developer Intelligence Suite Context Methods (Meet)
+    # ------------------------------------------------------------------
+
+    def build_intelligence_context(
+        self,
+        target: TargetSnippet,
+        related_symbols: Sequence[SymbolContext] | None = None,
+        relevant_chunks: Sequence[Any] | None = None,
+        repository_files: Sequence[RepositoryFile] | None = None,
+        project_rules: Sequence[str] | None = None,
+        token_budget: int = 10_000,
+    ) -> IntelligenceContext:
+        """
+        Build an enriched, token-bounded context for developer intelligence features:
+        Code Explanation, Bug Detection, Test Generation, and Code Review.
+
+        Prioritizes:
+            1. Target code snippet (exact lines & content)
+            2. Callers & enclosing symbols
+            3. Retrieved RAG chunks & types
+            4. Repository inventory & conventions
+        """
+        safe_symbols = list(related_symbols or [])
+        safe_chunks = list(relevant_chunks or [])
+        safe_files = list(repository_files or [])
+        safe_rules = list(project_rules or [])
+
+        # Step 1: Measure target code tokens
+        target_tokens = count_tokens(target.content)
+        remaining = max(0, token_budget - target_tokens)
+
+        # Step 2: Fit related symbols & callers
+        fitted_symbols: list[SymbolContext] = []
+        for sym in safe_symbols:
+            tok = count_tokens(sym.content or sym.name)
+            if tok <= remaining:
+                fitted_symbols.append(sym)
+                remaining -= tok
+
+        # Step 3: Fit relevant chunks
+        fitted_chunks: list[Any] = []
+        for chk in safe_chunks:
+            tok = count_tokens(getattr(chk, "content", ""))
+            if tok <= remaining:
+                fitted_chunks.append(chk)
+                remaining -= tok
+
+        total = token_budget - remaining
+        return IntelligenceContext(
+            target=target,
+            related_symbols=fitted_symbols,
+            relevant_chunks=fitted_chunks,
+            repository_files=safe_files,
+            project_rules=safe_rules,
+            total_tokens=total,
+            token_budget=token_budget,
+        )
+
+    def render_intelligence_data(self, ctx: IntelligenceContext) -> str:
+        """Render the complete intelligence context into structured prompt data sections."""
+        sections = [
+            "TARGET CODE UNDER ANALYSIS:\n"
+            "---------------------------\n"
+            f"File: {ctx.target.file_path} (lines {ctx.target.start_line}–{ctx.target.end_line})\n"
+            f"Symbol: {ctx.target.symbol_name or 'N/A'}\n\n"
+            f"{ctx.target.content}"
+        ]
+
+        if ctx.related_symbols:
+            sym_lines = ["RELATED SYMBOLS & CALLERS:", "-------------------------"]
+            for s in ctx.related_symbols:
+                sym_lines.append(f"- {s.kind} {s.name} in {s.file_path}:{s.start_line}-{s.end_line}")
+                if s.content:
+                    sym_lines.append(f"  {s.content.strip()[:200]}")
+            sections.append("\n".join(sym_lines))
+
+        if ctx.relevant_chunks:
+            chunk_texts = "\n\n".join(_format_chunk(c) for c in ctx.relevant_chunks)
+            sections.append(f"RELEVANT CODE CONTEXT:\n----------------------\n{chunk_texts}")
+
+        if ctx.repository_files:
+            file_lines = ["REPOSITORY FILES OVERVIEW:", "-------------------------"]
+            for f in ctx.repository_files[:50]:
+                file_lines.append(f"- {f.path} ({f.language}, {f.line_count} lines)")
+            sections.append("\n".join(file_lines))
+
+        if ctx.project_rules:
+            rule_lines = ["PROJECT RULES & CONVENTIONS:", "----------------------------"]
+            for r in ctx.project_rules:
+                rule_lines.append(f"- {r}")
+            sections.append("\n".join(rule_lines))
+
+        return "\n\n".join(sections)
 
     # ------------------------------------------------------------------
     # Private Helpers / Algorithms

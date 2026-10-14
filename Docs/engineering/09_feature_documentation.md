@@ -11,7 +11,7 @@
 Single, centralized entry point for every LLM API call in the system. Enforces consistent logging, retry, timeout, and structured output across all AI features.
 
 ### Description
-`LLMGateway` wraps any `LLMProvider` implementation. Currently the only provider is `OpenAIProvider`. No other module may call an LLM API directly.
+`LLMGateway` wraps approved `LLMProvider` implementations. The platform enforces strict restriction to **Google Gemini** (`gemini-flash-lite-latest`) and **Groq** (`llama-3.3-70b-versatile`). No other module may call an LLM API directly.
 
 ### Actors
 - System (all AI features call this)
@@ -38,11 +38,15 @@ None — internal system component
 ### Backend Components
 - `backend/ai/llm/client.py` — `LLMGateway`
 - `backend/ai/llm/provider.py` — `LLMProvider` (abstract)
+- `backend/ai/llm/gemini_provider.py` — `GoogleGeminiProvider`
+- `backend/ai/llm/groq_provider.py` — `GroqProvider`
 - `backend/ai/llm/openai_provider.py` — `OpenAIProvider`
 - `backend/ai/llm/schemas.py` — `LLMRequest`, `LLMResponse`, error hierarchy
 
 ### External Services
-- OpenAI Chat Completions API: `https://api.openai.com/v1/chat/completions`
+- Google Gemini API (`https://generativelanguage.googleapis.com`)
+- Groq Cloud API (`https://api.groq.com/openai/v1`)
+
 
 ### Business Rules
 1. LLM Gateway is the ONLY place in the codebase that calls an LLM API.
@@ -584,33 +588,82 @@ Convert parsed symbols into embedable code chunks, preserving line numbers and m
 
 ---
 
-## Feature: Frontend Application
+## Feature: Frontend Application (Code Intelligence Workbench)
 
-**Status:** 🔵 In Progress | **Priority:** P0 | **Owner:** Dhramraj
+**Status:** 🟢 Done | **Priority:** P0 | **Owner:** Dhramraj
 
 ### Description
-React 19 + TypeScript SPA built with Vite. Uses Zustand for client state, TanStack Query for server state, Axios for API calls, MSW for development mocks.
+React 19 + TypeScript single-page application built with Vite and Tailwind CSS. Features an IDE-grade fixed-viewport layout (`h-screen overflow-hidden`) with scrollable panels, real-time Server-Sent Events (SSE) repository sync tracking, and responsive source exploration.
 
-### Pages (Implemented)
+### Pages & Routes
 
-| Page | Route | Status |
-|---|---|---|
-| Login | `/login` | 🔵 Skeleton |
-| Dashboard | `/app/dashboard` | 🔵 Skeleton |
-| Repositories | `/app/repositories` | 🔵 Skeleton |
-| Repository Detail | `/app/repositories/:id` | 🔵 Skeleton |
-| Repository Chat | `/app/repositories/:id/chat` | 🔵 Skeleton |
+| Page | Route | Description | Status |
+|---|---|---|---|
+| Login | `/login` | GitHub OAuth sign-in flow | 🟢 Done |
+| Dashboard | `/dashboard` | Connected repositories, sync status cards | 🟢 Done |
+| Repositories | `/repositories` | GitHub App repository discovery & connect | 🟢 Done |
+| Repository Detail | `/repositories/:id` | Repository overview, branch selector, sync triggers | 🟢 Done |
+| Repository Chat | `/repositories/:id/chat` | Fixed-viewport Workbench: source explorer + grounded chat | 🟢 Done |
+| Auth Callback | `/auth/github/callback` | OAuth redirect and token synchronization | 🟢 Done |
 
 ### State Stores
+- `useAuthStore`: User profile, authentication state, login/logout.
+- `useRepositoryStore`: Selected repository, sync status tracking.
+- `useAppStore`: Global application notification and drawer state.
 
-| Store | Purpose |
-|---|---|
-| `useAuthStore` | Auth state: user, isAuthenticated, login(), logout() |
-| `useRepositoryStore` | UI state: selectedRepository, syncStatus |
-| `useAppStore` | Global app state (TBD) |
+### Quality Verification
+- `oxlint`: 0 warnings, 0 errors across all 38 frontend files.
+- Production build: `tsc -b && vite build` passes cleanly.
 
-### Route Protection
-All `/app/*` routes are wrapped in `ProtectedRoute` — redirects to `/login` if not authenticated.
+---
 
-### Current Status
-🔵 Skeleton structure in place. Real API integration pending backend endpoints.
+## Feature: Shared IntelligenceContext (Week 2 Foundation)
+
+**Status:** 🟢 Done | **Priority:** P0 | **Owner:** Meet
+
+### Purpose
+Provide a unified, budget-bounded context abstraction capturing exact target code snippets, enclosing AST symbols, and caller/dependency relationships for all Week 2 developer intelligence services.
+
+### Components
+- `backend/ai/context/builder.py`: `TargetSnippet`, `SymbolContext`, `IntelligenceContext`, `build_intelligence_context()`, `render_intelligence_data()`.
+- Verified by `backend/tests/test_context_builder.py` (39 passing unit tests).
+
+---
+
+## Feature: Developer Intelligence Suite (Week 2 — Active)
+
+**Status:** 🔵 In Progress | **Priority:** P0 | **Owner:** Dev / Meet / Dhramraj / Yug / Om
+
+### 1. Code Explanation (`POST /api/v1/repositories/{id}/explain`)
+Explains a selected file, function, class, or custom line range. Produces structured sections: Purpose, Logic Flow, Key Symbols, Inputs/Outputs, Dependencies, and Limitations.
+
+### 2. Dedicated Bug Detection (`POST /api/v1/repositories/{id}/detect-bugs`)
+Combines static analysis tools (Ruff, Bandit, secret scanner) with grounded AI reasoning to identify off-by-one errors, null/undefined safety hazards, resource leaks, and unhandled exceptions.
+
+### 3. Framework-Aware Test Generation (`POST /api/v1/repositories/{id}/generate-tests`)
+Detects existing test runner conventions (`pytest`, `unittest`, `jest`) and generates complete, executable test files covering positive, negative, and edge-case paths.
+
+### 4. Standalone AI Code Review (`POST /api/v1/repositories/{id}/review`)
+Reviews files, commit SHAs, or GitHub PR diffs without autonomous execution. Categorizes findings into Correctness, Security, Performance, and Reliability.
+
+---
+
+## Feature: Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)
+
+**Status:** ⚪ Todo | **Priority:** P0 | **Owner:** Meet / Dev / Parth / Prit / Devu / Sukun
+
+### 1. Issue Intake & Finding Conversion (F31)
+Import accessible GitHub issues into development tasks or create GitHub issues from approved bug/review findings.
+
+### 2. Task Planning & Human Approval Gate (F32)
+Transforms requirements into structured, ordered steps with validation strategies. Requires explicit human approval before any workspace execution occurs.
+
+### 3. Isolated Workspace & Tool Router (F33, F34)
+Executes approved tasks inside isolated directories (`.workspaces/task-<id>`) on dedicated Git branches (`agent/task-<id>`) with strict command template allowlists and path traversal guards.
+
+### 4. Test Runner & Bounded Repair Loop (F35)
+Executes permitted test commands; on failure, initiates a bounded self-repair cycle with a hard ceiling of 3 task-level attempts.
+
+### 5. Independent Verification & GitHub Draft PR (F36, F37)
+Evaluates final changes independently, requires human publication authorization, pushes to the task branch, and creates a GitHub Draft Pull Request.
+
