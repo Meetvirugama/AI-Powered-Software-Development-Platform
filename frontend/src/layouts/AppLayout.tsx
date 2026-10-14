@@ -19,7 +19,7 @@ export function AppLayout() {
 
   const isChatRoute = location.pathname.endsWith('/chat');
   const isDetailRoute = /^\/app\/repositories\/[^/]+$/.test(location.pathname);
-  const isFixedLayout = isChatRoute || isDetailRoute;
+
 
   async function handleLogout() {
     try {
@@ -117,23 +117,18 @@ export function AppLayout() {
         </header>
 
         {/* Content area */}
-        <main
-          className={cn(
-            'flex-1 bg-background min-w-0',
-            isFixedLayout ? 'overflow-hidden flex flex-col h-full' : 'overflow-auto'
-          )}
-        >
+        <main className="flex-1 bg-background min-w-0 overflow-hidden flex flex-col h-full">
           <ErrorBoundary>
             {isChatRoute ? (
               <div className="h-full flex flex-col min-h-0">
                 <Outlet />
               </div>
             ) : isDetailRoute ? (
-              <div className="h-full flex flex-col min-h-0 p-3 sm:p-4 lg:p-5 md:overflow-hidden overflow-y-auto">
+              <div className="h-full flex flex-col min-h-0 p-3 sm:p-4 lg:p-5 overflow-hidden">
                 <Outlet />
               </div>
             ) : (
-              <div className="max-w-7xl mx-auto p-6">
+              <div className="h-full flex flex-col min-h-0 max-w-7xl w-full mx-auto p-4 sm:p-6 overflow-hidden">
                 <Outlet />
               </div>
             )}

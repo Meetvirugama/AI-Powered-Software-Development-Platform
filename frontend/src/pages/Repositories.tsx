@@ -127,130 +127,122 @@ export function Repositories() {
   // Render
   // ------------------------------------------------------------------
   return (
-    <div className="space-y-6">
+    <div className="h-full flex flex-col min-h-0 overflow-hidden">
       {/* ---------------------------------------------------------------- */}
-      {/* Page header                                                        */}
+      {/* Pinned Page Header & Controls                                     */}
       {/* ---------------------------------------------------------------- */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold text-foreground">Connect a Repository</h1>
-          <p className="text-sm text-muted-foreground">
-            GitHub repositories available through your GitHub App installation.
-          </p>
+      <div className="shrink-0 space-y-3 pb-3 border-b border-border/60">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col gap-0.5">
+            <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">Connect a Repository</h1>
+            <p className="text-xs text-muted-foreground">
+              GitHub repositories available through your GitHub App installation.
+            </p>
+          </div>
+          <a
+            href="https://github.com/apps/ai-dev-platform-local/installations/new"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto shrink-0"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            <span>Install / Manage GitHub App</span>
+            <ExternalLink className="h-3 w-3 opacity-70" />
+          </a>
         </div>
-        <a
-          href="https://github.com/apps/ai-dev-platform-local/installations/new"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto"
-        >
-          <PlusCircle className="h-4 w-4" />
-          Install / Manage GitHub App
-          <ExternalLink className="h-3.5 w-3.5 opacity-70" />
-        </a>
+
+        {/* Search input & repo count row */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative w-full max-w-md">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <input
+              id="repository-search"
+              type="search"
+              placeholder="Search repositories…"
+              value={searchInput}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="w-full rounded-lg border border-border bg-background py-1.5 pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
+              aria-label="Search repositories"
+            />
+            {searchInput && (
+              <button
+                onClick={() => handleSearchChange('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                aria-label="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground shrink-0">
+            {isFetching && !isLoading && (
+              <div className="flex items-center gap-1.5 font-mono text-[11px]" aria-live="polite">
+                <LoadingSpinner size="sm" label="Refreshing…" />
+                <span>Refreshing…</span>
+              </div>
+            )}
+            {data && (
+              <span className="font-medium text-foreground">
+                {debouncedSearch
+                  ? `${data.total} result${data.total !== 1 ? 's' : ''}`
+                  : `${data.total} repositories available`}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ---------------------------------------------------------------- */}
-      {/* Search input                                                       */}
+      {/* Scrollable Repository Cards Box                                   */}
       {/* ---------------------------------------------------------------- */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-        <input
-          id="repository-search"
-          type="search"
-          placeholder="Search repositories…"
-          value={searchInput}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
-          aria-label="Search repositories"
-        />
-        {/* Clear button */}
-        {searchInput && (
-          <button
-            onClick={() => handleSearchChange('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="Clear search"
-          >
-            <X className="h-4 w-4" />
-          </button>
+      <div className="flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-4">
+        {/* Loading skeleton */}
+        {isLoading && (
+          <div className="flex items-center justify-center py-16">
+            <LoadingSpinner size="lg" label="Loading repositories…" />
+          </div>
         )}
-      </div>
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Background refetch indicator                                       */}
-      {/* Shown when search/page changes while data already exists.         */}
-      {/* ---------------------------------------------------------------- */}
-      {isFetching && !isLoading && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-          <LoadingSpinner size="sm" label="Refreshing…" />
-          <span>Refreshing…</span>
-        </div>
-      )}
+        {/* Error state */}
+        {isError && !isLoading && (
+          <div className="flex flex-col items-center gap-4 py-12">
+            <ErrorMessage
+              message={
+                error instanceof Error
+                  ? error.message
+                  : 'Could not load repositories. Check your GitHub App installation.'
+              }
+              className="max-w-md"
+            />
+            <button
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              aria-label="Retry loading repositories"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </button>
+          </div>
+        )}
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Initial loading skeleton                                          */}
-      {/* ---------------------------------------------------------------- */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-16">
-          <LoadingSpinner size="lg" label="Loading repositories…" />
-        </div>
-      )}
+        {/* Empty — no repositories */}
+        {!isLoading && !isError && data && data.items.length === 0 && !debouncedSearch && (
+          <EmptyNoRepositories />
+        )}
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Discovery API error                                               */}
-      {/* ---------------------------------------------------------------- */}
-      {isError && !isLoading && (
-        <div className="flex flex-col items-center gap-4 py-12">
-          <ErrorMessage
-            message={
-              error instanceof Error
-                ? error.message
-                : 'Could not load repositories. Check your GitHub App installation.'
-            }
-            className="max-w-md"
+        {/* Empty — search returned no results */}
+        {!isLoading && !isError && data && data.items.length === 0 && debouncedSearch && (
+          <EmptySearchResults
+            search={debouncedSearch}
+            onClear={() => handleSearchChange('')}
           />
-          <button
-            onClick={() => refetch()}
-            className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Retry loading repositories"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Retry
-          </button>
-        </div>
-      )}
+        )}
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Empty — no repositories via GitHub App at all                     */}
-      {/* ---------------------------------------------------------------- */}
-      {!isLoading && !isError && data && data.items.length === 0 && !debouncedSearch && (
-        <EmptyNoRepositories />
-      )}
-
-      {/* ---------------------------------------------------------------- */}
-      {/* Empty — search returned no results                                */}
-      {/* ---------------------------------------------------------------- */}
-      {!isLoading && !isError && data && data.items.length === 0 && debouncedSearch && (
-        <EmptySearchResults
-          search={debouncedSearch}
-          onClear={() => handleSearchChange('')}
-        />
-      )}
-
-      {/* ---------------------------------------------------------------- */}
-      {/* Repository grid                                                   */}
-      {/* ---------------------------------------------------------------- */}
-      {!isLoading && !isError && data && data.items.length > 0 && (
-        <>
-          {/* Result count */}
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            {debouncedSearch
-              ? `${data.total} result${data.total !== 1 ? 's' : ''} for "${debouncedSearch}"`
-              : `${data.total} repositor${data.total !== 1 ? 'ies' : 'y'} available`}
-          </p>
-
+        {/* 3-column repository cards grid */}
+        {!isLoading && !isError && data && data.items.length > 0 && (
           <div
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+            className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
             aria-label="Available repositories"
           >
             {data.items.map((repo) => (
@@ -264,21 +256,25 @@ export function Repositories() {
               />
             ))}
           </div>
+        )}
+      </div>
 
-          {/* Pagination — only rendered when there are multiple pages */}
-          {totalPages > 1 && (
-            <DiscoveryPagination
-              page={page}
-              totalPages={totalPages}
-              total={data.total}
-              pageSize={PAGE_SIZE}
-              hasPrev={hasPrev}
-              hasNext={hasNext}
-              onPrev={() => setPage((p) => p - 1)}
-              onNext={() => setPage((p) => p + 1)}
-            />
-          )}
-        </>
+      {/* ---------------------------------------------------------------- */}
+      {/* Pinned Pagination Footer                                          */}
+      {/* ---------------------------------------------------------------- */}
+      {!isLoading && !isError && data && data.items.length > 0 && totalPages > 1 && (
+        <div className="shrink-0 pt-2.5 border-t border-border/60">
+          <DiscoveryPagination
+            page={page}
+            totalPages={totalPages}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+            hasPrev={hasPrev}
+            hasNext={hasNext}
+            onPrev={() => setPage((p) => p - 1)}
+            onNext={() => setPage((p) => p + 1)}
+          />
+        </div>
       )}
     </div>
   );
