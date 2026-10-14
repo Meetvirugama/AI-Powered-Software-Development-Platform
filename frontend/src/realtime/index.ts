@@ -20,6 +20,9 @@ const SSE_ENDPOINT = '/api/v1/events';
 
 export class RealtimeClient {
   private eventSource: EventSource | null = null;
+  private retryCount = 0;
+  private readonly maxRetries = 2;
+  private isUnavailable = false;
 
   /**
    * Open the SSE connection and register event handlers.
@@ -28,30 +31,38 @@ export class RealtimeClient {
    * @param onError   Optional callback invoked when the connection errors out.
    */
   connect(handlers: SseHandlers = {}, onError?: (event: Event) => void) {
-    if (this.eventSource) return; // already connected
+    if (this.eventSource || this.isUnavailable) return; // already connected or unavailable
 
-    this.eventSource = new EventSource(SSE_ENDPOINT, { withCredentials: true });
+    try {
+      this.eventSource = new EventSource(SSE_ENDPOINT, { withCredentials: true });
 
-    this.eventSource.onmessage = (event: MessageEvent) => {
-      let envelope: SseEnvelope;
-      try {
-        envelope = JSON.parse(event.data as string) as SseEnvelope;
-      } catch {
-        // Malformed message — ignore silently.
-        return;
-      }
+      this.eventSource.onmessage = (event: MessageEvent) => {
+        let envelope: SseEnvelope;
+        try {
+          envelope = JSON.parse(event.data as string) as SseEnvelope;
+        } catch {
+          // Malformed message — ignore silently.
+          return;
+        }
 
-      const handler = handlers[envelope.type as keyof typeof handlers];
-      if (handler) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (handler as (payload: any) => void)(envelope.data);
-      }
-    };
+        const handler = handlers[envelope.type as keyof typeof handlers];
+        if (handler) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (handler as (payload: any) => void)(envelope.data);
+        }
+      };
 
-    this.eventSource.onerror = (event: Event) => {
-      onError?.(event);
-      this.disconnect();
-    };
+      this.eventSource.onerror = (event: Event) => {
+        onError?.(event);
+        this.disconnect();
+        this.retryCount += 1;
+        if (this.retryCount >= this.maxRetries) {
+          this.isUnavailable = true; // prevent reconnect loops when endpoint is not configured
+        }
+      };
+    } catch {
+      this.isUnavailable = true;
+    }
   }
 
   disconnect() {

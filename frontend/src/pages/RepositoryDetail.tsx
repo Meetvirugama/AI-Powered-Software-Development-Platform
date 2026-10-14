@@ -58,14 +58,14 @@ export function RepositoryDetail() {
   // ------------------------------------------------------------------
   // Data Fetching
   // ------------------------------------------------------------------
-  const { data: repo, isLoading: repoLoading, isError: repoError, error: repoErrorData } = useRepository(id);
-  const progress = repo ? syncProgressFromStatus(repo.sync_status) : null;
-  const isPolling = progress?.isActive ?? false;
-  const isReady = progress?.isComplete ?? false;
-
-  useRepository(id, {
-    refetchInterval: isPolling ? SYNC_POLL_INTERVAL_MS : false,
+  const { data: repo, isLoading: repoLoading, isError: repoError, error: repoErrorData } = useRepository(id, {
+    refetchInterval: (query: any) => {
+      const status = query.state.data?.sync_status;
+      return status === 'SYNCING' ? SYNC_POLL_INTERVAL_MS : false;
+    },
   });
+  const progress = repo ? syncProgressFromStatus(repo.sync_status) : null;
+  const isReady = progress?.isComplete ?? false;
 
   // Only fetch files and dependencies if the repository is successfully synced
   const {

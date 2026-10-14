@@ -13,6 +13,11 @@ import {
   MessageSquare,
   RefreshCw,
   Trash2,
+  Copy,
+  Check,
+  ExternalLink,
+  Layers,
+  X,
 } from 'lucide-react';
 import type { ChatMessage, ChatSource, ChatConfidence } from '../types/api';
 
@@ -32,14 +37,12 @@ export function RepositoryChat() {
 
   // Input state — local to this component only.
   const [draft, setDraft] = useState('');
+  const [activeSource, setActiveSource] = useState<ChatSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll: always scroll to bottom when a new message is ADDED to the list
-  // (user sends a question, or the assistant placeholder appears).
-  // During streaming, only keep scrolling if the user is already near the bottom
-  // (within 150 px) — so manually scrolling up to read history isn't disrupted.
   const prevMessageCountRef = useRef(0);
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -50,12 +53,10 @@ export function RepositoryChat() {
     prevMessageCountRef.current = messageCount;
 
     if (isNewMessage) {
-      // A new message was added — always scroll to bottom.
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       return;
     }
 
-    // Chunk update during streaming — only scroll if already near the bottom.
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     if (distanceFromBottom <= 150) {
@@ -76,7 +77,6 @@ export function RepositoryChat() {
     if (!trimmed || isPending) return;
     sendMessage(trimmed);
     setDraft('');
-    // Reset textarea height after clearing.
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   }, [draft, isPending, sendMessage]);
 
@@ -90,52 +90,58 @@ export function RepositoryChat() {
     [handleSend],
   );
 
-  // ------------------------------------------------------------------
-  // Loading / Error states for repository metadata
-  // ------------------------------------------------------------------
-
   const repoName = repo?.full_name ?? repo?.name ?? id ?? 'Repository';
 
-  // ------------------------------------------------------------------
-  // Render
-  // ------------------------------------------------------------------
+  // Gather all sources across conversation for reference
+  const allSources = messages
+    .filter((m) => m.role === 'assistant' && m.sources && m.sources.length > 0)
+    .flatMap((m) => m.sources ?? []);
 
   return (
-    // Use -m-6 to counter-act AppLayout's p-6 padding so we can fill height.
-    // The chat interface needs precise height management to keep the composer
-    // pinned at the bottom and the message list scrollable.
-    <div className="-m-6 flex flex-col h-[calc(100vh-4rem)]">
-
+    <div className="flex flex-col h-full w-full bg-background overflow-hidden relative">
       {/* ---------------------------------------------------------------- */}
       {/* Header                                                            */}
       {/* ---------------------------------------------------------------- */}
       <header className="flex-shrink-0 bg-card border-b border-border px-4 py-3 flex items-center gap-3 min-w-0">
         <Link
           to={`/app/repositories/${id}`}
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-2 py-1 hover:bg-accent"
           aria-label="Back to Repository Explorer"
         >
-          <ArrowLeft className="h-4 w-4" />
-          <span className="hidden sm:inline">Repository</span>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Explorer</span>
         </Link>
 
         <div className="h-4 w-px bg-border shrink-0" aria-hidden="true" />
 
         <div className="flex items-center gap-2 min-w-0">
-          <Bot className="h-4 w-4 text-primary shrink-0" aria-hidden="true" />
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary shrink-0">
+            <Bot className="h-3.5 w-3.5" aria-hidden="true" />
+          </div>
           <div className="min-w-0">
             {repoLoading ? (
-              <div className="h-4 w-40 bg-muted animate-pulse rounded" />
+              <div className="h-4 w-36 bg-muted animate-pulse rounded" />
             ) : (
               <h1 className="text-sm font-semibold text-foreground truncate">
                 {repoName}
               </h1>
             )}
-            <p className="text-xs text-muted-foreground">Repository Chat</p>
+            <p className="text-[10px] text-muted-foreground font-mono">Grounded Code Conversation</p>
           </div>
         </div>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          {allSources.length > 0 && (
+            <button
+              onClick={() => setActiveSource(allSources[0])}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded border border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="Inspect cited sources"
+            >
+              <Layers className="h-3.5 w-3.5 text-primary" />
+              <span className="hidden sm:inline">Evidence ({allSources.length})</span>
+            </button>
+          )}
+
           {messages.length > 0 && (
             <button
               onClick={clearConversation}
@@ -179,7 +185,11 @@ export function RepositoryChat() {
         ) : (
           <>
             {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onSelectSource={(src) => setActiveSource(src)}
+              />
             ))}
 
             {/* Inline error beneath the last message */}
@@ -195,9 +205,6 @@ export function RepositoryChat() {
               />
             )}
 
-            {/* Show the typing indicator only while waiting for the very first chunk.
-                Once the assistant placeholder message exists (isStreaming=true),
-                the bubble itself renders the cursor — no separate indicator needed. */}
             {isPending && !messages.some((m) => m.role === 'assistant' && m.isStreaming) && (
               <TypingIndicator />
             )}
@@ -207,6 +214,63 @@ export function RepositoryChat() {
         {/* Sentinel element for auto-scroll */}
         <div ref={bottomRef} aria-hidden="true" />
       </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Evidence Side Drawer / Inspector                                  */}
+      {/* ---------------------------------------------------------------- */}
+      {activeSource && (
+        <div className="absolute right-0 top-14 bottom-0 w-80 sm:w-96 bg-card border-l border-border shadow-2xl z-30 flex flex-col animate-in slide-in-from-right duration-200">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+            <div className="flex items-center gap-2">
+              <Layers className="h-4 w-4 text-primary" />
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">Cited Evidence</h3>
+            </div>
+            <button
+              onClick={() => setActiveSource(null)}
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              aria-label="Close evidence panel"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <div className="p-4 flex-1 overflow-y-auto space-y-4">
+            <div className="space-y-1">
+              <span className="text-[10px] text-muted-foreground uppercase font-mono">File Path</span>
+              <p className="font-mono text-xs text-foreground bg-muted p-2 rounded border border-border break-all">
+                {activeSource.file}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="space-y-1">
+                <span className="text-[10px] text-muted-foreground uppercase font-mono">Lines</span>
+                <p className="font-mono text-foreground font-semibold">
+                  {activeSource.start_line} – {activeSource.end_line}
+                </p>
+              </div>
+              {activeSource.symbol && (
+                <div className="space-y-1">
+                  <span className="text-[10px] text-muted-foreground uppercase font-mono">Symbol</span>
+                  <p className="font-mono text-primary truncate" title={activeSource.symbol}>
+                    {activeSource.symbol}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-border">
+              <Link
+                to={`/app/repositories/${id}`}
+                className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                View in Repository Explorer
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------------------- */}
       {/* Composer                                                          */}
@@ -282,21 +346,20 @@ function EmptyState({
 }) {
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[40vh] text-center gap-4 select-none px-4">
-      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <MessageSquare className="h-7 w-7" aria-hidden="true" />
+      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
+        <MessageSquare className="h-6 w-6" aria-hidden="true" />
       </div>
       <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold text-foreground">
+        <h2 className="text-base font-semibold text-foreground">
           {repoLoading ? (
             <span className="inline-block h-5 w-48 bg-muted animate-pulse rounded" />
           ) : (
             `Ask about ${repoName}`
           )}
         </h2>
-        <p className="text-sm text-muted-foreground max-w-sm">
+        <p className="text-xs text-muted-foreground max-w-sm">
           Ask questions about code, architecture, authentication, dependencies,
-          or anything in this repository. Answers are grounded in the indexed
-          source files.
+          or symbols. Answers are grounded in the indexed source files.
         </p>
       </div>
     </div>
@@ -307,7 +370,13 @@ function EmptyState({
 // MessageBubble — renders a single user or assistant message
 // ---------------------------------------------------------------------------
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onSelectSource,
+}: {
+  message: ChatMessage;
+  onSelectSource?: (src: ChatSource) => void;
+}) {
   const isUser = message.role === 'user';
 
   return (
@@ -320,7 +389,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       {/* Avatar */}
       <div
         className={cn(
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border',
+          'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border',
           isUser
             ? 'bg-primary text-primary-foreground border-primary'
             : 'bg-muted text-muted-foreground border-border',
@@ -328,9 +397,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         aria-hidden="true"
       >
         {isUser ? (
-          <User className="h-4 w-4" />
+          <User className="h-3.5 w-3.5" />
         ) : (
-          <Bot className="h-4 w-4" />
+          <Bot className="h-3.5 w-3.5" />
         )}
       </div>
 
@@ -346,16 +415,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             'rounded-2xl px-4 py-2.5 text-sm leading-relaxed',
             isUser
               ? 'bg-primary text-primary-foreground rounded-tr-sm'
-              : 'bg-muted text-foreground rounded-tl-sm',
+              : 'bg-card border border-border text-foreground rounded-tl-sm shadow-sm',
           )}
         >
           {message.content ? (
             <MessageContent content={message.content} />
           ) : (
-            // Empty content before first chunk arrives
             <span className="text-muted-foreground/60 text-xs italic">Thinking…</span>
           )}
-          {/* Blinking cursor while the assistant is streaming */}
           {message.isStreaming && (
             <span
               className="inline-block ml-0.5 w-0.5 h-4 align-text-bottom bg-current opacity-70 animate-[blink_1s_step-end_infinite]"
@@ -364,11 +431,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           )}
         </div>
 
-        {/* Timestamp — hidden while streaming to avoid layout shift */}
+        {/* Timestamp */}
         {!message.isStreaming && (
           <time
             dateTime={message.timestamp}
-            className="text-xs text-muted-foreground px-1"
+            className="text-[11px] text-muted-foreground px-1 font-mono"
           >
             {new Date(message.timestamp).toLocaleTimeString([], {
               hour: '2-digit',
@@ -377,14 +444,14 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </time>
         )}
 
-        {/* Confidence badge — only for complete assistant messages */}
+        {/* Confidence badge */}
         {!isUser && !message.isStreaming && message.confidence && (
           <ConfidenceBadge confidence={message.confidence} />
         )}
 
-        {/* Sources — only shown for complete (non-streaming) assistant messages */}
+        {/* Sources */}
         {!isUser && !message.isStreaming && message.sources && message.sources.length > 0 && (
-          <SourceList sources={message.sources} />
+          <SourceList sources={message.sources} onSelectSource={onSelectSource} />
         )}
       </div>
     </div>
@@ -392,12 +459,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 }
 
 // ---------------------------------------------------------------------------
-// MessageContent — minimal Markdown-like rendering without a library
-// Handles: inline code, code blocks, paragraphs.
+// MessageContent — renders markdown paragraphs and CodeBlock with Copy
 // ---------------------------------------------------------------------------
 
 function MessageContent({ content }: { content: string }) {
-  // Split on fenced code blocks (```...```)
   const segments = content.split(/(```[\s\S]*?```)/g);
 
   return (
@@ -407,16 +472,8 @@ function MessageContent({ content }: { content: string }) {
           const inner = seg.slice(3, -3);
           const newline = inner.indexOf('\n');
           const code = newline !== -1 ? inner.slice(newline + 1) : inner;
-          return (
-            <pre
-              key={i}
-              className="overflow-x-auto rounded-md bg-background/80 border border-border px-3 py-2 text-xs font-mono text-foreground"
-            >
-              <code>{code}</code>
-            </pre>
-          );
+          return <CodeBlock key={i} code={code} />;
         }
-        // Inline code: wrap `backtick` spans
         const parts = seg.split(/(`[^`]+`)/g);
         return (
           <span key={i}>
@@ -424,7 +481,7 @@ function MessageContent({ content }: { content: string }) {
               part.startsWith('`') && part.endsWith('`') ? (
                 <code
                   key={j}
-                  className="rounded bg-background/80 border border-border px-1 py-0.5 font-mono text-xs"
+                  className="rounded bg-muted/80 border border-border px-1.5 py-0.5 font-mono text-xs text-primary"
                 >
                   {part.slice(1, -1)}
                 </code>
@@ -439,13 +496,51 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="relative group rounded-lg border border-border bg-background/95 overflow-hidden my-2.5">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/40 border-b border-border text-[11px] font-mono text-muted-foreground">
+        <span>source code</span>
+        <button
+          onClick={handleCopy}
+          className="inline-flex items-center gap-1 hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-background/80"
+          title="Copy code"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-emerald-400" />
+              <span className="text-emerald-400">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 text-xs font-mono text-foreground leading-relaxed">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// ConfidenceBadge — shows the backend-provided confidence level
+// ConfidenceBadge — shows backend-provided confidence
 // ---------------------------------------------------------------------------
 
 const confidenceConfig: Record<ChatConfidence, { label: string; className: string }> = {
-  high:   { label: 'High confidence',   className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-  medium: { label: 'Medium confidence', className: 'bg-amber-500/10  text-amber-600  border-amber-500/20'  },
+  high:   { label: 'High confidence',   className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+  medium: { label: 'Medium confidence', className: 'bg-amber-500/10  text-amber-400  border-amber-500/30'  },
   low:    { label: 'Low confidence',    className: 'bg-muted         text-muted-foreground border-border'   },
 };
 
@@ -453,7 +548,7 @@ function ConfidenceBadge({ confidence }: { confidence: ChatConfidence }) {
   const { label, className } = confidenceConfig[confidence];
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${className}`}
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-mono font-medium ${className}`}
       title={`Answer confidence: ${confidence}`}
       aria-label={label}
     >
@@ -463,39 +558,50 @@ function ConfidenceBadge({ confidence }: { confidence: ChatConfidence }) {
 }
 
 // ---------------------------------------------------------------------------
-// SourceList — renders the cited repository sources
+// SourceList — renders cited repository sources with click-to-inspect
 // ---------------------------------------------------------------------------
 
-function SourceList({ sources }: { sources: ChatSource[] }) {
+function SourceList({
+  sources,
+  onSelectSource,
+}: {
+  sources: ChatSource[];
+  onSelectSource?: (src: ChatSource) => void;
+}) {
   return (
     <div className="w-full space-y-1.5">
-      <p className="text-xs font-medium text-muted-foreground px-1">Sources</p>
+      <p className="text-[11px] font-medium text-muted-foreground px-1 uppercase font-mono tracking-wider">
+        Cited Sources
+      </p>
       <ul className="space-y-1.5" aria-label="Referenced sources">
         {sources.map((src, i) => (
-          <li
-            key={i}
-            className="rounded-md border border-border bg-card px-3 py-2 text-xs space-y-0.5"
-          >
-            <div className="flex items-start gap-2 min-w-0">
-              <FileCode
-                className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5"
-                aria-hidden="true"
-              />
-              {/* Use real backend field: src.file */}
-              <span className="font-mono text-foreground break-all">
-                {src.file}
-              </span>
-            </div>
-            {/* Use real backend fields: start_line / end_line */}
-            <p className="text-muted-foreground pl-5">
-              Lines {src.start_line}
-              {src.end_line !== src.start_line ? `–${src.end_line}` : ''}
-            </p>
-            {src.symbol && (
-              <p className="text-muted-foreground pl-5 font-mono">
-                {src.symbol}
-              </p>
-            )}
+          <li key={i}>
+            <button
+              onClick={() => onSelectSource?.(src)}
+              className="w-full text-left rounded-lg border border-border bg-card/80 hover:bg-accent/60 transition-colors px-3 py-2 text-xs space-y-1 group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <div className="flex items-center justify-between gap-2 min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <FileCode
+                    className="h-3.5 w-3.5 text-primary shrink-0"
+                    aria-hidden="true"
+                  />
+                  <span className="font-mono text-foreground font-medium group-hover:text-primary transition-colors truncate">
+                    {src.file}
+                  </span>
+                </div>
+                <ExternalLink className="h-3 w-3 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground font-mono pl-5">
+                <span>Lines {src.start_line}{src.end_line !== src.start_line ? `–${src.end_line}` : ''}</span>
+                {src.symbol && (
+                  <>
+                    <span>·</span>
+                    <span className="text-primary truncate">{src.symbol}</span>
+                  </>
+                )}
+              </div>
+            </button>
           </li>
         ))}
       </ul>

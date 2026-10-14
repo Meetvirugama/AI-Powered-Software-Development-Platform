@@ -94,7 +94,7 @@ export async function getRepositoryFiles(
  * Fetch top-level dependencies for a repository.
  *
  * GET /api/v1/repositories/:id/dependencies
- * MOCKED: The backend does not yet expose dependencies.
+ * Live backend parses package.json, requirements.txt, go.mod, Cargo.toml from indexed files.
  */
 export async function getRepositoryDependencies(
   id: string,

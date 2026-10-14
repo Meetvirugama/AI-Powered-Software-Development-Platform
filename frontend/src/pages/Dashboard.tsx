@@ -22,16 +22,17 @@ export function Dashboard() {
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
 
-  // Temporary fetch to detect syncing repos for conditional polling
-  const { data, isLoading, isFetching, isError, error, refetch } =
-    useRepositories(page, PAGE_SIZE);
-
-  const hasSyncingRepo = data?.items.some((r) => r.sync_status === 'SYNCING') ?? false;
-
-  // Poll when any repo is syncing
-  useRepositories(page, PAGE_SIZE, {
-    refetchInterval: hasSyncingRepo ? 3000 : false,
-  });
+  const { data, isLoading, isFetching, isError, error, refetch } = useRepositories(
+    page,
+    PAGE_SIZE,
+    {
+      refetchInterval: (query: any) => {
+        const items = query.state.data?.items;
+        const hasSyncing = items?.some((r: any) => r.sync_status === 'SYNCING');
+        return hasSyncing ? 3000 : false;
+      },
+    },
+  );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const hasPrev = page > 1;

@@ -16,30 +16,9 @@
  *     → GET /api/v1/github/repositories
  *     → PaginatedAvailableRepositoryResponse (adapted)
  *
- * Backend status (Day 4):
- *   The endpoint GET /api/v1/github/repositories does NOT yet exist in the
- *   backend. It is backed by MSW mocks (src/mocks/handlers.ts) during
- *   development. When the backend implements it, only this file needs updating.
- *
- * Expected backend response contract (assumed — to be confirmed with Yug/Parth):
- *   {
- *     "items": [
- *       {
- *         "github_repo_id": "123456001",
- *         "owner": "dev-user",
- *         "name": "platform-backend",
- *         "full_name": "dev-user/platform-backend",
- *         "default_branch": "main",
- *         "language": "Python",
- *         "is_connected": true
- *       },
- *       ...
- *     ],
- *     "total": 42,
- *     "page": 1,
- *     "page_size": 20,
- *     "total_pages": 3
- *   }
+ * Backend status:
+ *   Live backend integration via backend/app/api/v1/github.py.
+ *   GET /api/v1/github/repositories returns PaginatedAvailableRepositoryResponse.
  */
 import { apiClient } from './api';
 import type {
@@ -164,20 +143,14 @@ export async function listAvailableRepositories(
 // ---------------------------------------------------------------------------
 // Connect repository
 //
-// Assumed backend endpoint (not yet implemented — backed by MSW):
+// Live backend endpoint (backend/app/api/v1/github.py):
 //   POST /api/v1/github/repositories/:githubRepoId/connect
 //
-// The backend is expected to:
-//   1. Look up the repository in GitHub using the installation token
-//   2. Create a repository record in our DB
-//   3. Queue a sync job immediately
-//   4. Return { repository_id, job_id }
-//
-// Raw response shape (assumed, to be confirmed with Yug/Parth):
-//   { "repository_id": "<uuid>", "job_id": "<uuid>" }
-//
-// If the backend splits this into two requests (POST /github/repositories/connect
-// + POST /repositories/:id/sync), only this function needs updating.
+// The backend:
+//   1. Looks up repository in GitHub using installation token
+//   2. Creates repository record in DB
+//   3. Queues sync job immediately
+//   4. Returns { repository_id, job_id }
 // ---------------------------------------------------------------------------
 
 interface RawConnectResponse {
