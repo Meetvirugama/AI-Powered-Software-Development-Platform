@@ -350,3 +350,30 @@ Related Docs: Which documentation may need updating
 | 2026-09-28 | `10_development_tasks.md` | All W1 AI/API tasks updated to DONE | Documentation system |
 | 2026-09-28 | `11_testing_qa.md` | Updated test suite status with all new test files | Documentation system |
 | 2026-09-24 | All `Docs/engineering/` files | Initial creation of complete documentation system | Documentation system |
+| 2026-10-14 | All `Docs/` | Week 1 Foundation 100% completed, PR #72 opened and verified (369 passed, 71.3% coverage) | Meet / Team |
+| 2026-10-15 | `Docs/week2.md`, `Docs/week3.md` | Week 2 Developer Intelligence Suite & Week 3 Workflow Automation plans finalized | Team |
+| 2026-10-15 | `backend/ai/context/builder.py` | Meet implemented `IntelligenceContext`, `TargetSnippet`, `SymbolContext`, and caller graph enrichment | Meet |
+| 2026-10-15 | `Docs/README.md` | Added master documentation index and roadmap matrix | Team |
+
+---
+
+## Week 2 Changes
+
+---
+
+### [W2-Day1] 2026-10-15 — Shared IntelligenceContext & Target Snippet Resolution
+**Type:** Feature  
+**Developer:** Meet  
+**Changes:**
+- `backend/ai/context/builder.py`:
+  - Added `TargetSnippet` dataclass preserving file path, lines, and target code
+  - Added `SymbolContext` dataclass capturing enclosing class/function and caller references
+  - Added `IntelligenceContext` container unifying repository metadata, target snippet, symbols, and token budgets
+  - Implemented `build_intelligence_context()` and `render_intelligence_data()` with prompt-isolation boundaries
+- `backend/tests/test_context_builder.py`:
+  - Added comprehensive test coverage for `IntelligenceContext` (all 39 tests passing)
+
+**Impact:** Dev can directly consume `IntelligenceContext` for Code Explanation, Bug Detection, Test Generation, and Review services.
+
+**Related Docs:** `Docs/week2.md`, `Docs/engineering/00_dashboard.md`, `Docs/engineering/10_development_tasks.md`
+
