@@ -1,25 +1,43 @@
+# ── Secrets & credentials (never commit!) ─────────────────────────────────────
 .env
 .env.*
+*.pem
+*.key
 
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
+*.py[cod]
+*.egg-info/
 .venv/
 venv/
 
-
-node_modules/
-
-dist/
-build/
-
-.DS_Store
-
-# Private keys — never commit!
-*.pem
-
-# Test & coverage artifacts
+# ── Testing & coverage ────────────────────────────────────────────────────────
 .coverage
 .coverage.*
+.coveragerc
 htmlcov/
 .pytest_cache/
+
+# ── Alembic ───────────────────────────────────────────────────────────────────
+alembic.ini.local
+
+# ── Frontend (Vite / React) ───────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+*.local
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Logs & DB ─────────────────────────────────────────────────────────────────
+*.log
 *.db
-test.db
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
