@@ -350,14 +350,8 @@ def _request_user_id(request: Request) -> UUID:
 
 def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
     user_id = _request_user_id(request)
-    repo_repo = RepositoryRepository(db)
-    if hasattr(repo_repo, "get_for_user"):
-        repository = repo_repo.get_for_user(repository_id, user_id)
-        if repository is None:
-            raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository does not exist or you do not have access.")
-        return repository
-    repository = repo_repo.get_by_id(repository_id)
-    if repository is None or getattr(repository, "user_id", None) != user_id:
+    repository = RepositoryRepository(db).get_for_user(repository_id, user_id)
+    if repository is None:
         raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository does not exist or you do not have access.")
     return repository
 
