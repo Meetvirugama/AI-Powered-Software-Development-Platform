@@ -74,8 +74,9 @@ flowchart TD
 | Agent analytics dashboard | P2 — deferred |
 | Memory dashboard UI | P1 — Week 3 or shortly after |
 | Full billing/metering | Out of scope for project |
-| Self-hosted LLM | Current provider: OpenAI only |
+| Self-hosted LLM | Current approved providers: Google Gemini & Groq only |
 | Support for non-GitHub VCS | GitHub only for now |
+
 
 ---
 

@@ -15,20 +15,49 @@
 
 ## API Inventory
 
+### Core & Repository APIs (Week 1 — Live)
+
 | Method | Endpoint | Feature | Auth Required | Status |
 |---|---|---|---|---|
 | GET | `/health` | Health Check | No | 🟢 Done |
 | GET | `/api/v1/auth/github/login` | GitHub OAuth Login | No | 🟢 Done |
 | GET | `/api/v1/auth/github/callback` | OAuth Callback | No | 🟢 Done |
-| GET | `/api/v1/auth/me` | Current User | Yes | 🟢 Done |
-| POST | `/api/v1/auth/logout` | Logout | Yes | 🟢 Done |
-| GET | `/api/v1/repositories` | List Repositories | Yes | 🟢 Done |
-| GET | `/api/v1/repositories/{id}` | Repository Detail | Yes | 🟢 Done |
-| POST | `/api/v1/repositories/{id}/sync` | Queue Sync | Yes | 🟢 Done |
-| POST | `/api/v1/repositories/{id}/search` | Hybrid Code Search | Yes | 🟢 Done |
+| GET | `/api/v1/auth/me` | Current User Profile | Yes | 🟢 Done |
+| POST | `/api/v1/auth/logout` | Logout & Blocklist JWT | Yes | 🟢 Done |
+| GET | `/api/v1/github/repositories` | List Repositories via GitHub App | Yes | 🟢 Done |
+| POST | `/api/v1/github/repositories/{id}/connect` | Connect Repository to Platform | Yes | 🟢 Done |
+| GET | `/api/v1/repositories` | List Connected Repositories | Yes | 🟢 Done |
+| GET | `/api/v1/repositories/{id}` | Repository Detail & Sync Status | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/sync` | Queue Repository Sync | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/search` | Hybrid Vector + Lexical Search | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/files` | List Indexed Files | Yes | 🟢 Done |
-| GET | `/api/v1/repositories/{id}/symbols` | List Extracted Symbols | Yes | 🟢 Done |
-| POST | `/api/v1/repositories/{id}/chat` | Repository Chat | Yes | 🟢 Done |
+| GET | `/api/v1/repositories/{id}/symbols` | List Extracted AST Symbols | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/chat` | Grounded Repository Chat | Yes | 🟢 Done |
+
+### Developer Intelligence Suite (Week 2 — Active)
+
+| Method | Endpoint | Feature | Auth Required | Status |
+|---|---|---|---|---|
+| POST | `/api/v1/repositories/{id}/explain` | Code Explanation (file, symbol, range) | Yes | 🔵 In Progress |
+| POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🔵 In Progress |
+| POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🔵 In Progress |
+| POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🔵 In Progress |
+| GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs | Yes | 🔵 In Progress |
+
+### Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)
+
+| Method | Endpoint | Feature | Auth Required | Status |
+|---|---|---|---|---|
+| POST | `/api/v1/repositories/{id}/issues/import` | Import Issue into Task Workflow | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks` | Create Natural-Language Task | Yes | ⚪ Todo |
+| GET | `/api/v1/tasks/{id}` | Get Task Status & Timeline | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/plan` | Generate Structured Implementation Plan | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/approve` | Human Approval Gate (Proceed to Execute) | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/reject` | Reject Plan / Cancel Task | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/execute` | Execute Plan in Isolated Workspace | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/verify` | Run Independent Verification Checks | Yes | ⚪ Todo |
+| POST | `/api/v1/tasks/{id}/create-pr` | Authorize Push & Create GitHub Draft PR | Yes | ⚪ Todo |
+
 
 ---
 

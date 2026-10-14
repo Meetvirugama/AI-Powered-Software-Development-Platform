@@ -46,7 +46,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, and Week 3.
 - [11. Testing & QA](./engineering/11_testing_qa.md) — Test strategies, fixture suites, and coverage policies.
 - [12. Deployment & DevOps](./engineering/12_deployment_devops.md) — Local setup, Docker Compose, and environment variables.
-- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-007).
+- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-010).
 - [14. Changelog](./engineering/14_changelog.md) — Chronological log of major codebase milestones.
 
 ---
