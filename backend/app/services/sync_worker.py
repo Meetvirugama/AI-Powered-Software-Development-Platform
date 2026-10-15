@@ -117,11 +117,12 @@ async def process_sync_job(
         embedding_provider = GeminiEmbeddingProvider(
             api_keys=gemini_keys,
             dimensions=settings.embedding_dimensions,
+            max_retries=max(len(gemini_keys) * 2, 6),
         )
         embedding_service = EmbeddingService(
             provider=embedding_provider,
-            batch_size=50,
-            max_concurrency=4,
+            batch_size=30,
+            max_concurrency=1,
         )
 
         # Run IncrementalIndexer
@@ -148,6 +149,16 @@ async def process_sync_job(
                 repo.last_synced_at = datetime.now(timezone.utc)
                 db.commit()
 
+        # Notify connected frontend clients via Redis pub/sub
+        try:
+            redis = await get_redis_async()
+            await redis.publish(
+                "platform_events",
+                json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}),
+            )
+        except Exception as pub_exc:
+            logger.debug("Failed to publish repository.updated event: %s", pub_exc)
+
         logger.info(
             "sync_worker_job_completed",
             extra={
@@ -167,6 +178,15 @@ async def process_sync_job(
                 job.status = SyncJobStatus.FAILED
                 repo.sync_status = SyncStatus.FAILED
                 db.commit()
+
+        try:
+            redis = await get_redis_async()
+            await redis.publish(
+                "platform_events",
+                json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}),
+            )
+        except Exception:
+            pass
 
     finally:
         if clone_dir and clone_dir.exists():

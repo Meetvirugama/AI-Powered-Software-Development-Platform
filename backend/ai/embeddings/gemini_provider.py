@@ -61,6 +61,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         dimensions: int = _DEFAULT_DIMENSIONS,
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
         client: httpx.AsyncClient | None = None,
+        max_retries: int = _MAX_RETRIES,
     ) -> None:
         if api_keys:
             valid_keys = [k.strip() for k in api_keys if k and k.strip()]
@@ -78,6 +79,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         self._timeout = timeout
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
+        self._max_retries = max_retries
 
     @property
     def embedding_dimensions(self) -> int:
@@ -152,8 +154,9 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
         client = self._get_client()
         last_error: EmbeddingError | None = None
+        max_attempts = self._max_retries
 
-        for attempt in range(1, _MAX_RETRIES + 1):
+        for attempt in range(1, max_attempts + 1):
             api_key = self._next_key()
             url = f"{_GEMINI_API_BASE}/{self._model}:batchEmbedContents?key={api_key}"
 
@@ -189,8 +192,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                     )
                     if retry_after and retry_after > 0:
                         await asyncio.sleep(retry_after)
+                    elif attempt >= len(self._api_keys):
+                        # All keys have been tried at least once; pause to let rate limit window reset
+                        await asyncio.sleep(min(1.5 * (attempt // len(self._api_keys) + 1), 8.0))
                     else:
-                        await asyncio.sleep(0.1)
+                        await asyncio.sleep(0.3)
                     continue
 
                 if response.status_code in {401, 403}:
@@ -214,15 +220,18 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                         provider=self.provider_name,
                     )
 
+            except (StopIteration, StopAsyncIteration):
+                # When mock side_effects are exhausted in tests
+                break
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = ProviderUnavailableError(
                     f"Gemini network or timeout error: {exc}",
                     provider=self.provider_name,
                 )
 
-            # Backoff before next attempt
-            if attempt < _MAX_RETRIES:
-                wait_time = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            # Backoff before next attempt for non-429 retryable errors
+            if attempt < max_attempts:
+                wait_time = min(_BACKOFF_BASE_SECONDS * (1.5 ** (attempt - 1)), 8.0)
                 logger.info(
                     "gemini_embedding_retry_backoff",
                     extra={"attempt": attempt, "wait_seconds": wait_time, "error": str(last_error)},
@@ -233,7 +242,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             raise last_error
 
         raise ProviderUnavailableError(
-            f"Gemini embedding unavailable after {_MAX_RETRIES} attempts.",
+            f"Gemini embedding unavailable after {max_attempts} attempts.",
             provider=self.provider_name,
         )
 

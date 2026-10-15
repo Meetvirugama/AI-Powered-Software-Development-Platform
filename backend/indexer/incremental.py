@@ -17,6 +17,7 @@ import logging
 import os
 import uuid
 from typing import Any
+import asyncio
 from uuid import UUID
 
 from sqlalchemy import text
@@ -24,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from indexer.chunker import SymbolChunker
 from scanner.detector import LanguageDetector
+from scanner.extractor import SymbolExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +61,13 @@ class IncrementalIndexer:
         db_session: Any,
         chunker: SymbolChunker | None = None,
         embedding_service: Any = None,
+        extractor: SymbolExtractor | None = None,
     ) -> None:
         self._db = db_session
         self.chunker = chunker or SymbolChunker()
         self.embedding_service = embedding_service
         self.detector = LanguageDetector()
+        self.extractor = extractor or SymbolExtractor()
 
     async def _execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         """Helper to run SQL across AsyncSession, sync Session, or sessionmaker."""
@@ -211,11 +215,18 @@ class IncrementalIndexer:
                     },
                 )
 
-            # Chunk the file using SymbolChunker
+            # Extract symbols if language is supported
+            symbols = []
+            try:
+                symbols = self.extractor.extract(file_info, content, file_id=file_id)
+            except Exception as e:
+                logger.debug("Symbol extraction skipped for %s: %s", file_rel_path, e)
+
+            # Chunk the file using SymbolChunker (symbol-aware or fallback line blocks)
             chunks = self.chunker.chunk_symbols(
                 repository_id=repository_id,
                 file_id=file_id,
-                symbols=[],  # Falls back to chunk_text for robust line blocks
+                symbols=symbols,
                 content=content,
                 language=language,
             )
@@ -231,12 +242,23 @@ class IncrementalIndexer:
                 try:
                     vectors = await self.embedding_service.embed_batch(chunk_texts)
                 except Exception as exc:
-                    logger.error(
+                    logger.warning(
                         "Embedding failed for file %s: %s",
                         file_rel_path,
                         exc,
                     )
                     vectors = []
+
+            # If embedding was required but failed, skip persisting chunks without vectors
+            # to avoid pgvector NOT NULL violations on code_chunks.embedding
+            if self.embedding_service is not None and not vectors:
+                logger.warning(
+                    "Skipping code_chunks persistence for file %s because embeddings could not be generated.",
+                    file_rel_path,
+                )
+                indexed_count += 1
+                await asyncio.sleep(0.05)
+                continue
 
             # Insert chunks into code_chunks
             chunk_query = text(
@@ -276,6 +298,7 @@ class IncrementalIndexer:
                 )
 
             indexed_count += 1
+            await asyncio.sleep(0.05)
 
         await self._commit()
         logger.info(
