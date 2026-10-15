@@ -94,7 +94,14 @@ class CrossEncoderReranker:
         if not query or not query.strip():
             return candidates[:top_n]
 
-        model = self._get_model()
+        try:
+            model = self._get_model()
+        except RuntimeError as exc:
+            logger.warning(
+                "reranker_model_unavailable_falling_back",
+                extra={"error": str(exc), "candidates_count": len(candidates)},
+            )
+            return candidates[:top_n]
 
         # Build input pairs for the cross-encoder
         pairs = [(query, chunk.content) for chunk in candidates]

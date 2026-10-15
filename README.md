@@ -58,7 +58,7 @@ AI & Retrieval Engine         Repository Scanner & Indexer
 
 - **Backend**: Python 3.11+, FastAPI, SQLAlchemy (asyncio), Alembic, Pydantic v2, Redis, tree-sitter.
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, Lucide Icons, Zustand.
-- **Database**: PostgreSQL 15 with `pgvector` extension for 1536-dimensional vector search.
+- **Database**: PostgreSQL 15 with `pgvector` extension for 768-dimensional vector search.
 - **AI Models**: Google Gemini (`gemini-flash-lite-latest`) & Groq (`llama-3.3-70b-versatile`) via unified provider gateway.
 
 ---

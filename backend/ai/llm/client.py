@@ -40,10 +40,10 @@ class LLMGateway:
 
     Usage::
 
-        from ai.llm.openai_provider import OpenAIProvider
+        from ai.llm.gemini_provider import GeminiProvider
         from ai.llm.client import LLMGateway
 
-        gateway  = LLMGateway(provider=OpenAIProvider())
+        gateway  = LLMGateway(provider=GeminiProvider(api_keys=["key"]))
         response = await gateway.generate(request)
     """
 

@@ -365,9 +365,9 @@ class ContextBuilder:
 
     def build(
         self,
-        chunks: Sequence[CodeChunk] | None,
-        memory: Sequence[MemoryEntry] | None,
-        history: Sequence[ChatMessage | Mapping[str, Any] | Any] | None,
+        chunks: Sequence[CodeChunk] | None = None,
+        memory: Sequence[MemoryEntry] | None = None,
+        history: Sequence[ChatMessage | Mapping[str, Any] | Any] | None = None,
         related_files: Sequence[RepositoryFile] | None = None,
     ) -> AgentContext:
         """

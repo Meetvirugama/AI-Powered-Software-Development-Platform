@@ -654,3 +654,34 @@ class TestCodeChunkModel:
         assert chunk.score == 0.88
         assert "app/main.py" in chunk.header
 
+
+class TestHybridRetrieverRerankerWiring:
+    @pytest.mark.asyncio
+    async def test_hybrid_retriever_uses_reranker_when_configured(self):
+        from ai.retrieval.hybrid import HybridRetriever
+        from ai.retrieval.reranker import CrossEncoderReranker
+
+        mock_vector = AsyncMock()
+        mock_lexical = AsyncMock()
+        c1 = _make_chunk(content="code 1", score=0.5)
+        c2 = _make_chunk(content="code 2", score=0.6)
+        mock_vector.retrieve.return_value = [c1]
+        mock_lexical.retrieve.return_value = [c2]
+
+        mock_reranker = MagicMock(spec=CrossEncoderReranker)
+        reranked_chunk = _make_chunk(content="code 2 reranked", score=0.99)
+        mock_reranker.rerank.return_value = [reranked_chunk]
+
+        hybrid = HybridRetriever(
+            vector_retriever=mock_vector,
+            lexical_retriever=mock_lexical,
+            reranker=mock_reranker,
+        )
+
+        assert hybrid.reranker is mock_reranker
+        results = await hybrid.retrieve("my query", uuid.uuid4(), top_k=1)
+        assert len(results) == 1
+        assert results[0].content == "code 2 reranked"
+        assert results[0].score == 0.99
+        mock_reranker.rerank.assert_called_once()
+

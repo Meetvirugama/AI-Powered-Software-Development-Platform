@@ -171,15 +171,26 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                     return [item["values"] for item in embeddings_raw]
 
                 if response.status_code == 429:
+                    retry_after: float | None = None
+                    ra_hdr = response.headers.get("Retry-After") if hasattr(response, "headers") else None
+                    if ra_hdr:
+                        try:
+                            retry_after = float(ra_hdr)
+                        except (ValueError, TypeError):
+                            retry_after = None
                     last_error = RateLimitError(
                         "Gemini embedding rate limit exceeded.",
+                        retry_after=retry_after,
                         provider=self.provider_name,
                     )
                     logger.warning(
                         "gemini_embedding_rate_limit_rotating_key",
                         extra={"attempt": attempt, "key_masked": f"{api_key[:4]}...{api_key[-4:]}"},
                     )
-                    await asyncio.sleep(0.1)
+                    if retry_after and retry_after > 0:
+                        await asyncio.sleep(retry_after)
+                    else:
+                        await asyncio.sleep(0.1)
                     continue
 
                 if response.status_code in {401, 403}:

@@ -38,7 +38,7 @@ class EmbeddingService:
 
     Usage::
 
-        provider = OpenAIEmbeddingProvider()
+        provider = GeminiEmbeddingProvider(api_keys=["key"], dimensions=768)
         service  = EmbeddingService(provider=provider)
 
         # Single text

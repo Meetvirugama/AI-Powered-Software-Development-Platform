@@ -21,7 +21,7 @@ backend/
 │   └── workers/         # Background sync and indexing workers
 ├── ai/
 │   ├── llm/             # LLM Gateway (Gemini, Groq providers, retry, token tracking)
-│   ├── embeddings/      # OpenAI text-embedding-3-small service with batching
+│   ├── embeddings/      # Gemini embedding service with batching (768 dims)
 │   ├── retrieval/       # VectorRetriever, LexicalRetriever, RRFFusion, CrossEncoderReranker
 │   ├── context/         # ContextBuilder (token budgeting, AgentContext rendering)
 │   ├── prompts/         # Cached prompt templates with traversal guards
@@ -29,7 +29,7 @@ backend/
 ├── scanner/             # FileWalker, LanguageDetector, tree-sitter AST parser
 ├── indexer/             # Symbol-aware chunker, content-hash incremental indexer
 ├── migrations/          # Alembic versioned migration scripts
-└── tests/               # 369 unit and integration tests (71.31% coverage)
+└── tests/               # Unit and integration tests
 ```
 
 ---
@@ -61,7 +61,6 @@ GITHUB_CLIENT_SECRET=xxx
 GITHUB_WEBHOOK_SECRET=xxx
 GEMINI_API_KEY=AIzaSy...
 GROQ_API_KEY=gsk_...
-OPENAI_API_KEY=sk-proj-...
 ```
 
 ---
