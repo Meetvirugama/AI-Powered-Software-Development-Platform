@@ -128,6 +128,10 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
     user_id = _request_user_id(request)
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
     job = service.request_sync(repository_id, user_id)
+    try:
+        get_redis().publish("platform_events", json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}))
+    except Exception:
+        pass
     return SyncJobResponse(job_id=str(job.id))
 
 
@@ -135,6 +139,10 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
 def delete_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> None:
     repo = _owned_repository(repository_id, request, db)
     RepositoryRepository(db).delete(repo.id)
+    try:
+        get_redis().publish("platform_events", json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}))
+    except Exception:
+        pass
 
 
 @router.post("/{repository_id}/search", response_model=RepositorySearchResponse, summary="Hybrid code search")

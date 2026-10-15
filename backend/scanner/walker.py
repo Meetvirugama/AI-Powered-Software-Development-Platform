@@ -12,7 +12,37 @@ from .symbols import FileInfo
 logger = logging.getLogger(__name__)
 
 MAX_FILE_SIZE_BYTES = 1024 * 1024  # 1MB — larger files (e.g. a 50MB dump) are skipped
-SKIP_DIRS = {'.git', 'node_modules', 'venv', '__pycache__', 'dist', 'build', '.next', '.cache'}
+SKIP_DIRS = {
+    '.git', 'node_modules', 'venv', '.venv', 'env', '.env',
+    '__pycache__', 'dist', 'build', '.next', '.cache',
+    '.idea', '.vscode', '.pytest_cache', '.mypy_cache', '.tox', 'coverage', '.nyc_output'
+}
+
+SKIP_EXTENSIONS = {
+    # Data & Datasets
+    ".csv", ".tsv", ".parquet", ".feather", ".arrow", ".sqlite", ".sqlite3", ".db", ".sqlitedb",
+    # ML / Model files
+    ".h5", ".hdf5", ".pt", ".pth", ".onnx", ".safetensors", ".weights", ".pkl", ".pickle", ".npy", ".npz",
+    # Notebooks & Documents
+    ".ipynb", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    # Media & Fonts
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".mp3", ".mp4", ".wav", ".avi", ".mov",
+    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+    # Archives
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".7z", ".rar",
+    # Logs & Locks & Minified
+    ".log", ".lock", ".min.js", ".min.css", ".map",
+}
+
+SKIP_FILENAMES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pipfile.lock",
+    "cargo.lock",
+    "composer.lock",
+}
 
 class FileWalker:
     def __init__(self):
@@ -43,10 +73,13 @@ class FileWalker:
             # Modify dirnames in-place to skip directories
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
 
-            # Remove hidden directories as well (starting with '.') except maybe some valid ones?
-            # Instructions only specified specific SKIP_DIRS, so we stick to that.
-
             for filename in filenames:
+                lower_filename = filename.lower()
+                if lower_filename in SKIP_FILENAMES:
+                    continue
+                if any(lower_filename.endswith(ext) for ext in SKIP_EXTENSIONS):
+                    continue
+
                 filepath = os.path.join(dirpath, filename)
                 # Ensure we use forward slashes for cross-platform rel_path consistency if needed,
                 # but os.path.relpath works natively.
