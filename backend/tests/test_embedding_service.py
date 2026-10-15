@@ -1,5 +1,5 @@
 """
-Unit tests for the Embedding Service — Day 3 requirements.
+Unit tests for the Embedding Service — Gemini 768-d provider.
 Owner: Meet (implementation) / Keval (test infrastructure) — W1-12
 
 Tests:
@@ -7,7 +7,7 @@ Tests:
     2. test_retry_on_429                       — first call 429, second 200 → success.
     3. test_retry_exhaustion_raises            — all 3 calls 429 → EmbeddingError raised.
     4. test_dimension_mismatch_raises          — vector wrong length → EmbeddingError.
-    5. test_embed_batch_splits_into_batches   — 250 texts split into 3 sub-batches.
+    5. test_embed_batch_splits_into_batches   — 250 texts split into sub-batches.
     6. test_embed_batch_preserves_order        — output order matches input order.
     7. test_embed_batch_empty_list             — empty input → empty output, no API call.
     8. test_timeout_raises_embedding_error     — httpx timeout → EmbeddingError.
@@ -27,19 +27,12 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_embedding_response(
+def _make_gemini_embedding_response(
     vectors: list[list[float]],
-    model: str = "text-embedding-3-small",
 ) -> dict[str, Any]:
-    """Build a minimal OpenAI embeddings API response dict."""
+    """Build a minimal Gemini batchEmbedContents API response dict."""
     return {
-        "object": "list",
-        "data": [
-            {"object": "embedding", "index": i, "embedding": vec}
-            for i, vec in enumerate(vectors)
-        ],
-        "model": model,
-        "usage": {"prompt_tokens": 10 * len(vectors), "total_tokens": 10 * len(vectors)},
+        "embeddings": [{"values": vec} for vec in vectors]
     }
 
 
@@ -52,7 +45,7 @@ def _make_http_response(status_code: int, json_body: dict | None = None) -> Magi
     return mock_resp
 
 
-def _fake_vector(dims: int = 1536, value: float = 0.1) -> list[float]:
+def _fake_vector(dims: int = 768, value: float = 0.1) -> list[float]:
     return [value] * dims
 
 
@@ -62,11 +55,11 @@ def _fake_vector(dims: int = 1536, value: float = 0.1) -> list[float]:
 
 @pytest.fixture()
 def provider_and_service():
-    """Return an OpenAIEmbeddingProvider with a fake key and its EmbeddingService wrapper."""
-    from ai.embeddings.openai_provider import OpenAIEmbeddingProvider
+    """Return a GeminiEmbeddingProvider with a fake key and its EmbeddingService wrapper."""
+    from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
     from ai.embeddings.service import EmbeddingService
 
-    provider = OpenAIEmbeddingProvider(api_key="sk-test-key", dimensions=1536)
+    provider = GeminiEmbeddingProvider(api_keys=["test-key"], dimensions=768)
     service = EmbeddingService(provider=provider)
     return provider, service
 
@@ -83,7 +76,7 @@ class TestEmbedSingle:
         """Happy path: API returns 200 with a valid vector."""
         _, service = provider_and_service
         expected_vec = _fake_vector()
-        payload = _make_embedding_response([expected_vec])
+        payload = _make_gemini_embedding_response([expected_vec])
 
         with patch(
             "httpx.AsyncClient.post",
@@ -99,7 +92,7 @@ class TestEmbedSingle:
         """First call 429, second 200 → service succeeds after one retry."""
         _, service = provider_and_service
         vec = _fake_vector()
-        payload = _make_embedding_response([vec])
+        payload = _make_gemini_embedding_response([vec])
 
         responses = [
             _make_http_response(429),
@@ -137,8 +130,8 @@ class TestEmbedSingle:
         from ai.embeddings.client import EmbeddingError
 
         _, service = provider_and_service
-        wrong_dim_vec = _fake_vector(dims=512)  # provider expects 1536
-        payload = _make_embedding_response([wrong_dim_vec])
+        wrong_dim_vec = _fake_vector(dims=512)  # provider expects 768
+        payload = _make_gemini_embedding_response([wrong_dim_vec])
 
         with patch(
             "httpx.AsyncClient.post",
@@ -148,7 +141,7 @@ class TestEmbedSingle:
             await service.embed("some code")
 
         assert exc_info.value.retryable is False, "Dimension mismatch must be non-retryable."
-        assert "1536" in str(exc_info.value), "Error message should mention expected dimension."
+        assert "768" in str(exc_info.value), "Error message should mention expected dimension."
         assert "512" in str(exc_info.value), "Error message should mention actual dimension."
 
     @pytest.mark.asyncio
@@ -194,7 +187,7 @@ class TestEmbedBatch:
 
         texts = ["first", "second", "third"]
         vectors = [_fake_vector(value=float(i)) for i in range(len(texts))]
-        payload = _make_embedding_response(vectors)
+        payload = _make_gemini_embedding_response(vectors)
 
         with patch(
             "httpx.AsyncClient.post",
@@ -216,11 +209,11 @@ class TestEmbedBatch:
 
         call_sizes: list[int] = []
 
-        async def fake_post(url, *, json, headers, **kwargs):
-            input_texts = json["input"]
-            call_sizes.append(len(input_texts))
-            vecs = [_fake_vector() for _ in input_texts]
-            return _make_http_response(200, _make_embedding_response(vecs))
+        async def fake_post(url, *, json, headers=None, **kwargs):
+            input_requests = json["requests"]
+            call_sizes.append(len(input_requests))
+            vecs = [_fake_vector() for _ in input_requests]
+            return _make_http_response(200, _make_gemini_embedding_response(vecs))
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=fake_post):
             result = await service.embed_batch(texts)
@@ -236,7 +229,7 @@ class TestEmbedBatch:
         _, service = provider_and_service
 
         vec = _fake_vector()
-        payload = _make_embedding_response([vec])
+        payload = _make_gemini_embedding_response([vec])
 
         with patch(
             "httpx.AsyncClient.post",
@@ -340,8 +333,7 @@ class TestSDE3EmbeddingFeatures:
     async def test_async_context_manager_lifecycle(self, provider_and_service):
         _, service = provider_and_service
         async with service as svc:
-            assert svc.dimensions == 1536
+            assert svc.dimensions == 768
             assert svc.batch_size == 100
-            assert svc.provider.provider_name == "openai"
-            assert svc.provider.model_name == "text-embedding-3-small"
-
+            assert svc.provider.provider_name == "gemini"
+            assert "gemini-embedding" in svc.provider.model_name

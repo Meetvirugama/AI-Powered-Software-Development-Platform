@@ -27,8 +27,8 @@ from pydantic import BaseModel
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _openai_success_payload(content: str = "Hello!", model: str = "gpt-4o") -> dict[str, Any]:
-    """Minimal OpenAI chat completion response structure."""
+def _groq_success_payload(content: str = "Hello!", model: str = "llama-3.3-70b-versatile") -> dict[str, Any]:
+    """Minimal Groq chat completion wire response structure."""
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -75,11 +75,11 @@ def llm_request():
 
 @pytest.fixture()
 def provider_and_gateway():
-    """Return a real OpenAIProvider with a fake API key + its LLMGateway wrapper."""
+    """Return a real GroqProvider with a fake API key + its LLMGateway wrapper."""
     from ai.llm.client import LLMGateway
-    from ai.llm.openai_provider import OpenAIProvider
+    from ai.llm.groq_provider import GroqProvider
 
-    provider = OpenAIProvider(api_key="sk-test-key")
+    provider = GroqProvider(api_keys=["gsk-test-key"])
     gateway = LLMGateway(provider=provider)
     return provider, gateway
 
@@ -98,7 +98,7 @@ class TestRetryOn429:
         Expected: Gateway succeeds (returns LLMResponse) after 1 retry.
         """
         _, gateway = provider_and_gateway
-        success_payload = _openai_success_payload("Auth is in auth_service.py")
+        success_payload = _groq_success_payload("Auth is in auth_service.py")
 
         responses = [
             _make_http_response(429),
@@ -125,7 +125,7 @@ class TestRetryOn429:
         confirming retry behaviour is active.
         """
         _, gateway = provider_and_gateway
-        success_payload = _openai_success_payload()
+        success_payload = _groq_success_payload()
 
         call_count = 0
 
@@ -172,7 +172,7 @@ class TestLLMResponseType:
         from ai.llm.schemas import LLMResponse
 
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload("The answer is 42.")
+        payload = _groq_success_payload("The answer is 42.")
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
             result = await gateway.generate(llm_request)
@@ -185,7 +185,7 @@ class TestLLMResponseType:
     async def test_token_counts_populated(self, llm_request, provider_and_gateway):
         """Token counts must be extracted from OpenAI usage field."""
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload()
+        payload = _groq_success_payload()
         payload["usage"] = {"prompt_tokens": 123, "completion_tokens": 77, "total_tokens": 200}
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
@@ -198,7 +198,7 @@ class TestLLMResponseType:
     async def test_latency_ms_is_positive(self, llm_request, provider_and_gateway):
         """Latency should always be a positive number."""
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload()
+        payload = _groq_success_payload()
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
             result = await gateway.generate(llm_request)
@@ -219,7 +219,7 @@ class TestStructuredOutput:
             confidence: float
 
         json_content = json.dumps({"answer": "It's in auth.py", "confidence": 0.95})
-        payload = _openai_success_payload(content=json_content)
+        payload = _groq_success_payload(content=json_content)
 
         _, gateway = provider_and_gateway
         request = LLMRequest(
@@ -242,7 +242,7 @@ class TestStructuredOutput:
         class MySchema(BaseModel):
             answer: str
 
-        bad_payload = _openai_success_payload(content="not valid JSON !!!")
+        bad_payload = _groq_success_payload(content="not valid JSON !!!")
         _, gateway = provider_and_gateway
         request = LLMRequest(
             model="gpt-4o",
@@ -266,7 +266,7 @@ class TestStructuredOutput:
             confidence: float  # required
 
         bad_json = json.dumps({"answer": "something"})  # missing confidence
-        bad_payload = _openai_success_payload(content=bad_json)
+        bad_payload = _groq_success_payload(content=bad_json)
 
         _, gateway = provider_and_gateway
         request = LLMRequest(
@@ -413,5 +413,5 @@ class TestSDE3GatewayFeatures:
     async def test_gateway_async_context_manager(self, provider_and_gateway):
         _, gateway = provider_and_gateway
         async with gateway as gw:
-            assert gw.provider_name == "openai"
+            assert gw.provider_name == "groq"
 

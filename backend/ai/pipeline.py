@@ -93,7 +93,7 @@ class RAGPipeline:
         grounding_validator: GroundingValidator instance (default: GroundingValidator()
                           with no DB session — citations pass through as grounded).
         max_context_tokens: Token budget forwarded to ContextBuilder (default 100_000).
-        model:            Default model identifier for LLM inference (default: 'gpt-4o').
+        model:            Default model identifier for LLM inference (default: 'gemini-flash-lite-latest').
         max_retrieval_top_k: Maximum candidate chunks fetched per retrieval turn.
         max_repair_attempts: Maximum attempts to repair invalid JSON responses.
 
@@ -101,7 +101,7 @@ class RAGPipeline:
 
         pipeline = RAGPipeline(
             retriever=HybridRetriever(...),
-            llm_gateway=LLMGateway(provider=OpenAIProvider()),
+            llm_gateway=LLMGateway(provider=GeminiProvider(api_keys=["..."])),
         )
         answer = await pipeline.chat(
             question="Where is authentication implemented?",
@@ -132,7 +132,9 @@ class RAGPipeline:
         self.context_builder = context_builder or ContextBuilder(max_context_tokens=max_context_tokens)
         self.llm = llm_gateway
         self.prompt_builder = prompt_builder or PromptBuilder()
-        self.grounding_validator = grounding_validator or GroundingValidator()
+        self.grounding_validator = grounding_validator or GroundingValidator(db_session=db_session)
+        if getattr(self.grounding_validator, "_db", None) is None and db_session is not None:
+            self.grounding_validator._db = db_session
         self._model = model
         self._max_retrieval_top_k = max_retrieval_top_k
         self._max_repair_attempts = max_repair_attempts

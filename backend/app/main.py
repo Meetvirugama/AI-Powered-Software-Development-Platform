@@ -104,9 +104,12 @@ async def lifespan(app: FastAPI):
                 embedding_service=embedding_service,
             )
             lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
+            from ai.retrieval.reranker import CrossEncoderReranker
+            reranker = CrossEncoderReranker()
             retriever = HybridRetriever(
                 vector_retriever=vector_retriever,
                 lexical_retriever=lexical_retriever,
+                reranker=reranker,
             )
 
         grounding_validator = GroundingValidator(db_session=AsyncSessionLocal)

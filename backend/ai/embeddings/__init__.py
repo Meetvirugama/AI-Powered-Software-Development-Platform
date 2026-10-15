@@ -2,7 +2,7 @@
 Embeddings Module — Providers, Error Types, and Batching Services.
 
 Provides high-level embedding generation with dimension validation,
-bounded concurrency, and provider abstractions (OpenAI, etc.).
+bounded concurrency, and provider abstractions (Gemini, etc.).
 """
 
 from .client import (
@@ -15,7 +15,6 @@ from .client import (
     RateLimitError,
 )
 from .gemini_provider import GeminiEmbeddingProvider
-from .openai_provider import OpenAIEmbeddingProvider
 from .service import EmbeddingService
 
 __all__ = [
@@ -26,7 +25,7 @@ __all__ = [
     "EmbeddingService",
     "GeminiEmbeddingProvider",
     "InvalidRequestError",
-    "OpenAIEmbeddingProvider",
     "ProviderUnavailableError",
     "RateLimitError",
 ]
+

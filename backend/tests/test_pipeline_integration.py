@@ -109,7 +109,7 @@ def _index_fixture_repository(
                     symbol_id=ch.symbol_id,
                     content=ch.content,
                     token_count=ch.token_count,
-                    embedding=[0.0] * 1536,
+                    embedding=[0.0] * 768,
                     start_line=ch.start_line,
                     end_line=ch.end_line,
                     content_hash=ch.content_hash,

@@ -3,7 +3,7 @@ from typing import Any
 
 from sqlalchemy import String, Integer, ForeignKey, Index, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 from pgvector.sqlalchemy import Vector
 
 from app.core.database import Base
@@ -23,6 +23,18 @@ class CodeChunk(TimestampedModel, Base):
     end_line: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String)
     chunk_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB)
+
+    @validates("embedding")
+    def validate_embedding(self, key: str, value: Any) -> Any:
+        """Enforce strict dimensionality matching the configured vector schema (768)."""
+        if value is not None and hasattr(value, "__len__"):
+            from app.core.config import get_settings
+            expected_dim = get_settings().embedding_dimensions
+            if len(value) != expected_dim:
+                raise ValueError(
+                    f"CodeChunk embedding dimension mismatch: expected {expected_dim}, got {len(value)}"
+                )
+        return value
 
     __table_args__ = (
         Index(

@@ -539,7 +539,14 @@ class TestAcceptance:
         mock_llm = AsyncMock()
         mock_llm.generate.return_value = llm_response
 
-        pipeline = RAGPipeline(retriever=mock_retriever, llm_gateway=mock_llm)
+        mock_gv = AsyncMock(spec=GroundingValidator)
+        mock_gv.validate_sources.side_effect = lambda ans, repo_id: ans
+
+        pipeline = RAGPipeline(
+            retriever=mock_retriever,
+            llm_gateway=mock_llm,
+            grounding_validator=mock_gv,
+        )
 
         answer = await pipeline.chat(
             question="Where is authentication implemented?",

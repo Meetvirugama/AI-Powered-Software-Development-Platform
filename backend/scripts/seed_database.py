@@ -120,7 +120,7 @@ def seed():
             file_id=file_id,
             content=content,
             token_count=len(content.split()),
-            embedding=[0.0] * 1536,
+            embedding=[0.0] * 768,
             start_line=1,
             end_line=len(content.splitlines()),
             content_hash=content_hash,

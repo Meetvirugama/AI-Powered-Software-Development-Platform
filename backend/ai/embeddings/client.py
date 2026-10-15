@@ -1,7 +1,7 @@
 """
 Abstract Embedding Provider Interface and Structured Error Hierarchy.
 
-Defines the contract for embedding providers (OpenAI, HuggingFace, local, etc.)
+Defines the contract for embedding providers (Gemini, local, etc.)
 and domain exceptions used throughout retrieval and vector storage pipelines.
 """
 
@@ -175,7 +175,7 @@ class EmbeddingProvider(ABC):
     @property
     @abstractmethod
     def provider_name(self) -> str:
-        """Canonical human-readable provider identifier (e.g. 'openai')."""
+        """Canonical human-readable provider identifier (e.g. 'gemini')."""
         ...
 
     @property

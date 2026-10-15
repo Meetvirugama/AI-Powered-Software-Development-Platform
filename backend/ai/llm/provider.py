@@ -1,8 +1,8 @@
 """
 Abstract LLM Provider Interface.
 
-Defines the contract for all underlying LLM provider SDK adapters (OpenAI, Groq,
-Anthropic, etc.). Concrete providers encapsulate network transport, provider-specific
+Defines the contract for all underlying LLM provider SDK adapters (Gemini, Groq,
+etc.). Concrete providers encapsulate network transport, provider-specific
 parameter mapping, and transient retries. High-level routing, telemetry, and structured
 output validation are governed by LLMGateway.
 """
@@ -48,7 +48,7 @@ class LLMProvider(ABC):
     @property
     @abstractmethod
     def provider_name(self) -> str:
-        """Canonical identifier for the provider (e.g. 'openai', 'groq')."""
+        """Canonical identifier for the provider (e.g. 'gemini', 'groq')."""
         ...
 
     @property

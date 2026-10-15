@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,19 +44,42 @@ class Settings(BaseSettings):
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
-    ai_fallback_provider: str = "groq"
+    ai_fallback_provider: str | None = "groq"
     gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
     gemini_chat_model: str = "gemini-flash-lite-latest"
     groq_api_key: str | None = None
     groq_api_keys: str | None = None       # comma-separated list
-    groq_chat_model: str = "openai/gpt-oss-120b"
+    groq_chat_model: str = "llama-3.3-70b-versatile"
     ai_embedding_provider: str = "gemini"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048
+
+    @field_validator("ai_primary_provider", "ai_fallback_provider")
+    @classmethod
+    def validate_provider(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        allowed = {"gemini", "groq"}
+        if v.lower() not in allowed:
+            raise ValueError(
+                f"Provider '{v}' is not supported. Allowed runtime providers are: {sorted(allowed)}. "
+                "OpenAI is explicitly prohibited."
+            )
+        return v.lower()
+
+    @field_validator("ai_embedding_provider")
+    @classmethod
+    def validate_embedding_provider(cls, v: str) -> str:
+        if v.lower() != "gemini":
+            raise ValueError(
+                f"Embedding provider '{v}' is not supported. Required runtime provider is: 'gemini'. "
+                "OpenAI is explicitly prohibited."
+            )
+        return v.lower()
 
     @property
     def all_gemini_keys(self) -> list[str]:

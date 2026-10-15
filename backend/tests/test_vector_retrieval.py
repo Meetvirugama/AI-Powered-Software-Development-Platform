@@ -16,7 +16,7 @@ Run with:
     pytest backend/tests/test_vector_retrieval.py -v
 
 Design notes:
-    - No real DB or OpenAI calls — both are fully mocked.
+    - No real DB or external API calls — both are fully mocked.
     - AsyncMock used for async DB execute and embedding service.
     - Row objects are simulated via SimpleNamespace for readability.
 """
@@ -77,7 +77,7 @@ def _make_db_session(rows: list[SimpleNamespace]) -> AsyncMock:
 def _make_embedding_service(vector: list[float] | None = None) -> AsyncMock:
     """Return a mock EmbeddingService.embed() returning a fake vector."""
     svc = AsyncMock()
-    svc.embed = AsyncMock(return_value=vector or [0.1] * 1536)
+    svc.embed = AsyncMock(return_value=vector or [0.1] * 768)
     return svc
 
 
@@ -92,7 +92,7 @@ def repo_id() -> uuid.UUID:
 
 @pytest.fixture()
 def fake_vector() -> list[float]:
-    return [0.05] * 1536
+    return [0.05] * 768
 
 
 @pytest.fixture()

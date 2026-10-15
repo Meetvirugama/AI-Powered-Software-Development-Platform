@@ -26,9 +26,9 @@ async def test_llm_timeout_returns_structured_error():
 
 @pytest.mark.asyncio
 async def test_llm_unavailable_retries_then_fails_gracefully():
-    """Test that when OpenAI is down, it gracefully returns a retryable APIError."""
+    """Test that when AI provider is down, it gracefully returns a retryable APIError."""
     mock_llm = AsyncMock()
-    mock_llm.generate.side_effect = LLMUnavailableError("OpenAI is down")
+    mock_llm.generate.side_effect = LLMUnavailableError("AI provider is down")
     pipeline = RAGPipeline(llm_gateway=mock_llm, retriever=AsyncMock())
     
     with pytest.raises(APIError) as exc_info:

@@ -5,8 +5,8 @@ Single entry point for all language model inference across the platform.
 """
 
 from .client import LLMGateway
+from .gemini_provider import GeminiProvider
 from .groq_provider import GroqProvider
-from .openai_provider import OpenAIProvider
 from .provider import LLMProvider
 from .schemas import (
     LLMAuthenticationError,
@@ -21,6 +21,7 @@ from .schemas import (
 )
 
 __all__ = [
+    "GeminiProvider",
     "GroqProvider",
     "LLMAuthenticationError",
     "LLMError",
@@ -33,5 +34,4 @@ __all__ = [
     "LLMUnavailableError",
     "LLMValidationError",
     "Message",
-    "OpenAIProvider",
 ]
