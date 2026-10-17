@@ -38,11 +38,12 @@
 
 | Method | Endpoint | Feature | Auth Required | Status |
 |---|---|---|---|---|
-| POST | `/api/v1/repositories/{id}/explain` | Code Explanation (file, symbol, range) | Yes | 🔵 In Progress |
-| POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🔵 In Progress |
-| POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🔵 In Progress |
-| POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🔵 In Progress |
-| GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs | Yes | 🔵 In Progress |
+| POST | `/api/v1/repositories/{id}/explain` | Code Explanation (file, symbol, range) | Yes | 🟢 Done (API Contract) |
+| POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🟢 Done (API Contract) |
+| POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🟢 Done (API Contract) |
+| POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🟢 Done (API Contract) |
+| GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs | Yes | 🟢 Done (API Contract) |
+| GET | `/api/v1/analysis-runs/{run_id}` | Get Specific Analysis Run & Findings | Yes | 🟢 Done (API Contract) |
 
 ### Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)
 
@@ -507,6 +508,322 @@ Chat API → RAGPipeline.chat()
 
 ---
 
+### POST `/api/v1/repositories/{repository_id}/explain`
+
+**Purpose:** Explain a selected file, symbol, or 1-indexed inclusive line range using grounded repository context.
+
+**Authentication:** Required
+
+**Request Body (`ExplainCodeRequest`):**
+```json
+{
+  "target": {
+    "type": "range",
+    "path": "backend/app/core/input_security.py",
+    "start_line": 36,
+    "end_line": 64,
+    "symbol": "validate_repo_relative_path"
+  },
+  "options": {
+    "include_context": true,
+    "max_context_tokens": 10000,
+    "persist_run": true
+  }
+}
+```
+
+**Response (`CodeExplanationResponse`):**
+```json
+{
+  "run_id": "uuid",
+  "repository_id": "uuid",
+  "status": "COMPLETED",
+  "target": {
+    "type": "range",
+    "path": "backend/app/core/input_security.py",
+    "start_line": 36,
+    "end_line": 64,
+    "symbol": "validate_repo_relative_path",
+    "revision": null
+  },
+  "revision": "main",
+  "explanation": {
+    "purpose": "Validates untrusted repository-relative file paths and blocks path traversal.",
+    "logic_flow": [
+      "Rejects empty, overly long, or control-character strings.",
+      "Normalizes POSIX path segments and rejects '..' segments."
+    ],
+    "key_symbols": [
+      {
+        "name": "validate_repo_relative_path",
+        "kind": "function",
+        "role": "Primary path sanitizer",
+        "start_line": 36,
+        "end_line": 64
+      }
+    ],
+    "inputs_and_outputs": "Takes `path: str`, returns normalized path string or raises `UnsafePathError`.",
+    "dependencies": ["pathlib.PurePosixPath", "re"],
+    "assumptions_and_limitations": ["Symlink escape checks require `resolve_within_root`."],
+    "sources": [
+      {
+        "repository_id": null,
+        "file_path": "backend/app/core/input_security.py",
+        "start_line": 36,
+        "end_line": 64,
+        "revision": null,
+        "symbol_name": "validate_repo_relative_path"
+      }
+    ],
+    "confidence": "high",
+    "missing_context": []
+  },
+  "created_at": "2026-10-17T12:00:00Z"
+}
+```
+
+**Status Codes:**
+| Code | Meaning |
+|---|---|
+| 200 | Structured explanation returned |
+| 400 | Unsafe path or line range exceeds indexed file bounds (`INVALID_REQUEST`) |
+| 401 | Not authenticated (`UNAUTHORIZED`) |
+| 404 | Repository not owned/found (`REPOSITORY_NOT_FOUND`) or target file missing (`FILE_NOT_FOUND`) |
+| 413 | Target file exceeds 1 MB limit (`PAYLOAD_TOO_LARGE`) |
+| 422 | Request schema validation failed (`INVALID_REQUEST`) |
+| 429 | Per-user rate limit exceeded (20 req/min, `RATE_LIMITED`) |
+| 500 | AI output failed validation (`ANALYSIS_FAILED`) |
+| 503 | Explanation service or LLM provider unavailable (`SERVICE_UNAVAILABLE`) |
+
+**Implementation:** `backend/app/api/v1/analysis.py` — `explain_code()`
+
+---
+
+### POST `/api/v1/repositories/{repository_id}/detect-bugs`
+
+**Purpose:** Identify potential defects using static analysis and AI reasoning with grounded source locations.
+
+**Authentication:** Required
+
+**Request Body (`BugDetectionRequest`):**
+```json
+{
+  "target": {
+    "type": "file",
+    "path": "src/pagination.py"
+  },
+  "include_static": true,
+  "include_ai": true,
+  "min_severity": "LOW"
+}
+```
+
+**Response (`BugDetectionResponse`):**
+```json
+{
+  "run_id": "uuid",
+  "repository_id": "uuid",
+  "status": "COMPLETED",
+  "target": {
+    "type": "file",
+    "path": "src/pagination.py",
+    "start_line": null,
+    "end_line": null,
+    "symbol": null,
+    "revision": null
+  },
+  "revision": "main",
+  "findings": [
+    {
+      "id": "finding-1",
+      "category": "off_by_one",
+      "severity": "HIGH",
+      "title": "Inclusive loop upper bound accesses index len(items)",
+      "description": "Iterating up to len(items) inclusive causes IndexError on the final iteration.",
+      "source_reference": {
+        "repository_id": null,
+        "file_path": "src/pagination.py",
+        "start_line": 14,
+        "end_line": 18,
+        "revision": null,
+        "symbol_name": "slice_page"
+      },
+      "evidence": "for idx in range(0, len(items) + 1): items[idx]",
+      "suggested_fix": "Use range(0, len(items)) instead of len(items) + 1.",
+      "confidence": "high",
+      "is_uncertain": false,
+      "source_type": "AI",
+      "rule_id": null
+    }
+  ],
+  "total_findings": 1,
+  "static_findings_count": 0,
+  "ai_findings_count": 1,
+  "missing_context": [],
+  "created_at": "2026-10-17T12:00:00Z"
+}
+```
+
+**Implementation:** `backend/app/api/v1/analysis.py` — `detect_bugs()`
+
+---
+
+### POST `/api/v1/repositories/{repository_id}/generate-tests`
+
+**Purpose:** Generate a complete, previewable test file matching the repository's supported test framework (`pytest`, `unittest`, or `jest`).
+
+**Authentication:** Required
+
+**Request Body (`TestGenerationRequest`):**
+```json
+{
+  "target": {
+    "type": "file",
+    "path": "src/pagination.py"
+  },
+  "framework": "pytest"
+}
+```
+
+**Response (`TestGenerationResponse`):**
+```json
+{
+  "run_id": "uuid",
+  "repository_id": "uuid",
+  "status": "COMPLETED",
+  "target": {
+    "type": "file",
+    "path": "src/pagination.py",
+    "start_line": null,
+    "end_line": null,
+    "symbol": null,
+    "revision": null
+  },
+  "revision": "main",
+  "result": {
+    "detected_framework": "pytest",
+    "proposed_test_path": "backend/tests/test_pagination.py",
+    "test_content": "def test_slice_page_empty():\\n    assert slice_page([], 1, 10) == []\\n",
+    "covered_scenarios": [
+      {
+        "name": "test_slice_page_empty",
+        "category": "edge_case",
+        "description": "Verifies empty list returns empty page."
+      }
+    ],
+    "assumptions_and_warnings": [],
+    "syntax_valid": true,
+    "validation_errors": [],
+    "sources": [
+      {
+        "repository_id": null,
+        "file_path": "src/pagination.py",
+        "start_line": 1,
+        "end_line": 25,
+        "revision": null,
+        "symbol_name": null
+      }
+    ]
+  },
+  "created_at": "2026-10-17T12:00:00Z"
+}
+```
+
+**Implementation:** `backend/app/api/v1/analysis.py` — `generate_tests()`
+
+---
+
+### POST `/api/v1/repositories/{repository_id}/review`
+
+**Purpose:** Run a standalone AI and static code review on a single file, commit SHA, GitHub PR number, or unified diff without starting an autonomous task.
+
+**Authentication:** Required
+
+**Request Body (`CodeReviewRequest`):**
+```json
+{
+  "target": {
+    "type": "commit",
+    "commit_sha": "a1b2c3d4"
+  },
+  "include_static": true
+}
+```
+
+**Response (`ReviewReportResponse`):**
+```json
+{
+  "run_id": "uuid",
+  "repository_id": "uuid",
+  "status": "COMPLETED",
+  "target": {
+    "type": "commit",
+    "path": null,
+    "commit_sha": "a1b2c3d4",
+    "pr_number": null,
+    "diff": null,
+    "base_revision": null,
+    "head_revision": null
+  },
+  "report": {
+    "summary": "Reviewed commit a1b2c3d4: 1 high-severity security issue identified.",
+    "risk_level": "HIGH",
+    "findings": [
+      {
+        "id": "rev-1",
+        "category": "security",
+        "severity": "HIGH",
+        "title": "Unparameterized SQL string interpolation",
+        "description": "User input is formatted directly into SQL query text.",
+        "source_reference": {
+          "repository_id": null,
+          "file_path": "src/db.py",
+          "start_line": 42,
+          "end_line": 45,
+          "revision": "a1b2c3d4",
+          "symbol_name": null
+        },
+        "evidence": "conn.execute(f\"SELECT * FROM users WHERE login = '{login}'\")",
+        "suggested_fix": "Use bound parameters (:login) with SQLAlchemy text().",
+        "confidence": "high",
+        "is_uncertain": false,
+        "is_new_in_change": true,
+        "source_type": "COMBINED",
+        "rule_id": "B608"
+      }
+    ],
+    "total_findings": 1,
+    "category_counts": {
+      "security": 1
+    },
+    "missing_context": []
+  },
+  "created_at": "2026-10-17T12:00:00Z"
+}
+```
+
+**Implementation:** `backend/app/api/v1/analysis.py` — `review_code()`
+
+---
+
+### GET `/api/v1/repositories/{repository_id}/analysis-runs` & GET `/api/v1/analysis-runs/{run_id}`
+
+**Purpose:** List and inspect persisted analysis runs and findings for repositories owned by the authenticated user.
+
+**Authentication:** Required
+
+**Query Parameters (`GET /api/v1/repositories/{repository_id}/analysis-runs`):**
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `feature_type` | string | `null` | Optional filter: `explain`, `detect_bugs`, `generate_tests`, `review` |
+| `status` | string | `null` | Optional filter: `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED` |
+| `page` | integer | `1` | 1-indexed page number |
+| `page_size` | integer | `20` | Items per page (max 100) |
+
+**Implementation:** `backend/app/api/v1/analysis.py` — `list_analysis_runs()`, `get_analysis_run()`
+
+---
+
 ## Standard Error Format
 
 All error responses follow this envelope:
@@ -532,6 +849,11 @@ All error responses follow this envelope:
 | `GITHUB_PROFILE_FAILED` | 502 | GitHub returned incomplete user profile |
 | `SERVICE_UNAVAILABLE` | 503 | LLM, Redis, or external service down |
 | `INTERNAL_SERVER_ERROR` | 500 | Unrecoverable server error |
+| `FILE_NOT_FOUND` | 404 | Target file does not exist in the indexed repository |
+| `ANALYSIS_RUN_NOT_FOUND` | 404 | Requested analysis run ID does not exist or is not accessible |
+| `INVALID_REQUEST` | 400/422 | Unsafe file path, invalid line range, or schema validation failure |
+| `PAYLOAD_TOO_LARGE` | 413 | Target file exceeds the 1 MB analysis limit |
+| `ANALYSIS_FAILED` | 500 | AI output failed schema validation or analysis execution failed |
 
 ---
 
