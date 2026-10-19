@@ -411,4 +411,34 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day2] 2026-10-16 — Target Selector & Symbol Resolution Integration
+**Type:** Feature  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/target_selector.py`:
+  - Created `TargetSelector` connecting workbench / API target selections to AST and source location utilities
+  - Implemented `select_target()` supporting `'file'`, `'symbol'`, and `'range'` targets
+  - Added qualified symbol resolution (`Class.method`) and member symbol extraction
+  - Implemented ambiguous symbol detection and multi-level disambiguation (qualified naming, cursor/line proximity, scope ranking)
+  - Added consistent 1-indexed inclusive line range enforcement with boundary clamping and enclosing symbol identification
+  - Added `TargetSelectionResult.to_target_snippet()` converting targets directly into `TargetSnippet` for Meet's `IntelligenceContext`
+  - Integrated parse failure resilience with explicit `parse_status` (`OK`, `SYNTAX_WARNING`, `PARSE_ERROR`, `UNSUPPORTED_LANGUAGE`) and case-insensitive suggestions
+- `backend/scanner/__init__.py`:
+  - Re-exported `TargetSelector` and `TargetSelectionResult`
+- `backend/tests/fixtures/ast_sample/ambiguous_sample.py`:
+  - Added multi-scope ambiguous symbol fixture for testing disambiguation heuristics
+- `backend/tests/test_target_selector.py`:
+  - Added 14 unit and integration tests covering whole file, function, class, qualified method, ambiguous symbols, line ranges, syntax warnings, and TargetSnippet conversion
+- `Docs/scanner_languages.md`:
+  - Updated specification with TargetSelector API contracts, ambiguous symbol handling, and line range interpretation rules
+- `Docs/daily_tasks.md`:
+  - Marked Prit's Day 2 Symbol Resolution task as completed
+
+**Impact:** Downstream Code Explanation (`POST /api/v1/repositories/{id}/explain`) and Intelligence Workbench can resolve any target file, symbol, or range with verified boundaries and enclosing context.
+
+**Related Docs:** `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/scanner_languages.md`
+
+
 

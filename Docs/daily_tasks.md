@@ -527,11 +527,13 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 2 Feature 1: Code Explanation
 
+- ✅ Prit: `TargetSelector` & symbol resolution connecting AST utilities to Code Explanation targets
 - ⬜ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
 - ⬜ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
 - ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
 - ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
 - ⬜ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations
+
 
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 

@@ -86,6 +86,20 @@ class Symbol:
   - Universal target resolver producing a typed `ResolutionResult`.
   - Supports resolution via explicit `symbol_name`, line ranges (`start_line`, `end_line`), or point-in-file cursor lines.
 
+### 4.2 Target Selection & Disambiguation Engine (`TargetSelector`)
+
+`backend/scanner/target_selector.py` integrates AST utilities into user-facing target selection:
+- **`select_target(file_path, content, target_type, symbol_name, start_line, end_line, cursor_line, language)`**:
+  - Resolves `'file'`, `'symbol'`, and `'range'` targets into a verified `TargetSelectionResult`.
+  - Resolves functions, classes, and member methods to exact line bounds.
+  - Generates `child_symbols` for classes and `enclosing_symbol` for methods.
+- **Ambiguous Symbol Disambiguation**:
+  - Detects duplicate symbol names across different scopes (`is_ambiguous=True`).
+  - Disambiguates using qualified names (`Class.method`), cursor line proximity, or scope hierarchy defaults.
+  - Attaches an informative `ambiguity_note` and full candidate list for transparency.
+- **Direct Bridge to Developer Intelligence**:
+  - `result.to_target_snippet(language)` produces a `TargetSnippet` directly consumed by Meet's `IntelligenceContext` and Dev's `CodeExplanationService`.
+
 ---
 
 ## 5. Import Tracking & Mapping (`ImportTracker`)

@@ -6,6 +6,7 @@ from .import_tracker import FileImportMap, ImportedSymbol, ImportTracker
 from .parser import Parser
 from .source_location import ResolutionResult, SourceLocationResolver
 from .symbols import FileInfo, ParseResult, ScanResult, SourceRange, Symbol, SymbolEdge
+from .target_selector import TargetSelectionResult, TargetSelector
 from .test_mapper import FileTestMapper
 from .walker import FileWalker
 
@@ -25,7 +26,10 @@ __all__ = [
     "SourceLocationResolver",
     "Symbol",
     "SymbolEdge",
+    "TargetSelector",
+    "TargetSelectionResult",
     "FileTestMapper",
     "FileWalker",
 ]
+
 
