@@ -520,7 +520,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
 | Om | `analysis_runs` and `code_findings` database models & Alembic migration | ⬜ Todo |
 | Parth | Authorized file & commit diff retrieval service in `GitHubService` | ⬜ Todo |
-| Prit | AST symbol range resolution & import mapping | ⬜ Todo |
+| Prit | AST symbol range resolution & import mapping | ✅ Done |
 | Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
 | Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ⬜ Todo |
 | Keval | Baseline defect fixtures & Week 2 regression test plan | ⬜ Todo |

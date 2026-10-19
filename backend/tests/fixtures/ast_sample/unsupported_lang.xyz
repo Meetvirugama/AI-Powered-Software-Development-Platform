@@ -1,0 +1,4 @@
+// Custom DSL or unsupported syntax
+ROUTINE main() {
+    EMIT "Hello from unsupported language";
+}

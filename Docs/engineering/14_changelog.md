@@ -377,3 +377,38 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2.md`, `Docs/engineering/00_dashboard.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day1] 2026-10-15 — AST Symbol Range Resolution, Source Location & Import Tracking
+**Type:** Feature  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/parser.py`:
+  - Added `is_language_supported()` and `get_supported_languages()`
+  - Added `parse_with_status()` returning structured `ParseResult` with explicit syntax error detection (`has_syntax_errors`) and unsupported language status
+- `backend/scanner/symbols.py`:
+  - Added `SourceRange` and `ParseResult` dataclasses
+- `backend/scanner/source_location.py`:
+  - Created `SourceLocationResolver` for exact 1-indexed start/end line mapping
+  - Implemented `resolve_symbol_range()` supporting simple and qualified names (`Class.method`)
+  - Implemented `find_enclosing_symbol()` and `find_enclosing_scope()` for tightest scope resolution
+  - Implemented safe `extract_snippet()` with boundary clamping
+  - Implemented `resolve_target()` returning typed `ResolutionResult` with explicit error codes (`UNSUPPORTED_LANGUAGE`, `SYMBOL_NOT_FOUND`, `LINE_OUT_OF_BOUNDS`)
+- `backend/scanner/import_tracker.py`:
+  - Created `ImportTracker` and `FileImportMap`
+  - Added full import parsing for Python (PEP 328 relative/absolute), TypeScript (ES6 named/default/namespace), and JavaScript (CommonJS `require`)
+  - Added automated categorization (standard library vs third-party vs local repo file)
+- `backend/scanner/extractor.py`:
+  - Added Python standard library AST fallback when tree-sitter grammars are unavailable
+- `backend/tests/fixtures/ast_sample/`:
+  - Added fixtures: `supported_python.py`, `supported_typescript.ts`, `supported_javascript.js`, `local_module.py`, `malformed_syntax.py`, `unsupported_lang.xyz`
+- `backend/tests/test_source_location.py`:
+  - 15 unit and integration tests verifying symbol ranges, enclosing symbols, import tracking, and syntax error resilience
+- `Docs/scanner_languages.md`:
+  - Published comprehensive language support specification, line range semantics, and limitations
+
+**Impact:** Provides exact source line mapping and import dependencies for Meet's `IntelligenceContext` and Dev's Code Intelligence features (Explanation, Bug Detection, Test Generation, and Review).
+
+**Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
