@@ -537,6 +537,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 
+- ✅ Prit: `ASTBugAnalyzer` with 10 structural defect rules, exact line range preservation, target scoping, and Devu `StaticFinding` adapter
 - ⬜ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
 - ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
 - ⬜ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding

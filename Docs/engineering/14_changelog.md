@@ -440,5 +440,44 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/scanner_languages.md`
 
+---
+
+### [W2-Day3] 2026-10-20 — AST Rule Integration & Structural Bug Analysis Engine
+**Type:** Feature  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/ast_rules.py`:
+  - Created `ASTBugAnalyzer` and `BaseASTRule` base class for structural defect checking
+  - Implemented 10 deterministic structural defect rules:
+    - `AST-RES-001` (`resource_leak`): Detects unclosed resources allocated outside `with` context managers
+    - `AST-EXC-001` (`unhandled_exception`): Detects bare `except:` or `except Exception:` swallowed with `pass`
+    - `AST-ARG-001` (`logic_error`): Detects mutable default arguments (lists, dicts, sets) in functions
+    - `AST-NULL-001` (`null_dereference`): Flags PEP 8 equality comparisons (`== None`) and dereferencing inside None-check blocks
+    - `AST-ITER-001` (`off_by_one`): Detects modifying collections (`.remove()`, `.append()`, `del`) while actively iterating over them
+    - `AST-LOGIC-001` (`logic_error`): Flags identical if-else execution branches and duplicated elif conditions
+    - `AST-DEAD-001` (`logic_error`): Flags unreachable dead code following unconditional return/raise/break/continue
+    - `AST-SEC-001` (`security`): Detects dangerous dynamic code execution via `eval()`, `exec()`, and `__import__()`
+    - `AST-LOGIC-002` (`logic_error`): Detects redundant self-assignments (`x = x`) and tautological comparisons (`x == x`)
+    - `AST-BOUND-001` (`off_by_one`): Flags index boundary violations such as `items[len(items)]`
+  - Added multi-language Tree-sitter inspection for JavaScript/TypeScript (eval detection and empty catch clauses)
+  - Added explicit `AST-SYNTAX-ERROR` reporting on malformed syntax without crashing repository scans
+  - Enforced exact 1-indexed start/end line range preservation and target scoping (via `SourceRange` and `TargetSelector`)
+  - Added Devu `StaticFinding` normalization adapter (`to_static_findings()`) and standard dictionary serialization
+- `backend/scanner/__init__.py`:
+  - Re-exported `ASTBugAnalyzer`, `ASTBugFinding`, `ASTRuleAnalysisResult`, `BaseASTRule`, and `DEFAULT_RULES`
+- `backend/tests/fixtures/ast_sample/defect_sample.py` & `defect_sample.js`:
+  - Created verified known-defect fixtures containing deterministic defects across all 7 categories
+- `backend/tests/test_ast_rules.py`:
+  - Added comprehensive test suite with 22 unit and integration tests (all passing) verifying rule detection, clean code tolerance, syntax error handling, target scoping, path traversal protection, and static adapter output
+- `Docs/scanner_languages.md`:
+  - Published Section 6 on AST Rule Integration, rule catalog, and bug scanner pipeline contracts
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Marked Prit's Day 3 AST Rule Integration deliverable as completed
+
+**Impact:** Provides deterministic, AST-backed defect detection that Devu's `StaticBugScanner` and Yug's Bug Detection API (`POST /api/v1/repositories/{id}/detect-bugs`) can directly merge with external scanner and AI findings.
+
+**Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 

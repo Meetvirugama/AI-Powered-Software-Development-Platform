@@ -154,9 +154,50 @@ When an unsupported language or unparseable input is provided:
 
 ---
 
-## 7. Verification & Acceptance Gate
+## 7. AST Rule Integration & Structural Bug Analysis (`ASTBugAnalyzer`)
 
-The AST and source location foundation is verified by automated test suites:
-- `backend/tests/test_source_location.py`: 15 unit and integration tests verifying exact range extraction, scope resolution, import tracking, and syntax error tolerance.
-- `backend/tests/test_repository_engine.py`: 14 end-to-end scanner tests verifying file counts, language detection, and symbol counts across all 3 standard fixtures (`python_sample`, `nodejs_sample`, `typescript_sample`).
-- `backend/tests/test_detector.py` & `backend/tests/test_test_mapper.py`: Language detection and test mapping suites.
+**Owner:** Prit — Repository Engine Lead  
+**Task:** W2-Day3 — AST Rule Integration  
+**Milestone:** Week 2 — Dedicated Bug Detection Foundation  
+
+`backend/scanner/ast_rules.py` provides high-precision structural defect detection directly on syntax trees without requiring external dependencies or executing untrusted code:
+
+### 7.1 Built-in Rule Catalog
+
+| Rule ID | Category | Severity | Target Pattern | Suggested Remediation |
+|---|---|---|---|---|
+| **`AST-RES-001`** | `resource_leak` | High | `open()` or `socket()` assigned without a `with` context manager | Wrap allocation in `with open(...) as ...:` or close in `finally`. |
+| **`AST-EXC-001`** | `unhandled_exception` | High / Med | Bare `except:` or `except Exception:` swallowed with `pass` / empty body | Specify explicit exception classes and log or re-raise errors. |
+| **`AST-ARG-001`** | `logic_error` | Medium | Mutable default argument (`items=[]`, `config={}`) in function signatures | Default to `None` and initialize the container inside the function body. |
+| **`AST-NULL-001`** | `null_dereference` | Crit / Low | PEP 8 equality check `== None` or accessing `.attr` inside `if x is None:` block | Use `is None` / `is not None` and guard dereferences. |
+| **`AST-ITER-001`** | `off_by_one` | High | Mutating a collection (`.remove()`, `.append()`, `del`) while actively iterating over it | Iterate over a copy (`list(items)`) or use list comprehensions. |
+| **`AST-LOGIC-001`** | `logic_error` | Medium | Structurally identical if/else branches or duplicate elif condition checks | Provide distinct branch logic or eliminate redundant condition checks. |
+| **`AST-DEAD-001`** | `logic_error` | Low | Unreachable code statements following unconditional `return`, `raise`, `break`, or `continue` | Remove or relocate dead statements. |
+| **`AST-SEC-001`** | `security` | Critical | Dynamic execution via `eval()`, `exec()`, or `__import__()` | Replace with safe parsers like `ast.literal_eval()` or structured validation. |
+| **`AST-LOGIC-002`** | `logic_error` | Medium / Low | Redundant self-assignment (`x = x`) or tautological comparison (`x == x`) | Remove self-assignment or correct comparator variable name. |
+| **`AST-BOUND-001`** | `off_by_one` | High | Directly indexing an array with `items[len(items)]` causing `IndexError` | Use `items[-1]` for the last element or `range(len(items))`. |
+| **`AST-SYNTAX-ERROR`** | `syntax_error` | Critical | Malformed syntax caught during parsing (exact line and column preserved) | Fix syntax error so the file can be cleanly parsed. |
+
+### 7.2 Multi-Language Tree-sitter Checking
+
+In addition to Python standard library AST traversal, `ASTBugAnalyzer` evaluates Tree-sitter concrete syntax trees for JavaScript and TypeScript:
+- **`eval()` Detection**: Identifies call expressions targeting `eval()` in `.js` and `.ts` files.
+- **Empty Catch Blocks**: Identifies catch clauses with 0 statement children that swallow exceptions without handling or logging.
+
+### 7.3 Integration with Static Analysis and API Pipelines
+
+- **Devu's Static Findings Pipeline**: `analyzer.to_static_findings(findings)` maps `ASTBugFinding` into normalized `StaticFinding` dictionaries (`scanner="ast_rules"`), allowing Devu's `StaticReviewer` to merge AST and linter findings without schema friction.
+- **Target Range Scoping**: When a user selects a symbol or range in Dhramraj's UI, `analyze_code(content, target_symbol="my_func")` filters findings to the exact target boundaries `[start_line, end_line]`.
+- **Zero-Crash & Path Traversal Guards**: Parsing failures return structured results with `parse_status="SYNTAX_WARNING"` or `"PARSE_ERROR"`. `analyze_file` strictly validates repository root boundaries, blocking path traversal attempts.
+
+---
+
+## 8. Verification & Acceptance Gate
+
+The AST, source location, and rule foundation is verified by automated test suites:
+- `backend/tests/test_ast_rules.py`: 22 unit and integration tests verifying all 10 structural rules, clean fixture zero findings, syntax error resilience, symbol/range scoping, path traversal guards, and static findings adapters.
+- `backend/tests/test_target_selector.py`: 14 tests verifying target selection across files, symbols, qualified methods, ambiguous names, and TargetSnippet conversion.
+- `backend/tests/test_source_location.py`: 15 tests verifying exact range extraction, scope resolution, import tracking, and syntax error tolerance.
+- `backend/tests/test_repository_engine.py`: 14 scanner integration tests across Python, Node.js, and TypeScript fixtures.
+- `backend/tests/test_detector.py`, `backend/tests/test_test_mapper.py`, `backend/tests/test_walker.py`: Baseline scanner regression suites.
+

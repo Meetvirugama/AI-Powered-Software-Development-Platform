@@ -57,7 +57,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-04 | Analysis API routing (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) | Yug | P0 | IN PROGRESS | Validated request/response schemas & repository auth |
 | W2-05 | Analysis run persistence (`analysis_runs`, `code_findings`) | Om | P0 | IN PROGRESS | SQLAlchemy models, Alembic migration & history query |
 | W2-06 | GitHub source service (files, commits, PR diffs) | Parth | P0 | IN PROGRESS | Authorized diff provider, revision integrity |
-| W2-07 | AST symbol range resolution & import tracking | Prit | P0 | DONE | Exact start/end line mapping for selected symbols, SourceLocationResolver & ImportTracker |
+| W2-07 | AST symbol range resolution, target selector & rule integration | Prit | P0 | DONE | Exact line mapping, `TargetSelector`, and `ASTBugAnalyzer` with 10 structural rules |
 | W2-08 | Static scanner adapter (Ruff, Bandit, secret scanner) | Devu | P0 | IN PROGRESS | Normalized static finding schemas & deduplication |
 | W2-09 | Prompt-injection boundaries & secret redaction | Sukun | P0 | IN PROGRESS | Untrusted code boundaries & security test suite |
 | W2-10 | QA defect fixtures & acceptance test matrix | Keval | P0 | IN PROGRESS | Fixture repository with known bugs, QA evaluation suite |

@@ -1,4 +1,5 @@
 # Initialize the scanner module
+from .ast_rules import ASTBugAnalyzer, ASTBugFinding, ASTRuleAnalysisResult, BaseASTRule, DEFAULT_RULES
 from .detector import LanguageDetector
 from .extractor import SymbolExtractor
 from .graph import DependencyGraphBuilder
@@ -11,6 +12,11 @@ from .test_mapper import FileTestMapper
 from .walker import FileWalker
 
 __all__ = [
+    "ASTBugAnalyzer",
+    "ASTBugFinding",
+    "ASTRuleAnalysisResult",
+    "BaseASTRule",
+    "DEFAULT_RULES",
     "LanguageDetector",
     "SymbolExtractor",
     "DependencyGraphBuilder",
