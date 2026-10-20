@@ -2,6 +2,7 @@
 from .ast_rules import ASTBugAnalyzer, ASTBugFinding, ASTRuleAnalysisResult, BaseASTRule, DEFAULT_RULES
 from .detector import LanguageDetector
 from .extractor import SymbolExtractor
+from .framework_detector import FrameworkDetectionResult, FrameworkDetector
 from .graph import DependencyGraphBuilder
 from .import_tracker import FileImportMap, ImportedSymbol, ImportTracker
 from .parser import Parser
@@ -17,6 +18,8 @@ __all__ = [
     "ASTRuleAnalysisResult",
     "BaseASTRule",
     "DEFAULT_RULES",
+    "FrameworkDetector",
+    "FrameworkDetectionResult",
     "LanguageDetector",
     "SymbolExtractor",
     "DependencyGraphBuilder",
