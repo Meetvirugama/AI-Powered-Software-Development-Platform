@@ -364,3 +364,8 @@ class GitHubService(GitHubIntegrationBase):
 
         logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
         return str(target)
+
+
+# Re-export GitHubSourceService for backwards compatibility with Week 2 source routes
+from .source_service import GitHubSourceService  # noqa: E402
+
