@@ -20,6 +20,10 @@ from ai.context.builder import (
     TargetSnippet,
     count_tokens,
 )
+from ai.context.explanation import (
+    ExplanationContextEnricher,
+    enrich_explanation_context,
+)
 
 __all__ = [
     "AgentContext",
@@ -27,6 +31,7 @@ __all__ = [
     "ContextBuilder",
     "ContextLimits",
     "ContextStatus",
+    "ExplanationContextEnricher",
     "IntelligenceContext",
     "IntelligenceContextRequest",
     "IntelligenceContextResponse",
@@ -36,4 +41,5 @@ __all__ = [
     "SymbolContext",
     "TargetSnippet",
     "count_tokens",
+    "enrich_explanation_context",
 ]
