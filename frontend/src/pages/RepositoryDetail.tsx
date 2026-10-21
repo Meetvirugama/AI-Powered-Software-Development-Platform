@@ -11,6 +11,10 @@ import {
 } from '../hooks/useRepositories';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import { FileTree } from '../components/explorer/FileTree';
+import { CodeViewer } from '../components/explorer/CodeViewer';
+import { AnalysisActionBar } from '../components/explorer/AnalysisActionBar';
+import { AnalysisResultPanel } from '../components/explorer/AnalysisResultPanel';
 import { cn } from '../lib/utils';
 import {
   MessageSquare,
@@ -19,14 +23,11 @@ import {
   RefreshCw,
   XCircle,
   Clock,
-  Folder,
-  FolderOpen,
   FileText,
   FileCode,
   Box,
   Database,
   Code,
-  File,
   Trash2,
   RotateCw,
   X,
@@ -35,11 +36,11 @@ import {
   Check,
   Maximize2,
   GitBranch,
-  ChevronRight,
-  ChevronDown,
   Layers,
+  Sparkles,
 } from 'lucide-react';
 import type { SyncStage, RepositoryFile } from '../types/api';
+import type { AnalysisFeatureType, AnalysisTarget, AnalysisStatus } from '../types/analysis';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -59,6 +60,14 @@ export function RepositoryDetail() {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [dependencyFilter, setDependencyFilter] = useState('');
+
+  // ------------------------------------------------------------------
+  // Week 2 Developer Intelligence State
+  // ------------------------------------------------------------------
+  const [activeFeature, setActiveFeature] = useState<AnalysisFeatureType | null>(null);
+  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('IDLE');
+  const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   // ------------------------------------------------------------------
   // Mutations
@@ -105,6 +114,17 @@ export function RepositoryDetail() {
     return readme ?? filesData.items[0];
   }, [userSelectedFile, filesData]);
 
+  // Derived active target: defaults to full file unless user targeted a symbol/range on current file
+  const activeTarget: AnalysisTarget = useMemo(() => {
+    if (customTarget && customTarget.path === selectedFile?.path) {
+      return customTarget;
+    }
+    return {
+      type: 'file',
+      path: selectedFile?.path ?? '',
+    };
+  }, [customTarget, selectedFile]);
+
   function handleSync() {
     if (id) triggerSync(id);
   }
@@ -128,6 +148,34 @@ export function RepositoryDetail() {
       (dep) => dep.name.toLowerCase().includes(q) || dep.ecosystem?.toLowerCase().includes(q)
     );
   }, [dependencies, dependencyFilter]);
+
+
+  function handleRunAnalysis(feature: AnalysisFeatureType, target: AnalysisTarget) {
+    setAnalysisStatus('RUNNING');
+    setAnalysisError(null);
+
+    const targetDesc =
+      target.type === 'symbol' && target.symbol
+        ? `${target.path} (${target.symbol})`
+        : target.start_line
+        ? `${target.path}:L${target.start_line}-${target.end_line}`
+        : target.path;
+
+    // Simulate request transition for Day 1 UX testing:
+    // Demonstrates loading state, then transitions to informative Day 1 integration message
+    setTimeout(() => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        `The "${feature}" endpoint for ${targetDesc} is scheduled for integration in Week 2. Backend contracts (POST /api/v1/repositories/${id}/${feature}) are being finalized by Yug and Dev on Day 1.`
+      );
+    }, 600);
+  }
+
+  function handleRetry() {
+    if (activeFeature) {
+      handleRunAnalysis(activeFeature, activeTarget);
+    }
+  }
 
   // ------------------------------------------------------------------
   // Loading & Error States
@@ -516,9 +564,31 @@ export function RepositoryDetail() {
                 <div className="flex items-center gap-1.5 shrink-0">
                   {selectedFile && (
                     <>
+                      {/* Analysis Panel Toggle */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveFeature((prev) => (prev ? null : 'explain'));
+                          setAnalysisStatus('IDLE');
+                          setAnalysisError(null);
+                        }}
+                        className={cn(
+                          'inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
+                          activeFeature
+                            ? 'bg-primary text-primary-foreground shadow-xs'
+                            : 'bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground'
+                        )}
+                        title="Toggle Analysis Result Panel"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        <span className="hidden sm:inline">
+                          {activeFeature ? 'Hide Analysis' : 'Analysis Panel'}
+                        </span>
+                      </button>
+
                       <Link
                         to={`/app/repositories/${repo.id}/chat?file=${encodeURIComponent(selectedFile.path)}`}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                         title="Ask AI about this file"
                       >
                         <MessageSquare className="h-3 w-3" />
@@ -538,11 +608,24 @@ export function RepositoryDetail() {
                 </div>
               </div>
 
+              {/* Developer Intelligence Action Bar */}
+              {selectedFile && (
+                <AnalysisActionBar
+                  activeFeature={activeFeature}
+                  activeTarget={activeTarget}
+                  onSelectFeature={(feat) => {
+                    setActiveFeature((prev) => (prev === feat ? null : feat));
+                    setAnalysisStatus('IDLE');
+                    setAnalysisError(null);
+                  }}
+                />
+              )}
+
               {/* Workbench Split Workspace */}
               <div className="flex-1 min-h-0 flex flex-col sm:flex-row overflow-hidden">
                 {/* Sub-pane 1: Interactive File Tree (Scrollable) */}
-                <div className="w-full sm:w-60 lg:w-72 border-b sm:border-b-0 sm:border-r border-border flex flex-col shrink-0 min-h-0 bg-muted/10">
-                  <FileExplorerPane
+                <div className="w-full sm:w-56 lg:w-64 border-b sm:border-b-0 sm:border-r border-border flex flex-col shrink-0 min-h-0 bg-muted/10">
+                  <FileTree
                     files={filesData?.items ?? []}
                     isLoading={filesLoading}
                     isError={filesError}
@@ -554,9 +637,12 @@ export function RepositoryDetail() {
                 {/* Sub-pane 2: Code Viewer & Symbols (Scrollable) */}
                 <div className="flex-1 min-w-0 flex flex-col min-h-0 bg-background/40">
                   {selectedFile && id ? (
-                    <InlineCodeViewer
+                    <CodeViewer
+                      key={selectedFile.id}
                       repositoryId={id}
                       file={selectedFile}
+                      activeTarget={activeTarget}
+                      onTargetChange={setCustomTarget}
                     />
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
@@ -568,6 +654,21 @@ export function RepositoryDetail() {
                     </div>
                   )}
                 </div>
+
+                {/* Sub-pane 3: Reusable Analysis Result Panel */}
+                {activeFeature && selectedFile && (
+                  <div className="w-full sm:w-80 lg:w-96 border-t sm:border-t-0 sm:border-l border-border flex flex-col shrink-0 min-h-0">
+                    <AnalysisResultPanel
+                      feature={activeFeature}
+                      target={activeTarget}
+                      status={analysisStatus}
+                      error={analysisError}
+                      onClose={() => setActiveFeature(null)}
+                      onRunAnalysis={handleRunAnalysis}
+                      onRetry={handleRetry}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -586,319 +687,6 @@ export function RepositoryDetail() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// File Explorer Pane (Interactive Search & Collapsible Tree)
-// ---------------------------------------------------------------------------
-
-function FileExplorerPane({
-  files,
-  isLoading,
-  isError,
-  selectedFile,
-  onSelectFile,
-}: {
-  files: RepositoryFile[];
-  isLoading: boolean;
-  isError: boolean;
-  selectedFile: RepositoryFile | null;
-  onSelectFile: (file: RepositoryFile) => void;
-}) {
-  const [filter, setFilter] = useState('');
-  const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
-
-  function toggleDir(dirName: string) {
-    setCollapsedDirs((prev) => ({
-      ...prev,
-      [dirName]: !prev[dirName],
-    }));
-  }
-
-  // Filter files
-  const filteredFiles = useMemo(() => {
-    if (!filter.trim()) return files;
-    const q = filter.toLowerCase();
-    return files.filter((f) => f.path.toLowerCase().includes(q));
-  }, [files, filter]);
-
-  // Group into directories
-  const { rootFiles, directories } = useMemo(() => {
-    const rf: RepositoryFile[] = [];
-    const dirs = new Map<string, RepositoryFile[]>();
-
-    for (const file of filteredFiles) {
-      const parts = file.path.split('/').filter(Boolean);
-      const isDir = file.path.endsWith('/');
-
-      if (parts.length === 1) {
-        if (isDir) {
-          if (!dirs.has(parts[0])) dirs.set(parts[0], []);
-        } else {
-          rf.push(file);
-        }
-      } else if (parts.length >= 2) {
-        const rootDir = parts[0];
-        if (!dirs.has(rootDir)) dirs.set(rootDir, []);
-        dirs.get(rootDir)!.push(file);
-      }
-    }
-
-    rf.sort((a, b) => a.path.localeCompare(b.path));
-    const sorted = Array.from(dirs.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-    return { rootFiles: rf, directories: sorted };
-  }, [filteredFiles]);
-
-  const getFileIcon = (filename: string) => {
-    if (filename.endsWith('.md')) return <FileText className="h-3.5 w-3.5 text-muted-foreground" />;
-    if (filename.match(/\.(js|jsx|ts|tsx)$/)) return <FileCode className="h-3.5 w-3.5 text-blue-400" />;
-    if (filename.match(/\.(py)$/)) return <FileCode className="h-3.5 w-3.5 text-amber-400" />;
-    if (filename.match(/\.(json|yaml|yml|toml)$/)) return <FileCode className="h-3.5 w-3.5 text-emerald-400" />;
-    return <File className="h-3.5 w-3.5 text-muted-foreground" />;
-  };
-
-  return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      {/* Search files header */}
-      <div className="p-2 border-b border-border/60 bg-background/50 shrink-0">
-        <div className="relative flex items-center">
-          <Search className="h-3 w-3 absolute left-2.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter files…"
-            className="w-full pl-7 pr-7 py-1 text-xs rounded-md bg-muted/20 border border-border text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary transition-colors font-mono"
-          />
-          {filter && (
-            <button
-              onClick={() => setFilter('')}
-              className="absolute right-2 text-muted-foreground hover:text-foreground"
-              aria-label="Clear file filter"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Tree list */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 text-xs font-mono select-none space-y-0.5">
-        {isLoading ? (
-          <div className="flex justify-center py-8">
-            <LoadingSpinner size="sm" label="Loading tree…" />
-          </div>
-        ) : isError ? (
-          <p className="text-xs text-destructive p-2">Failed to load files.</p>
-        ) : filteredFiles.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic p-2 text-center">
-            {filter ? `No files matching "${filter}"` : 'No files indexed yet.'}
-          </p>
-        ) : (
-          <>
-            {directories.map(([dirName, children]) => {
-              const isCollapsed = Boolean(collapsedDirs[dirName]);
-              return (
-                <div key={dirName} className="mb-0.5">
-                  <button
-                    type="button"
-                    onClick={() => toggleDir(dirName)}
-                    className="flex items-center gap-1.5 w-full py-1 px-1.5 hover:bg-accent/60 rounded text-foreground font-medium transition-colors text-left"
-                  >
-                    {isCollapsed ? (
-                      <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                    )}
-                    {isCollapsed ? (
-                      <Folder className="h-3.5 w-3.5 text-amber-500 fill-amber-500/20" />
-                    ) : (
-                      <FolderOpen className="h-3.5 w-3.5 text-amber-500 fill-amber-500/20" />
-                    )}
-                    <span className="truncate flex-1">{dirName}</span>
-                    <span className="text-[10px] text-muted-foreground/60 font-mono">
-                      {children.length}
-                    </span>
-                  </button>
-
-                  {!isCollapsed && children.length > 0 && (
-                    <div className="ml-3 border-l border-border/60 pl-1.5 my-0.5 space-y-0.5">
-                      {children.map((child) => {
-                        const childName = child.path.startsWith(dirName + '/')
-                          ? child.path.slice(dirName.length + 1)
-                          : child.path;
-                        const isChildDir = child.path.endsWith('/');
-                        const isSelected = selectedFile?.id === child.id;
-
-                        return (
-                          <button
-                            key={child.id}
-                            type="button"
-                            onClick={() => !isChildDir && onSelectFile(child)}
-                            className={cn(
-                              'flex w-full items-center gap-1.5 py-1 px-1.5 rounded text-left transition-colors',
-                              isSelected
-                                ? 'bg-primary/15 text-primary font-medium border-l-2 border-primary'
-                                : isChildDir
-                                ? 'cursor-default text-muted-foreground'
-                                : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-                            )}
-                          >
-                            {isChildDir ? (
-                              <Folder className="h-3.5 w-3.5 text-amber-500" />
-                            ) : (
-                              getFileIcon(childName)
-                            )}
-                            <span className="truncate flex-1">{childName}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {rootFiles.map((file) => {
-              const isSelected = selectedFile?.id === file.id;
-              return (
-                <button
-                  key={file.id}
-                  type="button"
-                  onClick={() => onSelectFile(file)}
-                  className={cn(
-                    'flex w-full items-center gap-1.5 py-1 px-1.5 rounded text-left transition-colors',
-                    isSelected
-                      ? 'bg-primary/15 text-primary font-medium border-l-2 border-primary'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
-                  )}
-                >
-                  {getFileIcon(file.path)}
-                  <span className="truncate flex-1">{file.path}</span>
-                </button>
-              );
-            })}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Inline Code Viewer (Embedded Inside Workbench Split View)
-// ---------------------------------------------------------------------------
-
-function InlineCodeViewer({
-  repositoryId,
-  file,
-}: {
-  repositoryId: string;
-  file: RepositoryFile;
-}) {
-  const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
-  const [copied, setCopied] = useState(false);
-
-  async function handleCopy() {
-    if (!fileData?.content) return;
-    try {
-      await navigator.clipboard.writeText(fileData.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Ignore clipboard write failures
-    }
-  }
-
-  const content = fileData?.content;
-  const lines = useMemo(() => (content ? content.split('\n') : []), [content]);
-
-
-  return (
-    <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-      {/* Symbols Strip (if any extracted) */}
-      {fileData?.symbols && fileData.symbols.length > 0 && (
-        <div className="shrink-0 px-3 py-1.5 border-b border-border/60 bg-muted/20 flex items-center gap-1.5 overflow-x-auto text-xs">
-          <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider shrink-0 mr-1">
-            Symbols ({fileData.symbols.length}):
-          </span>
-          {fileData.symbols.slice(0, 15).map((sym) => (
-            <span
-              key={sym.id}
-              className="inline-flex items-center gap-1 rounded bg-background border border-border/60 px-1.5 py-0.5 text-[10px] text-foreground font-mono shrink-0"
-              title={`${sym.kind} ${sym.name} (Lines ${sym.start_line}-${sym.end_line})`}
-            >
-              <span className="text-primary font-bold">{sym.kind}</span>
-              <span>{sym.name}</span>
-              <span className="text-muted-foreground text-[9px]">L{sym.start_line}</span>
-            </span>
-          ))}
-          {fileData.symbols.length > 15 && (
-            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
-              +{fileData.symbols.length - 15} more
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Code Viewer Body */}
-      <div className="flex-1 min-h-0 overflow-auto relative">
-        {/* Floating copy button */}
-        {fileData?.content && (
-          <button
-            onClick={handleCopy}
-            className="absolute top-2 right-3 z-10 inline-flex items-center gap-1 px-2 py-1 rounded bg-card/80 backdrop-blur-sm border border-border text-[11px] font-mono text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shadow-sm"
-            title="Copy code to clipboard"
-            aria-label="Copy code to clipboard"
-          >
-            {copied ? (
-              <>
-                <Check className="h-3 w-3 text-emerald-400" />
-                <span className="text-emerald-400">Copied</span>
-              </>
-            ) : (
-              <>
-                <Copy className="h-3 w-3" />
-                <span>Copy</span>
-              </>
-            )}
-          </button>
-        )}
-
-        {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-2">
-            <LoadingSpinner size="md" label="Loading code…" />
-            <span className="text-xs text-muted-foreground font-mono">Retrieving indexed chunks…</span>
-          </div>
-        ) : isError ? (
-          <div className="p-6 text-center text-xs text-destructive">
-            Could not retrieve file content. Chunks might still be indexing.
-          </div>
-        ) : !fileData?.content ? (
-          <div className="p-6 text-center text-xs text-muted-foreground italic">
-            Empty file or non-indexed binary content.
-          </div>
-        ) : (
-          <div className="flex min-w-full font-mono text-xs leading-5">
-            {/* Line numbers gutter */}
-            <div className="shrink-0 py-3 px-3 text-right text-muted-foreground/40 select-none bg-muted/5 border-r border-border/40 font-mono text-[11px]">
-              {lines.map((_, i) => (
-                <div key={i}>{i + 1}</div>
-              ))}
-            </div>
-
-            {/* Code content */}
-            <div className="flex-1 py-3 px-4 text-foreground whitespace-pre overflow-x-auto">
-              {lines.map((line, i) => (
-                <div key={i} className="hover:bg-accent/20">
-                  {line || '\n'}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // File Preview Modal (Inspect Code & Extracted Symbols Fullscreen)
