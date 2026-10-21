@@ -28,6 +28,10 @@ from ai.context.explanation import (
     ExplanationContextEnricher,
     enrich_explanation_context,
 )
+from ai.context.test_context import (
+    TestContextBuilder,
+    build_test_generation_context,
+)
 
 __all__ = [
     "AgentContext",
@@ -45,7 +49,9 @@ __all__ = [
     "RepositoryFile",
     "SymbolContext",
     "TargetSnippet",
+    "TestContextBuilder",
     "count_tokens",
+    "build_test_generation_context",
     "enrich_explanation_context",
     "extract_bug_context",
 ]
