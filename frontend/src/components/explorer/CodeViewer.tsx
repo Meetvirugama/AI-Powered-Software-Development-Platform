@@ -1,16 +1,19 @@
-import { useState, useMemo, useRef } from 'react';
-import { Copy, Check, Hash, Layers, X, Target } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect } from 'react';
+import { Copy, Check, Hash, Layers, X, Target, Sparkles } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { useRepositoryFileContent } from '../../hooks/useRepositories';
 import { cn } from '../../lib/utils';
 import type { RepositoryFile, CodeSymbol } from '../../types/api';
-import type { AnalysisTarget } from '../../types/analysis';
+import type { AnalysisTarget, SourceReference } from '../../types/analysis';
 
 export interface CodeViewerProps {
   repositoryId: string;
   file: RepositoryFile;
   activeTarget: AnalysisTarget;
   onTargetChange: (target: AnalysisTarget) => void;
+  highlightedSource?: SourceReference | null;
+  onClearHighlightedSource?: () => void;
+  onTriggerExplain?: () => void;
   className?: string;
 }
 
@@ -194,6 +197,9 @@ export function CodeViewer({
   file,
   activeTarget,
   onTargetChange,
+  highlightedSource,
+  onClearHighlightedSource,
+  onTriggerExplain,
   className,
 }: CodeViewerProps) {
   const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
@@ -209,6 +215,21 @@ export function CodeViewer({
     return lines.map((line) => tokenizeLine(line, file.language || file.path));
   }, [lines, file.language, file.path]);
 
+  // Auto-scroll to cited reference when set
+  useEffect(() => {
+    if (
+      highlightedSource &&
+      highlightedSource.file_path === file.path &&
+      typeof highlightedSource.start_line === 'number'
+    ) {
+      const lineEl = codeContainerRef.current?.querySelector(
+        `[data-line="${highlightedSource.start_line}"]`
+      );
+      if (lineEl) {
+        lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [highlightedSource, file.path]);
 
   async function handleCopy() {
     if (!content) return;
@@ -273,11 +294,17 @@ export function CodeViewer({
     typeof activeTarget.start_line === 'number' &&
     typeof activeTarget.end_line === 'number';
 
+  const isCitedSourceActive =
+    Boolean(highlightedSource) &&
+    highlightedSource?.file_path === file.path &&
+    typeof highlightedSource?.start_line === 'number' &&
+    typeof highlightedSource?.end_line === 'number';
+
   return (
     <div className={cn('flex-1 min-h-0 flex flex-col overflow-hidden', className)}>
       {/* Target Status Banner (shows active scope: entire file vs selected symbol/range) */}
-      <div className="shrink-0 px-3 py-1.5 border-b border-border/70 bg-muted/30 flex items-center justify-between text-xs font-mono">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="shrink-0 px-3 py-1.5 border-b border-border/70 bg-muted/30 flex items-center justify-between text-xs font-mono gap-2 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0 flex-wrap">
           <Target className="h-3.5 w-3.5 text-primary shrink-0" />
           <span className="text-muted-foreground text-[11px]">Analysis Target:</span>
           {activeTarget.type === 'symbol' && activeTarget.symbol ? (
@@ -302,20 +329,52 @@ export function CodeViewer({
               Entire file <span className="text-muted-foreground">({lines.length} lines)</span>
             </span>
           )}
+
+          {/* Active Cited Source Badge */}
+          {isCitedSourceActive && highlightedSource && (
+            <span className="inline-flex items-center gap-1 text-cyan-400 font-medium bg-cyan-500/15 px-2 py-0.5 rounded border border-cyan-500/30 text-[10px]">
+              <span>Cited: L{highlightedSource.start_line}–L{highlightedSource.end_line}</span>
+              {onClearHighlightedSource && (
+                <button
+                  type="button"
+                  onClick={onClearHighlightedSource}
+                  className="hover:text-foreground ml-0.5"
+                  title="Clear cited highlight"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
+            </span>
+          )}
         </div>
 
-        {activeTarget.type !== 'file' && (
-          <button
-            type="button"
-            onClick={handleResetTarget}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            title="Reset target to entire file"
-          >
-            <X className="h-3 w-3" />
-            <span>Target Full File</span>
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onTriggerExplain && (
+            <button
+              type="button"
+              onClick={onTriggerExplain}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground transition-all shadow-xs"
+              title="Explain current target"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>Explain Target</span>
+            </button>
+          )}
+
+          {activeTarget.type !== 'file' && (
+            <button
+              type="button"
+              onClick={handleResetTarget}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="Reset target to entire file"
+            >
+              <X className="h-3 w-3" />
+              <span>Target Full File</span>
+            </button>
+          )}
+        </div>
       </div>
+
 
       {/* Extracted Symbols Strip */}
       {fileData?.symbols && fileData.symbols.length > 0 && (
@@ -404,6 +463,11 @@ export function CodeViewer({
                   activeTarget.start_line! <= lineNum &&
                   lineNum <= activeTarget.end_line!;
 
+                const isInCited =
+                  isCitedSourceActive &&
+                  highlightedSource.start_line <= lineNum &&
+                  lineNum <= highlightedSource.end_line;
+
                 return (
                   <button
                     key={lineNum}
@@ -411,7 +475,11 @@ export function CodeViewer({
                     onClick={(e) => handleLineClick(lineNum, e)}
                     className={cn(
                       'block w-full px-3 text-right hover:text-foreground hover:bg-accent/40 cursor-pointer transition-colors',
-                      isInTarget && 'bg-primary/20 text-primary font-bold'
+                      isInTarget
+                        ? 'bg-primary/20 text-primary font-bold'
+                        : isInCited
+                        ? 'bg-cyan-500/20 text-cyan-300 font-bold border-r-2 border-cyan-400'
+                        : undefined
                     )}
                     title={`Click to select line ${lineNum} (Shift+click for range)`}
                   >
@@ -430,13 +498,21 @@ export function CodeViewer({
                   activeTarget.start_line! <= lineNum &&
                   lineNum <= activeTarget.end_line!;
 
+                const isInCited =
+                  isCitedSourceActive &&
+                  highlightedSource.start_line <= lineNum &&
+                  lineNum <= highlightedSource.end_line;
+
                 return (
                   <div
                     key={lineNum}
+                    data-line={lineNum}
                     className={cn(
                       'px-1 -mx-1 rounded-xs transition-colors',
                       isInTarget
                         ? 'bg-primary/10 border-l-2 border-primary text-foreground'
+                        : isInCited
+                        ? 'bg-cyan-500/10 border-l-2 border-cyan-400 text-foreground'
                         : 'hover:bg-accent/20'
                     )}
                   >
@@ -452,6 +528,7 @@ export function CodeViewer({
           </div>
         )}
       </div>
+
     </div>
   );
 }

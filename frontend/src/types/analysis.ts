@@ -18,6 +18,18 @@ export interface AnalysisTarget {
   start_line?: number;
   end_line?: number;
   symbol?: string | null;
+  revision?: string | null;
+}
+
+export interface AnalysisOptions {
+  include_context?: boolean;
+  max_context_tokens?: number;
+  persist_run?: boolean;
+}
+
+export interface ExplainCodeRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
 }
 
 export type AnalysisStatus =
@@ -32,13 +44,23 @@ export type FindingSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 export type FindingSourceType = 'STATIC' | 'AI' | 'COMBINED';
 
+export type ConfidenceLevel = 'high' | 'medium' | 'low';
+
 export interface SourceReference {
-  repository_id?: string;
+  repository_id?: string | null;
   file_path: string;
   start_line: number;
   end_line: number;
-  revision?: string;
+  revision?: string | null;
   symbol_name?: string | null;
+}
+
+export interface SymbolSummary {
+  name: string;
+  kind: string;
+  role: string;
+  start_line?: number | null;
+  end_line?: number | null;
 }
 
 export interface AnalysisFinding {
@@ -54,14 +76,29 @@ export interface AnalysisFinding {
   source_type: FindingSourceType;
 }
 
-export interface CodeExplanationResult {
+export interface CodeExplanation {
   purpose: string;
-  logic_flow?: string[];
-  key_symbols?: string[];
-  inputs_outputs?: string;
-  dependencies?: string[];
-  limitations?: string;
-  sources?: SourceReference[];
+  logic_flow: string[];
+  key_symbols: SymbolSummary[];
+  inputs_and_outputs: string;
+  dependencies: string[];
+  assumptions_and_limitations: string[];
+  sources: SourceReference[];
+  confidence: ConfidenceLevel;
+  missing_context: string[];
+}
+
+/** Backward-compatible alias for CodeExplanation */
+export type CodeExplanationResult = CodeExplanation;
+
+export interface CodeExplanationResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  explanation: CodeExplanation;
+  created_at: string;
 }
 
 export interface BugDetectionResult {
@@ -85,7 +122,7 @@ export interface CodeReviewResult {
 }
 
 export type AnalysisResult =
-  | { type: 'explain'; data: CodeExplanationResult }
+  | { type: 'explain'; data: CodeExplanation }
   | { type: 'bugs'; data: BugDetectionResult }
   | { type: 'tests'; data: TestGenerationResult }
   | { type: 'review'; data: CodeReviewResult };

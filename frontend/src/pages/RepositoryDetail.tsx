@@ -39,8 +39,16 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
+import { useExplainCode } from '../hooks/useAnalysis';
 import type { SyncStage, RepositoryFile } from '../types/api';
-import type { AnalysisFeatureType, AnalysisTarget, AnalysisStatus } from '../types/analysis';
+import type {
+  AnalysisFeatureType,
+  AnalysisTarget,
+  AnalysisStatus,
+  SourceReference,
+  CodeExplanation,
+  SymbolSummary,
+} from '../types/analysis';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,12 +76,28 @@ export function RepositoryDetail() {
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('IDLE');
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
+  const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
 
   // ------------------------------------------------------------------
   // Mutations
   // ------------------------------------------------------------------
   const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
   const { mutate: deleteRepo, isPending: isDeletePending } = useDeleteRepository();
+  const { mutate: triggerExplain, isPending: isExplainPending } = useExplainCode(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus('COMPLETED');
+      setExplanationResult(data.explanation);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Unable to complete code explanation. The AI analysis provider may be temporarily unavailable.'
+      );
+    },
+  });
 
   // ------------------------------------------------------------------
   // Data Fetching
@@ -149,11 +173,35 @@ export function RepositoryDetail() {
     );
   }, [dependencies, dependencyFilter]);
 
-
   function handleRunAnalysis(feature: AnalysisFeatureType, target: AnalysisTarget) {
+    if (analysisStatus === 'RUNNING' || analysisStatus === 'PENDING' || isExplainPending) {
+      // Guard against duplicate simultaneous requests
+      return;
+    }
+
     setAnalysisStatus('RUNNING');
     setAnalysisError(null);
 
+    if (feature === 'explain') {
+      triggerExplain({
+        target: {
+          type: target.type,
+          path: target.path,
+          start_line: target.start_line,
+          end_line: target.end_line,
+          symbol: target.symbol,
+          revision: repo?.default_branch || 'main',
+        },
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+      });
+      return;
+    }
+
+    // Other three feature entry points remain intact as placeholders for Days 3–5
     const targetDesc =
       target.type === 'symbol' && target.symbol
         ? `${target.path} (${target.symbol})`
@@ -161,14 +209,12 @@ export function RepositoryDetail() {
         ? `${target.path}:L${target.start_line}-${target.end_line}`
         : target.path;
 
-    // Simulate request transition for Day 1 UX testing:
-    // Demonstrates loading state, then transitions to informative Day 1 integration message
     setTimeout(() => {
       setAnalysisStatus('FAILED');
       setAnalysisError(
-        `The "${feature}" endpoint for ${targetDesc} is scheduled for integration in Week 2. Backend contracts (POST /api/v1/repositories/${id}/${feature}) are being finalized by Yug and Dev on Day 1.`
+        `The "${feature}" workflow for ${targetDesc} is scheduled for Days 3–5. Week 2 Day 2 activates the real Code Explanation API.`
       );
-    }, 600);
+    }, 500);
   }
 
   function handleRetry() {
@@ -176,6 +222,32 @@ export function RepositoryDetail() {
       handleRunAnalysis(activeFeature, activeTarget);
     }
   }
+
+  function handleSelectSourceReference(source: SourceReference) {
+    setHighlightedSource(source);
+
+    // If cited reference points to a different file in the repository, navigate to it
+    if (selectedFile && source.file_path !== selectedFile.path && filesData?.items) {
+      const matchingFile = filesData.items.find(
+        (f) => f.path === source.file_path || f.path.endsWith(source.file_path)
+      );
+      if (matchingFile) {
+        setUserSelectedFile(matchingFile);
+      }
+    }
+  }
+
+  function handleSelectSymbolFromExplanation(sym: SymbolSummary) {
+    if (!selectedFile) return;
+    setCustomTarget({
+      type: 'symbol',
+      path: selectedFile.path,
+      symbol: sym.name,
+      start_line: sym.start_line ?? undefined,
+      end_line: sym.end_line ?? undefined,
+    });
+  }
+
 
   // ------------------------------------------------------------------
   // Loading & Error States
@@ -613,6 +685,7 @@ export function RepositoryDetail() {
                 <AnalysisActionBar
                   activeFeature={activeFeature}
                   activeTarget={activeTarget}
+                  disabled={analysisStatus === 'RUNNING' || analysisStatus === 'PENDING'}
                   onSelectFeature={(feat) => {
                     setActiveFeature((prev) => (prev === feat ? null : feat));
                     setAnalysisStatus('IDLE');
@@ -630,7 +703,10 @@ export function RepositoryDetail() {
                     isLoading={filesLoading}
                     isError={filesError}
                     selectedFile={selectedFile}
-                    onSelectFile={(file) => setUserSelectedFile(file)}
+                    onSelectFile={(file) => {
+                      setUserSelectedFile(file);
+                      setHighlightedSource(null);
+                    }}
                   />
                 </div>
 
@@ -643,6 +719,12 @@ export function RepositoryDetail() {
                       file={selectedFile}
                       activeTarget={activeTarget}
                       onTargetChange={setCustomTarget}
+                      highlightedSource={highlightedSource}
+                      onClearHighlightedSource={() => setHighlightedSource(null)}
+                      onTriggerExplain={() => {
+                        setActiveFeature('explain');
+                        handleRunAnalysis('explain', activeTarget);
+                      }}
                     />
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
@@ -663,6 +745,11 @@ export function RepositoryDetail() {
                       target={activeTarget}
                       status={analysisStatus}
                       error={analysisError}
+                      explanation={activeFeature === 'explain' ? explanationResult : null}
+                      sources={explanationResult?.sources || []}
+                      activeSourceReference={highlightedSource}
+                      onSelectSourceReference={handleSelectSourceReference}
+                      onSelectSymbol={handleSelectSymbolFromExplanation}
                       onClose={() => setActiveFeature(null)}
                       onRunAnalysis={handleRunAnalysis}
                       onRetry={handleRetry}

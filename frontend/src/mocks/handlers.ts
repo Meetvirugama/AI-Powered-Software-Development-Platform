@@ -807,5 +807,143 @@ export const handlers = [
       confidence: 'high',
     });
   }),
-];
 
+  // -------------------------------------------------------------------------
+  // Feature 1: Code Explanation (Week 2 Day 2)
+  //
+  // POST /api/v1/repositories/:id/explain
+  //
+  // Matches real backend contract in backend/app/schemas/analysis.py
+  // -------------------------------------------------------------------------
+  http.post(`${BASE}/repositories/:id/explain`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+    let body: any = null;
+    try {
+      body = (await request.json()) as any;
+    } catch {
+      // Malformed body
+    }
+
+    const target = body?.target || {
+      type: 'file',
+      path: body?.path || 'src/main.py',
+    };
+
+    // Error simulation paths for testing
+    if (target.path?.includes('500') || target.path?.includes('fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ANALYSIS_FAILED',
+            message: 'AI analysis output failed validation and could not be repaired.',
+            retryable: false,
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    if (target.path?.includes('503') || target.path?.includes('timeout')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'AI analysis provider is temporarily unavailable. Please try again.',
+            retryable: true,
+          },
+        },
+        { status: 503 }
+      );
+    }
+
+    const filePath = target.path || 'src/main.py';
+    const isSymbol = target.type === 'symbol' && Boolean(target.symbol);
+    const isRange = target.type === 'range' && Boolean(target.start_line);
+
+    const startLine = target.start_line ?? 1;
+    const endLine = target.end_line ?? 25;
+
+    const explanation = {
+      purpose: isSymbol
+        ? `Implements the "${target.symbol}" function to handle core execution logic in ${filePath}.`
+        : isRange
+        ? `Executes procedural logic and input validation between lines ${startLine} and ${endLine} of ${filePath}.`
+        : `Serves as the main module entry point and operational coordinator for ${filePath}.`,
+      logic_flow: [
+        'Inspect incoming arguments and verify preconditions.',
+        'Dispatch operational calls to internal helper routines and dependencies.',
+        'Normalize and validate resulting data structures.',
+        'Return validated execution result or raise typed exception.',
+      ],
+      key_symbols: isSymbol
+        ? [
+            {
+              name: target.symbol,
+              kind: 'function',
+              role: 'Primary target routine under analysis.',
+              start_line: startLine,
+              end_line: endLine,
+            },
+            {
+              name: 'validate_payload',
+              kind: 'function',
+              role: 'Precondition sanitization helper.',
+              start_line: startLine,
+              end_line: Math.min(startLine + 5, endLine),
+            },
+          ]
+        : [
+            {
+              name: 'health_check',
+              kind: 'function',
+              role: 'Returns service health status and diagnostics.',
+              start_line: 9,
+              end_line: 12,
+            },
+            {
+              name: 'app',
+              kind: 'variable',
+              role: 'FastAPI application instance bootstrapping routes.',
+              start_line: 5,
+              end_line: 7,
+            },
+          ],
+      inputs_and_outputs: isSymbol
+        ? `Accepts arguments appropriate for "${target.symbol}"; yields transformed data models or raises APIError.`
+        : `Accepts HTTP requests and CLI bootstrap triggers; emits JSON responses or system status dictionaries.`,
+      dependencies: [
+        'fastapi (HTTP routing and middleware)',
+        'pydantic (schema models and input parsing)',
+        'uvicorn (ASGI server runner)',
+      ],
+      assumptions_and_limitations: [
+        'Assumes standard ASGI environment configuration and accessible port bindings.',
+        'Dynamic caller sites outside the indexed symbol graph cannot be inferred.',
+      ],
+      sources: [
+        {
+          repository_id: id,
+          file_path: filePath,
+          start_line: startLine,
+          end_line: endLine,
+          revision: target.revision ?? 'main',
+          symbol_name: target.symbol ?? null,
+        },
+      ],
+      confidence: 'high' as const,
+      missing_context: isSymbol
+        ? [`No direct test callers found in symbol graph for "${target.symbol}".`]
+        : [],
+    };
+
+    return HttpResponse.json({
+      run_id: 'mock-run-' + Date.now(),
+      repository_id: id,
+      status: 'COMPLETED',
+      target,
+      revision: target.revision ?? 'main',
+      explanation,
+      created_at: new Date().toISOString(),
+    });
+  }),
+];
