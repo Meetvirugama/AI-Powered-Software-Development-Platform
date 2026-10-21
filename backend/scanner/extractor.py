@@ -36,10 +36,13 @@ class SymbolExtractor:
         file_id = file_id or uuid4()
         tree = self.parser.parse(file_info, content)
         if tree is None:
+            if file_info.language == "Python":
+                return self._extract_python_ast(content, file_id)
             return []
 
         symbols: List[Symbol] = []
         lines = content.splitlines()
+
 
         def get_sig(node: Any) -> str:
             start_row = node.start_point[0]
@@ -190,3 +193,104 @@ class SymbolExtractor:
 
         walk(tree.root_node)
         return symbols
+
+    def _extract_python_ast(self, content: str, file_id: UUID) -> List[Symbol]:
+        """Fallback Python AST extractor using python's built-in ast module."""
+        import ast
+
+        symbols: List[Symbol] = []
+        lines = content.splitlines()
+        try:
+            tree = ast.parse(content)
+        except Exception as e:
+            logger.warning(f"Python fallback AST parse error: {e}")
+            return []
+
+        def get_sig(lineno: int) -> str:
+            if 1 <= lineno <= len(lines):
+                return lines[lineno - 1].strip()
+            return ""
+
+        for node in tree.body:
+            try:
+                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                    sig = get_sig(node.lineno)
+                    symbols.append(
+                        Symbol(
+                            id=uuid4(),
+                            name=sig,
+                            kind="import",
+                            file_id=file_id,
+                            start_line=node.lineno,
+                            end_line=getattr(node, "end_lineno", node.lineno),
+                            signature=sig,
+                            parent_id=None,
+                        )
+                    )
+                elif isinstance(node, ast.ClassDef):
+                    sym_id = uuid4()
+                    sig = get_sig(node.lineno)
+                    symbols.append(
+                        Symbol(
+                            id=sym_id,
+                            name=node.name,
+                            kind="class",
+                            file_id=file_id,
+                            start_line=node.lineno,
+                            end_line=getattr(node, "end_lineno", node.lineno),
+                            signature=sig,
+                            parent_id=None,
+                        )
+                    )
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            item_sig = get_sig(item.lineno)
+                            symbols.append(
+                                Symbol(
+                                    id=uuid4(),
+                                    name=item.name,
+                                    kind="method",
+                                    file_id=file_id,
+                                    start_line=item.lineno,
+                                    end_line=getattr(item, "end_lineno", item.lineno),
+                                    signature=item_sig,
+                                    parent_id=sym_id,
+                                )
+                            )
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    sig = get_sig(node.lineno)
+                    symbols.append(
+                        Symbol(
+                            id=uuid4(),
+                            name=node.name,
+                            kind="function",
+                            file_id=file_id,
+                            start_line=node.lineno,
+                            end_line=getattr(node, "end_lineno", node.lineno),
+                            signature=sig,
+                            parent_id=None,
+                        )
+                    )
+                elif isinstance(node, ast.Assign):
+                    sig = get_sig(node.lineno)
+                    target_name = ""
+                    if node.targets and isinstance(node.targets[0], ast.Name):
+                        target_name = node.targets[0].id
+                    symbols.append(
+                        Symbol(
+                            id=uuid4(),
+                            name=target_name or sig,
+                            kind="constant",
+                            file_id=file_id,
+                            start_line=node.lineno,
+                            end_line=getattr(node, "end_lineno", node.lineno),
+                            signature=sig,
+                            parent_id=None,
+                        )
+                    )
+            except Exception as e:
+                logger.warning(f"Error extracting symbol node via fallback: {e}")
+                continue
+
+        return symbols
+

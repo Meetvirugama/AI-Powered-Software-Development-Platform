@@ -1,10 +1,14 @@
 """Per-route rate limiting backed by Redis.
-Owner: Sukun — W1, Day 6 (API Security)
+Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2, Day 1
 
-Limits (Docs/week1.md, Day 6):
-    /auth/github/callback         10 req/min per IP
-    /repositories/:id/sync         5 req/min per user
-    /repositories/:id/chat        30 req/min per user
+Limits (Docs/week1.md, Day 6 & Docs/week2.md, Section 4.6):
+    /auth/github/callback                  10 req/min per IP
+    /repositories/:id/sync                  5 req/min per user
+    /repositories/:id/chat                 30 req/min per user
+    /repositories/:id/explain              20 req/min per user
+    /repositories/:id/detect-bugs          20 req/min per user
+    /repositories/:id/generate-tests       20 req/min per user
+    /repositories/:id/review               20 req/min per user
 
 Algorithm: fixed one-minute window. Each request increments
 ``ratelimit:<rule>:<identity>:<window>`` in Redis; the key expires on its own
@@ -60,6 +64,14 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/sync/?$"), 5, 60, "user"),
         RateLimitRule("repo_chat", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/chat/?$"), 30, 60, "user"),
+        RateLimitRule("repo_explain", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/explain/?$"), 20, 60, "user"),
+        RateLimitRule("repo_detect_bugs", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/detect-bugs/?$"), 20, 60, "user"),
+        RateLimitRule("repo_generate_tests", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/generate-tests/?$"), 20, 60, "user"),
+        RateLimitRule("repo_review", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/review/?$"), 20, 60, "user"),
     )
 
 
