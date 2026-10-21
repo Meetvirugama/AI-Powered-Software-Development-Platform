@@ -537,6 +537,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 
+- ✅ Prit: `ASTBugAnalyzer` with 10 structural defect rules, exact line range preservation, target scoping, and Devu `StaticFinding` adapter
 - ⬜ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
 - ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
 - ✅ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
@@ -546,7 +547,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
-- ⬜ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout
+- ✅ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout, fixture extraction, and test path proposal (`FrameworkDetector`)
 - ✅ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
 - ⬜ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
 - ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions

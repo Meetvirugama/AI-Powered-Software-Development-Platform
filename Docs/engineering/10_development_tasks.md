@@ -57,13 +57,13 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-04 | Analysis API routing (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) | Yug | P0 | IN PROGRESS | Validated request/response schemas & repository auth |
 | W2-05 | Analysis run persistence (`analysis_runs`, `code_findings`) | Om | P0 | IN PROGRESS | SQLAlchemy models, Alembic migration & history query |
 | W2-06 | GitHub source service (files, commits, PR diffs) | Parth | P0 | IN PROGRESS | Authorized diff provider, revision integrity |
-| W2-07 | AST symbol range resolution & import tracking | Prit | P0 | DONE | Exact start/end line mapping for selected symbols, SourceLocationResolver & ImportTracker |
+| W2-07 | AST symbol range resolution, target selector & rule integration | Prit | P0 | DONE | Exact line mapping, `TargetSelector`, and `ASTBugAnalyzer` with 10 structural rules |
 | W2-08 | Static scanner adapter (Ruff, Bandit, secret scanner) | Devu | P0 | IN PROGRESS | Normalized static finding schemas & deduplication |
 | W2-09 | Prompt-injection boundaries & secret redaction | Sukun | P0 | IN PROGRESS | Untrusted code boundaries & security test suite |
 | W2-10 | QA defect fixtures & acceptance test matrix | Keval | P0 | IN PROGRESS | Fixture repository with known bugs, QA evaluation suite |
 | W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | IN PROGRESS | Purpose, logic flow, key symbols, data flow, limitations (Meet context enrichment done) |
 | W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
-| W2-13 | Feature 3: `TestGenerationService` | Dev / Prit | P0 | TODO | Framework detection (`pytest`/`unittest`/`jest`), test file generation |
+| W2-13 | Feature 3: `TestGenerationService` & `FrameworkDetector` | Dev / Prit | P0 | IN PROGRESS | `FrameworkDetector` (DONE - Prit), test file generation (Dev) |
 | W2-14 | Feature 4: `AICodeReviewEngine` | Dev / Parth | P0 | TODO | Correctness, security, performance, maintainability diff review |
 | W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | TODO | Scenarios A–E, zero mock in production, docs update |
 
