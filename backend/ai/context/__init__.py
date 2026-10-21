@@ -28,6 +28,12 @@ from ai.context.explanation import (
     ExplanationContextEnricher,
     enrich_explanation_context,
 )
+from ai.context.review_context import (
+    ModifiedFile,
+    ReviewBlastRadius,
+    ReviewContextBuilder,
+    build_multi_file_review_context,
+)
 from ai.context.test_context import (
     TestContextBuilder,
     build_test_generation_context,
@@ -46,11 +52,15 @@ __all__ = [
     "IntelligenceContextResponse",
     "MemoryEntry",
     "MissingContextInfo",
+    "ModifiedFile",
     "RepositoryFile",
+    "ReviewBlastRadius",
+    "ReviewContextBuilder",
     "SymbolContext",
     "TargetSnippet",
     "TestContextBuilder",
     "count_tokens",
+    "build_multi_file_review_context",
     "build_test_generation_context",
     "enrich_explanation_context",
     "extract_bug_context",
