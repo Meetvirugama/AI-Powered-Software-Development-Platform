@@ -222,14 +222,131 @@ In addition to Python standard library AST traversal, `ASTBugAnalyzer` evaluates
 
 ---
 
-## 9. Verification & Acceptance Gate
+## 9. Review Source Mapping (`ReviewSourceMapper`)
 
-The AST, source location, rules, and framework detector foundation is verified by automated test suites:
+**Owner:** Prit — Repository Engine Lead  
+**Task:** W2-Day5 — Review Source Mapping  
+**Milestone:** Week 2 — Standalone AI Code Review Foundation  
+
+`backend/scanner/source_mapper.py` implements the review source mapping engine that bridges raw git diffs, commits, and patches with AST-level semantic understanding for the Standalone AI Code Review suite (`backend/ai/review/`).
+
+### 9.1 Core Architectural Responsibilities
+
+1. **Diff Parsing & Hunk Extraction**:
+   - Parses unified git diffs (`diff --git`, `--- a/file`, `+++ b/file`, `@@ -old_start,old_count +new_start,new_count @@`).
+   - Tracks modified, added, deleted, and renamed files while preserving old and new paths.
+   - Extracts modified/added line numbers per hunk using standard 1-indexed line math.
+   - Integrates with commit changes (e.g. Parth's `CommitFileChange` dictionaries with `filename`, `patch`, and `status`).
+
+2. **AST Symbol Resolution**:
+   - Maps changed lines to enclosing functions, methods, classes, and scopes.
+   - Computes tightest enclosing symbol (`enclosing_symbol`), scope hierarchy (`enclosing_scopes`), and qualified name (e.g. `AccountManager.update_role`).
+   - Extracts child and sibling symbols intersecting the hunk range.
+   - Generates typed `SymbolSummary` records with 1-indexed inclusive bounds (`start_line`, `end_line`), `kind`, and declaration `signature`.
+
+3. **Structural AST Context & Bug Rule Scoping**:
+   - Generates `HunkASTContext` containing detected syntactic node types, scope hierarchy, and syntax validation status.
+   - Evaluates Prit's `ASTBugAnalyzer` structural rules against the file content, strictly scoping findings to the changed line ranges `[start_line, end_line]`.
+   - Enables the code review engine to identify immediate AST-level defects (e.g. resource leaks, bare exceptions, mutable defaults) introduced in the diff before running LLM evaluation.
+
+4. **Preservation of File and Revision Identity**:
+   - Preserves 1-indexed inclusive line bounds across all hunks and symbol summaries.
+   - Preserves file identity through additions, modifications, renames, and deletions.
+   - Carries git revision metadata (`base_revision`, `head_revision`, `commit_sha`) through the mapping lifecycle.
+   - Provides seamless conversion to downstream contracts:
+     - `to_source_references()`: Generates `AnalysisSourceReference` objects for Dev's review findings pipeline.
+     - `to_modified_files()`: Generates Meet's `ModifiedFile` dataclass objects with `file_path`, `change_type`, and `modified_line_ranges`.
+
+5. **Explicit Mapping Limitation Reporting**:
+   - When precision cannot be achieved, the mapper reports explicit `MappingLimitation` records rather than failing, hallucinating lines, or silently skipping files.
+   - **Supported Limitation Categories**:
+     - `UNSUPPORTED_LANGUAGE`: File format does not have an active AST parser (e.g. Markdown, YAML, Shell).
+     - `MODULE_LEVEL_CODE`: Changed lines reside at top-level module scope outside any function or class declaration.
+     - `DELETED_FILE`: Target file was removed in the diff; AST parsing cannot be performed on the new revision.
+     - `BINARY_FILE`: Binary asset modified; AST parsing is bypassed.
+     - `LINE_OUT_OF_BOUNDS`: Hunk line numbers exceed the total lines in the provided source file.
+     - `SYNTAX_ERROR`: File has fatal syntax errors preventing full symbol resolution (reports exact syntax error location).
+
+### 9.2 Data Contracts
+
+```python
+@dataclass
+class SymbolSummary:
+    name: str
+    kind: str
+    start_line: int
+    end_line: int
+    signature: str = ""
+    qualified_name: str = ""
+
+@dataclass
+class HunkASTContext:
+    node_types: list[str] = field(default_factory=list)
+    scopes: list[str] = field(default_factory=list)
+    syntax_valid: bool = True
+    structural_bug_findings: list[dict[str, Any]] = field(default_factory=list)
+    details: dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class MappingLimitation:
+    limitation_type: str  # "UNSUPPORTED_LANGUAGE" | "MODULE_LEVEL_CODE" | "DELETED_FILE" | ...
+    file_path: str
+    hunk_index: int | None = None
+    line_number: int | None = None
+    reason: str = ""
+
+@dataclass
+class HunkMapping:
+    old_start: int
+    old_lines: int
+    new_start: int
+    new_lines: int
+    header: str
+    modified_line_ranges: list[tuple[int, int]]
+    added_lines: list[int]
+    enclosing_symbol: SymbolSummary | None = None
+    enclosing_scopes: list[str] = field(default_factory=list)
+    intersecting_symbols: list[SymbolSummary] = field(default_factory=list)
+    ast_context: HunkASTContext | None = None
+    limitations: list[MappingLimitation] = field(default_factory=list)
+    hunk_text: str = ""
+
+@dataclass
+class FileSourceMapping:
+    file_path: str
+    old_path: str | None = None
+    change_type: str = "modified"  # "modified" | "added" | "deleted" | "renamed"
+    language: str = "unknown"
+    is_supported: bool = True
+    hunks: list[HunkMapping] = field(default_factory=list)
+    all_symbols: list[SymbolSummary] = field(default_factory=list)
+    limitations: list[MappingLimitation] = field(default_factory=list)
+    revision: str | None = None
+
+@dataclass
+class ReviewSourceMapResult:
+    files: list[FileSourceMapping] = field(default_factory=list)
+    total_files: int = 0
+    total_hunks: int = 0
+    limitations: list[MappingLimitation] = field(default_factory=list)
+    commit_sha: str | None = None
+    base_revision: str | None = None
+    head_revision: str | None = None
+    success: bool = True
+    error: str | None = None
+```
+
+---
+
+## 10. Verification & Acceptance Gate
+
+The AST, source location, rules, framework detector, and review source mapping foundation is verified by 95 automated test suites:
+- `backend/tests/test_source_mapper.py`: 21 unit and integration tests verifying diff header parsing, hunk boundary math, symbol mapping (functions, classes, methods), multi-language AST context (Python, TypeScript), scoped AST defect rule evaluation, file additions, renames, deletions, boundary out-of-bounds, syntax error resilience, module-level limitation tracking, commit changes helper, dictionary serialization, and conversions to `AnalysisSourceReference` and `ModifiedFile`.
 - `backend/tests/test_framework_detector.py`: 15 unit and integration tests verifying pytest options, conftest fixture AST extraction, unittest detection, Jest detection, Vitest/ambiguous handling, test path proposals, and dictionary serialization.
 - `backend/tests/test_ast_rules.py`: 22 unit and integration tests verifying all 10 structural rules, clean fixture zero findings, syntax error resilience, symbol/range scoping, path traversal guards, and static findings adapters.
 - `backend/tests/test_target_selector.py`: 14 tests verifying target selection across files, symbols, qualified methods, ambiguous names, and TargetSnippet conversion.
 - `backend/tests/test_source_location.py`: 15 tests verifying exact range extraction, scope resolution, import tracking, and syntax error tolerance.
-- `backend/tests/test_repository_engine.py`: 14 scanner integration tests across Python, Node.js, and TypeScript fixtures.
 - `backend/tests/test_detector.py`, `backend/tests/test_test_mapper.py`, `backend/tests/test_walker.py`: Baseline scanner regression suites.
+
 
 
