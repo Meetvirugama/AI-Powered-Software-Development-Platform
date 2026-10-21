@@ -29,6 +29,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError, ErrorCode
+from app.integrations.github.cache import SourceRevisionCache
 from app.integrations.github.client import GitHubAPIError, GitHubClient
 from app.integrations.github.schemas import (
     CommitAuthor,
@@ -81,8 +82,9 @@ class GitHubSourceService:
         # that downstream services can embed in their analysis results.
     """
 
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, cache: SourceRevisionCache | None = None) -> None:
         self._db = db
+        self._cache = cache if cache is not None else SourceRevisionCache()
 
     # ----- Authorization helpers -------------------------------------------
 
@@ -134,6 +136,57 @@ class GitHubSourceService:
             ) from exc
         return GitHubClient(token)
 
+    async def resolve_commit_sha(
+        self,
+        repository: Repository,
+        ref: str,
+        client: GitHubClient,
+    ) -> Optional[str]:
+        """Resolve a branch or tag ref to its current commit SHA."""
+        clean_ref = ref.strip()
+        # If already a full 40-character hex commit SHA
+        if len(clean_ref) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_ref):
+            return clean_ref.lower()
+
+        try:
+            branch_data = await client.get_branch(repository.owner, repository.name, clean_ref)
+            if isinstance(branch_data, dict):
+                commit = branch_data.get("commit")
+                if isinstance(commit, dict):
+                    sha = commit.get("sha")
+                    if isinstance(sha, str) and sha:
+                        return sha
+        except Exception:
+            pass
+
+        try:
+            ref_data = await client.get_ref(repository.owner, repository.name, f"heads/{clean_ref}")
+            if isinstance(ref_data, dict):
+                obj = ref_data.get("object")
+                if isinstance(obj, dict):
+                    sha = obj.get("sha")
+                    if isinstance(sha, str) and sha:
+                        return sha
+        except Exception:
+            pass
+
+        return None
+
+    def invalidate_cache(
+        self,
+        repository_id: UUID,
+        revision: str | None = None,
+        path: str | None = None,
+    ) -> int:
+        """Invalidate cached files for a repository."""
+        if revision and path:
+            self._cache.invalidate(repository_id, revision, path)
+            return 1
+        elif revision:
+            return self._cache.invalidate_revision(repository_id, revision)
+        else:
+            return self._cache.invalidate_repository(repository_id)
+
     # ----- File content ----------------------------------------------------
 
     async def get_file_content(
@@ -141,33 +194,70 @@ class GitHubSourceService:
         repository_id: UUID,
         user_id: UUID,
         request: FileContentRequest,
+        allow_cache: bool = True,
     ) -> FileContentResponse:
-        """Retrieve file content from an authorized repository.
+        """Retrieve file content from an authorized repository with revision guarantees.
 
-        Parameters
-        ----------
-        repository_id : UUID
-            The local repository ID.
-        user_id : UUID
-            The authenticated user making the request.
-        request : FileContentRequest
-            Path, optional ref, and optional line range.
-
-        Returns
-        -------
-        FileContentResponse
-            The file content with metadata and a ``SourceReference``.
-
-        Raises
-        ------
-        APIError
-            On authorization failure, path traversal, oversized files,
-            or GitHub API errors.
+        Guarantees (Parth — Source Revision Correctness):
+        - Ensures the API uses the intended file content for the requested ref or default branch.
+        - Preserves complete revision information across responses and SourceReferences.
+        - Handles deleted or inaccessible files with descriptive revision errors.
+        - Prevents cached content from silently representing a different revision.
         """
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
-        ref = request.ref or repository.default_branch
+        ref = request.ref or repository.default_branch or "main"
 
+        # 1. Resolve commit SHA for mutable refs to prevent silent drift
+        commit_sha = await self.resolve_commit_sha(repository, ref, client)
+
+        # 2. Check SourceRevisionCache with revision integrity verification
+        if allow_cache:
+            cached = self._cache.get(
+                repository_id=repository_id,
+                revision=ref,
+                path=request.path,
+                expected_commit_sha=commit_sha,
+            )
+            if cached is not None:
+                content = cached["content"]
+                lines = content.splitlines(keepends=True)
+                total_lines = len(lines)
+                if request.start_line or request.end_line:
+                    if request.start_line and request.start_line > total_lines:
+                        content = ""
+                        total_lines = 0
+                    else:
+                        start = (request.start_line or 1) - 1
+                        end = min(request.end_line or total_lines, total_lines)
+                        content = "".join(lines[start:end])
+                        total_lines = max(0, end - start)
+
+                source_ref = SourceReference(
+                    repository_id=str(repository_id),
+                    file_path=request.path,
+                    start_line=request.start_line,
+                    end_line=request.end_line,
+                    revision=ref,
+                    commit_sha=cached.get("commit_sha") or commit_sha,
+                )
+                return FileContentResponse(
+                    path=request.path,
+                    content=content,
+                    encoding="utf-8",
+                    size_bytes=len(content.encode("utf-8")),
+                    line_count=total_lines,
+                    language=self._detect_language(request.path),
+                    sha=cached.get("blob_sha"),
+                    commit_sha=cached.get("commit_sha") or commit_sha,
+                    ref=ref,
+                    is_binary=cached.get("is_binary", False),
+                    from_cache=True,
+                    truncated=cached.get("truncated", False),
+                    source_reference=source_ref,
+                )
+
+        # 3. Cache miss: fetch exact content from GitHub API
         try:
             data = await client.get_file_content(
                 repository.owner,
@@ -180,7 +270,7 @@ class GitHubSourceService:
                 raise APIError(
                     404,
                     ErrorCode.NOT_FOUND,
-                    f"File not found: {request.path}",
+                    f"File '{request.path}' was not found at revision '{ref}'. It may have been deleted, moved, or does not exist.",
                 ) from exc
             raise APIError(
                 502,
@@ -198,7 +288,7 @@ class GitHubSourceService:
             raise APIError(
                 400,
                 ErrorCode.INVALID_REQUEST,
-                f"Path '{request.path}' is not a file.",
+                f"Path '{request.path}' is a {data.get('type')}, not a file at revision '{ref}'.",
             )
 
         # Decode content
@@ -206,42 +296,71 @@ class GitHubSourceService:
         truncated = size > MAX_FILE_SIZE_BYTES
         raw_content = data.get("content", "")
         encoding = data.get("encoding", "base64")
+        is_binary = False
 
         if encoding == "base64":
             try:
                 content_bytes = base64.b64decode(raw_content)
+                is_binary = b"\x00" in content_bytes[:8000]
                 content = content_bytes.decode("utf-8", errors="replace")
             except Exception:
                 raise APIError(502, ErrorCode.SERVICE_UNAVAILABLE, "Failed to decode file content.")
         else:
             content = raw_content
 
-        # Apply optional line-range filter
+        blob_sha = data.get("sha")
+
+        # 4. Cache full decoded file tagged with exact revision and commit_sha
+        self._cache.set(
+            repository_id=repository_id,
+            revision=ref,
+            path=request.path,
+            data={
+                "path": request.path,
+                "content": content,
+                "blob_sha": blob_sha,
+                "size_bytes": size,
+                "is_binary": is_binary,
+                "truncated": truncated,
+            },
+            commit_sha=commit_sha,
+        )
+
+        # 5. Apply optional line-range filter
         lines = content.splitlines(keepends=True)
         total_lines = len(lines)
         if request.start_line or request.end_line:
-            start = (request.start_line or 1) - 1  # 0-indexed
-            end = request.end_line or total_lines
-            content = "".join(lines[start:end])
-            total_lines = end - start
+            if request.start_line and request.start_line > total_lines:
+                content = ""
+                total_lines = 0
+            else:
+                start = (request.start_line or 1) - 1
+                end = min(request.end_line or total_lines, total_lines)
+                content = "".join(lines[start:end])
+                total_lines = max(0, end - start)
 
+        # 6. Preserve complete revision information
         source_ref = SourceReference(
             repository_id=str(repository_id),
             file_path=request.path,
             start_line=request.start_line,
             end_line=request.end_line,
             revision=ref,
+            commit_sha=commit_sha,
         )
 
         return FileContentResponse(
             path=request.path,
             content=content,
             encoding="utf-8",
-            size_bytes=size,
+            size_bytes=len(content.encode("utf-8")),
             line_count=total_lines,
             language=self._detect_language(request.path),
-            sha=data.get("sha"),
+            sha=blob_sha,
+            commit_sha=commit_sha,
             ref=ref,
+            is_binary=is_binary,
+            from_cache=False,
             truncated=truncated,
             source_reference=source_ref,
         )
