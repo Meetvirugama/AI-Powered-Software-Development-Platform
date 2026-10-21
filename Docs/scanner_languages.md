@@ -192,12 +192,44 @@ In addition to Python standard library AST traversal, `ASTBugAnalyzer` evaluates
 
 ---
 
-## 8. Verification & Acceptance Gate
+## 8. Framework and Convention Detector (`FrameworkDetector`)
 
-The AST, source location, and rule foundation is verified by automated test suites:
+**Owner:** Prit — Repository Engine Lead  
+**Task:** W2-Day4 — Framework and Convention Detector  
+**Milestone:** Week 2 — Framework-Aware Test Generation Foundation  
+
+`backend/scanner/framework_detector.py` provides repository test runner introspection, convention discovery, fixture extraction, and test path generation:
+
+### 8.1 Supported Frameworks
+
+| Framework | Language | Primary Manifests & Indicators | Configured Command | Status |
+|---|---|---|---|---|
+| **`pytest`** | Python | `pytest.ini`, `pyproject.toml` (`[tool.pytest]`), `setup.cfg`, `requirements.txt` | `pytest` | 🟢 Supported |
+| **`unittest`** | Python | Standard library fallback, `unittest.TestCase` in test files | `python -m unittest` | 🟢 Supported |
+| **`jest`** | TypeScript / JavaScript | `package.json` (`scripts.test`, `devDependencies`), `jest.config.*` | `npm test` | 🟢 Supported |
+| **`vitest`** | TypeScript / JavaScript | `package.json` (`vitest` in dependencies), `vitest.config.*` | `vitest run` | 🟡 Detected (Unsupported) |
+| **`mocha`** | JavaScript | `package.json` (`mocha` in dependencies), `.mocharc.*` | `mocha` | 🟡 Detected (Unsupported) |
+| **`go test`** | Go | `go.mod`, `*_test.go` | `go test ./...` | 🟡 Detected (Unsupported) |
+| **`junit`** | Java | `pom.xml`, `build.gradle` | `mvn test` | 🟡 Detected (Unsupported) |
+
+### 8.2 Convention and Fixture Introspection
+
+- **Test Directory Resolution**: Auto-detects configured `testpaths` from `pytest.ini` or discovers directories in order: `backend/tests`, `tests`, `test`, `__tests__`, `src/__tests__`.
+- **Naming Pattern Recognition**: Identifies whether the project follows `prefix:test_` (standard Python), `suffix:_test`, or `suffix:.test.ts` / `suffix:.spec.ts` (TypeScript/JavaScript).
+- **AST Fixture Extraction**: Automatically parses `conftest.py` files using Python AST to identify all `@pytest.fixture` functions, extracting fixture names, line numbers, scopes (`function`, `module`, `session`), `autouse` flags, and docstrings.
+- **Test Path Proposal (`propose_test_path`)**: Computes the matching test path for any source file (e.g. `backend/scanner/parser.py` -> `backend/tests/scanner/test_parser.py`, `src/components/Button.tsx` -> `src/components/__tests__/Button.test.tsx`).
+- **Ambiguity & Conflict Handling**: When multiple runners exist (e.g. `jest` and `vitest` in `package.json`), sets `is_ambiguous=True`, `status="AMBIGUOUS"`, and provides full candidate list and explanation.
+
+---
+
+## 9. Verification & Acceptance Gate
+
+The AST, source location, rules, and framework detector foundation is verified by automated test suites:
+- `backend/tests/test_framework_detector.py`: 15 unit and integration tests verifying pytest options, conftest fixture AST extraction, unittest detection, Jest detection, Vitest/ambiguous handling, test path proposals, and dictionary serialization.
 - `backend/tests/test_ast_rules.py`: 22 unit and integration tests verifying all 10 structural rules, clean fixture zero findings, syntax error resilience, symbol/range scoping, path traversal guards, and static findings adapters.
 - `backend/tests/test_target_selector.py`: 14 tests verifying target selection across files, symbols, qualified methods, ambiguous names, and TargetSnippet conversion.
 - `backend/tests/test_source_location.py`: 15 tests verifying exact range extraction, scope resolution, import tracking, and syntax error tolerance.
 - `backend/tests/test_repository_engine.py`: 14 scanner integration tests across Python, Node.js, and TypeScript fixtures.
 - `backend/tests/test_detector.py`, `backend/tests/test_test_mapper.py`, `backend/tests/test_walker.py`: Baseline scanner regression suites.
+
 

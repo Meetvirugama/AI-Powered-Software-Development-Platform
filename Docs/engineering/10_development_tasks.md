@@ -63,7 +63,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-10 | QA defect fixtures & acceptance test matrix | Keval | P0 | IN PROGRESS | Fixture repository with known bugs, QA evaluation suite |
 | W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | IN PROGRESS | Purpose, logic flow, key symbols, data flow, limitations (Meet context enrichment done) |
 | W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
-| W2-13 | Feature 3: `TestGenerationService` | Dev / Prit | P0 | TODO | Framework detection (`pytest`/`unittest`/`jest`), test file generation |
+| W2-13 | Feature 3: `TestGenerationService` & `FrameworkDetector` | Dev / Prit | P0 | IN PROGRESS | `FrameworkDetector` (DONE - Prit), test file generation (Dev) |
 | W2-14 | Feature 4: `AICodeReviewEngine` | Dev / Parth | P0 | TODO | Correctness, security, performance, maintainability diff review |
 | W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | TODO | Scenarios A–E, zero mock in production, docs update |
 

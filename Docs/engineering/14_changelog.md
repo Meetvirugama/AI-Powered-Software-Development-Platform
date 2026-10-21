@@ -478,6 +478,37 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day4] 2026-10-20 — Framework and Convention Detector
+**Type:** Feature  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/framework_detector.py`:
+  - Created `FrameworkDetector` and `FrameworkDetectionResult`
+  - Added multi-manifest inspection for Python (`pytest.ini`, `pyproject.toml`, `setup.cfg`, `tox.ini`, `requirements.txt`, `Pipfile`) and JavaScript/TypeScript (`package.json`, `jest.config.*`, `tsconfig.json`)
+  - Added support for `pytest`, `unittest`, and `jest` with explicit verification against actual project dependencies
+  - Implemented AST-based fixture introspection on `conftest.py` files (extracting fixture name, scope, autouse, and docstrings)
+  - Implemented automatic test directory and file naming pattern discovery (`prefix:test_`, `suffix:_test`, `suffix:.test.ts`, `suffix:.spec.ts`)
+  - Implemented `propose_test_path()` generating idiomatic, convention-matching test paths for Python, TypeScript, and JavaScript source files
+  - Added robust handling of ambiguous or conflicting runners (e.g. Jest vs Vitest in dependencies) with explicit `is_ambiguous` flag and candidates
+  - Added explicit unsupported runner detection (`vitest`, `mocha`, `go test`, `junit`) returning actionable warnings
+- `backend/scanner/__init__.py`:
+  - Re-exported `FrameworkDetector` and `FrameworkDetectionResult`
+- `backend/tests/fixtures/framework_samples/`:
+  - Added deterministic test fixtures: `pytest_repo/`, `unittest_repo/`, `jest_repo/`, `vitest_repo/`, `ambiguous_repo/`
+- `backend/tests/test_framework_detector.py`:
+  - Added 15 unit and integration tests covering pytest options, conftest fixtures, unittest detection, Jest detection, Vitest/ambiguous handling, test path proposals, and dictionary serialization
+- `Docs/scanner_languages.md`:
+  - Added Section 8 documenting the Framework and Convention Detector specification and contracts
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Marked Prit's Day 4 Framework and Convention Detector deliverable as completed
+
+**Impact:** Downstream `TestGenerationService` (Dev) and `POST /api/v1/repositories/{id}/generate-tests` (Yug) can detect exact test framework rules, test commands, fixtures, and target file paths before generating tests.
+
+**Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 
