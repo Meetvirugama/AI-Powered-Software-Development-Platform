@@ -17,6 +17,7 @@ import type {
   Repository,
   PaginatedRepositoryFileResponse,
   RepositoryDependency,
+  RepositoryFileContent,
 } from '../types/api';
 
 export interface ListRepositoriesParams {
@@ -93,7 +94,7 @@ export async function getRepositoryFiles(
  * Fetch top-level dependencies for a repository.
  *
  * GET /api/v1/repositories/:id/dependencies
- * MOCKED: The backend does not yet expose dependencies.
+ * Live backend parses package.json, requirements.txt, go.mod, Cargo.toml from indexed files.
  */
 export async function getRepositoryDependencies(
   id: string,
@@ -103,3 +104,42 @@ export async function getRepositoryDependencies(
   );
   return response.data;
 }
+
+/**
+ * Trigger background synchronization for a repository.
+ *
+ * POST /api/v1/repositories/:id/sync
+ */
+export async function syncRepository(
+  id: string,
+): Promise<{ job_id: string }> {
+  const response = await apiClient.post<{ job_id: string }>(
+    `/repositories/${id}/sync`,
+  );
+  return response.data;
+}
+
+/**
+ * Disconnect and remove a repository and its indexed data.
+ *
+ * DELETE /api/v1/repositories/:id
+ */
+export async function deleteRepository(id: string): Promise<void> {
+  await apiClient.delete(`/repositories/${id}`);
+}
+
+/**
+ * Fetch indexed content and symbols for a specific file.
+ *
+ * GET /api/v1/repositories/:repositoryId/files/:fileId/content
+ */
+export async function getRepositoryFileContent(
+  repositoryId: string,
+  fileId: string,
+): Promise<RepositoryFileContent> {
+  const response = await apiClient.get<RepositoryFileContent>(
+    `/repositories/${repositoryId}/files/${fileId}/content`,
+  );
+  return response.data;
+}
+

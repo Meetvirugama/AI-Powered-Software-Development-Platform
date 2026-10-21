@@ -20,15 +20,14 @@ members share the same App credentials via environment variables.
 | **Webhook URL** | Use [ngrok](https://ngrok.com/) for local dev: `https://<your-ngrok-id>.ngrok.io/api/v1/webhooks/github` |
 | **Webhook secret** | Generate with `openssl rand -hex 32` — save this value |
 
-4. Under **Repository permissions**, grant:
+| Permission | Level | Notes |
+|------------|-------|-------|
+| Contents | Read & Write | Read for cloning (Week 1); Write for task branch commits (Week 3) |
+| Metadata | Read (mandatory) | Repository info and branch inspection |
+| Pull requests | Read & Write | Read PR diffs (Week 2); Create draft PRs (Week 3) |
+| Issues | Read & Write | Convert bug findings into GitHub Issues (Week 3) |
 
-| Permission | Level |
-|------------|-------|
-| Contents | Read |
-| Metadata | Read (mandatory) |
-| Pull requests | Write |
-
-5. Under **Subscribe to events**, check: **Push**, **Pull request**, **Installation**.
+5. Under **Subscribe to events**, check: **Push**, **Pull request**, **Issues**, **Installation**.
 
 6. Click **Create GitHub App**.
 

@@ -1,7 +1,10 @@
 import hashlib
 from uuid import UUID
 
-from backend.scanner.symbols import Symbol
+try:
+    from scanner.symbols import Symbol
+except ImportError:
+    from backend.scanner.symbols import Symbol
 
 from .models import Chunk
 
@@ -114,6 +117,49 @@ class SymbolChunker:
 
         return chunks
 
+    def chunk_text(
+        self,
+        repository_id: UUID,
+        file_id: UUID,
+        content: str,
+        language: str = "unknown",
+    ) -> list[Chunk]:
+        """Chunk arbitrary file content by line blocks with overlap when no symbols exist."""
+        lines = content.splitlines()
+        if not lines:
+            return []
+
+        chunks: list[Chunk] = []
+        start_idx = 0
+        total_lines = len(lines)
+
+        while start_idx < total_lines:
+            end_idx = min(start_idx + 60, total_lines)
+            block = "\n".join(lines[start_idx:end_idx])
+            start_line = start_idx + 1
+            end_line = end_idx
+            chunks.append(
+                Chunk(
+                    repository_id=repository_id,
+                    file_id=file_id,
+                    symbol_id=None,
+                    content=block,
+                    start_line=start_line,
+                    end_line=end_line,
+                    language=language,
+                    chunk_type="block",
+                    token_count=self._token_count(block),
+                    content_hash=self._content_hash(block),
+                    metadata={},
+                )
+            )
+            if end_idx >= total_lines:
+                break
+            # Overlap by 10 lines
+            start_idx = max(start_idx + 1, end_idx - 10)
+
+        return chunks
+
     def chunk_symbols(
         self,
         repository_id: UUID,
@@ -122,6 +168,9 @@ class SymbolChunker:
         content: str,
         language: str,
     ) -> list[Chunk]:
+        if not symbols:
+            return self.chunk_text(repository_id, file_id, content, language)
+
         lines = content.splitlines()
         chunks: list[Chunk] = []
         module_symbols: list[Symbol] = []

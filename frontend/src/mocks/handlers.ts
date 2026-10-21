@@ -638,4 +638,88 @@ export const handlers = [
       { status: 201 },
     );
   }),
+
+  // -------------------------------------------------------------------------
+  // Chat — Day 7
+  //
+  // POST /api/v1/repositories/:id/chat
+  //
+  // Matches the real backend contract:
+  //   Request:  { question: string, history: { role, content }[] }
+  //   Response: { answer: string, sources: SourceReference[], confidence: "high"|"medium"|"low" }
+  //
+  // Source fields match backend SourceReference (backend/ai/schemas/output.py):
+  //   { file: string, start_line: number, end_line: number, symbol?: string | null }
+  //
+  // Error simulation: include "fail" in the question body.
+  // -------------------------------------------------------------------------
+
+  http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+
+    // Parse request body — real contract: { question, history }
+    let question = '';
+    try {
+      const body = await request.json() as { question?: string; history?: unknown[] };
+      question = body?.question ?? '';
+    } catch {
+      // Malformed body — treat as empty question.
+    }
+
+    // Force-error simulation: include "fail" in the question.
+    if (question.toLowerCase().includes('fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'CHAT_ERROR',
+            message: 'The assistant encountered an error processing your question.',
+            retryable: true,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
+    // Deterministic mock response based on repository ID.
+    const repoName =
+      MOCK_REPOSITORIES.find((r) => r.id === id)?.name ?? 'this repository';
+
+    const mockAnswer =
+      `In ${repoName}, authentication is handled through the backend authentication module. ` +
+      `The \`/api/v1/auth\` route group manages OAuth login via GitHub, ` +
+      `token validation, and session management using HTTP-only cookies. ` +
+      `The \`AuthService\` class in \`backend/app/services/auth_service.py\` ` +
+      `encapsulates the JWT creation and verification logic. ` +
+      `Route-level protection is enforced through a FastAPI dependency ` +
+      `injected into each protected endpoint.`;
+
+    // Sources use the REAL backend field names: file, start_line, end_line, symbol.
+    const mockSources = [
+      {
+        file: 'backend/app/api/v1/auth.py',
+        start_line: 1,
+        end_line: 45,
+        symbol: 'router',
+      },
+      {
+        file: 'backend/app/services/auth_service.py',
+        start_line: 22,
+        end_line: 68,
+        symbol: 'AuthService',
+      },
+      {
+        file: 'backend/app/core/dependencies.py',
+        start_line: 10,
+        end_line: 30,
+        symbol: 'get_current_user',
+      },
+    ];
+
+    return HttpResponse.json({
+      answer: mockAnswer,
+      sources: mockSources,
+      confidence: 'high',
+    });
+  }),
 ];
+

@@ -1,9 +1,12 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listRepositories,
   getRepository,
   getRepositoryFiles,
   getRepositoryDependencies,
+  syncRepository,
+  deleteRepository,
+  getRepositoryFileContent,
 } from '../services/repositories';
 import type {
   PaginatedRepositoryResponse,
@@ -12,6 +15,8 @@ import type {
   SyncStatus,
   PaginatedRepositoryFileResponse,
   RepositoryDependency,
+  RepositoryFileContent,
+  ApiError,
 } from '../types/api';
 
 /**
@@ -28,79 +33,27 @@ export const repositoryKeys = {
   detail: (id: string) => [...repositoryKeys.all, 'detail', id] as const,
   files: (id: string, page: number, pageSize: number) =>
     [...repositoryKeys.detail(id), 'files', { page, pageSize }] as const,
+  fileContent: (id: string, fileId: string) =>
+    [...repositoryKeys.detail(id), 'files', fileId, 'content'] as const,
   dependencies: (id: string) =>
     [...repositoryKeys.detail(id), 'dependencies'] as const,
 };
 
-/**
- * useRepositories — TanStack Query hook for the paginated repository list.
- *
- * Data flow:
- *   useRepositories(page, pageSize)
- *     → listRepositories({ page, pageSize })
- *     → GET /api/v1/repositories
- *     → PaginatedRepositoryResponse
- *
- * Each page is cached independently. Switching pages does not discard the
- * previous page's data — it stays in cache until stale.
- *
- * Returns the standard useQuery result. Components should consume:
- *   data?.items    — the Repository[] for the current page
- *   data?.total    — total count for pagination controls
- *   isLoading      — true on first load for this page
- *   isFetching     — true whenever a background refetch is in flight
- *   isError        — true if the last request failed
- *   error          — the ApiError from the response interceptor
- */
-export function useRepositories(page: number = 1, pageSize: number = 20) {
+export function useRepositories(
+  page: number = 1,
+  pageSize: number = 20,
+  options?: { refetchInterval?: number | false | ((query: any) => number | false | undefined) },
+) {
   return useQuery<PaginatedRepositoryResponse>({
     queryKey: repositoryKeys.list(page, pageSize),
     queryFn: () => listRepositories({ page, pageSize }),
+    ...options,
   });
 }
 
-// ---------------------------------------------------------------------------
-// useRepository — single repository detail hook
-//
-// Used by the Day 4 flow to retrieve sync status after a Connect mutation:
-//
-//   useConnectRepository() succeeds
-//     → ConnectRepositoryResponse.repository_id
-//     → useRepository(repository_id)
-//     → GET /api/v1/repositories/:id
-//     → Repository { sync_status, ... }
-//     → syncProgressFromStatus(sync_status)
-//     → SyncProgress { stage, label, isActive, isComplete, isFailed }
-//     → UI step indicator
-//
-// The actual polling interval is deliberately NOT set here because the
-// backend contract for intermediate sync stages is not yet confirmed.
-// The UI layer (Prompt 3) will add refetchInterval once confirmed.
-// ---------------------------------------------------------------------------
-
-/**
- * useRepository — TanStack Query hook for a single repository by ID.
- *
- * Data flow:
- *   useRepository(id)
- *     → getRepository(id)
- *     → GET /api/v1/repositories/:id
- *     → Repository
- *
- * This hook reuses repositoryKeys.detail(id) so that:
- *   - Invalidating repositoryKeys.all (e.g. after Connect or SSE event) also
- *     invalidates this query automatically.
- *   - The Dashboard and the Repository Selector can share cached detail data.
- *
- * The hook is disabled (no request made) when id is undefined/empty so it
- * can be mounted before the repository_id is known from the Connect response.
- *
- * @param id   Our internal repository UUID. Pass undefined to skip fetching.
- * @param options  Optional TanStack Query overrides (e.g. refetchInterval).
- */
 export function useRepository(
   id: string | undefined,
-  options?: { refetchInterval?: number | false },
+  options?: { refetchInterval?: number | false | ((query: any) => number | false | undefined) },
 ) {
   return useQuery<Repository>({
     queryKey: repositoryKeys.detail(id ?? ''),
@@ -229,3 +182,50 @@ export function useRepositoryDependencies(
     enabled: Boolean(id) && (options?.enabled ?? true),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Repository Actions: Sync, Delete, and File Content
+// ---------------------------------------------------------------------------
+
+/**
+ * useSyncRepository — Triggers background synchronization for a repository.
+ * Invalidates repository queries on success so all UI reflects the new SYNCING state.
+ */
+export function useSyncRepository() {
+  const queryClient = useQueryClient();
+  return useMutation<{ job_id: string }, ApiError, string>({
+    mutationFn: (id: string) => syncRepository(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+    },
+  });
+}
+
+/**
+ * useDeleteRepository — Disconnects and deletes a repository.
+ * Invalidates repository queries on success so the dashboard updates.
+ */
+export function useDeleteRepository() {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, string>({
+    mutationFn: (id: string) => deleteRepository(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+    },
+  });
+}
+
+/**
+ * useRepositoryFileContent — Fetches indexed code content and symbols for a file.
+ */
+export function useRepositoryFileContent(
+  repositoryId: string | undefined,
+  fileId: string | undefined,
+) {
+  return useQuery<RepositoryFileContent>({
+    queryKey: repositoryKeys.fileContent(repositoryId ?? '', fileId ?? ''),
+    queryFn: () => getRepositoryFileContent(repositoryId!, fileId!),
+    enabled: Boolean(repositoryId && fileId),
+  });
+}
+
