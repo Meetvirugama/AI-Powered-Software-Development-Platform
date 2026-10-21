@@ -34,12 +34,18 @@ from ai.context.review_context import (
     ReviewContextBuilder,
     build_multi_file_review_context,
 )
+from ai.context.service import (
+    ALLOWED_AI_PROVIDERS,
+    RepositoryContextService,
+    shared_context_service,
+)
 from ai.context.test_context import (
     TestContextBuilder,
     build_test_generation_context,
 )
 
 __all__ = [
+    "ALLOWED_AI_PROVIDERS",
     "AgentContext",
     "BugContextExtractor",
     "ChatMessage",
@@ -53,6 +59,7 @@ __all__ = [
     "MemoryEntry",
     "MissingContextInfo",
     "ModifiedFile",
+    "RepositoryContextService",
     "RepositoryFile",
     "ReviewBlastRadius",
     "ReviewContextBuilder",
@@ -64,4 +71,5 @@ __all__ = [
     "build_test_generation_context",
     "enrich_explanation_context",
     "extract_bug_context",
+    "shared_context_service",
 ]
