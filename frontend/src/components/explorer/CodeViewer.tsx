@@ -14,9 +14,7 @@ export interface CodeViewerProps {
   className?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Lightweight, safe syntax tokenizer (No dangerouslySetInnerHTML)
-// ---------------------------------------------------------------------------
+// Lightweight, safe syntax tokenizer (pure React text nodes, no raw HTML injection)
 
 type TokenType = 'keyword' | 'type' | 'string' | 'number' | 'comment' | 'function' | 'plain';
 
