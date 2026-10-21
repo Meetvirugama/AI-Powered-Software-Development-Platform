@@ -27,8 +27,8 @@ from pydantic import BaseModel
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _openai_success_payload(content: str = "Hello!", model: str = "gpt-4o") -> dict[str, Any]:
-    """Minimal OpenAI chat completion response structure."""
+def _groq_success_payload(content: str = "Hello!", model: str = "llama-3.3-70b-versatile") -> dict[str, Any]:
+    """Minimal Groq chat completion wire response structure."""
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -75,11 +75,11 @@ def llm_request():
 
 @pytest.fixture()
 def provider_and_gateway():
-    """Return a real OpenAIProvider with a fake API key + its LLMGateway wrapper."""
+    """Return a real GroqProvider with a fake API key + its LLMGateway wrapper."""
     from ai.llm.client import LLMGateway
-    from ai.llm.openai_provider import OpenAIProvider
+    from ai.llm.groq_provider import GroqProvider
 
-    provider = OpenAIProvider(api_key="sk-test-key")
+    provider = GroqProvider(api_keys=["gsk-test-key"])
     gateway = LLMGateway(provider=provider)
     return provider, gateway
 
@@ -98,7 +98,7 @@ class TestRetryOn429:
         Expected: Gateway succeeds (returns LLMResponse) after 1 retry.
         """
         _, gateway = provider_and_gateway
-        success_payload = _openai_success_payload("Auth is in auth_service.py")
+        success_payload = _groq_success_payload("Auth is in auth_service.py")
 
         responses = [
             _make_http_response(429),
@@ -125,7 +125,7 @@ class TestRetryOn429:
         confirming retry behaviour is active.
         """
         _, gateway = provider_and_gateway
-        success_payload = _openai_success_payload()
+        success_payload = _groq_success_payload()
 
         call_count = 0
 
@@ -158,9 +158,9 @@ class TestRetryOn429:
         with (
             patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=three_429s),
             patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(LLMRateLimitError),
         ):
-            with pytest.raises(LLMRateLimitError):
-                await gateway.generate(llm_request)
+            await gateway.generate(llm_request)
 
 
 class TestLLMResponseType:
@@ -172,7 +172,7 @@ class TestLLMResponseType:
         from ai.llm.schemas import LLMResponse
 
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload("The answer is 42.")
+        payload = _groq_success_payload("The answer is 42.")
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
             result = await gateway.generate(llm_request)
@@ -185,7 +185,7 @@ class TestLLMResponseType:
     async def test_token_counts_populated(self, llm_request, provider_and_gateway):
         """Token counts must be extracted from OpenAI usage field."""
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload()
+        payload = _groq_success_payload()
         payload["usage"] = {"prompt_tokens": 123, "completion_tokens": 77, "total_tokens": 200}
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
@@ -198,7 +198,7 @@ class TestLLMResponseType:
     async def test_latency_ms_is_positive(self, llm_request, provider_and_gateway):
         """Latency should always be a positive number."""
         _, gateway = provider_and_gateway
-        payload = _openai_success_payload()
+        payload = _groq_success_payload()
 
         with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, payload)):
             result = await gateway.generate(llm_request)
@@ -219,7 +219,7 @@ class TestStructuredOutput:
             confidence: float
 
         json_content = json.dumps({"answer": "It's in auth.py", "confidence": 0.95})
-        payload = _openai_success_payload(content=json_content)
+        payload = _groq_success_payload(content=json_content)
 
         _, gateway = provider_and_gateway
         request = LLMRequest(
@@ -242,7 +242,7 @@ class TestStructuredOutput:
         class MySchema(BaseModel):
             answer: str
 
-        bad_payload = _openai_success_payload(content="not valid JSON !!!")
+        bad_payload = _groq_success_payload(content="not valid JSON !!!")
         _, gateway = provider_and_gateway
         request = LLMRequest(
             model="gpt-4o",
@@ -250,9 +250,11 @@ class TestStructuredOutput:
             response_schema=MySchema,
         )
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, bad_payload)):
-            with pytest.raises(LLMValidationError):
-                await gateway.generate(request)
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, bad_payload)),
+            pytest.raises(LLMValidationError),
+        ):
+            await gateway.generate(request)
 
     @pytest.mark.asyncio
     async def test_schema_mismatch_raises_validation_error(self, provider_and_gateway):
@@ -264,7 +266,7 @@ class TestStructuredOutput:
             confidence: float  # required
 
         bad_json = json.dumps({"answer": "something"})  # missing confidence
-        bad_payload = _openai_success_payload(content=bad_json)
+        bad_payload = _groq_success_payload(content=bad_json)
 
         _, gateway = provider_and_gateway
         request = LLMRequest(
@@ -273,9 +275,11 @@ class TestStructuredOutput:
             response_schema=MySchema,
         )
 
-        with patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, bad_payload)):
-            with pytest.raises(LLMValidationError):
-                await gateway.generate(request)
+        with (
+            patch("httpx.AsyncClient.post", new_callable=AsyncMock, return_value=_make_http_response(200, bad_payload)),
+            pytest.raises(LLMValidationError),
+        ):
+            await gateway.generate(request)
 
 
 class TestTimeoutHandling:
@@ -291,6 +295,123 @@ class TestTimeoutHandling:
         with (
             patch("httpx.AsyncClient.post", new_callable=AsyncMock, side_effect=httpx.TimeoutException("timed out")),
             patch("asyncio.sleep", new_callable=AsyncMock),
+            pytest.raises(LLMTimeoutError),
         ):
-            with pytest.raises(LLMTimeoutError):
-                await gateway.generate(llm_request)
+            await gateway.generate(llm_request)
+
+
+# ===========================================================================
+# SDE-3 Enhancements
+# ===========================================================================
+
+
+class TestSDE3GatewayFeatures:
+    """Tests for SDE-3 production additions: fallback provider, message coercion, response helpers."""
+
+    def test_message_coercion_and_serialization(self):
+        from ai.llm.schemas import Message
+
+        msg = Message.from_dict({"role": "user", "content": "hello"})
+        assert msg.role == "user"
+        assert msg.to_dict() == {"role": "user", "content": "hello"}
+
+        msg_any = Message.from_any({"role": "assistant", "content": "world"})
+        assert msg_any.role == "assistant"
+        assert Message.from_any(msg_any) is msg_any
+
+    def test_llm_request_create_convenience(self):
+        from ai.llm.schemas import LLMRequest
+
+        req = LLMRequest.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Hi"},
+            ],
+            temperature=0.5,
+        )
+        assert len(req.messages) == 2
+        assert req.messages[0].role == "system"
+        assert req.temperature == 0.5
+
+    def test_llm_response_total_tokens_and_parse(self):
+        from ai.llm.schemas import LLMResponse, LLMValidationError
+
+        class AnswerSchema(BaseModel):
+            topic: str
+            confidence: float
+
+        resp = LLMResponse(
+            content='```json\n{"topic": "security", "confidence": 0.98}\n```',
+            model="gpt-4o",
+            input_tokens=100,
+            output_tokens=50,
+            latency_ms=120.5,
+        )
+        assert resp.total_tokens == 150
+        parsed = resp.parse_json()
+        assert parsed["topic"] == "security"
+
+        structured = resp.parse_schema(AnswerSchema)
+        assert structured.topic == "security"
+        assert structured.confidence == 0.98
+
+        bad_resp = LLMResponse(
+            content="non-json output",
+            model="gpt-4o",
+            input_tokens=10,
+            output_tokens=10,
+            latency_ms=50.0,
+        )
+        with pytest.raises(LLMValidationError):
+            bad_resp.parse_schema(AnswerSchema)
+
+    @pytest.mark.asyncio
+    async def test_gateway_fallback_provider_on_primary_outage(self, llm_request):
+        from ai.llm.client import LLMGateway
+        from ai.llm.schemas import LLMResponse, LLMUnavailableError
+
+        primary_mock = AsyncMock()
+        primary_mock.provider_name = "primary-mock"
+        primary_mock.generate.side_effect = LLMUnavailableError("Primary 503 down")
+
+        fallback_mock = AsyncMock()
+        fallback_mock.provider_name = "fallback-mock"
+        fallback_mock.generate.return_value = LLMResponse(
+            content="Fallback answer",
+            model="fallback-model",
+            input_tokens=20,
+            output_tokens=10,
+            latency_ms=45.0,
+        )
+
+        gateway = LLMGateway(provider=primary_mock, fallback_provider=fallback_mock)
+        result = await gateway.generate(llm_request)
+
+        assert result.content == "Fallback answer"
+        assert primary_mock.generate.call_count == 1
+        assert fallback_mock.generate.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_gateway_validation_errors(self):
+        from ai.llm.client import LLMGateway
+        from ai.llm.schemas import LLMRequest
+
+        mock_provider = AsyncMock()
+        mock_provider.provider_name = "mock"
+
+        gateway = LLMGateway(provider=mock_provider)
+
+        with pytest.raises(TypeError, match="Expected LLMRequest"):
+            await gateway.generate("not-a-request")  # type: ignore[arg-type]
+
+        empty_req = LLMRequest(model="gpt-4o", messages=[])
+        with pytest.raises(ValueError, match="at least one Message"):
+            await gateway.generate(empty_req)
+
+    @pytest.mark.asyncio
+    async def test_gateway_async_context_manager(self, provider_and_gateway):
+        _, gateway = provider_and_gateway
+        async with gateway as gw:
+            assert gw.provider_name == "groq"
+

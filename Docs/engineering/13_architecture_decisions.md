@@ -1,5 +1,5 @@
 # 13. Architecture Decision Records
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 ---
 
@@ -167,12 +167,13 @@ Option 3 — Full hybrid pipeline:
 **Trade-offs:**
 - More complex pipeline with more failure points
 - Cross-encoder adds ~100ms latency (runs locally)
-- RRF and reranker are stubs (Day 5 implementation)
 
 **Consequences:**
 - Default `top_k=30` for each retriever (RRF input)
 - Default `top_n=8` for reranker (LLM context)
 - `RRFFusion` uses k=60 constant (do not change without benchmarking)
+
+**Status:** 🟢 All components fully implemented (2026-09-28)
 
 **Related Components:**
 [`vector.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/vector.py), [`lexical.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/lexical.py), [`fusion.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/fusion.py), [`reranker.py`](file:///Users/meetvirugama/Desktop/AI-Powered-Software-Development-Platform/backend/ai/retrieval/reranker.py)
@@ -271,7 +272,76 @@ Docker-based sandbox (or gVisor for stronger isolation):
 - Host filesystem: completely invisible
 - Workspace destroyed after task completion/failure/cancellation
 
-**Status:** Proposed — not yet implemented (Week 2).
+**Status:** Proposed — scheduled for Week 3 workflow isolation.
 
 **Related Components:**
-`backend/sandbox/` (not yet created)
+`backend/agent/sandbox/` (Week 3)
+
+---
+
+## ADR-008: Approved LLM Provider Policy (Google Gemini & Groq Only)
+
+| Field | Value |
+|---|---|
+| **Title** | Restrict LLM inference strictly to Google Gemini and Groq |
+| **Date** | 2026-10-14 |
+| **Status** | Accepted |
+| **Owner** | Meet / Dev |
+
+**Context:**
+The platform relies on fast, high-quality, cost-efficient LLM inference for code analysis, prompt repair, and grounded chat. Uncontrolled proliferation of API keys and third-party models causes rate limit unpredictability and security risk.
+
+**Decision:**
+Enforce strict restriction to two approved providers through `LLMGateway`:
+1. **Google Gemini** (`gemini-flash-lite-latest` or `gemini-1.5-flash`) for large context analysis and reasoning.
+2. **Groq** (`llama-3.3-70b-versatile`) for ultra-low-latency structured inference and JSON output.
+
+**Consequences:**
+- No unauthorized external LLM providers are permitted.
+- Both providers implement `LLMProvider` abstract base class with exponential backoff and 30-second timeouts.
+- Deterministic mock providers are used across all automated test suites.
+
+---
+
+## ADR-009: Shared IntelligenceContext for Developer Intelligence Suite
+
+| Field | Value |
+|---|---|
+| **Title** | Unified TargetSnippet, SymbolContext, and bounded context container for Week 2 |
+| **Date** | 2026-10-15 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+Week 2 introduces four independent intelligence features: Code Explanation, Bug Detection, Test Generation, and Standalone AI Code Review. If each feature implemented its own AST target resolution and context truncation, code duplication and token budget overflows would occur.
+
+**Decision:**
+Create `IntelligenceContext` in `backend/ai/context/builder.py`:
+- `TargetSnippet`: Holds file path, selected start/end line range, and verified target code.
+- `SymbolContext`: Captures enclosing class/function and caller/dependency references from the AST symbol graph.
+- Budget-bounded truncation: Enforces strict token ceilings (`tiktoken` `cl100k_base`) ensuring target snippet is preserved while distant callers are cleanly truncated.
+- Untrusted boundary tagging: Formats repository code inside prompt-isolated delimiters (`<<<REPO_DATA_...>>>`).
+
+**Consequences:**
+- Used by all 4 developer intelligence services (`CodeExplanationService`, `BugDetectionEngine`, `TestGenerationService`, `AICodeReviewEngine`).
+- Guaranteed source traceability with exact file and line references.
+
+---
+
+## ADR-010: Mandatory Human Approval Gate & Bounded Repair Loop
+
+| Field | Value |
+|---|---|
+| **Title** | Server-enforced approval gate and 3-attempt ceiling for task workflow |
+| **Date** | 2026-10-15 |
+| **Status** | Accepted |
+| **Owner** | Meet / Dev / Sukun |
+
+**Context:**
+Autonomous agents operating on codebases risk unreviewed changes, infinite loops, and runaway token expenses without hard structural boundaries.
+
+**Decision:**
+1. **Mandatory Approval Gate:** No task can transition to `EXECUTING` or modify workspace files without explicit human approval of the structured plan. If a plan or base revision changes, previous approval is invalidated.
+2. **Bounded Repair Ceiling:** In the event of test failures, the self-repair loop is restricted to a maximum of **3 task-level attempts**. If the budget is exhausted, execution terminates in a safe failure state requiring human escalation.
+3. **No Automatic Merge:** The agent creates a GitHub Draft Pull Request only; merging and production deployment remain exclusively human actions.
+

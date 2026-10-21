@@ -30,6 +30,10 @@ class UserRepository:
     def get_by_id(self, user_id: uuid.UUID) -> Optional[User]:
         return self.session.get(User, user_id)
 
+    def get_by_login(self, login: str) -> Optional[User]:
+        stmt = select(User).where(User.login.ilike(login))
+        return self.session.execute(stmt).scalar_one_or_none()
+
     def upsert_github_user(
         self,
         github_id: str,

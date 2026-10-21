@@ -4,7 +4,8 @@ import { useRepositories } from '../hooks/useRepositories';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
-import { PlusCircle, ChevronLeft, ChevronRight, GitBranch } from 'lucide-react';
+import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw } from 'lucide-react';
+import { cn } from '../lib/utils';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -21,106 +22,134 @@ export function Dashboard() {
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
 
-  const { data, isLoading, isFetching, isError, error, refetch } =
-    useRepositories(page, PAGE_SIZE);
+  const { data, isLoading, isFetching, isError, error, refetch } = useRepositories(
+    page,
+    PAGE_SIZE,
+    {
+      refetchInterval: (query: any) => {
+        const items = query.state.data?.items;
+        const hasSyncing = items?.some((r: any) => r.sync_status === 'SYNCING');
+        return hasSyncing ? 3000 : false;
+      },
+    },
+  );
 
   const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
 
   return (
-    <div className="space-y-8">
+    <div className="h-full flex flex-col min-h-0 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
-      {/* Page header                                                          */}
+      {/* Pinned Page Header                                                 */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="shrink-0 pb-3 border-b border-border/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">Dashboard</h1>
+          <p className="text-xs text-muted-foreground mt-0.5">
             Your connected GitHub repositories.
           </p>
         </div>
-        <button
-          onClick={() => navigate('/app/repositories')}
-          className="inline-flex items-center gap-2 self-start rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:self-auto"
-          aria-label="Connect a repository"
-        >
-          <PlusCircle className="h-4 w-4" />
-          Add Repository
-        </button>
-      </div>
-
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Repository grid — loading                                            */}
-      {/* ------------------------------------------------------------------ */}
-      {isLoading && (
-        <div className="flex items-center justify-center py-16">
-          <LoadingSpinner size="lg" label="Loading repositories…" />
-        </div>
-      )}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Repository grid — error                                              */}
-      {/* ------------------------------------------------------------------ */}
-      {isError && !isLoading && (
-        <div className="flex flex-col items-center gap-4 py-12">
-          <ErrorMessage
-            message={error instanceof Error ? error.message : 'Could not load repositories.'}
-            className="max-w-md"
-          />
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
           <button
             onClick={() => refetch()}
-            className="rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            disabled={isFetching}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="Refresh repository list"
+            aria-label="Refresh repositories"
           >
-            Retry
+            <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={() => navigate('/app/repositories')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Connect a repository"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            Add Repository
           </button>
         </div>
-      )}
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* Repository grid — empty                                             */}
+      {/* Scrollable Repository Cards Box                                     */}
       {/* ------------------------------------------------------------------ */}
-      {!isLoading && !isError && data && data.items.length === 0 && (
-        <EmptyState onAddRepository={() => navigate('/app/repositories')} />
-      )}
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Repository grid — data                                              */}
-      {/* ------------------------------------------------------------------ */}
-      {!isLoading && !isError && data && data.items.length > 0 && (
-        <>
-          {/* Subtle refetch indicator — shown when background refetch runs */}
-          {isFetching && (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
-              <LoadingSpinner size="sm" label="Refreshing…" />
-              <span>Refreshing…</span>
-            </div>
-          )}
-
-          <div
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
-            aria-label="Repository list"
-          >
-            {data.items.map((repo) => (
-              <RepositoryCard key={repo.id} repo={repo} />
-            ))}
+      <div className="flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-4">
+        {/* Loading */}
+        {isLoading && (
+          <div className="flex items-center justify-center py-16">
+            <LoadingSpinner size="lg" label="Loading repositories…" />
           </div>
+        )}
 
-          {/* Pagination controls */}
-          {totalPages > 1 && (
-            <Pagination
-              page={page}
-              totalPages={totalPages}
-              total={data.total}
-              pageSize={PAGE_SIZE}
-              hasPrev={hasPrev}
-              hasNext={hasNext}
-              onPrev={() => setPage((p) => p - 1)}
-              onNext={() => setPage((p) => p + 1)}
+        {/* Error */}
+        {isError && !isLoading && (
+          <div className="flex flex-col items-center gap-4 py-12">
+            <ErrorMessage
+              message={error instanceof Error ? error.message : 'Could not load repositories.'}
+              className="max-w-md"
             />
-          )}
-        </>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => refetch()}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              >
+                Retry
+              </button>
+              <button
+                onClick={() => navigate('/login')}
+                className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Log in again
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Empty */}
+        {!isLoading && !isError && data && data.items.length === 0 && (
+          <EmptyState onAddRepository={() => navigate('/app/repositories')} />
+        )}
+
+        {/* Cards Grid */}
+        {!isLoading && !isError && data && data.items.length > 0 && (
+          <>
+            {isFetching && (
+              <div className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground" aria-live="polite">
+                <LoadingSpinner size="sm" label="Refreshing…" />
+                <span>Refreshing…</span>
+              </div>
+            )}
+
+            <div
+              className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3"
+              aria-label="Repository list"
+            >
+              {data.items.map((repo) => (
+                <RepositoryCard key={repo.id} repo={repo} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Pinned Pagination Footer                                           */}
+      {/* ------------------------------------------------------------------ */}
+      {!isLoading && !isError && data && data.items.length > 0 && totalPages > 1 && (
+        <div className="shrink-0 pt-2.5 border-t border-border/60">
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={data.total}
+            pageSize={PAGE_SIZE}
+            hasPrev={hasPrev}
+            hasNext={hasNext}
+            onPrev={() => setPage((p) => p - 1)}
+            onNext={() => setPage((p) => p + 1)}
+          />
+        </div>
       )}
     </div>
   );

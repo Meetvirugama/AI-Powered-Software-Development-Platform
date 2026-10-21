@@ -1,14 +1,31 @@
-# Embeddings module — Meet, W1-12
-# Day 1: abstract interface (EmbeddingProvider, EmbeddingError)
-# Day 3: concrete provider (OpenAIEmbeddingProvider) + full EmbeddingService
+"""
+Embeddings Module — Providers, Error Types, and Batching Services.
 
-from .client import EmbeddingError, EmbeddingProvider
-from .openai_provider import OpenAIEmbeddingProvider
+Provides high-level embedding generation with dimension validation,
+bounded concurrency, and provider abstractions (Gemini, etc.).
+"""
+
+from .client import (
+    AuthenticationError,
+    DimensionMismatchError,
+    EmbeddingError,
+    EmbeddingProvider,
+    InvalidRequestError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
+from .gemini_provider import GeminiEmbeddingProvider
 from .service import EmbeddingService
 
 __all__ = [
+    "AuthenticationError",
+    "DimensionMismatchError",
     "EmbeddingError",
     "EmbeddingProvider",
     "EmbeddingService",
-    "OpenAIEmbeddingProvider",
+    "GeminiEmbeddingProvider",
+    "InvalidRequestError",
+    "ProviderUnavailableError",
+    "RateLimitError",
 ]
+

@@ -52,7 +52,15 @@ class LLMValidationError(LLMError):
         detail: Short description of what part of the schema failed.
     """
 
-    def __init__(self, detail: str = "") -> None:
+    def __init__(
+        self,
+        detail: str = "",
+        *,
+        provider: str | None = None,
+        raw_response: str | None = None,
+    ) -> None:
+        self.provider = provider
+        self.raw_response = raw_response
         msg = "LLM response failed schema validation."
         if detail:
             msg += f" {detail}"

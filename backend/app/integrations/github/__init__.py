@@ -1,5 +1,13 @@
-"""GitHub source integration package.
+"""GitHub App integration package."""
 
-Provides authorized access to repository files, commit metadata,
-and pull-request diffs through the GitHub API.
-"""
+from .base import GitHubIntegrationBase
+from .service import GitHubService
+from .source_service import GitHubSourceService
+from .token_manager import InstallationTokenManager
+
+__all__ = [
+    "GitHubService",
+    "GitHubSourceService",
+    "GitHubIntegrationBase",
+    "InstallationTokenManager",
+]
