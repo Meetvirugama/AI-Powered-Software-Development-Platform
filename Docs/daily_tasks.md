@@ -527,14 +527,17 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 2 Feature 1: Code Explanation
 
+- ✅ Prit: `TargetSelector` & symbol resolution connecting AST utilities to Code Explanation targets
 - ⬜ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
 - ✅ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
 - ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
 - ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
 - ⬜ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations
 
+
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 
+- ✅ Prit: `ASTBugAnalyzer` with 10 structural defect rules, exact line range preservation, target scoping, and Devu `StaticFinding` adapter
 - ⬜ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
 - ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
 - ✅ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
@@ -544,7 +547,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
-- ⬜ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout
+- ✅ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout, fixture extraction, and test path proposal (`FrameworkDetector`)
 - ✅ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
 - ⬜ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
 - ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions

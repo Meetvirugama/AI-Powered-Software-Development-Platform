@@ -523,6 +523,92 @@ export const handlers = [
     return HttpResponse.json(MOCK_DEPENDENCIES);
   }),
 
+  // GET /api/v1/repositories/:repositoryId/files/:fileId/content — file content and symbols.
+  http.get(`${BASE}/repositories/:repositoryId/files/:fileId/content`, ({ params }) => {
+    const { fileId } = params as { repositoryId: string; fileId: string };
+    const file = MOCK_FILES.find((f) => f.id === fileId);
+
+    if (!file || file.path.endsWith('/')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'FILE_NOT_FOUND',
+            message: 'File does not exist or has not been indexed.',
+            retryable: false,
+          },
+        },
+        { status: 404 },
+      );
+    }
+
+    const mockContentMap: Record<string, { content: string; symbols: any[] }> = {
+      'file-2': {
+        content: `"""Application entry point and service bootstrap."""\nfrom fastapi import FastAPI\nfrom app.api.routes import router\n\napp = FastAPI(title="Platform API", version="1.0.0")\napp.include_router(router)\n\n@app.get("/health")\ndef health_check():\n    """Return service health status."""\n    return {"status": "healthy", "service": "platform-backend"}\n\nif __name__ == "__main__":\n    import uvicorn\n    uvicorn.run(app, host="0.0.0.0", port=8000)\n`,
+        symbols: [
+          {
+            id: 'sym-1',
+            file_id: 'file-2',
+            name: 'health_check',
+            kind: 'function',
+            start_line: 9,
+            end_line: 12,
+            signature: '() -> dict',
+            parent_id: null,
+          },
+        ],
+      },
+      'file-4': {
+        content: `from fastapi import APIRouter, HTTPException, Depends\nfrom typing import List\n\nrouter = APIRouter(prefix="/v1")\n\n@router.get("/items")\ndef list_items():\n    return [{"id": 1, "name": "Item A"}, {"id": 2, "name": "Item B"}]\n\n@router.post("/items")\ndef create_item(payload: dict):\n    if not payload.get("name"):\n        raise HTTPException(status_code=400, detail="Name required")\n    return {"id": 3, **payload}\n`,
+        symbols: [
+          {
+            id: 'sym-2',
+            file_id: 'file-4',
+            name: 'list_items',
+            kind: 'function',
+            start_line: 6,
+            end_line: 8,
+            signature: '() -> list',
+            parent_id: null,
+          },
+          {
+            id: 'sym-3',
+            file_id: 'file-4',
+            name: 'create_item',
+            kind: 'function',
+            start_line: 10,
+            end_line: 14,
+            signature: '(payload: dict) -> dict',
+            parent_id: null,
+          },
+        ],
+      },
+      'file-5': {
+        content: `fastapi==0.110.0\npydantic==2.6.4\nuvicorn==0.29.0\nsqlalchemy==2.0.29\npytest==8.1.1\n`,
+        symbols: [],
+      },
+      'file-6': {
+        content: `# Platform Backend\n\nCore microservice powering code intelligence, repository indexing, and AST analysis.\n\n## Getting Started\n\n1. Install dependencies: \`pip install -r requirements.txt\`\n2. Run server: \`python src/main.py\`\n`,
+        symbols: [],
+      },
+    };
+
+    const details = mockContentMap[file.id] || {
+      content: `// Source content for ${file.path}\nconsole.log("File loaded");\n`,
+      symbols: [],
+    };
+
+    return HttpResponse.json({
+      id: file.id,
+      path: file.path,
+      language: file.language,
+      size_bytes: file.size_bytes,
+      line_count: details.content.split('\n').length,
+      content: details.content,
+      symbols: details.symbols,
+    });
+  }),
+
+
   // -------------------------------------------------------------------------
   // Repository discovery (Day 4 — Prompt 1)
   // -------------------------------------------------------------------------
