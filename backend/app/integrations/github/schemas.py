@@ -64,6 +64,10 @@ class SourceReference(BaseModel):
         default=None,
         description="Git SHA or branch name at the time of retrieval.",
     )
+    commit_sha: Optional[str] = Field(
+        default=None,
+        description="Exact Git commit SHA for immutable revision identification.",
+    )
     symbol_name: Optional[str] = Field(
         default=None,
         description="Optional symbol (function/class) name for targeted retrieval.",
@@ -130,9 +134,21 @@ class FileContentResponse(BaseModel):
         default=None,
         description="Git blob SHA for cache validation.",
     )
+    commit_sha: Optional[str] = Field(
+        default=None,
+        description="Exact Git commit SHA corresponding to the retrieved revision.",
+    )
     ref: Optional[str] = Field(
         default=None,
         description="The resolved ref (branch/tag/SHA) used for retrieval.",
+    )
+    is_binary: bool = Field(
+        default=False,
+        description="True if the file contains binary content.",
+    )
+    from_cache: bool = Field(
+        default=False,
+        description="True if the content was served from the revision-safe cache.",
     )
     truncated: bool = Field(
         default=False,
