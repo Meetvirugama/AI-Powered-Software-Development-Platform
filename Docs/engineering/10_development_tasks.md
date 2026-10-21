@@ -61,7 +61,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-08 | Static scanner adapter (Ruff, Bandit, secret scanner) | Devu | P0 | IN PROGRESS | Normalized static finding schemas & deduplication |
 | W2-09 | Prompt-injection boundaries & secret redaction | Sukun | P0 | IN PROGRESS | Untrusted code boundaries & security test suite |
 | W2-10 | QA defect fixtures & acceptance test matrix | Keval | P0 | IN PROGRESS | Fixture repository with known bugs, QA evaluation suite |
-| W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | TODO | Purpose, logic flow, key symbols, data flow, limitations |
+| W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | IN PROGRESS | Purpose, logic flow, key symbols, data flow, limitations (Meet context enrichment done) |
 | W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
 | W2-13 | Feature 3: `TestGenerationService` | Dev / Prit | P0 | TODO | Framework detection (`pytest`/`unittest`/`jest`), test file generation |
 | W2-14 | Feature 4: `AICodeReviewEngine` | Dev / Parth | P0 | TODO | Correctness, security, performance, maintainability diff review |

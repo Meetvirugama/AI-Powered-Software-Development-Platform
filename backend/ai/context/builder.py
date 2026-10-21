@@ -21,6 +21,7 @@ import functools
 import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any
 
 import tiktoken
@@ -226,6 +227,63 @@ class AgentContext:
         }
 
 
+class ContextStatus(str, Enum):
+    """Execution status of intelligence context resolution."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    MISSING_TARGET = "missing_target"
+    OVERSIZED = "oversized"
+
+
+@dataclass
+class MissingContextInfo:
+    """Explicit, inspectable record of missing, truncated, or unresolved context."""
+
+    file_path: str
+    reason: str
+    symbol_name: str | None = None
+    suggested_action: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissingContextInfo:
+        return cls(
+            file_path=data.get("file_path", ""),
+            reason=data.get("reason", ""),
+            symbol_name=data.get("symbol_name"),
+            suggested_action=data.get("suggested_action", ""),
+        )
+
+
+@dataclass
+class ContextLimits:
+    """Configurable budget limits for retrieved repository context."""
+
+    max_tokens: int = 10_000
+    max_symbols: int = 15
+    max_chunks: int = 10
+    max_files: int = 50
+    max_rules: int = 10
+    target_budget_ratio: float = 0.5
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ContextLimits:
+        return cls(
+            max_tokens=data.get("max_tokens", 10_000),
+            max_symbols=data.get("max_symbols", 15),
+            max_chunks=data.get("max_chunks", 10),
+            max_files=data.get("max_files", 50),
+            max_rules=data.get("max_rules", 10),
+            target_budget_ratio=data.get("target_budget_ratio", 0.5),
+        )
+
+
 @dataclass
 class TargetSnippet:
     """The primary target code under intelligence analysis."""
@@ -236,9 +294,22 @@ class TargetSnippet:
     end_line: int
     symbol_name: str | None = None
     language: str = "text"
+    revision: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TargetSnippet:
+        return cls(
+            file_path=data.get("file_path", ""),
+            content=data.get("content", ""),
+            start_line=data.get("start_line", 1),
+            end_line=data.get("end_line", 1),
+            symbol_name=data.get("symbol_name"),
+            language=data.get("language", "text"),
+            revision=data.get("revision"),
+        )
 
 
 @dataclass
@@ -246,14 +317,27 @@ class SymbolContext:
     """A related caller, callee, imported type, or symbol."""
 
     name: str
-    kind: str  # "function" | "class" | "caller" | "type" | "import"
+    kind: str  # "function" | "class" | "caller" | "type" | "import" | "callee"
     file_path: str
     start_line: int
     end_line: int
     content: str = ""
+    score: float = 1.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SymbolContext:
+        return cls(
+            name=data.get("name", ""),
+            kind=data.get("kind", "function"),
+            file_path=data.get("file_path", ""),
+            start_line=data.get("start_line", 1),
+            end_line=data.get("end_line", 1),
+            content=data.get("content", ""),
+            score=data.get("score", 1.0),
+        )
 
 
 @dataclass
@@ -271,18 +355,107 @@ class IntelligenceContext:
     relevant_chunks: list[CodeChunk] = field(default_factory=list)
     repository_files: list[RepositoryFile] = field(default_factory=list)
     project_rules: list[str] = field(default_factory=list)
+    missing_context: list[MissingContextInfo] = field(default_factory=list)
+    status: ContextStatus = ContextStatus.COMPLETE
     total_tokens: int = 0
     token_budget: int = 10_000
+    revision: str | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == ContextStatus.COMPLETE
+
+    @property
+    def has_missing_context(self) -> bool:
+        return len(self.missing_context) > 0 or self.status != ContextStatus.COMPLETE
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "target": self.target.to_dict(),
-            "related_symbols": [s.to_dict() for s in self.related_symbols],
+            "target": self.target.to_dict() if hasattr(self.target, "to_dict") else asdict(self.target),
+            "related_symbols": [s.to_dict() if hasattr(s, "to_dict") else asdict(s) for s in self.related_symbols],
             "relevant_chunks_count": len(self.relevant_chunks),
             "repository_files_count": len(self.repository_files),
             "project_rules": self.project_rules,
+            "missing_context": [m.to_dict() if hasattr(m, "to_dict") else asdict(m) for m in self.missing_context],
+            "status": self.status.value if isinstance(self.status, ContextStatus) else str(self.status),
             "total_tokens": self.total_tokens,
             "token_budget": self.token_budget,
+            "revision": self.revision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IntelligenceContext:
+        target_raw = data.get("target", {})
+        target = TargetSnippet.from_dict(target_raw) if isinstance(target_raw, dict) else target_raw
+        related_symbols = [
+            SymbolContext.from_dict(s) if isinstance(s, dict) else s
+            for s in data.get("related_symbols", [])
+        ]
+        missing_context = [
+            MissingContextInfo.from_dict(m) if isinstance(m, dict) else m
+            for m in data.get("missing_context", [])
+        ]
+        status_raw = data.get("status", "complete")
+        try:
+            status = ContextStatus(status_raw)
+        except ValueError:
+            status = ContextStatus.PARTIAL
+
+        return cls(
+            target=target,
+            related_symbols=related_symbols,
+            project_rules=data.get("project_rules", []),
+            missing_context=missing_context,
+            status=status,
+            total_tokens=data.get("total_tokens", 0),
+            token_budget=data.get("token_budget", 10_000),
+            revision=data.get("revision"),
+        )
+
+
+@dataclass
+class IntelligenceContextRequest:
+    """Request contract for retrieving targeted repository context."""
+
+    repository_id: str
+    file_path: str
+    start_line: int | None = None
+    end_line: int | None = None
+    symbol_name: str | None = None
+    include_callers: bool = True
+    include_dependencies: bool = True
+    include_conventions: bool = True
+    limits: ContextLimits = field(default_factory=ContextLimits)
+    revision: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repository_id": self.repository_id,
+            "file_path": self.file_path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "symbol_name": self.symbol_name,
+            "include_callers": self.include_callers,
+            "include_dependencies": self.include_dependencies,
+            "include_conventions": self.include_conventions,
+            "limits": self.limits.to_dict(),
+            "revision": self.revision,
+        }
+
+
+@dataclass
+class IntelligenceContextResponse:
+    """Response container wrapping resolved intelligence context with diagnostic metadata."""
+
+    context: IntelligenceContext
+    elapsed_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context": self.context.to_dict(),
+            "elapsed_ms": self.elapsed_ms,
+            "metadata": self.metadata,
         }
 
 
@@ -538,6 +711,8 @@ class ContextBuilder:
         repository_files: Sequence[RepositoryFile] | None = None,
         project_rules: Sequence[str] | None = None,
         token_budget: int = 10_000,
+        limits: ContextLimits | None = None,
+        revision: str | None = None,
     ) -> IntelligenceContext:
         """
         Build an enriched, token-bounded context for developer intelligence features:
@@ -549,22 +724,99 @@ class ContextBuilder:
             3. Retrieved RAG chunks & types
             4. Repository inventory & conventions
         """
-        safe_symbols = list(related_symbols or [])
-        safe_chunks = list(relevant_chunks or [])
-        safe_files = list(repository_files or [])
-        safe_rules = list(project_rules or [])
+        active_limits = limits or ContextLimits(max_tokens=token_budget)
+        max_tokens = active_limits.max_tokens
+
+        # Check for missing or empty target
+        if not target or not getattr(target, "content", "").strip():
+            target_path = getattr(target, "file_path", "unknown") if target else "unknown"
+            return IntelligenceContext(
+                target=target or TargetSnippet(file_path=target_path, content="", start_line=1, end_line=1),
+                related_symbols=[],
+                relevant_chunks=[],
+                repository_files=[],
+                project_rules=[],
+                missing_context=[
+                    MissingContextInfo(
+                        file_path=target_path,
+                        reason="Target code snippet is missing or empty",
+                        suggested_action="Provide a valid target file path and line range",
+                    )
+                ],
+                status=ContextStatus.MISSING_TARGET,
+                total_tokens=0,
+                token_budget=max_tokens,
+                revision=revision,
+            )
+
+        missing_records: list[MissingContextInfo] = []
+        status = ContextStatus.COMPLETE
+
+        safe_symbols = list(related_symbols or [])[: active_limits.max_symbols]
+        if related_symbols and len(related_symbols) > active_limits.max_symbols:
+            dropped_cnt = len(related_symbols) - active_limits.max_symbols
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    reason=f"{dropped_cnt} related symbols truncated due to symbol count ceiling ({active_limits.max_symbols})",
+                )
+            )
+
+        safe_chunks = list(relevant_chunks or [])[: active_limits.max_chunks]
+        if relevant_chunks and len(relevant_chunks) > active_limits.max_chunks:
+            dropped_cnt = len(relevant_chunks) - active_limits.max_chunks
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    reason=f"{dropped_cnt} code chunks truncated due to chunk count ceiling ({active_limits.max_chunks})",
+                )
+            )
+
+        safe_files = list(repository_files or [])[: active_limits.max_files]
+        safe_rules = list(project_rules or [])[: active_limits.max_rules]
 
         # Step 1: Measure target code tokens
         target_tokens = count_tokens(target.content)
-        remaining = max(0, token_budget - target_tokens)
+        if target_tokens > max_tokens:
+            status = ContextStatus.OVERSIZED
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    symbol_name=target.symbol_name,
+                    reason=f"Target snippet ({target_tokens} tokens) exceeds context budget ({max_tokens} tokens)",
+                    suggested_action="Narrow the selected line range or symbol scope",
+                )
+            )
+            return IntelligenceContext(
+                target=target,
+                related_symbols=[],
+                relevant_chunks=[],
+                repository_files=safe_files,
+                project_rules=safe_rules,
+                missing_context=missing_records,
+                status=status,
+                total_tokens=target_tokens,
+                token_budget=max_tokens,
+                revision=revision,
+            )
 
-        # Step 2: Fit related symbols & callers
+        remaining = max_tokens - target_tokens
+
+        # Step 2: Fit related symbols & callers within remaining budget
         fitted_symbols: list[SymbolContext] = []
         for sym in safe_symbols:
             tok = count_tokens(sym.content or sym.name)
             if tok <= remaining:
                 fitted_symbols.append(sym)
                 remaining -= tok
+            else:
+                missing_records.append(
+                    MissingContextInfo(
+                        file_path=sym.file_path,
+                        symbol_name=sym.name,
+                        reason=f"Related symbol {sym.kind} '{sym.name}' omitted due to token budget constraint",
+                    )
+                )
 
         # Step 3: Fit relevant chunks
         fitted_chunks: list[Any] = []
@@ -573,21 +825,35 @@ class ContextBuilder:
             if tok <= remaining:
                 fitted_chunks.append(chk)
                 remaining -= tok
+            else:
+                missing_records.append(
+                    MissingContextInfo(
+                        file_path=getattr(chk, "file_path", target.file_path),
+                        reason="Code chunk omitted due to token budget constraint",
+                    )
+                )
 
-        total = token_budget - remaining
+        if missing_records and status == ContextStatus.COMPLETE:
+            status = ContextStatus.PARTIAL
+
+        total = max_tokens - remaining
         return IntelligenceContext(
             target=target,
             related_symbols=fitted_symbols,
             relevant_chunks=fitted_chunks,
             repository_files=safe_files,
             project_rules=safe_rules,
+            missing_context=missing_records,
+            status=status,
             total_tokens=total,
-            token_budget=token_budget,
+            token_budget=max_tokens,
+            revision=revision,
         )
 
     def render_intelligence_data(self, ctx: IntelligenceContext) -> str:
-        """Render the complete intelligence context into structured prompt data sections."""
+        """Render the complete intelligence context into structured prompt data sections with untrusted boundaries."""
         sections = [
+            "<<<REPO_DATA_START>>>",
             "TARGET CODE UNDER ANALYSIS:\n"
             "---------------------------\n"
             f"File: {ctx.target.file_path} (lines {ctx.target.start_line}–{ctx.target.end_line})\n"
@@ -619,6 +885,13 @@ class ContextBuilder:
                 rule_lines.append(f"- {r}")
             sections.append("\n".join(rule_lines))
 
+        if ctx.missing_context:
+            missing_lines = ["MISSING CONTEXT & NOTICES:", "-------------------------"]
+            for m in ctx.missing_context:
+                missing_lines.append(f"- [{m.file_path}] {m.reason}")
+            sections.append("\n".join(missing_lines))
+
+        sections.append("<<<REPO_DATA_END>>>")
         return "\n\n".join(sections)
 
     # ------------------------------------------------------------------
