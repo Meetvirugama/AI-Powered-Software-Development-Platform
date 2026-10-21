@@ -49,7 +49,7 @@ class OutputValidator:
                      Optional — only needed if ``repair()`` will be called.
     """
 
-    def __init__(self, llm_gateway: "LLMGateway | None" = None) -> None:
+    def __init__(self, llm_gateway: LLMGateway | None = None) -> None:
         self._gateway = llm_gateway
 
     # ------------------------------------------------------------------
@@ -136,7 +136,7 @@ class OutputValidator:
                                 ``_MAX_REPAIR_ATTEMPTS`` attempts.
             RuntimeError:       If called without a configured ``llm_gateway``.
         """
-        from ai.llm.schemas import LLMRequest, Message, LLMValidationError
+        from ai.llm.schemas import LLMRequest, LLMValidationError, Message
 
         if self._gateway is None:
             raise RuntimeError(
@@ -179,7 +179,7 @@ class OutputValidator:
                 current_raw = repaired_raw
                 current_error = f"Still invalid after repair attempt {attempt}."
 
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "output_repair_llm_error",
                     extra={"attempt": attempt, "error": str(exc)},

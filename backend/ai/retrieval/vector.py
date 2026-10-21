@@ -115,7 +115,7 @@ class VectorRetriever(Retriever):
     def __init__(
         self,
         db: AsyncSession,
-        embedding_service: "EmbeddingService",
+        embedding_service: EmbeddingService,
     ) -> None:
         self._db = db
         self._embedding_service = embedding_service
@@ -148,26 +148,34 @@ class VectorRetriever(Retriever):
             EmbeddingError: If the embedding service fails after retries.
             SQLAlchemyError: If the database is unreachable.
         """
+        if not query or not query.strip() or top_k <= 0:
+            return []
+
+        repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
+
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
         query_vec_literal = _vec_to_pg_literal(query_vector)
 
         # Step 2 — cosine distance search in pgvector
-        result = await self._db.execute(
-            _VECTOR_SEARCH_SQL,
-            {
-                "query_vec": query_vec_literal,
-                "repository_id": str(repository_id),
-                "top_k": top_k,
-            },
-        )
-        rows = result.fetchall()
+        params = {
+            "query_vec": query_vec_literal,
+            "repository_id": str(repo_uuid),
+            "top_k": top_k,
+        }
+        if hasattr(self._db, "execute"):
+            result = await self._db.execute(_VECTOR_SEARCH_SQL, params)
+            rows = result.fetchall()
+        else:
+            async with self._db() as session:
+                result = await session.execute(_VECTOR_SEARCH_SQL, params)
+                rows = result.fetchall()
 
         if not rows:
             logger.debug(
                 "vector_retrieval_empty",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "query_preview": query[:80],
                 },
             )
@@ -177,13 +185,13 @@ class VectorRetriever(Retriever):
         chunks: list[CodeChunk] = []
         for row in rows:
             distance = float(row.distance)  # type: ignore[attr-defined]
-            score = max(0.0, 1.0 - distance)  # clamp to [0, 1]
+            score = max(0.0, min(1.0, 1.0 - distance))  # clamp to [0, 1]
             chunks.append(_row_to_chunk(row, score))
 
         logger.info(
             "vector_retrieval_complete",
             extra={
-                "repository_id": str(repository_id),
+                "repository_id": str(repo_uuid),
                 "query_preview": query[:80],
                 "top_k": top_k,
                 "returned": len(chunks),
@@ -192,3 +200,9 @@ class VectorRetriever(Retriever):
         )
 
         return chunks
+
+    async def aclose(self) -> None:
+        """Close embedding service resources if supported."""
+        if hasattr(self._embedding_service, "aclose") and callable(self._embedding_service.aclose):
+            await self._embedding_service.aclose()
+

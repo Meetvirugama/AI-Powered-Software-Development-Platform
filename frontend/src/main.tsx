@@ -13,21 +13,21 @@ const queryClient = new QueryClient({
   },
 })
 
-async function enableMocking() {
-  if (import.meta.env.DEV) {
-    const { worker } = await import('./mocks/browser')
-    return worker.start({
-      onUnhandledRequest: 'bypass', // don't warn for non-mocked requests
-    })
-  }
-}
+// MSW mocking is DISABLED — all requests go to the real backend at localhost:8000.
+// To re-enable mocking for offline development, uncomment the block below.
+//
+// async function enableMocking() {
+//   if (import.meta.env.DEV) {
+//     const { worker } = await import('./mocks/browser')
+//     return worker.start({ onUnhandledRequest: 'bypass' })
+//   }
+// }
+// enableMocking().then(() => { ... })
 
-enableMocking().then(() => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </React.StrictMode>,
-  )
-})
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <App />
+    </QueryClientProvider>
+  </React.StrictMode>,
+)
