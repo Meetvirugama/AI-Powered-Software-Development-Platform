@@ -20,6 +20,10 @@ from ai.context.builder import (
     TargetSnippet,
     count_tokens,
 )
+from ai.context.bug_context import (
+    BugContextExtractor,
+    extract_bug_context,
+)
 from ai.context.explanation import (
     ExplanationContextEnricher,
     enrich_explanation_context,
@@ -27,6 +31,7 @@ from ai.context.explanation import (
 
 __all__ = [
     "AgentContext",
+    "BugContextExtractor",
     "ChatMessage",
     "ContextBuilder",
     "ContextLimits",
@@ -42,4 +47,5 @@ __all__ = [
     "TargetSnippet",
     "count_tokens",
     "enrich_explanation_context",
+    "extract_bug_context",
 ]
