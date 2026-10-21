@@ -1,0 +1,23 @@
+# Pre-commit configuration for SE_Project (Task W1-19)
+# Primary purpose: prevent committing API keys, tokens, or credentials
+
+repos:
+  # ── Secret detection (detect-secrets) ──────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: package-lock\.json
+
+  # ── Standard Git hygiene ────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key        # Catches raw RSA, SSH, or PEM keys
+      - id: check-added-large-files   # Prevents accidentally pushing files > 500KB
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict      # Catches unresolved git merge markers (<<<<<<<)
+      - id: check-yaml
+      - id: trailing-whitespace
+      - id: end-of-file-fixer

@@ -1,108 +1,491 @@
 """
-ContextBuilder — assembles AgentContext for repository Q&A.
-Owner: Meet — W1-12
+ContextBuilder — Assembles token-bounded AgentContext for repository-aware Q&A.
 
-Day 1: AgentContext dataclass + builder skeleton.
-Day 6: full implementation — REPOSITORY DATA section, token counting, truncation.
-
-team_rules.md rule:
-    Repository content goes into a clearly-labelled REPOSITORY DATA: section —
-    never into the system prompt.
+Architecture & System Contracts:
+- System / Data Separation: Repository source code and retrieved memory are untrusted
+  data and MUST be formatted into clearly-delimited sections (e.g. REPOSITORY DATA, MEMORY).
+  They must NEVER be injected into the LLM system prompt.
+- Token Budget Management: Enforces a strict context window ceiling using cached
+  tiktoken encoding (cl100k_base / GPT-4o standard).
+- Priority-Based Truncation:
+    1. Chat History: Fitted newest-to-oldest to preserve immediate conversation context.
+    2. Project Memory: De-duplicated by ID (last-write wins) and ordered by recency.
+    3. Code Chunks: Fitted greedily in retriever-ranked priority order (highest relevance first).
+- Resiliency: Special tokens (e.g. <|endoftext|>) are safely handled without throwing
+  disallowed token exceptions when ingesting untrusted user repositories.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from typing import Any
 
 import tiktoken
 
-if TYPE_CHECKING:
-    from ..retrieval.base import CodeChunk
+try:
+    from ai.retrieval.base import CodeChunk
+except ImportError:  # pragma: no cover
+    from uuid import UUID
+
+    @dataclass
+    class CodeChunk:  # type: ignore[no-redef]
+        id: UUID
+        repository_id: UUID
+        file_id: UUID
+        symbol_id: UUID | None
+        content: str
+        token_count: int
+        start_line: int
+        end_line: int
+        content_hash: str
+        score: float
+        file_path: str
+
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Token encoder (shared, GPT-4o / cl100k_base is the standard)
+# Token Encoding (Shared, GPT-4o / cl100k_base is the standard)
 # ---------------------------------------------------------------------------
 
-_ENCODING_NAME = "cl100k_base"
-
-def _get_encoder() -> tiktoken.Encoding:
-    """Return the shared tiktoken encoder (cl100k_base / GPT-4o compatible)."""
-    return tiktoken.get_encoding(_ENCODING_NAME)
+_ENCODING_NAME: str = "cl100k_base"
 
 
-def count_tokens(text: str) -> int:
-    """Return the number of tokens in *text* using cl100k_base encoding."""
-    enc = _get_encoder()
-    return len(enc.encode(text))
+@functools.lru_cache(maxsize=8)
+def _get_encoder(encoding_name: str = _ENCODING_NAME) -> tiktoken.Encoding:
+    """Return the cached tiktoken encoder (thread-safe and reusable)."""
+    return tiktoken.get_encoding(encoding_name)
+
+
+def count_tokens(text: str, encoding_name: str = _ENCODING_NAME) -> int:
+    """
+    Return the number of tokens in *text* using cl100k_base encoding.
+
+    Safety:
+        Uses ``disallowed_special=()`` so untrusted repository code containing
+        special tokens (e.g. ``<|endoftext|>``) does not raise a ValueError.
+    """
+    if not text:
+        return 0
+    try:
+        enc = _get_encoder(encoding_name)
+        return len(enc.encode(text, disallowed_special=()))
+    except (ValueError, UnicodeError, TypeError, KeyError) as exc:
+        logger.warning(
+            "token_counting_fallback",
+            extra={"error": str(exc), "text_len": len(text)},
+        )
+        # Sane heuristic fallback (approx. 4 characters per token) if tokenizer fails
+        return max(1, len(text) // 4)
 
 
 # ---------------------------------------------------------------------------
-# Domain dataclasses
+# Domain Dataclasses
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class MemoryEntry:
     """A single project memory entry (architecture note, decision, rule, etc.)."""
+
     id: str
     content: str
-    type: str       # "architecture" | "decision" | "rule" | "task" | "failure"
-    created_at: str  # ISO 8601
+    type: str  # "architecture" | "decision" | "rule" | "task" | "failure"
+    created_at: str  # ISO 8601 string
+    status: str = "active"  # "active" | "stale" | "archived"
+    source: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert entry to a serializable dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> MemoryEntry:
+        """Create a MemoryEntry from a mapping or database record dict."""
+        return cls(
+            id=str(data.get("id", "")),
+            content=str(data.get("content", "")),
+            type=str(data.get("type", data.get("type_", "rule"))),
+            created_at=str(data.get("created_at", "")),
+            status=str(data.get("status", "active")),
+            source=str(data.get("source", "")),
+        )
 
 
 @dataclass
 class RepositoryFile:
-    """Lightweight file metadata — path, language, size."""
+    """Lightweight repository file metadata (path, language, size)."""
+
     id: str
     path: str
     language: str
     size_bytes: int
     line_count: int
+    content_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert repository file metadata to a serializable dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RepositoryFile:
+        """Create a RepositoryFile from a dictionary."""
+        return cls(
+            id=str(data.get("id", "")),
+            path=str(data.get("path", "")),
+            language=str(data.get("language") or "text"),
+            size_bytes=int(data.get("size_bytes", 0)),
+            line_count=int(data.get("line_count", 0)),
+            content_hash=str(data.get("content_hash", "")),
+        )
 
 
 @dataclass
 class ChatMessage:
-    """A single turn in the conversation history."""
-    role: str   # "user" | "assistant"
+    """A single turn in conversation history."""
+
+    role: str  # "user" | "assistant" | "system"
     content: str
+
+    def to_dict(self) -> dict[str, str]:
+        """Convert message to a dictionary compatible with LLM schemas."""
+        return {"role": self.role, "content": self.content}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> ChatMessage:
+        """Create ChatMessage from a dictionary or schema payload."""
+        return cls(
+            role=str(data.get("role", "user")),
+            content=str(data.get("content", "")),
+        )
+
+    @classmethod
+    def from_any(cls, obj: Any) -> ChatMessage:
+        """Coerce an object (dict, Pydantic model, or ChatMessage) into ChatMessage."""
+        if isinstance(obj, ChatMessage):
+            return obj
+        if isinstance(obj, Mapping):
+            return cls.from_dict(obj)
+        role = getattr(obj, "role", "user")
+        content = getattr(obj, "content", "")
+        return cls(role=str(role), content=str(content))
 
 
 @dataclass
 class AgentContext:
     """
-    The fully assembled context passed to the LLM for repository Q&A.
+    The fully assembled, token-bounded context passed to the LLM for repository Q&A.
 
-    Assembled by ContextBuilder.build() — never constructed ad-hoc.
+    Assembled exclusively by ContextBuilder.build() to guarantee token safety
+    and strict data formatting rules.
     """
-    code_chunks: list["CodeChunk"] = field(default_factory=list)
+
+    code_chunks: list[CodeChunk] = field(default_factory=list)
     memory_chunks: list[MemoryEntry] = field(default_factory=list)
     related_files: list[RepositoryFile] = field(default_factory=list)
     recent_history: list[ChatMessage] = field(default_factory=list)
-    total_tokens: int = 0  # Set by builder after assembly
+    total_tokens: int = 0
+    chunk_tokens: int = 0
+    memory_tokens: int = 0
+    history_tokens: int = 0
+    overhead_tokens: int = 0
+
+    @property
+    def is_empty(self) -> bool:
+        """Return True if context contains no code chunks, memory, or history."""
+        return not (self.code_chunks or self.memory_chunks or self.recent_history)
+
+    def summary(self) -> dict[str, Any]:
+        """Return a structured breakdown of context size and token allocation."""
+        return {
+            "total_tokens": self.total_tokens,
+            "chunk_tokens": self.chunk_tokens,
+            "memory_tokens": self.memory_tokens,
+            "history_tokens": self.history_tokens,
+            "overhead_tokens": self.overhead_tokens,
+            "code_chunks_count": len(self.code_chunks),
+            "memory_chunks_count": len(self.memory_chunks),
+            "recent_history_count": len(self.recent_history),
+            "related_files_count": len(self.related_files),
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a dictionary representation of the context."""
+        return {
+            **self.summary(),
+            "code_chunks": [
+                asdict(c) if hasattr(c, "__dataclass_fields__") else vars(c)
+                for c in self.code_chunks
+            ],
+            "memory_chunks": [m.to_dict() for m in self.memory_chunks],
+            "related_files": [f.to_dict() for f in self.related_files],
+            "recent_history": [h.to_dict() for h in self.recent_history],
+        }
+
+
+class ContextStatus(str, Enum):
+    """Execution status of intelligence context resolution."""
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    MISSING_TARGET = "missing_target"
+    OVERSIZED = "oversized"
+
+
+@dataclass
+class MissingContextInfo:
+    """Explicit, inspectable record of missing, truncated, or unresolved context."""
+
+    file_path: str
+    reason: str
+    symbol_name: str | None = None
+    suggested_action: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissingContextInfo:
+        return cls(
+            file_path=data.get("file_path", ""),
+            reason=data.get("reason", ""),
+            symbol_name=data.get("symbol_name"),
+            suggested_action=data.get("suggested_action", ""),
+        )
+
+
+@dataclass
+class ContextLimits:
+    """Configurable budget limits for retrieved repository context."""
+
+    max_tokens: int = 10_000
+    max_symbols: int = 15
+    max_chunks: int = 10
+    max_files: int = 50
+    max_rules: int = 10
+    target_budget_ratio: float = 0.5
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ContextLimits:
+        return cls(
+            max_tokens=data.get("max_tokens", 10_000),
+            max_symbols=data.get("max_symbols", 15),
+            max_chunks=data.get("max_chunks", 10),
+            max_files=data.get("max_files", 50),
+            max_rules=data.get("max_rules", 10),
+            target_budget_ratio=data.get("target_budget_ratio", 0.5),
+        )
+
+
+@dataclass
+class TargetSnippet:
+    """The primary target code under intelligence analysis."""
+
+    file_path: str
+    content: str
+    start_line: int
+    end_line: int
+    symbol_name: str | None = None
+    language: str = "text"
+    revision: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TargetSnippet:
+        return cls(
+            file_path=data.get("file_path", ""),
+            content=data.get("content", ""),
+            start_line=data.get("start_line", 1),
+            end_line=data.get("end_line", 1),
+            symbol_name=data.get("symbol_name"),
+            language=data.get("language", "text"),
+            revision=data.get("revision"),
+        )
+
+
+@dataclass
+class SymbolContext:
+    """A related caller, callee, imported type, or symbol."""
+
+    name: str
+    kind: str  # "function" | "class" | "caller" | "type" | "import" | "callee"
+    file_path: str
+    start_line: int
+    end_line: int
+    content: str = ""
+    score: float = 1.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SymbolContext:
+        return cls(
+            name=data.get("name", ""),
+            kind=data.get("kind", "function"),
+            file_path=data.get("file_path", ""),
+            start_line=data.get("start_line", 1),
+            end_line=data.get("end_line", 1),
+            content=data.get("content", ""),
+            score=data.get("score", 1.0),
+        )
+
+
+@dataclass
+class IntelligenceContext:
+    """
+    Shared repository intelligence context for:
+    1. Code Explanation
+    2. Bug Detection
+    3. Test Generation
+    4. AI Code Review
+    """
+
+    target: TargetSnippet
+    related_symbols: list[SymbolContext] = field(default_factory=list)
+    relevant_chunks: list[CodeChunk] = field(default_factory=list)
+    repository_files: list[RepositoryFile] = field(default_factory=list)
+    project_rules: list[str] = field(default_factory=list)
+    missing_context: list[MissingContextInfo] = field(default_factory=list)
+    status: ContextStatus = ContextStatus.COMPLETE
+    total_tokens: int = 0
+    token_budget: int = 10_000
+    revision: str | None = None
+
+    @property
+    def is_complete(self) -> bool:
+        return self.status == ContextStatus.COMPLETE
+
+    @property
+    def has_missing_context(self) -> bool:
+        return len(self.missing_context) > 0 or self.status != ContextStatus.COMPLETE
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "target": self.target.to_dict() if hasattr(self.target, "to_dict") else asdict(self.target),
+            "related_symbols": [s.to_dict() if hasattr(s, "to_dict") else asdict(s) for s in self.related_symbols],
+            "relevant_chunks_count": len(self.relevant_chunks),
+            "repository_files_count": len(self.repository_files),
+            "project_rules": self.project_rules,
+            "missing_context": [m.to_dict() if hasattr(m, "to_dict") else asdict(m) for m in self.missing_context],
+            "status": self.status.value if isinstance(self.status, ContextStatus) else str(self.status),
+            "total_tokens": self.total_tokens,
+            "token_budget": self.token_budget,
+            "revision": self.revision,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IntelligenceContext:
+        target_raw = data.get("target", {})
+        target = TargetSnippet.from_dict(target_raw) if isinstance(target_raw, dict) else target_raw
+        related_symbols = [
+            SymbolContext.from_dict(s) if isinstance(s, dict) else s
+            for s in data.get("related_symbols", [])
+        ]
+        missing_context = [
+            MissingContextInfo.from_dict(m) if isinstance(m, dict) else m
+            for m in data.get("missing_context", [])
+        ]
+        status_raw = data.get("status", "complete")
+        try:
+            status = ContextStatus(status_raw)
+        except ValueError:
+            status = ContextStatus.PARTIAL
+
+        return cls(
+            target=target,
+            related_symbols=related_symbols,
+            project_rules=data.get("project_rules", []),
+            missing_context=missing_context,
+            status=status,
+            total_tokens=data.get("total_tokens", 0),
+            token_budget=data.get("token_budget", 10_000),
+            revision=data.get("revision"),
+        )
+
+
+@dataclass
+class IntelligenceContextRequest:
+    """Request contract for retrieving targeted repository context."""
+
+    repository_id: str
+    file_path: str
+    start_line: int | None = None
+    end_line: int | None = None
+    symbol_name: str | None = None
+    include_callers: bool = True
+    include_dependencies: bool = True
+    include_conventions: bool = True
+    limits: ContextLimits = field(default_factory=ContextLimits)
+    revision: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repository_id": self.repository_id,
+            "file_path": self.file_path,
+            "start_line": self.start_line,
+            "end_line": self.end_line,
+            "symbol_name": self.symbol_name,
+            "include_callers": self.include_callers,
+            "include_dependencies": self.include_dependencies,
+            "include_conventions": self.include_conventions,
+            "limits": self.limits.to_dict(),
+            "revision": self.revision,
+        }
+
+
+@dataclass
+class IntelligenceContextResponse:
+    """Response container wrapping resolved intelligence context with diagnostic metadata."""
+
+    context: IntelligenceContext
+    elapsed_ms: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "context": self.context.to_dict(),
+            "elapsed_ms": self.elapsed_ms,
+            "metadata": self.metadata,
+        }
 
 
 # ---------------------------------------------------------------------------
-# Section formatters
+# Section Formatters
 # ---------------------------------------------------------------------------
 
-def _format_chunk(chunk: "CodeChunk") -> str:
+def _format_chunk(chunk: Any) -> str:
     """Render a CodeChunk into the REPOSITORY DATA section."""
-    header = f"--- {chunk.file_path} (lines {chunk.start_line}–{chunk.end_line}) ---"
-    return f"{header}\n{chunk.content}"
+    if isinstance(chunk, str):
+        return chunk
+    file_path = getattr(chunk, "file_path", "unknown")
+    start_line = getattr(chunk, "start_line", 0)
+    end_line = getattr(chunk, "end_line", 0)
+
+    content = getattr(chunk, "content", str(chunk))
+    header = f"--- {file_path} (lines {start_line}–{end_line}) ---"
+    return f"{header}\n{content}"
 
 
 def _format_memory(entry: MemoryEntry) -> str:
     """Render a MemoryEntry into the MEMORY section."""
-    return f"[{entry.type.upper()}] {entry.content}"
+    entry_type = (entry.type or "NOTE").upper()
+    return f"[{entry_type}] {entry.content}"
 
 
 def _format_history_message(msg: ChatMessage) -> str:
-    """Render a ChatMessage into text."""
-    return f"{msg.role.upper()}: {msg.content}"
+    """Render a ChatMessage into text for budgeting."""
+    role = (msg.role or "USER").upper()
+    return f"{role}: {msg.content}"
 
 
 # ---------------------------------------------------------------------------
@@ -112,32 +495,42 @@ def _format_history_message(msg: ChatMessage) -> str:
 
 class ContextBuilder:
     """
-    Assembles an AgentContext from retrieval results and memory.
+    Assembles a token-budget-aware AgentContext from retrieval results and memory.
 
-    Rules enforced:
-    - Repository content goes into REPOSITORY DATA: section only
-    - Memory entries are de-duplicated (by id) and sorted by recency (created_at desc)
-    - Total context must not exceed the LLM context window limit (tracked via tiktoken)
-    - Chunks and memory are truncated from the tail when the budget is exceeded
-
-    Usage::
-
-        builder = ContextBuilder(max_context_tokens=100_000)
-        ctx = builder.build(
-            chunks=reranked_top8,
-            memory=project_memory,
-            history=last_5_turns,
-            related_files=file_metadata,
-        )
-        # ctx.total_tokens == actual tokens in assembled context
-        # ctx.code_chunks may be shorter than input if truncated
+    Key Responsibilities & Invariants:
+    1. System/Data Boundary: Repository code and memory live in untrusted user sections.
+    2. Memory Deduplication: Deduplicated by entry ID (last-write wins), sorted descending by recency.
+    3. Token Budgeting: Enforces max_context_tokens ceiling via tiktoken.
+    4. Truncation Order: History preserved newest-first; memory fitted next; ranked chunks fitted greedy.
     """
 
     # Static overhead budget: header strings, separators, labels (~500 tokens)
     _OVERHEAD_TOKENS: int = 500
 
-    def __init__(self, max_context_tokens: int = 100_000) -> None:
+    def __init__(
+        self,
+        max_context_tokens: int = 100_000,
+        overhead_tokens: int = _OVERHEAD_TOKENS,
+        encoding_name: str = _ENCODING_NAME,
+    ) -> None:
+        if max_context_tokens <= 0:
+            raise ValueError(f"max_context_tokens must be positive, got {max_context_tokens}")
+        if overhead_tokens < 0:
+            raise ValueError(f"overhead_tokens cannot be negative, got {overhead_tokens}")
+
         self._max_tokens = max_context_tokens
+        self._overhead_tokens = overhead_tokens
+        self._encoding_name = encoding_name
+
+    @property
+    def max_tokens(self) -> int:
+        """Configured maximum token budget."""
+        return self._max_tokens
+
+    @property
+    def overhead_tokens(self) -> int:
+        """Static overhead tokens reserved for section headers and separators."""
+        return self._overhead_tokens
 
     # ------------------------------------------------------------------
     # Public API
@@ -145,55 +538,58 @@ class ContextBuilder:
 
     def build(
         self,
-        chunks: list["CodeChunk"],
-        memory: list[MemoryEntry],
-        history: list[ChatMessage],
-        related_files: list[RepositoryFile] | None = None,
+        chunks: Sequence[CodeChunk] | None = None,
+        memory: Sequence[MemoryEntry] | None = None,
+        history: Sequence[ChatMessage | Mapping[str, Any] | Any] | None = None,
+        related_files: Sequence[RepositoryFile] | None = None,
     ) -> AgentContext:
         """
         Assemble context for an LLM call.
 
         Steps:
-            1. De-duplicate memory entries by id
-            2. Sort memory by created_at desc (most recent first)
-            3. Count tokens for each section using tiktoken
-            4. Truncate chunks / memory from the tail if total exceeds max_context_tokens
-            5. Set ctx.total_tokens
+            1. Normalize and deduplicate memory entries by id.
+            2. Sort memory by created_at desc (most recent first).
+            3. Count tokens for each section using tiktoken.
+            4. Truncate chunks / memory / history if total exceeds max_context_tokens.
+            5. Set total_tokens and section token breakdowns.
 
         Args:
-            chunks:        Reranked top-8 (or top-N) code chunks from RAG pipeline.
+            chunks:        Reranked top-N code chunks from RAG pipeline.
             memory:        Relevant memory entries from project memory store.
-            history:       Last N conversation turns.
-            related_files: Optional file metadata for additional context.
+            history:       Conversation turns (ChatMessage, dict, or message-like objects).
+            related_files: Optional file metadata for repository structure context.
 
         Returns:
-            AgentContext ready to be serialised into a prompt by Dev's PromptBuilder.
+            AgentContext ready to be serialized into a prompt by PromptBuilder.
         """
-        if related_files is None:
-            related_files = []
+        safe_chunks = list(chunks) if chunks is not None else []
+        safe_memory = list(memory) if memory is not None else []
+        safe_files = list(related_files) if related_files is not None else []
+        safe_history = [ChatMessage.from_any(m) for m in (history or [])]
 
         # ---- Step 1 & 2: De-duplicate + sort memory -------------------------
-        deduped_memory = self._dedup_memory(memory)
+        deduped_memory = self._dedup_memory(safe_memory)
 
         # ---- Step 3 & 4: Token-budget-aware truncation ----------------------
-        budget = self._max_tokens - self._OVERHEAD_TOKENS
+        effective_overhead = min(self._overhead_tokens, self._max_tokens)
+        available_budget = max(0, self._max_tokens - effective_overhead)
 
-        history_tokens, history_kept = self._fit_history(history, budget)
-        budget -= history_tokens
+        history_tokens, history_kept = self._fit_history(safe_history, available_budget)
+        remaining_budget = max(0, available_budget - history_tokens)
 
         memory_tokens, memory_kept = self._fit_items(
-            deduped_memory, budget, _format_memory
+            deduped_memory, remaining_budget, _format_memory
         )
-        budget -= memory_tokens
+        remaining_budget = max(0, remaining_budget - memory_tokens)
 
         chunk_tokens, chunks_kept = self._fit_items(
-            chunks, budget, _format_chunk
+            safe_chunks, remaining_budget, _format_chunk
         )
-        budget -= chunk_tokens
+        remaining_budget = max(0, remaining_budget - chunk_tokens)
 
         # ---- Step 5: Total token count --------------------------------------
         total = (
-            self._OVERHEAD_TOKENS
+            effective_overhead
             + history_tokens
             + memory_tokens
             + chunk_tokens
@@ -202,9 +598,13 @@ class ContextBuilder:
         ctx = AgentContext(
             code_chunks=chunks_kept,
             memory_chunks=memory_kept,
-            related_files=list(related_files),
+            related_files=safe_files,
             recent_history=history_kept,
             total_tokens=total,
+            chunk_tokens=chunk_tokens,
+            memory_tokens=memory_tokens,
+            history_tokens=history_tokens,
+            overhead_tokens=effective_overhead,
         )
 
         logger.info(
@@ -212,11 +612,12 @@ class ContextBuilder:
             extra={
                 "total_tokens": total,
                 "max_tokens": self._max_tokens,
-                "chunks_in": len(chunks),
+                "chunks_in": len(safe_chunks),
                 "chunks_kept": len(chunks_kept),
-                "memory_in": len(memory),
+                "memory_in": len(safe_memory),
                 "memory_kept": len(memory_kept),
                 "history_messages": len(history_kept),
+                "related_files": len(safe_files),
             },
         )
 
@@ -224,10 +625,9 @@ class ContextBuilder:
 
     def render_repository_data(self, ctx: AgentContext) -> str:
         """
-        Render the REPOSITORY DATA section as a plain string.
+        Render the REPOSITORY DATA and MEMORY sections as a plain string.
 
-        This is the text that Dev's PromptBuilder places inside the **user**
-        message — never the system message.
+        This text is injected into the user message — never the system message.
 
         Format::
 
@@ -244,9 +644,25 @@ class ContextBuilder:
             ctx: An AgentContext produced by :meth:`build`.
 
         Returns:
-            A multi-line string ready for injection into the user message.
+            A multi-line formatted string, or "" if both chunks and memory are empty.
         """
         sections: list[str] = []
+
+        # ---- Repository files & structure -----------------------------------
+        if ctx.related_files:
+            total_lines = sum(f.line_count for f in ctx.related_files)
+            file_lines = [
+                "REPOSITORY OVERVIEW & FILE INVENTORY:",
+                "-------------------------------------",
+                f"Total files: {len(ctx.related_files)}",
+                f"Total lines: {total_lines}",
+                "Files in repository:",
+            ]
+            for f in ctx.related_files[:100]:
+                file_lines.append(f"- {f.path} ({f.language or 'unknown'}, {f.line_count} lines)")
+            if len(ctx.related_files) > 100:
+                file_lines.append(f"... and {len(ctx.related_files) - 100} more files")
+            sections.append("\n".join(file_lines))
 
         # ---- Code chunks ----------------------------------------------------
         if ctx.code_chunks:
@@ -268,37 +684,249 @@ class ContextBuilder:
 
         return "\n\n".join(sections)
 
+    def render_history_section(self, ctx: AgentContext) -> str:
+        """Render recent conversation history as formatted text turns."""
+        if not ctx.recent_history:
+            return ""
+        return "\n".join(_format_history_message(m) for m in ctx.recent_history)
+
+    def render_related_files_section(self, ctx: AgentContext) -> str:
+        """Render repository file hierarchy summary if present."""
+        if not ctx.related_files:
+            return ""
+        lines = ["RELATED FILES:", "--------------"]
+        for f in ctx.related_files:
+            lines.append(f"- {f.path} ({f.language or 'unknown'}, {f.line_count} lines)")
+        return "\n".join(lines)
+
     # ------------------------------------------------------------------
-    # Private helpers
+    # Week 2: Developer Intelligence Suite Context Methods (Meet)
+    # ------------------------------------------------------------------
+
+    def build_intelligence_context(
+        self,
+        target: TargetSnippet,
+        related_symbols: Sequence[SymbolContext] | None = None,
+        relevant_chunks: Sequence[Any] | None = None,
+        repository_files: Sequence[RepositoryFile] | None = None,
+        project_rules: Sequence[str] | None = None,
+        token_budget: int = 10_000,
+        limits: ContextLimits | None = None,
+        revision: str | None = None,
+    ) -> IntelligenceContext:
+        """
+        Build an enriched, token-bounded context for developer intelligence features:
+        Code Explanation, Bug Detection, Test Generation, and Code Review.
+
+        Prioritizes:
+            1. Target code snippet (exact lines & content)
+            2. Callers & enclosing symbols
+            3. Retrieved RAG chunks & types
+            4. Repository inventory & conventions
+        """
+        active_limits = limits or ContextLimits(max_tokens=token_budget)
+        max_tokens = active_limits.max_tokens
+
+        # Check for missing or empty target
+        if not target or not getattr(target, "content", "").strip():
+            target_path = getattr(target, "file_path", "unknown") if target else "unknown"
+            return IntelligenceContext(
+                target=target or TargetSnippet(file_path=target_path, content="", start_line=1, end_line=1),
+                related_symbols=[],
+                relevant_chunks=[],
+                repository_files=[],
+                project_rules=[],
+                missing_context=[
+                    MissingContextInfo(
+                        file_path=target_path,
+                        reason="Target code snippet is missing or empty",
+                        suggested_action="Provide a valid target file path and line range",
+                    )
+                ],
+                status=ContextStatus.MISSING_TARGET,
+                total_tokens=0,
+                token_budget=max_tokens,
+                revision=revision,
+            )
+
+        missing_records: list[MissingContextInfo] = []
+        status = ContextStatus.COMPLETE
+
+        safe_symbols = list(related_symbols or [])[: active_limits.max_symbols]
+        if related_symbols and len(related_symbols) > active_limits.max_symbols:
+            dropped_cnt = len(related_symbols) - active_limits.max_symbols
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    reason=f"{dropped_cnt} related symbols truncated due to symbol count ceiling ({active_limits.max_symbols})",
+                )
+            )
+
+        safe_chunks = list(relevant_chunks or [])[: active_limits.max_chunks]
+        if relevant_chunks and len(relevant_chunks) > active_limits.max_chunks:
+            dropped_cnt = len(relevant_chunks) - active_limits.max_chunks
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    reason=f"{dropped_cnt} code chunks truncated due to chunk count ceiling ({active_limits.max_chunks})",
+                )
+            )
+
+        safe_files = list(repository_files or [])[: active_limits.max_files]
+        safe_rules = list(project_rules or [])[: active_limits.max_rules]
+
+        # Step 1: Measure target code tokens
+        target_tokens = count_tokens(target.content)
+        if target_tokens > max_tokens:
+            status = ContextStatus.OVERSIZED
+            missing_records.append(
+                MissingContextInfo(
+                    file_path=target.file_path,
+                    symbol_name=target.symbol_name,
+                    reason=f"Target snippet ({target_tokens} tokens) exceeds context budget ({max_tokens} tokens)",
+                    suggested_action="Narrow the selected line range or symbol scope",
+                )
+            )
+            return IntelligenceContext(
+                target=target,
+                related_symbols=[],
+                relevant_chunks=[],
+                repository_files=safe_files,
+                project_rules=safe_rules,
+                missing_context=missing_records,
+                status=status,
+                total_tokens=target_tokens,
+                token_budget=max_tokens,
+                revision=revision,
+            )
+
+        remaining = max_tokens - target_tokens
+
+        # Step 2: Fit related symbols & callers within remaining budget
+        fitted_symbols: list[SymbolContext] = []
+        for sym in safe_symbols:
+            tok = count_tokens(sym.content or sym.name)
+            if tok <= remaining:
+                fitted_symbols.append(sym)
+                remaining -= tok
+            else:
+                missing_records.append(
+                    MissingContextInfo(
+                        file_path=sym.file_path,
+                        symbol_name=sym.name,
+                        reason=f"Related symbol {sym.kind} '{sym.name}' omitted due to token budget constraint",
+                    )
+                )
+
+        # Step 3: Fit relevant chunks
+        fitted_chunks: list[Any] = []
+        for chk in safe_chunks:
+            tok = count_tokens(getattr(chk, "content", ""))
+            if tok <= remaining:
+                fitted_chunks.append(chk)
+                remaining -= tok
+            else:
+                missing_records.append(
+                    MissingContextInfo(
+                        file_path=getattr(chk, "file_path", target.file_path),
+                        reason="Code chunk omitted due to token budget constraint",
+                    )
+                )
+
+        if missing_records and status == ContextStatus.COMPLETE:
+            status = ContextStatus.PARTIAL
+
+        total = max_tokens - remaining
+        return IntelligenceContext(
+            target=target,
+            related_symbols=fitted_symbols,
+            relevant_chunks=fitted_chunks,
+            repository_files=safe_files,
+            project_rules=safe_rules,
+            missing_context=missing_records,
+            status=status,
+            total_tokens=total,
+            token_budget=max_tokens,
+            revision=revision,
+        )
+
+    def render_intelligence_data(self, ctx: IntelligenceContext) -> str:
+        """Render the complete intelligence context into structured prompt data sections with untrusted boundaries."""
+        sections = [
+            "<<<REPO_DATA_START>>>",
+            "TARGET CODE UNDER ANALYSIS:\n"
+            "---------------------------\n"
+            f"File: {ctx.target.file_path} (lines {ctx.target.start_line}–{ctx.target.end_line})\n"
+            f"Symbol: {ctx.target.symbol_name or 'N/A'}\n\n"
+            f"{ctx.target.content}"
+        ]
+
+        if ctx.related_symbols:
+            sym_lines = ["RELATED SYMBOLS & CALLERS:", "-------------------------"]
+            for s in ctx.related_symbols:
+                sym_lines.append(f"- {s.kind} {s.name} in {s.file_path}:{s.start_line}-{s.end_line}")
+                if s.content:
+                    sym_lines.append(f"  {s.content.strip()[:200]}")
+            sections.append("\n".join(sym_lines))
+
+        if ctx.relevant_chunks:
+            chunk_texts = "\n\n".join(_format_chunk(c) for c in ctx.relevant_chunks)
+            sections.append(f"RELEVANT CODE CONTEXT:\n----------------------\n{chunk_texts}")
+
+        if ctx.repository_files:
+            file_lines = ["REPOSITORY FILES OVERVIEW:", "-------------------------"]
+            for f in ctx.repository_files[:50]:
+                file_lines.append(f"- {f.path} ({f.language}, {f.line_count} lines)")
+            sections.append("\n".join(file_lines))
+
+        if ctx.project_rules:
+            rule_lines = ["PROJECT RULES & CONVENTIONS:", "----------------------------"]
+            for r in ctx.project_rules:
+                rule_lines.append(f"- {r}")
+            sections.append("\n".join(rule_lines))
+
+        if ctx.missing_context:
+            missing_lines = ["MISSING CONTEXT & NOTICES:", "-------------------------"]
+            for m in ctx.missing_context:
+                missing_lines.append(f"- [{m.file_path}] {m.reason}")
+            sections.append("\n".join(missing_lines))
+
+        sections.append("<<<REPO_DATA_END>>>")
+        return "\n\n".join(sections)
+
+    # ------------------------------------------------------------------
+    # Private Helpers / Algorithms
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _dedup_memory(entries: list[MemoryEntry]) -> list[MemoryEntry]:
+    def _dedup_memory(entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
         """
         De-duplicate memory entries by id and sort by created_at descending.
 
-        Later entries with the same id overwrite earlier ones (last-write wins),
-        then the unique set is sorted newest-first.
+        Last-write wins: later entries with duplicate ID supersede earlier ones.
+        Safe against non-string IDs and missing timestamps.
         """
         seen: dict[str, MemoryEntry] = {}
         for entry in entries:
-            seen[entry.id] = entry  # last-write wins
+            seen[str(entry.id)] = entry
 
-        # Sort by ISO 8601 created_at string descending (lexicographic works)
-        return sorted(seen.values(), key=lambda e: e.created_at, reverse=True)
+        # Sort by ISO 8601 created_at string descending (newest first)
+        return sorted(seen.values(), key=lambda e: str(e.created_at or ""), reverse=True)
 
     @staticmethod
     def _fit_history(
-        history: list[ChatMessage],
+        history: Sequence[ChatMessage],
         budget: int,
     ) -> tuple[int, list[ChatMessage]]:
         """
         Fit as many history messages as possible within *budget* tokens.
 
-        Iterates from **newest to oldest** so that the most recent turns
-        are always preserved. Returns (total_tokens_used, kept_messages)
-        with messages in chronological order (oldest first).
+        Iterates from newest to oldest so recent turns take precedence.
+        Returns (total_tokens_used, kept_messages) in chronological order.
         """
+        if budget <= 0:
+            return 0, []
+
         kept: list[ChatMessage] = []
         used = 0
         for msg in reversed(history):
@@ -308,27 +936,30 @@ class ContextBuilder:
             kept.append(msg)
             used += tokens
 
-        kept.reverse()  # restore chronological order
+        kept.reverse()  # Restore original chronological order
         return used, kept
 
     @staticmethod
     def _fit_items(
-        items: list,
+        items: Sequence[Any],
         budget: int,
-        formatter,
-    ) -> tuple[int, list]:
+        formatter: Callable[[Any], str],
+    ) -> tuple[int, list[Any]]:
         """
-        Generic greedy token fitter — keeps items in order until budget is exhausted.
+        Generic greedy token fitter — preserves items in priority order.
 
         Args:
-            items:     Ordered list of items to include (highest priority first).
+            items:     Ordered list of items (highest priority first).
             budget:    Remaining token budget.
-            formatter: Callable(item) -> str  for token counting.
+            formatter: Callable(item) -> str for token counting.
 
         Returns:
             (tokens_used, kept_items)
         """
-        kept = []
+        if budget <= 0:
+            return 0, []
+
+        kept: list[Any] = []
         used = 0
         for item in items:
             tokens = count_tokens(formatter(item))

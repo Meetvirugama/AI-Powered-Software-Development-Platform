@@ -52,23 +52,21 @@ Run with:
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
-from unittest.mock import patch
 
 import pytest
-
 from ai.context.builder import (
     AgentContext,
     ChatMessage,
     ContextBuilder,
+    IntelligenceContext,
     MemoryEntry,
     RepositoryFile,
+    SymbolContext,
+    TargetSnippet,
     _format_chunk,
-    _format_memory,
     count_tokens,
 )
 from ai.retrieval.base import CodeChunk
-
 
 # ===========================================================================
 # Helpers / factories
@@ -192,7 +190,7 @@ class TestFitHistory:
         long_msg = _make_message(content="x " * 5000)
         short_msg = _make_message(content="Hi")
         # Process newest first → short_msg fits, long_msg does not
-        tokens, kept = ContextBuilder._fit_history(
+        _tokens, kept = ContextBuilder._fit_history(
             [long_msg, short_msg], budget=50
         )
         assert kept == [short_msg]
@@ -227,7 +225,7 @@ class TestFitItems:
     def test_fit_items_truncates_tail(self):
         big_content = "word " * 2000  # ~2000 tokens
         chunks = [_make_chunk(content=big_content) for _ in range(5)]
-        tokens, kept = ContextBuilder._fit_items(chunks, 4_000, _format_chunk)
+        _tokens, kept = ContextBuilder._fit_items(chunks, 4_000, _format_chunk)
         assert len(kept) < 5  # some dropped
 
     def test_fit_items_empty(self):
@@ -366,3 +364,153 @@ class TestRenderRepositoryData:
         ctx = self._build_with(chunks=[], memory=[])
         rendered = self.builder.render_repository_data(ctx)
         assert rendered == ""
+
+
+# ===========================================================================
+# 31–40: SDE-3 Robustness & Production Features
+# ===========================================================================
+
+
+class TestSDE3Features:
+    def test_count_tokens_special_tokens_safe(self):
+        # Untrusted repo or prompt text with special tokens must not raise ValueError
+        special_text = "def test(): return '<|endoftext|>' and '<|fim_prefix|>'"
+        assert count_tokens(special_text) > 0
+
+    def test_context_builder_config_validation(self):
+        with pytest.raises(ValueError, match="positive"):
+            ContextBuilder(max_context_tokens=-1)
+        with pytest.raises(ValueError, match="positive"):
+            ContextBuilder(max_context_tokens=0)
+        with pytest.raises(ValueError, match="negative"):
+            ContextBuilder(overhead_tokens=-10)
+
+    def test_build_with_none_arguments(self):
+        builder = ContextBuilder(max_context_tokens=10_000)
+        ctx = builder.build(chunks=None, memory=None, history=None, related_files=None)
+        assert ctx.code_chunks == []
+        assert ctx.memory_chunks == []
+        assert ctx.recent_history == []
+        assert ctx.related_files == []
+        assert ctx.is_empty is True
+        assert ctx.total_tokens == builder.overhead_tokens
+
+    def test_build_normalizes_dict_history(self):
+        builder = ContextBuilder(max_context_tokens=10_000)
+        raw_history = [
+            {"role": "user", "content": "How does auth work?"},
+            {"role": "assistant", "content": "Auth uses JWTs."},
+        ]
+        ctx = builder.build(chunks=[], memory=[], history=raw_history)
+        assert len(ctx.recent_history) == 2
+        assert ctx.recent_history[0].role == "user"
+        assert ctx.recent_history[1].role == "assistant"
+
+    def test_token_breakdown_metadata(self):
+        builder = ContextBuilder(max_context_tokens=50_000)
+        chunks = [_make_chunk(content="def foo(): pass")]
+        memory = [_make_memory(content="Architecture note")]
+        history = [_make_message(content="Hello")]
+        ctx = builder.build(chunks=chunks, memory=memory, history=history)
+
+        assert ctx.chunk_tokens > 0
+        assert ctx.memory_tokens > 0
+        assert ctx.history_tokens > 0
+        assert ctx.overhead_tokens == 500
+        assert ctx.total_tokens == (
+            ctx.overhead_tokens
+            + ctx.history_tokens
+            + ctx.memory_tokens
+            + ctx.chunk_tokens
+        )
+
+        summary = ctx.summary()
+        assert summary["code_chunks_count"] == 1
+        assert summary["memory_chunks_count"] == 1
+        assert summary["recent_history_count"] == 1
+        assert summary["total_tokens"] == ctx.total_tokens
+
+    def test_domain_serialization(self):
+        msg = ChatMessage(role="user", content="Hi")
+        assert msg.to_dict() == {"role": "user", "content": "Hi"}
+        msg_from_dict = ChatMessage.from_dict({"role": "assistant", "content": "Hello"})
+        assert msg_from_dict.role == "assistant"
+
+        mem = _make_memory(id="m-1", content="Note", type="rule", created_at="2024-01-01T00:00:00Z")
+        mem_dict = mem.to_dict()
+        assert mem_dict["id"] == "m-1"
+        assert MemoryEntry.from_dict(mem_dict).id == "m-1"
+
+        rf = _make_file(path="main.py")
+        rf_dict = rf.to_dict()
+        assert rf_dict["path"] == "main.py"
+        assert RepositoryFile.from_dict(rf_dict).path == "main.py"
+
+    def test_additional_renderers(self):
+        builder = ContextBuilder()
+        ctx = builder.build(
+            chunks=[_make_chunk(file_path="src/main.py")],
+            memory=[_make_memory(type="rule", content="Follow PEP 8")],
+            history=[_make_message(role="user", content="Hello")],
+            related_files=[_make_file(path="src/main.py")],
+        )
+
+        history_render = builder.render_history_section(ctx)
+        assert "USER: Hello" in history_render
+
+        files_render = builder.render_related_files_section(ctx)
+        assert "RELATED FILES:" in files_render
+        assert "src/main.py" in files_render
+
+    def test_dedup_memory_handles_non_string_and_missing_timestamps(self):
+        mem1 = MemoryEntry(id=123, content="First", type="rule", created_at=None)  # type: ignore
+        mem2 = MemoryEntry(id="123", content="Second", type="rule", created_at="2024-01-01T00:00:00Z")
+        result = ContextBuilder._dedup_memory([mem1, mem2])
+        assert len(result) == 1
+        assert result[0].content == "Second"
+
+    def test_intelligence_context_builder_and_render(self):
+        builder = ContextBuilder()
+        target = TargetSnippet(
+            file_path="backend/app/auth.py",
+            content="def login(): return 'token'",
+            start_line=10,
+            end_line=15,
+            symbol_name="login",
+            language="python",
+        )
+        symbols = [
+            SymbolContext(
+                name="verify_credentials",
+                kind="caller",
+                file_path="backend/app/api.py",
+                start_line=20,
+                end_line=25,
+                content="verify_credentials(user, pwd)",
+            )
+        ]
+        files = [RepositoryFile(id="1", path="backend/app/auth.py", language="python", size_bytes=100, line_count=30)]
+        rules = ["Never log passwords"]
+
+        ctx = builder.build_intelligence_context(
+            target=target,
+            related_symbols=symbols,
+            repository_files=files,
+            project_rules=rules,
+            token_budget=5000,
+        )
+
+        assert ctx.target.symbol_name == "login"
+        assert len(ctx.related_symbols) == 1
+        assert ctx.total_tokens > 0
+        assert ctx.token_budget == 5000
+        assert "target" in ctx.to_dict()
+
+        rendered = builder.render_intelligence_data(ctx)
+        assert "TARGET CODE UNDER ANALYSIS:" in rendered
+        assert "backend/app/auth.py" in rendered
+        assert "RELATED SYMBOLS & CALLERS:" in rendered
+        assert "verify_credentials" in rendered
+        assert "PROJECT RULES & CONVENTIONS:" in rendered
+        assert "Never log passwords" in rendered
+

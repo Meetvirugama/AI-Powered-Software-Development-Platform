@@ -52,11 +52,13 @@ def upgrade() -> None:
     op.create_index(op.f('ix_github_installations_installation_id'), 'github_installations', ['installation_id'], unique=True)
     op.create_index(op.f('ix_github_installations_user_id'), 'github_installations', ['user_id'], unique=False)
 
-    # SyncStatus enum
-    sync_status = sa.Enum('NOT_SYNCED', 'SYNCING', 'SYNCED', 'FAILED', name='syncstatus')
-    sync_status.create(op.get_bind(), checkfirst=True)
+    # SyncStatus enum — use raw SQL to safely create only if not exists.
+    # This avoids a SQLAlchemy 2.1.x bug where create_constraint=False is ignored
+    # inside create_table, causing a DuplicateObject error on re-runs.
+    op.execute("DO $$ BEGIN CREATE TYPE syncstatus AS ENUM ('NOT_SYNCED', 'SYNCING', 'SYNCED', 'FAILED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;")
 
-    # Repositories table
+    # Repositories table — use sa.String for the column and rely on the DB-level
+    # enum type; avoids triggering SQLAlchemy's automatic CREATE TYPE.
     op.create_table(
         'repositories',
         sa.Column('id', sa.UUID(), nullable=False),
@@ -67,7 +69,7 @@ def upgrade() -> None:
         sa.Column('name', sa.String(), nullable=False),
         sa.Column('default_branch', sa.String(), nullable=False),
         sa.Column('language', sa.String(), nullable=True),
-        sa.Column('sync_status', sync_status, nullable=False),
+        sa.Column('sync_status', sa.String(), nullable=False),
         sa.Column('last_synced_at', sa.DateTime(timezone=True), nullable=True),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -75,6 +77,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
+    # Cast the column to the proper enum type after table creation
+    op.execute("ALTER TABLE repositories ALTER COLUMN sync_status TYPE syncstatus USING sync_status::syncstatus")
+
     op.create_index(op.f('ix_repositories_github_repo_id'), 'repositories', ['github_repo_id'], unique=False)
     op.create_index(op.f('ix_repositories_installation_id'), 'repositories', ['installation_id'], unique=False)
     op.create_index(op.f('ix_repositories_user_id'), 'repositories', ['user_id'], unique=False)

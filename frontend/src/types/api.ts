@@ -125,6 +125,27 @@ export interface PaginatedRepositoryFileResponse {
   page_size: number;
 }
 
+export interface CodeSymbol {
+  id: string;
+  file_id: string;
+  name: string;
+  kind: string;
+  start_line: number;
+  end_line: number;
+  signature: string | null;
+  parent_id: string | null;
+}
+
+export interface RepositoryFileContent {
+  id: string;
+  path: string;
+  language: string | null;
+  size_bytes: number;
+  line_count: number;
+  content: string;
+  symbols: CodeSymbol[];
+}
+
 // ---------------------------------------------------------------------------
 // Dependencies — Day 5 Mock
 // ---------------------------------------------------------------------------
@@ -312,4 +333,128 @@ export interface SyncProgress {
   isComplete: boolean;
   /** True when sync failed. */
   isFailed: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Chat — Day 7 (aligned with real backend contract)
+//
+// Backend endpoint (confirmed):
+//   POST /api/v1/repositories/{repository_id}/chat
+//
+// Request — RepositoryChatRequest (backend/app/schemas/repository.py):
+//   { question: string, history: ChatHistoryMessage[] }
+//
+// Response — RepositoryAnswer (backend/ai/schemas/output.py):
+//   { answer: string, sources: SourceReference[], confidence: "high"|"medium"|"low" }
+//
+// Source — SourceReference (backend/ai/schemas/output.py):
+//   { file: string, start_line: number, end_line: number, symbol?: string | null }
+//
+// IMPORTANT: Only src/services/chat.ts knows the exact endpoint and wire format.
+// Hooks and UI always consume ChatMessage — never raw HTTP shapes.
+// ---------------------------------------------------------------------------
+
+/**
+ * Role of a chat participant.
+ * Matches the backend Literal["user", "assistant"] constraint.
+ */
+export type ChatRole = 'user' | 'assistant';
+
+/**
+ * A single turn in the conversation history sent to the backend.
+ *
+ * Mirrors backend ChatHistoryMessage (backend/app/schemas/repository.py).
+ * Must NOT include timestamps, ids, sources, or any other UI-only fields.
+ */
+export interface ChatHistoryMessage {
+  role: ChatRole;
+  content: string;
+}
+
+/**
+ * Request payload for the repository chat endpoint.
+ *
+ * Mirrors backend RepositoryChatRequest (backend/app/schemas/repository.py).
+ *   - question: 1–4000 chars, no whitespace-only
+ *   - history:  max 50 messages, each content 1–20000 chars
+ */
+export interface RepositoryChatRequest {
+  question: string;
+  history: ChatHistoryMessage[];
+}
+
+/**
+ * A source citation returned by the backend RAG pipeline.
+ *
+ * Mirrors backend SourceReference (backend/ai/schemas/output.py).
+ *   - file:       repository-relative path, e.g. "src/auth/service.ts"
+ *   - start_line: first line (1-indexed)
+ *   - end_line:   last line (inclusive)
+ *   - symbol:     optional symbol name (class/function)
+ *
+ * NOTE: "snippet" was a Day 6 frontend assumption — it does not exist in the
+ * backend schema. Removed in Day 7 to match the real contract.
+ */
+export interface ChatSource {
+  /** Repository-relative file path. */
+  file: string;
+  /** First line of the cited range (1-indexed). */
+  start_line: number;
+  /** Last line of the cited range (inclusive). */
+  end_line: number;
+  /** Optional symbol name at this location, if known. */
+  symbol?: string | null;
+}
+
+/**
+ * Confidence level of the repository answer.
+ * Mirrors backend Literal["high", "medium", "low"].
+ */
+export type ChatConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * Response from the repository chat endpoint.
+ *
+ * Mirrors backend RepositoryAnswer (backend/ai/schemas/output.py).
+ */
+export interface RepositoryChatResponse {
+  /** Natural-language answer referencing only repository context. */
+  answer: string;
+  /** File + line citations supporting the answer. Empty if no sources found. */
+  sources: ChatSource[];
+  /** Grounding confidence: "high" | "medium" | "low". */
+  confidence: ChatConfidence;
+}
+
+/**
+ * A single message in the UI conversation.
+ *
+ * This is a UI-only type — it is NEVER sent to the backend as-is.
+ * The hook converts ChatMessage[] → ChatHistoryMessage[] when building requests.
+ *
+ * UI-only fields: id, timestamp, isStreaming, confidence.
+ */
+export interface ChatMessage {
+  /** Client-generated unique identifier (React key). */
+  id: string;
+  role: ChatRole;
+  content: string;
+  /** ISO-8601 timestamp set on the client at creation. */
+  timestamp: string;
+  /**
+   * Source citations attached to assistant messages after the response completes.
+   * Empty while streaming/pending.
+   */
+  sources?: ChatSource[];
+  /**
+   * Confidence level of the assistant answer.
+   * Only populated for assistant messages when the response has completed.
+   */
+  confidence?: ChatConfidence;
+  /**
+   * True while the assistant is in a streaming/pending state.
+   * Set to false once the complete response is received.
+   * Reserved for future real streaming support.
+   */
+  isStreaming?: boolean;
 }

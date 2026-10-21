@@ -21,41 +21,62 @@ import { useAuthStore } from '../stores/useAuthStore';
  */
 export function useAuth() {
   const { user, isAuthenticated, setUser, clearUser } = useAuthStore();
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   // If the store already has a resolved user, we have already checked.
   // Start resolved immediately so child components don't re-fetch.
   const [isLoading, setIsLoading] = useState(() => user === null && !isAuthenticated);
 
+  const checkSession = useCallback(async () => {
+    setIsLoading(true);
+    setSessionError(null);
+    try {
+      const currentUser = await getCurrentUser();
+      setUser(currentUser);
+      setSessionError(null);
+    } catch (err: unknown) {
+      const errorObj = err as { code?: string; message?: string } | undefined;
+      const isUnauthorized = errorObj?.code === 'UNAUTHORIZED';
+
+      if (isUnauthorized) {
+        clearUser();
+        setSessionError(null);
+      } else {
+        // Network or 5xx server error: keep local user if already present, but surface retryable error
+        setSessionError(
+          errorObj?.message || 'Could not verify session due to a connection or server error.'
+        );
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setUser, clearUser]);
+
   useEffect(() => {
     // Skip if auth state was already resolved before this component mounted.
-    if (!isLoading) return;
-
-    let cancelled = false;
-
-    async function checkSession() {
-      try {
-        const currentUser = await getCurrentUser();
-        if (!cancelled) setUser(currentUser);
-      } catch {
-        // 401 or network error — not authenticated.
-        if (!cancelled) clearUser();
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
+    if (user !== null || isAuthenticated) {
+      return;
     }
 
+    // oxlint-disable-next-line react/set-state-in-effect
     checkSession();
-
-    return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [checkSession, user, isAuthenticated]);
 
   const logout = useCallback(async () => {
     try {
       await authServiceLogout();
     } finally {
       clearUser();
+      setSessionError(null);
     }
   }, [clearUser]);
 
-  return { user, isAuthenticated, isLoading, logout };
+  return {
+    user,
+    isAuthenticated,
+    isLoading,
+    sessionError,
+    retrySessionCheck: checkSession,
+    logout,
+  };
 }

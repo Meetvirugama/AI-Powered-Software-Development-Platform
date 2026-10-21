@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Optional
 
 from .base import CodeChunk
 
@@ -48,9 +47,13 @@ class CrossEncoderReranker:
         top8 = reranker.rerank(query, fused_candidates, top_n=8)
     """
 
-    def __init__(self, model_name: str = _DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        model_name: str = _DEFAULT_MODEL,
+        model: object | None = None,
+    ) -> None:
         self._model_name = model_name
-        self._model: Optional[object] = None  # Lazy-loaded CrossEncoder
+        self._model: object | None = model  # Supports dependency injection
 
     # ------------------------------------------------------------------
     # Public interface
@@ -85,16 +88,33 @@ class CrossEncoderReranker:
         Raises:
             RuntimeError: If sentence-transformers is not installed.
         """
-        if not candidates:
+        if not candidates or top_n <= 0:
             return []
 
-        model = self._get_model()
+        if not query or not query.strip():
+            return candidates[:top_n]
+
+        try:
+            model = self._get_model()
+        except RuntimeError as exc:
+            logger.warning(
+                "reranker_model_unavailable_falling_back",
+                extra={"error": str(exc), "candidates_count": len(candidates)},
+            )
+            return candidates[:top_n]
 
         # Build input pairs for the cross-encoder
         pairs = [(query, chunk.content) for chunk in candidates]
 
-        # Batch predict — returns numpy array of float32 logit scores
-        raw_scores = model.predict(pairs)  # type: ignore[union-attr]
+        try:
+            # Batch predict — returns numpy array of float32 logit scores
+            raw_scores = model.predict(pairs)  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "reranker_inference_failed_falling_back",
+                extra={"error": str(exc), "candidates_count": len(candidates)},
+            )
+            return candidates[:top_n]
 
         # Sort by score descending and take top_n
         ranked = sorted(

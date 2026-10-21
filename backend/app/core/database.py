@@ -7,6 +7,7 @@ shared application infrastructure they will use.
 from collections.abc import Generator
 
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -15,6 +16,9 @@ settings = get_settings()
 
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+async_engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):

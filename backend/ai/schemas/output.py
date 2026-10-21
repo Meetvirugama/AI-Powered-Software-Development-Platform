@@ -16,7 +16,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Source citation — points to a specific file + line range in the repository
 # ---------------------------------------------------------------------------

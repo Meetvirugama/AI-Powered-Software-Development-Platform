@@ -119,3 +119,107 @@ def test_list_repositories_is_scoped_to_user(
     assert response.status_code == 200
     data = response.json()
     assert not any(r["id"] == str(other_repo.id) for r in data)
+
+
+def test_get_repository_dependencies_empty(
+    client: TestClient,
+    db_session: Session,
+    test_user: User,
+    auth_headers: dict[str, str],
+) -> None:
+    installation = GitHubInstallation(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id="inst-dep-1",
+        account_login=test_user.login,
+        permissions={"contents": "read"},
+    )
+    db_session.add(installation)
+    db_session.commit()
+
+    repo = Repository(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id=installation.id,
+        github_repo_id="gh-repo-dep-1",
+        owner=test_user.login,
+        name="test-dep-repo",
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/repositories/{repo.id}/dependencies", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_get_repository_includes_stats(
+    client: TestClient,
+    db_session: Session,
+    test_user: User,
+    auth_headers: dict[str, str],
+) -> None:
+    installation = GitHubInstallation(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id="inst-stats-1",
+        account_login=test_user.login,
+        permissions={"contents": "read"},
+    )
+    db_session.add(installation)
+    db_session.commit()
+
+    repo = Repository(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id=installation.id,
+        github_repo_id="gh-repo-stats-1",
+        owner=test_user.login,
+        name="test-stats-repo",
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    response = client.get(f"/api/v1/repositories/{repo.id}", headers=auth_headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "file_count" in data
+    assert "symbol_count" in data
+    assert "chunk_count" in data
+
+
+def test_delete_repository(
+    client: TestClient,
+    db_session: Session,
+    test_user: User,
+    auth_headers: dict[str, str],
+) -> None:
+    installation = GitHubInstallation(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id="inst-del-1",
+        account_login=test_user.login,
+        permissions={"contents": "read"},
+    )
+    db_session.add(installation)
+    db_session.commit()
+
+    repo = Repository(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id=installation.id,
+        github_repo_id="gh-repo-del-1",
+        owner=test_user.login,
+        name="test-del-repo",
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    # Delete
+    response = client.delete(f"/api/v1/repositories/{repo.id}", headers=auth_headers)
+    assert response.status_code == 204
+
+    # Verify 404 now
+    response = client.get(f"/api/v1/repositories/{repo.id}", headers=auth_headers)
+    assert response.status_code == 404
+
