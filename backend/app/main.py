@@ -122,6 +122,16 @@ async def lifespan(app: FastAPI):
             db_session=AsyncSessionLocal,
         )
         logger.info("rag_pipeline_ready", extra={"has_retriever": retriever is not None})
+
+        # ── Week 2 Day 2: Default Code Explanation Service ───────────────────
+        if getattr(app.state, "llm_gateway", None) is not None and getattr(app.state, "explanation_service", None) is None:
+            from app.services.explanation_orchestrator import LLMCodeExplanationService
+
+            app.state.explanation_service = LLMCodeExplanationService(
+                llm_gateway=app.state.llm_gateway,
+                model=settings.gemini_chat_model,
+            )
+            logger.info("explanation_service_ready")
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None
