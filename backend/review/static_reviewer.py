@@ -80,6 +80,38 @@ class StaticReviewer:
             for item in self.normalize_findings(findings, scanner=scanner)
         ]
 
+    def review_modified_files(
+        self,
+        modified_files: list[str],
+        ai_findings: list[dict[str, Any]] | None = None,
+        scanners: tuple[str, ...] = ("ruff", "bandit"),
+    ) -> dict[str, Any]:
+        """Run static scanners on modified files and combine their findings with AI findings."""
+        static_findings: list[dict[str, Any]] = []
+
+        for file_path in modified_files:
+            for scanner in scanners:
+                try:
+                    static_findings.extend(
+                        self.run_scanner(scanner, file_path)
+                    )
+                except RuntimeError:
+                    # Preserve results from other files/scanners.
+                    continue
+
+        combined_findings = [
+            *static_findings,
+            *(ai_findings or []),
+        ]
+
+        return {
+            "findings": combined_findings,
+            "static_findings_count": len(static_findings),
+            "ai_findings_count": len(ai_findings or []),
+            "total_findings": len(combined_findings),
+        }
+
+
     def run_scanner(
         self, scanner: str, target_path: str
     ) -> list[dict[str, Any]]:

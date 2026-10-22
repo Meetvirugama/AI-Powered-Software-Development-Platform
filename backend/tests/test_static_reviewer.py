@@ -108,6 +108,52 @@ class TestStaticReviewer(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid JSON"):
             self.reviewer.run_scanner("ruff", "app.py")
 
+    @patch.object(StaticReviewer, "run_scanner")
+    def test_review_modified_files_combines_static_and_ai_findings(
+        self, mock_run_scanner
+    ):
+        mock_run_scanner.return_value = [
+            {
+                "rule_id": "F401",
+                "severity": "low",
+                "message": "Unused import",
+                "file_path": "app.py",
+                "line_number": 1,
+                "scanner": "ruff",
+                "metadata": None,
+            }
+        ]
+        ai_findings = [
+            {"rule_id": "AI001", "message": "Possible bug", "source_type": "AI"}
+        ]
+
+        result = self.reviewer.review_modified_files(
+            ["app.py"], ai_findings, scanners=("ruff",)
+        )
+
+        self.assertEqual(result["static_findings_count"], 1)
+        self.assertEqual(result["ai_findings_count"], 1)
+        self.assertEqual(result["total_findings"], 2)
+        self.assertEqual(len(result["findings"]), 2)
+        mock_run_scanner.assert_called_once_with("ruff", "app.py")
+
+    @patch.object(StaticReviewer, "run_scanner")
+    def test_review_modified_files_handles_multiple_files(
+        self, mock_run_scanner
+    ):
+        mock_run_scanner.side_effect = [
+            [{"rule_id": "R1", "file_path": "a.py"}],
+            [{"rule_id": "R2", "file_path": "b.py"}],
+        ]
+
+        result = self.reviewer.review_modified_files(
+            ["a.py", "b.py"], scanners=("ruff",)
+        )
+
+        self.assertEqual(result["static_findings_count"], 2)
+        self.assertEqual(result["ai_findings_count"], 0)
+        self.assertEqual(result["total_findings"], 2)
+        self.assertEqual(mock_run_scanner.call_count, 2)
 
 if __name__ == "__main__":
     unittest.main()
