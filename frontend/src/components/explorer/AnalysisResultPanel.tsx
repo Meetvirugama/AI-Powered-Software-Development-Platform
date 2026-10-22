@@ -11,12 +11,15 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
+import { ExplanationResultView } from './ExplanationResultView';
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
   AnalysisTarget,
   AnalysisStatus,
   SourceReference,
+  CodeExplanation,
+  SymbolSummary,
 } from '../../types/analysis';
 
 export interface AnalysisResultPanelProps {
@@ -24,9 +27,13 @@ export interface AnalysisResultPanelProps {
   target: AnalysisTarget;
   status: AnalysisStatus;
   error?: string | null;
+  explanation?: CodeExplanation | null;
   onRetry?: () => void;
   onRunAnalysis?: (feature: AnalysisFeatureType, target: AnalysisTarget) => void;
   onClose?: () => void;
+  onSelectSourceReference?: (source: SourceReference) => void;
+  activeSourceReference?: SourceReference | null;
+  onSelectSymbol?: (symbol: SymbolSummary) => void;
   sources?: SourceReference[];
   className?: string;
   children?: React.ReactNode;
@@ -82,14 +89,19 @@ export function AnalysisResultPanel({
   target,
   status,
   error,
+  explanation,
   onRetry,
   onRunAnalysis,
   onClose,
+  onSelectSourceReference,
+  activeSourceReference,
+  onSelectSymbol,
   sources = [],
   className,
   children,
 }: AnalysisResultPanelProps) {
   const currentMeta = feature ? FEATURE_META[feature] : null;
+  const isRunning = status === 'RUNNING' || status === 'PENDING';
 
   const targetDescription =
     target.type === 'symbol' && target.symbol
@@ -152,7 +164,18 @@ export function AnalysisResultPanel({
           </span>
         </div>
         <div className="flex items-center gap-1 shrink-0 text-[10px]">
-          <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+          <span
+            className={cn(
+              'h-1.5 w-1.5 rounded-full',
+              isRunning
+                ? 'bg-blue-400 animate-pulse'
+                : status === 'COMPLETED'
+                ? 'bg-emerald-400'
+                : status === 'FAILED'
+                ? 'bg-destructive'
+                : 'bg-primary'
+            )}
+          />
           <span className="capitalize">{status.toLowerCase()}</span>
         </div>
       </div>
@@ -220,11 +243,19 @@ export function AnalysisResultPanel({
               <div className="pt-2">
                 <button
                   type="button"
+                  disabled={isRunning || !target.path}
                   onClick={() => onRunAnalysis?.(feature, target)}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-all shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-all shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                  title={!target.path ? 'Select a file to run analysis' : undefined}
                 >
                   <currentMeta.icon className="h-4 w-4" />
-                  <span>{currentMeta.runLabel}</span>
+                  <span>
+                    {isRunning
+                      ? 'Running…'
+                      : !target.path
+                      ? 'Select File to Run'
+                      : currentMeta.runLabel}
+                  </span>
                 </button>
               </div>
             </div>
@@ -232,15 +263,14 @@ export function AnalysisResultPanel({
             <div className="rounded-lg bg-muted/20 border border-border/60 p-3 flex items-start gap-2.5 text-xs text-muted-foreground">
               <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed">
-                Analysis requests are scoped strictly to authorized repository context. Week 2 Day 1
-                establishes the explorer foundation and result UX ahead of Day 2 AI service deployment.
+                Analysis requests are scoped strictly to authorized repository context. Explanations decompose purpose, execution flow, key symbols, parameters, and limitations.
               </p>
             </div>
           </div>
         )}
 
         {/* State 3: RUNNING / PENDING */}
-        {(status === 'RUNNING' || status === 'PENDING') && (
+        {isRunning && (
           <div className="h-[240px] flex flex-col items-center justify-center text-center p-6 space-y-3">
             <LoadingSpinner size="md" label={`Running ${currentMeta?.title ?? 'analysis'}…`} />
             <div className="space-y-1">
@@ -254,7 +284,7 @@ export function AnalysisResultPanel({
           </div>
         )}
 
-        {/* State 4: FAILED (with working retry callback) */}
+        {/* State 4: FAILED (with working retry callback, duplicate guarded) */}
         {status === 'FAILED' && (
           <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 space-y-3 animate-in fade-in duration-200">
             <div className="flex items-start gap-2.5">
@@ -265,7 +295,7 @@ export function AnalysisResultPanel({
                 </h4>
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   {error ||
-                    'Unable to complete analysis. The backend service endpoint may still be in development or the provider call timed out.'}
+                    'Unable to complete analysis. The backend service endpoint may be temporarily unavailable or the provider call timed out.'}
                 </p>
               </div>
             </div>
@@ -274,21 +304,29 @@ export function AnalysisResultPanel({
               <div className="flex justify-end pt-2 border-t border-destructive/20">
                 <button
                   type="button"
+                  disabled={isRunning}
                   onClick={onRetry}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-accent transition-colors shadow-xs"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-accent transition-colors shadow-xs disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  <RefreshCw className="h-3.5 w-3.5 text-primary" />
-                  <span>Retry Analysis</span>
+                  <RefreshCw className={cn('h-3.5 w-3.5 text-primary', isRunning && 'animate-spin')} />
+                  <span>{isRunning ? 'Retrying…' : 'Retry Analysis'}</span>
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* State 5: COMPLETED (Content slot for structured findings/explanation) */}
+        {/* State 5: COMPLETED */}
         {status === 'COMPLETED' && (
           <div className="space-y-4">
-            {children ? (
+            {feature === 'explain' && explanation ? (
+              <ExplanationResultView
+                explanation={explanation}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+                onSelectSymbol={onSelectSymbol}
+              />
+            ) : children ? (
               children
             ) : (
               <div className="rounded-xl border border-border/80 bg-background/50 p-4 space-y-2 text-center">
@@ -300,25 +338,29 @@ export function AnalysisResultPanel({
               </div>
             )}
 
-            {/* Evidence & Sources Section */}
-            {sources && sources.length > 0 && (
+            {/* Evidence & Sources Section (for other features or fallback) */}
+            {(!explanation || feature !== 'explain') && sources && sources.length > 0 && (
               <div className="pt-3 border-t border-border/60 space-y-2">
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono">
                   Cited Evidence ({sources.length}):
                 </h4>
                 <div className="space-y-1.5">
                   {sources.map((src, idx) => (
-                    <div
+                    <button
                       key={idx}
-                      className="p-2 rounded-lg border border-border/50 bg-muted/20 text-xs font-mono flex items-center justify-between gap-2"
+                      type="button"
+                      onClick={() => onSelectSourceReference?.(src)}
+                      className="w-full text-left p-2 rounded-lg border border-border/50 bg-muted/20 text-xs font-mono flex items-center justify-between gap-2 hover:bg-accent hover:border-border transition-colors cursor-pointer"
                     >
                       <span className="text-foreground truncate" title={src.file_path}>
                         {src.file_path}
                       </span>
                       <span className="text-muted-foreground text-[10px] shrink-0">
-                        L{src.start_line}–{src.end_line}
+                        {typeof src.start_line === 'number' && typeof src.end_line === 'number'
+                          ? `L${src.start_line}–${src.end_line}`
+                          : 'File'}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

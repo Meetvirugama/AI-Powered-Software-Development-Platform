@@ -6,6 +6,7 @@ export interface AnalysisActionBarProps {
   activeFeature: AnalysisFeatureType | null;
   activeTarget: AnalysisTarget;
   onSelectFeature: (feature: AnalysisFeatureType) => void;
+  disabled?: boolean;
   className?: string;
 }
 
@@ -57,6 +58,7 @@ export function AnalysisActionBar({
   activeFeature,
   activeTarget,
   onSelectFeature,
+  disabled = false,
   className,
 }: AnalysisActionBarProps) {
   const targetLabel =
@@ -86,9 +88,10 @@ export function AnalysisActionBar({
             <button
               key={action.id}
               type="button"
+              disabled={disabled}
               onClick={() => onSelectFeature(action.id)}
               className={cn(
-                'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none',
                 isActive
                   ? action.activeClass
                   : 'border-border/70 bg-background/60 text-muted-foreground hover:text-foreground hover:bg-accent/60 hover:border-border'
@@ -101,6 +104,7 @@ export function AnalysisActionBar({
           );
         })}
       </div>
+
 
       <div className="text-[10px] text-muted-foreground font-mono hidden md:flex items-center gap-1">
         <span>Target:</span>
