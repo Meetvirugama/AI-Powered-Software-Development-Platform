@@ -203,3 +203,37 @@ async def get_pull_request_diff(
         _request_user_id(request),
         pr_number,
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent branch creation (Day 3 execution transition)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/agent-branch",
+    summary="Create agent branch for task execution",
+    description="Triggered when task transitions to EXECUTING. Creates agent/task-{task_id} from main.",
+)
+async def create_agent_branch_endpoint(
+    repository_id: UUID,
+    request: Request,
+    task_id: str = Query(..., min_length=1, description="Task ID transitioning to EXECUTING"),
+    base_branch: str | None = Query(default=None, description="Optional base branch (defaults to repo default)"),
+    db: Session = Depends(get_db),
+):
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    info = await service.on_task_executing(
+        repository_id=repository_id,
+        task_id=task_id,
+        user_id=_request_user_id(request),
+        base_branch=base_branch,
+    )
+    return {
+        "branch_name": info.branch_name,
+        "base_branch": info.base_branch,
+        "base_sha": info.base_sha,
+        "status": info.status,
+    }
+
