@@ -123,15 +123,25 @@ async def lifespan(app: FastAPI):
         )
         logger.info("rag_pipeline_ready", extra={"has_retriever": retriever is not None})
 
-        # ── Week 2 Day 2: Default Code Explanation Service ───────────────────
-        if getattr(app.state, "llm_gateway", None) is not None and getattr(app.state, "explanation_service", None) is None:
-            from app.services.explanation_orchestrator import LLMCodeExplanationService
+        # ── Week 2 Day 2 & Day 3: Default Explanation & Bug Detection Services ──
+        if getattr(app.state, "llm_gateway", None) is not None:
+            if getattr(app.state, "explanation_service", None) is None:
+                from app.services.explanation_orchestrator import LLMCodeExplanationService
 
-            app.state.explanation_service = LLMCodeExplanationService(
-                llm_gateway=app.state.llm_gateway,
-                model=settings.gemini_chat_model,
-            )
-            logger.info("explanation_service_ready")
+                app.state.explanation_service = LLMCodeExplanationService(
+                    llm_gateway=app.state.llm_gateway,
+                    model=settings.gemini_chat_model,
+                )
+                logger.info("explanation_service_ready")
+
+            if getattr(app.state, "bug_detection_service", None) is None:
+                from app.services.bug_detection_orchestrator import LLMBugDetectionService
+
+                app.state.bug_detection_service = LLMBugDetectionService(
+                    llm_gateway=app.state.llm_gateway,
+                    model=settings.gemini_chat_model,
+                )
+                logger.info("bug_detection_service_ready")
 
         # ── Week 2: Shared Repository Context Service ────────────────────────
         from ai.context import shared_context_service

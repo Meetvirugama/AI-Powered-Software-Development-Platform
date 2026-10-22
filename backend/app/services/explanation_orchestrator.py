@@ -19,11 +19,17 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+import os
+from pathlib import Path
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
+
+_DEFAULT_TIKTOKEN_CACHE = Path(__file__).resolve().parents[3] / ".venv" / "data-gym-cache"
+if _DEFAULT_TIKTOKEN_CACHE.exists():
+    os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(_DEFAULT_TIKTOKEN_CACHE))
 
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -462,6 +468,7 @@ def record_analysis_run(
     target: AnalysisTarget,
     revision: str | None,
     result_payload: dict[str, Any] | None = None,
+    findings: list[dict[str, Any]] | None = None,
     error_message: str | None = None,
     findings_count: int = 0,
 ) -> None:
@@ -480,7 +487,7 @@ def record_analysis_run(
         "source_revision": revision,
         "findings_count": findings_count,
         "result_payload": result_payload,
-        "findings": [],
+        "findings": findings or [],
         "error_message": error_message,
         "created_at": now,
         "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
@@ -553,7 +560,7 @@ class LLMCodeExplanationService:
         "}"
     )
 
-    def __init__(self, llm_gateway: Any, model: str = "gemini-flash-latest") -> None:
+    def __init__(self, llm_gateway: Any, model: str = "gemini-flash-lite-latest") -> None:
         self._llm = llm_gateway
         self._model = model
 
