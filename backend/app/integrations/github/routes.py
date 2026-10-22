@@ -18,12 +18,14 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.integrations.github.schemas import (
+    AgentBranchRequest,
+    AgentBranchResponse,
     CommitDetail,
     CommitListResponse,
     FileContentResponse,
@@ -203,3 +205,45 @@ async def get_pull_request_diff(
         _request_user_id(request),
         pr_number,
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent branch creation (Day 3 execution transition)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/agent-branch",
+    response_model=AgentBranchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create agent branch for task execution",
+    description="Triggered when task transitions to EXECUTING. Creates agent/task-{task_id} from main.",
+)
+async def create_agent_branch_endpoint(
+    repository_id: UUID,
+    request: Request,
+    body: AgentBranchRequest | None = None,
+    task_id: str | None = Query(default=None, min_length=1, description="Task ID transitioning to EXECUTING"),
+    base_branch: str | None = Query(default=None, description="Optional base branch (defaults to repo default)"),
+    db: Session = Depends(get_db),
+) -> AgentBranchResponse:
+    from app.services.git_branch import GitBranchService
+
+    effective_task_id = (body.task_id if body else None) or task_id
+    if not effective_task_id:
+        raise APIError(422, ErrorCode.INVALID_REQUEST, "task_id is required in request body or query parameter.")
+    effective_base_branch = (body.base_branch if body and body.base_branch is not None else None) or base_branch
+
+    service = GitBranchService(db)
+    info = await service.on_task_executing(
+        repository_id=repository_id,
+        task_id=effective_task_id,
+        user_id=_request_user_id(request),
+        base_branch=effective_base_branch,
+    )
+    return AgentBranchResponse(
+        branch_name=info.branch_name,
+        base_branch=info.base_branch,
+        base_sha=info.base_sha,
+        status=info.status,
+    )
+

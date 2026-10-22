@@ -12,6 +12,7 @@ Branch naming convention: agent/task-{task_id} (e.g., agent/task-f47ac10b)
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
@@ -24,6 +25,18 @@ from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AgentBranchInfo:
+    """Metadata for an agent execution branch created when task enters EXECUTING."""
+
+    branch_name: str
+    base_branch: str
+    base_sha: str
+    repository_id: str
+    task_id: str
+    status: str  # "created" or "ready"
 
 
 def format_agent_branch_name(task_id: UUID | str) -> str:
@@ -126,16 +139,21 @@ class GitBranchService:
                 retryable=exc.retryable,
             ) from exc
 
-    async def create_agent_branch(
+    async def on_task_executing(
         self,
         repository_id: UUID | str,
         task_id: UUID | str,
         user_id: UUID | str | None = None,
         base_branch: str | None = None,
-    ) -> str:
-        """Create an isolated branch agent/task-{task_id} from the default branch.
+    ) -> AgentBranchInfo:
+        """Triggered when execution starts (task transitions to EXECUTING).
 
-        Returns the created branch name (e.g. 'agent/task-f47ac10b').
+        Creates the isolated agent branch from default branch (main):
+        main
+          └── agent/task-f47ac10b    ← created here
+
+        All agent file edits stay in the workspace directory only during Week 2.
+        The branch exists in Git pointing to base_sha without any commits yet.
         """
         repo = self._get_repository(repository_id, user_id)
         client = await self._get_client_for_repo(repo)
@@ -143,19 +161,35 @@ class GitBranchService:
         branch_name = format_agent_branch_name(task_id)
         source_branch = base_branch or repo.default_branch or "main"
 
-        # Check if agent branch already exists
+        # Check if agent branch already exists first (idempotent resume/re-execution)
         if await self.branch_exists(repository_id, branch_name, user_id):
             logger.info("Agent branch %s already exists for repo %s", branch_name, repo.id)
-            return branch_name
+            existing_sha = ""
+            try:
+                clean_branch = branch_name.removeprefix("refs/heads/")
+                existing_info = await client.get_branch(repo.owner, repo.name, clean_branch)
+                if isinstance(existing_info, dict):
+                    existing_sha = existing_info.get("commit", {}).get("sha", "")
+            except GitHubAPIError:
+                pass
 
-        # Get latest commit SHA of source branch
+            return AgentBranchInfo(
+                branch_name=branch_name,
+                base_branch=source_branch,
+                base_sha=existing_sha,
+                repository_id=str(repository_id),
+                task_id=str(task_id),
+                status="ready",
+            )
+
+        # Resolve latest commit SHA of source branch only when creating new branch
         try:
             branch_info = await client.get_branch(repo.owner, repo.name, source_branch)
-            source_sha = branch_info.get("commit", {}).get("sha")
+            source_sha = branch_info.get("commit", {}).get("sha") if isinstance(branch_info, dict) else None
             if not source_sha:
-                # Fallback to ref endpoint
                 ref_info = await client.get_ref(repo.owner, repo.name, f"heads/{source_branch}")
-                source_sha = ref_info.get("object", {}).get("sha")
+                if isinstance(ref_info, dict):
+                    source_sha = ref_info.get("object", {}).get("sha")
         except GitHubAPIError as exc:
             raise APIError(
                 502,
@@ -171,7 +205,7 @@ class GitBranchService:
                 f"Could not determine commit SHA for base branch '{source_branch}'.",
             )
 
-        # Create the branch ref
+        # Create branch ref pointing to source_sha
         try:
             await client.create_branch(repo.owner, repo.name, branch_name, source_sha)
             logger.info("Created agent branch %s at %s for repo %s", branch_name, source_sha, repo.id)
@@ -183,7 +217,28 @@ class GitBranchService:
                 retryable=exc.retryable,
             ) from exc
 
-        return branch_name
+        return AgentBranchInfo(
+            branch_name=branch_name,
+            base_branch=source_branch,
+            base_sha=source_sha,
+            repository_id=str(repository_id),
+            task_id=str(task_id),
+            status="created",
+        )
+
+    async def create_agent_branch(
+        self,
+        repository_id: UUID | str,
+        task_id: UUID | str,
+        user_id: UUID | str | None = None,
+        base_branch: str | None = None,
+    ) -> str:
+        """Create an isolated branch agent/task-{task_id} from the default branch.
+
+        Returns the created branch name (e.g. 'agent/task-f47ac10b').
+        """
+        info = await self.on_task_executing(repository_id, task_id, user_id, base_branch)
+        return info.branch_name
 
     async def delete_branch(
         self,
