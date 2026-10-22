@@ -556,6 +556,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 
+- ✅ Prit: Review source mapping — map changed lines & unified diff hunks to AST symbols, supply AST context, maintain file identity & 1-indexed line locations, report mapping limitations explicitly (`ReviewSourceMapper`)
 - ⬜ Parth: Retrieve authorized commit metadata and GitHub PR diffs via GitHub App
 - ⬜ Dev: `AICodeReviewEngine` analyzing changes across Correctness, Security, Performance, Reliability, Maintainability
 - ⬜ Devu: `StaticReviewer` running linters on modified files and merging with AI suggestions

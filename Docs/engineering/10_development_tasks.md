@@ -64,7 +64,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | IN PROGRESS | Purpose, logic flow, key symbols, data flow, limitations (Meet context enrichment done) |
 | W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
 | W2-13 | Feature 3: `TestGenerationService` & `FrameworkDetector` | Dev / Prit | P0 | IN PROGRESS | `FrameworkDetector` (DONE - Prit), test file generation (Dev) |
-| W2-14 | Feature 4: `AICodeReviewEngine` | Dev / Parth | P0 | TODO | Correctness, security, performance, maintainability diff review |
+| W2-14 | Feature 4: `AICodeReviewEngine` & `ReviewSourceMapper` | Dev / Parth / Prit | P0 | IN PROGRESS | `ReviewSourceMapper` (DONE - Prit), diff review engine (Dev/Parth) |
 | W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | TODO | Scenarios A–E, zero mock in production, docs update |
 
 ---
@@ -101,7 +101,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
 | **Om** | Analysis Persistence & Models | `analysis_runs`, `code_findings` models and migrations |
 | **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
-| **Prit** | AST Symbol & Line Range Mapper | Resolving functions/classes to exact source line ranges |
+| **Prit** | AST Symbol, Scanner & Review Source Mapper | `ReviewSourceMapper`, `FrameworkDetector`, `ASTBugAnalyzer`, `TargetSelector` |
 | **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |
 | **Sukun** | Prompt-Injection Defenses & Scrubbing | Untrusted data boundary markers, secret scrubbers |
 | **Keval** | Quality Fixtures & Regression Testing | Acceptance test suites, fixture codebases with defects |

@@ -508,6 +508,38 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day5] 2026-10-21 — Review Source Mapping & Diff AST Integration
+**Type:** Feature  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/source_mapper.py`:
+  - Created `ReviewSourceMapper` with dataclasses: `SymbolSummary`, `HunkASTContext`, `MappingLimitation`, `HunkMapping`, `FileSourceMapping`, and `ReviewSourceMapResult`
+  - Implemented unified git diff parser supporting file additions, modifications, renames, deletions, and standard chunk headers (`@@ -old_start,old_lines +new_start,new_lines @@`)
+  - Implemented symbol mapper resolving changed lines and diff hunks to enclosing functions, methods, classes, and scopes
+  - Implemented structural AST context provider (`HunkASTContext`) extracting node types, scope hierarchies, and syntax validation across Python and TypeScript/JavaScript
+  - Integrated `ASTBugAnalyzer` scoped strictly to modified line ranges `[start_line, end_line]` within diff hunks, surfacing immediate structural defects
+  - Implemented 1-indexed inclusive line preservation, revision metadata retention (`base_revision`, `head_revision`, `commit_sha`), and file path tracking
+  - Implemented explicit limitation reporting (`UNSUPPORTED_LANGUAGE`, `MODULE_LEVEL_CODE`, `DELETED_FILE`, `BINARY_FILE`, `LINE_OUT_OF_BOUNDS`, `SYNTAX_ERROR`)
+  - Added adapter methods:
+    - `to_source_references()`: Generates `AnalysisSourceReference` for review finding schemas
+    - `to_modified_files()`: Generates Meet's `ModifiedFile` dataclass objects for multi-file review context
+    - `map_commit_changes()`: Ingests commit change records directly (Parth's `CommitFileChange` format)
+- `backend/scanner/__init__.py`:
+  - Exported `ReviewSourceMapper`, `ReviewSourceMapResult`, `FileSourceMapping`, `HunkMapping`, `SymbolSummary`, `HunkASTContext`, and `MappingLimitation`
+- `backend/tests/test_source_mapper.py`:
+  - Added 21 unit and integration tests (100% passing) covering unified diff parsing, symbol mapping, AST context extraction, scoped defect evaluation, additions/renames/deletions, boundary out-of-bounds, syntax error tolerance, commit change mapping, and conversion adapters
+- `Docs/scanner_languages.md`:
+  - Added Section 9 documenting the Review Source Mapping specification, data contracts, and limitation reporting
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Marked Prit's Day 5 Review Source Mapping deliverable as completed
+
+**Impact:** Provides AST-aware diff mapping and immediate structural defect signals for the Standalone AI Code Review Engine (`backend/ai/review/`), linking modified lines to enclosing symbols and multi-file review context.
+
+**Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 
