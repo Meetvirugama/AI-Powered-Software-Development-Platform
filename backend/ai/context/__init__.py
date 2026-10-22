@@ -37,6 +37,7 @@ from ai.context.review_context import (
 from ai.context.service import (
     ALLOWED_AI_PROVIDERS,
     RepositoryContextService,
+    RevisionDriftError,
     shared_context_service,
 )
 from ai.context.test_context import (
@@ -63,6 +64,7 @@ __all__ = [
     "RepositoryFile",
     "ReviewBlastRadius",
     "ReviewContextBuilder",
+    "RevisionDriftError",
     "SymbolContext",
     "TargetSnippet",
     "TestContextBuilder",
