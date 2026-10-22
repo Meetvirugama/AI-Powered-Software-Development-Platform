@@ -4,3 +4,5 @@ ef73c57c88  # backend/tests/test_repository_isolation.py mock test token
 1311f8fc80  # Docs/project_idea.md documentation example
 fcf730b6d9  # Docs/week3.md documentation example
 8bcac7908e  # backend/README.md documentation example
+9915af1fc1  # backend/tests/test_static_reviewer.py mock test value
+654dcaa1e6  # backend/tests/test_static_reviewer.py mock test value

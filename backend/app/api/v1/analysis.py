@@ -1,6 +1,6 @@
-"""Developer Intelligence Suite API endpoints (Week 2).
+"""Developer Intelligence Suite API endpoints (Week 2 — Day 1 & Day 2).
 
-Owner: Yug — W2, Day 1 (API Foundation & Orchestration)
+Owner: Yug — W2, Day 1 & Day 2 (API Foundation & Code Explanation Endpoint)
 
 Endpoints registered:
 - POST /api/v1/repositories/{repository_id}/explain
@@ -9,21 +9,6 @@ Endpoints registered:
 - POST /api/v1/repositories/{repository_id}/review
 - GET  /api/v1/repositories/{repository_id}/analysis-runs
 - GET  /api/v1/analysis-runs/{run_id}
-
-Architectural Rules (Docs/week2.md & Docs/team_rules.md):
-1. Authenticate caller via JWT (`request.state.user_id`) and enforce repository
-   ownership (`RepositoryRepository(db).get_for_user(repository_id, user_id)`)
-   before accessing any file metadata, database records, or AI services.
-2. Validate all repository-relative file paths using `require_safe_repo_path()`
-   to reject path traversal (`../`, absolute paths, backslashes, control chars)
-   with HTTP 400 `INVALID_REQUEST`.
-3. Verify indexed file bounds (existence, line count, max 1 MB size) when
-   repository file records are present in the database session.
-4. Consume downstream AI and persistence services via Protocol boundaries on
-   `request.app.state` (`explanation_service`, `bug_detection_service`,
-   `test_generation_service`, `code_review_service`, `analysis_run_service`).
-5. Never misrepresent a provider failure or schema validation error as a
-   successful empty analysis result.
 """
 
 from __future__ import annotations
@@ -69,12 +54,16 @@ from app.schemas.analysis import (
     TestGenerationResponse,
     TestGenerationResult,
 )
+from app.services.explanation_orchestrator import (
+    MAX_ANALYZABLE_FILE_BYTES,
+    ground_explanation_sources,
+    record_analysis_run,
+    resolve_target_and_build_context,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["analysis"])
-
-MAX_ANALYZABLE_FILE_BYTES = 1_048_576  # 1 MB ceiling matching FileWalker
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +239,7 @@ async def _invoke_service_method(
     user_id: UUID,
     db: Session,
     file_record: RepositoryFile | None = None,
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     """Invoke a sync or async service method while passing supported keyword args."""
     kwargs: dict[str, Any] = {}
@@ -265,6 +255,10 @@ async def _invoke_service_method(
             kwargs["db"] = db
         if file_record is not None and (accepts_var_kw or "file_record" in params):
             kwargs["file_record"] = file_record
+        if extra_kwargs:
+            for k, v in extra_kwargs.items():
+                if accepts_var_kw or k in params:
+                    kwargs[k] = v
     except (TypeError, ValueError):
         pass
 
@@ -314,61 +308,85 @@ async def explain_code(
     request: Request,
     db: Session = Depends(get_db),
 ) -> CodeExplanationResponse:
-    """Authenticate, verify repository ownership, validate target, and return a grounded explanation."""
+    """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
+    # Steps 1 & 2: Authenticate user and verify repository ownership
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    file_record = _validate_and_normalize_code_target(repository_id, payload.target, db)
 
+    # Steps 3, 4 & 5: Validate target, resolve AST symbol/range, fetch source & IntelligenceContext
+    resolved = resolve_target_and_build_context(repository_id, repo, payload, db)
+    payload.target = resolved.target
+
+    # Step 6: Resolve and invoke explanation service
     service = _get_service(request, "explanation_service", "Code explanation")
-    method = getattr(service, "explain", service) if not callable(service) else service
-    if hasattr(service, "explain"):
-        method = service.explain
+    method = service.explain if hasattr(service, "explain") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-        file_record=file_record,
-    )
+    run_id = str(uuid4())
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+            file_record=resolved.file_record,
+            extra_kwargs={
+                "context": resolved.intelligence_context,
+                "code_content": resolved.code_content,
+                "revision": resolved.revision,
+            },
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="explain",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=exc.message,
+            )
+        raise
 
-    revision = payload.target.revision or getattr(repo, "default_branch", "main")
+    # Step 7: Validate output schema and ground source references
     try:
         if isinstance(raw_result, CodeExplanationResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            explanation = raw_result.explanation
+            revision = raw_result.revision or resolved.revision
         elif isinstance(raw_result, CodeExplanation):
-            response = CodeExplanationResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                explanation=raw_result,
-            )
+            status_val = "COMPLETED"
+            explanation = raw_result
+            revision = resolved.revision
         elif isinstance(raw_result, dict) and "explanation" in raw_result:
-            response = CodeExplanationResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "revision": raw_result.get("revision") or revision,
-                    "explanation": raw_result["explanation"],
-                }
-            )
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            revision = raw_result.get("revision") or resolved.revision
+            explanation = CodeExplanation.model_validate(raw_result["explanation"])
         else:
+            status_val = "COMPLETED"
+            revision = resolved.revision
             explanation = CodeExplanation.model_validate(raw_result)
-            response = CodeExplanationResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                explanation=explanation,
-            )
     except ValidationError as exc:
         logger.error("explain_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="explain",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message="Code explanation service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -376,13 +394,59 @@ async def explain_code(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
+    if status_val == "FAILED":
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="explain",
+                status="FAILED",
+                target=resolved.target,
+                revision=revision,
+                error_message="Code explanation failed during execution.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
             "Code explanation failed during execution.",
             retryable=True,
         )
+
+    grounded_explanation = ground_explanation_sources(
+        explanation,
+        repository_id=repository_id,
+        resolved=resolved,
+    )
+
+    response = CodeExplanationResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=resolved.target,
+        revision=revision,
+        explanation=grounded_explanation,
+    )
+
+    # Step 8: Persist completed analysis run if requested
+    if payload.options.persist_run:
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="explain",
+            status=response.status,
+            target=response.target,
+            revision=response.revision,
+            result_payload=response.model_dump(mode="json"),
+            findings_count=0,
+        )
+
+    # Step 9: Return structured response
     return response
 
 
@@ -703,7 +767,7 @@ async def list_analysis_runs(
             items=[_coerce_run_summary(item, repository_id) for item in items],
         )
 
-    # Fallback: check if Om's AnalysisRunRepository is available in app.repositories
+    # Try Om's AnalysisRunRepository if available
     try:
         from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
 
@@ -722,12 +786,28 @@ async def list_analysis_runs(
             items=[_coerce_run_summary(item, repository_id) for item in items],
         )
     except Exception:
-        return PaginatedAnalysisRunResponse(
-            page=page,
-            page_size=page_size,
-            total=0,
-            items=[],
-        )
+        pass
+
+    # Fallback: read from in-memory `_analysis_run_history` recorded by orchestrator
+    history_store: dict[str, dict[str, Any]] = getattr(
+        request.app.state, "_analysis_run_history", {}
+    )
+    matching = [
+        r
+        for r in history_store.values()
+        if str(r.get("repository_id")) == str(repository_id)
+        and (feature_type is None or r.get("feature_type") == feature_type)
+        and (status is None or r.get("status") == status)
+    ]
+    matching.sort(key=lambda r: r.get("created_at", datetime.min), reverse=True)
+    total = len(matching)
+    sliced = matching[offset : offset + page_size]
+    return PaginatedAnalysisRunResponse(
+        page=page,
+        page_size=page_size,
+        total=total,
+        items=[_coerce_run_summary(item, repository_id) for item in sliced],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +841,12 @@ async def get_analysis_run(
             run_record = AnalysisRunRepository(db).get_by_id(run_id)
         except Exception:
             run_record = None
+
+    if run_record is None:
+        history_store: dict[str, dict[str, Any]] = getattr(
+            request.app.state, "_analysis_run_history", {}
+        )
+        run_record = history_store.get(str(run_id))
 
     if run_record is None:
         raise APIError(404, ErrorCode.ANALYSIS_RUN_NOT_FOUND, "Analysis run not found.")
