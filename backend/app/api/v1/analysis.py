@@ -1,6 +1,6 @@
-"""Developer Intelligence Suite API endpoints (Week 2 — Day 1 & Day 2).
+"""Developer Intelligence Suite API endpoints (Week 2 — Day 1, Day 2 & Day 3).
 
-Owner: Yug — W2, Day 1 & Day 2 (API Foundation & Code Explanation Endpoint)
+Owner: Yug — W2, Day 1–3 (API Foundation, Code Explanation & Dedicated Bug Detection)
 
 Endpoints registered:
 - POST /api/v1/repositories/{repository_id}/explain
@@ -53,6 +53,12 @@ from app.schemas.analysis import (
     TestGenerationRequest,
     TestGenerationResponse,
     TestGenerationResult,
+)
+from app.services.bug_detection_orchestrator import (
+    BuiltinStaticBugScanner,
+    filter_and_rank_findings,
+    merge_and_deduplicate_findings,
+    normalize_and_ground_findings,
 )
 from app.services.explanation_orchestrator import (
     MAX_ANALYZABLE_FILE_BYTES,
@@ -309,15 +315,12 @@ async def explain_code(
     db: Session = Depends(get_db),
 ) -> CodeExplanationResponse:
     """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
-    # Steps 1 & 2: Authenticate user and verify repository ownership
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
 
-    # Steps 3, 4 & 5: Validate target, resolve AST symbol/range, fetch source & IntelligenceContext
     resolved = resolve_target_and_build_context(repository_id, repo, payload, db)
     payload.target = resolved.target
 
-    # Step 6: Resolve and invoke explanation service
     service = _get_service(request, "explanation_service", "Code explanation")
     method = service.explain if hasattr(service, "explain") else service
 
@@ -352,7 +355,6 @@ async def explain_code(
             )
         raise
 
-    # Step 7: Validate output schema and ground source references
     try:
         if isinstance(raw_result, CodeExplanationResponse):
             run_id = raw_result.run_id or run_id
@@ -430,7 +432,6 @@ async def explain_code(
         explanation=grounded_explanation,
     )
 
-    # Step 8: Persist completed analysis run if requested
     if payload.options.persist_run:
         record_analysis_run(
             request.app.state,
@@ -446,7 +447,6 @@ async def explain_code(
             findings_count=0,
         )
 
-    # Step 9: Return structured response
     return response
 
 
@@ -465,83 +465,161 @@ async def detect_bugs(
     request: Request,
     db: Session = Depends(get_db),
 ) -> BugDetectionResponse:
-    """Run static and AI defect analysis on an authorized repository target."""
+    """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    file_record = _validate_and_normalize_code_target(repository_id, payload.target, db)
+
+    explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
+    resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+    payload.target = resolved.target
 
     service = _get_service(request, "bug_detection_service", "Bug detection")
     method = service.detect_bugs if hasattr(service, "detect_bugs") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-        file_record=file_record,
-    )
+    run_id = str(uuid4())
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+            file_record=resolved.file_record,
+            extra_kwargs={
+                "context": resolved.intelligence_context,
+                "code_content": resolved.code_content,
+                "revision": resolved.revision,
+            },
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="detect_bugs",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=exc.message,
+            )
+        raise
 
-    revision = payload.target.revision or getattr(repo, "default_branch", "main")
+    extra_static_raw: list[Any] = []
+    parser_warnings: list[str] = []
+    if payload.include_static:
+        ext_scanner = getattr(request.app.state, "static_bug_scanner", None)
+        if ext_scanner is not None:
+            scan_fn = getattr(ext_scanner, "scan", ext_scanner)
+            if callable(scan_fn):
+                try:
+                    ext_res = scan_fn(
+                        repository_id=repository_id,
+                        file_path=resolved.target.path,
+                        code_content=resolved.code_content,
+                        target=resolved.target,
+                    )
+                    if inspect.isawaitable(ext_res):
+                        ext_res = await ext_res
+                    if isinstance(ext_res, dict):
+                        extra_static_raw.extend(ext_res.get("findings", []))
+                    elif isinstance(ext_res, list):
+                        extra_static_raw.extend(ext_res)
+                except Exception as exc:
+                    logger.warning("external_static_scanner_error", extra={"error": str(exc)})
+                    parser_warnings.append("External static scanner encountered an error.")
+
+        if resolved.code_content:
+            builtin_items, builtin_warns = BuiltinStaticBugScanner().scan(
+                file_path=resolved.target.path,
+                code_content=resolved.code_content,
+                language=(resolved.file_record.language if resolved.file_record else "Python") or "Python",
+                base_start_line=resolved.target.start_line or 1,
+                revision=resolved.revision,
+                repository_id=str(repository_id),
+            )
+            extra_static_raw.extend(builtin_items)
+            parser_warnings.extend(builtin_warns)
+
+    status_val = "COMPLETED"
+    revision = resolved.revision
+    service_missing_ctx: list[str] = []
     try:
         if isinstance(raw_result, BugDetectionResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            revision = raw_result.revision or resolved.revision
+            raw_findings_list: list[Any] = list(raw_result.findings)
+            service_missing_ctx = list(raw_result.missing_context)
         elif isinstance(raw_result, dict):
-            findings_raw = raw_result.get("findings", [])
-            response = BugDetectionResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "revision": raw_result.get("revision") or revision,
-                    "findings": findings_raw,
-                    "total_findings": raw_result.get("total_findings", len(findings_raw)),
-                    "static_findings_count": raw_result.get(
-                        "static_findings_count",
-                        sum(
-                            1
-                            for f in findings_raw
-                            if (
-                                f.get("source_type")
-                                if isinstance(f, dict)
-                                else getattr(f, "source_type", None)
-                            )
-                            == "STATIC"
-                        ),
-                    ),
-                    "ai_findings_count": raw_result.get(
-                        "ai_findings_count",
-                        sum(
-                            1
-                            for f in findings_raw
-                            if (
-                                f.get("source_type")
-                                if isinstance(f, dict)
-                                else getattr(f, "source_type", None)
-                            )
-                             in ("AI", "COMBINED")
-                        ),
-                    ),
-                    "missing_context": raw_result.get("missing_context", []),
-                }
-            )
+            if "findings" not in raw_result and "status" not in raw_result:
+                raise ValueError("Bug detection dict result must contain 'findings'.")
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            revision = raw_result.get("revision") or resolved.revision
+            raw_findings_list = list(raw_result.get("findings", []))
+            service_missing_ctx = list(raw_result.get("missing_context", []))
         elif isinstance(raw_result, list):
-            response = BugDetectionResponse.model_validate(
-                {
-                    "run_id": str(uuid4()),
-                    "repository_id": str(repository_id),
-                    "status": "COMPLETED",
-                    "target": payload.target,
-                    "revision": revision,
-                    "findings": raw_result,
-                    "total_findings": len(raw_result),
-                }
-            )
+            raw_findings_list = list(raw_result)
         else:
-            response = BugDetectionResponse.model_validate(raw_result)
-    except ValidationError as exc:
+            parsed_resp = BugDetectionResponse.model_validate(raw_result)
+            run_id = parsed_resp.run_id or run_id
+            status_val = parsed_resp.status
+            revision = parsed_resp.revision or resolved.revision
+            raw_findings_list = list(parsed_resp.findings)
+            service_missing_ctx = list(parsed_resp.missing_context)
+
+        if status_val == "FAILED":
+            if payload.options.persist_run:
+                record_analysis_run(
+                    request.app.state,
+                    db,
+                    run_id=run_id,
+                    repository_id=repository_id,
+                    user_id=user_id,
+                    feature_type="detect_bugs",
+                    status="FAILED",
+                    target=resolved.target,
+                    revision=revision,
+                    error_message="Bug detection scan failed.",
+                )
+            raise APIError(
+                500,
+                ErrorCode.ANALYSIS_FAILED,
+                "Bug detection scan failed.",
+                retryable=True,
+            )
+
+        grounded_service, _ = normalize_and_ground_findings(
+            raw_findings_list,
+            repository_id=repository_id,
+            resolved=resolved,
+        )
+        grounded_static, _ = normalize_and_ground_findings(
+            extra_static_raw,
+            repository_id=repository_id,
+            resolved=resolved,
+            default_source_type="STATIC",
+        )
+    except APIError:
+        raise
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.error("detect_bugs_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="detect_bugs",
+                status="FAILED",
+                target=resolved.target,
+                revision=revision,
+                error_message="Bug detection service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -549,13 +627,53 @@ async def detect_bugs(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
-        raise APIError(
-            500,
-            ErrorCode.ANALYSIS_FAILED,
-            "Bug detection scan failed.",
-            retryable=True,
+    merged_findings = merge_and_deduplicate_findings([*grounded_static, *grounded_service])
+    ranked_findings = filter_and_rank_findings(
+        merged_findings,
+        min_severity=payload.min_severity,
+        include_static=payload.include_static,
+        include_ai=payload.include_ai,
+    )
+
+    static_count = sum(
+        1 for f in ranked_findings if f.source_type in ("STATIC", "COMBINED")
+    )
+    ai_count = sum(
+        1 for f in ranked_findings if f.source_type in ("AI", "COMBINED")
+    )
+    merged_missing = list(
+        dict.fromkeys([*resolved.missing_context, *parser_warnings, *service_missing_ctx])
+    )
+
+    response = BugDetectionResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=resolved.target,
+        revision=revision,
+        findings=ranked_findings,
+        total_findings=len(ranked_findings),
+        static_findings_count=static_count,
+        ai_findings_count=ai_count,
+        missing_context=merged_missing,
+    )
+
+    if payload.options.persist_run:
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="detect_bugs",
+            status=response.status,
+            target=response.target,
+            revision=response.revision,
+            result_payload=response.model_dump(mode="json"),
+            findings=[f.model_dump(mode="json") for f in ranked_findings],
+            findings_count=len(ranked_findings),
         )
+
     return response
 
 
@@ -767,7 +885,6 @@ async def list_analysis_runs(
             items=[_coerce_run_summary(item, repository_id) for item in items],
         )
 
-    # Try Om's AnalysisRunRepository if available
     try:
         from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
 
@@ -788,7 +905,6 @@ async def list_analysis_runs(
     except Exception:
         pass
 
-    # Fallback: read from in-memory `_analysis_run_history` recorded by orchestrator
     history_store: dict[str, dict[str, Any]] = getattr(
         request.app.state, "_analysis_run_history", {}
     )
@@ -861,7 +977,6 @@ async def get_analysis_run(
     except (TypeError, ValueError) as exc:
         raise APIError(404, ErrorCode.ANALYSIS_RUN_NOT_FOUND, "Analysis run not found.") from exc
 
-    # Enforce strict repository authorization before returning the run payload
     _owned_repository(repo_uuid, request, db)
 
     if isinstance(run_record, AnalysisRunDetailResponse):
