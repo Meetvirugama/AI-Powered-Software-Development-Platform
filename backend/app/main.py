@@ -132,6 +132,12 @@ async def lifespan(app: FastAPI):
                 model=settings.gemini_chat_model,
             )
             logger.info("explanation_service_ready")
+
+        # ── Week 2: Shared Repository Context Service ────────────────────────
+        from ai.context import shared_context_service
+
+        app.state.context_service = shared_context_service
+        logger.info("context_service_ready")
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None

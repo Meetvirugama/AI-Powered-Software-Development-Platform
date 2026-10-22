@@ -57,7 +57,7 @@
 
 | Feature | Owner | Status | Notes |
 |---|---|---|---|
-| Shared `IntelligenceContext` Contract | Meet | 🟢 Done | Context enrichment, target snippet, callers |
+| Shared `IntelligenceContext` & Facade Service | Meet | 🟢 Done | Context enrichment, bug/test/review builders, caching & drift gate |
 | Developer Intelligence Schemas | Dev | 🔵 In Progress | Explanation, BugFinding, TestGen, ReviewReport |
 | Workbench Drawers & Action Triggers | Dhramraj | 🔵 In Progress | Explain, Bug, Test, Review drawer shells |
 | Analysis REST Endpoints | Yug | 🔵 In Progress | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
