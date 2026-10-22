@@ -1004,7 +1004,10 @@ async def get_analysis_run(
         source_revision=getattr(run_record, "source_revision", None),
         findings_count=getattr(run_record, "findings_count", 0) or 0,
         result_payload=getattr(run_record, "result_payload", None),
-        findings=getattr(run_record, "findings", []) or [],
+        findings=[
+            f.to_dict() if hasattr(f, "to_dict") else f
+            for f in (getattr(run_record, "findings", []) or [])
+        ],
         error_message=getattr(run_record, "error_message", None),
         created_at=getattr(run_record, "created_at", datetime.now(timezone.utc)),
         completed_at=getattr(run_record, "completed_at", None),

@@ -4,3 +4,12 @@ from .chunk_repository import ChunkRepository
 from .memory_repository import MemoryRepository
 from .code_symbol_repository import CodeSymbolRepository
 from .symbol_edge_repository import SymbolEdgeRepository
+from .analysis_run_repository import AnalysisRunRepository
+
+__all__ = [
+    "ChunkRepository",
+    "MemoryRepository",
+    "CodeSymbolRepository",
+    "SymbolEdgeRepository",
+    "AnalysisRunRepository",
+]
