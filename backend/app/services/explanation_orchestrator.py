@@ -553,7 +553,7 @@ class LLMCodeExplanationService:
         "}"
     )
 
-    def __init__(self, llm_gateway: Any, model: str = "gemini-flash-lite-latest") -> None:
+    def __init__(self, llm_gateway: Any, model: str = "gemini-flash-latest") -> None:
         self._llm = llm_gateway
         self._model = model
 

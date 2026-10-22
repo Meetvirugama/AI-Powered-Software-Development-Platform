@@ -56,6 +56,47 @@ def test_github_login_redirects_with_a_csrf_state(monkeypatch) -> None:
     assert "oauth_state=" in response.headers["set-cookie"]
 
 
+def test_github_callback_rejects_missing_state(monkeypatch) -> None:
+    _configure_auth(monkeypatch)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/api/v1/auth/github/callback?code=foo")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "BAD_REQUEST"
+
+
+def test_github_callback_validates_redis_state(monkeypatch) -> None:
+    fake_redis = _configure_auth(monkeypatch)
+    fake_redis.blocklisted.add("oauth_state:valid-state")
+
+    async def mock_user(code: str):
+        return {"id": 1234, "login": "testuser", "email": "test@test.com", "avatar_url": None}
+
+    monkeypatch.setattr("app.api.v1.auth._github_user_for_code", mock_user)
+
+    class FakeUserRepo:
+        def __init__(self, session: object) -> None:
+            pass
+
+        def upsert_github_user(self, *args: object, **kwargs: object) -> object:
+            from app.models.user import User
+
+            u = User(login="testuser", github_id=1234)
+            u.id = "0e969876-16d2-4c9f-8fe1-a849f32fa605"
+            return u
+
+    monkeypatch.setattr("app.api.v1.auth.UserRepository", FakeUserRepo)
+    app.dependency_overrides[get_db] = lambda: object()
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_logout_blocklists_current_token(monkeypatch) -> None:
     _configure_auth(monkeypatch)
     token, _ = create_access_token("0e969876-16d2-4c9f-8fe1-a849f32fa605")

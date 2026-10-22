@@ -46,22 +46,23 @@ _BACKOFF_BASE_SECONDS: float = 1.0
 _GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
-_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+_DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 # Map standard/legacy model names to current Groq endpoints
 _MODEL_MAP: dict[str, str] = {
-    "llama-3.3-70b-versatile": "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant": "llama-3.1-8b-instant",
-    "llama3-70b-8192": "llama-3.3-70b-versatile",
-    "llama3-8b-8192": "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768": "mixtral-8x7b-32768",
+    "openai/gpt-oss-120b": "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b": "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b": "qwen/qwen3.8-27b",
-    # Legacy fallbacks
-    "gpt-4o": "llama-3.3-70b-versatile",
-    "gpt-4": "llama-3.3-70b-versatile",
-    "gpt-3.5-turbo": "llama-3.1-8b-instant",
-    "openai/gpt-oss-120b": "llama-3.3-70b-versatile",
-    "openai/gpt-oss-20b": "llama-3.1-8b-instant",
+    "allam-2-7b": "allam-2-7b",
+    # Legacy and fallback mappings to active Groq models
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "llama3-70b-8192": "openai/gpt-oss-120b",
+    "llama3-8b-8192": "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768": "qwen/qwen3.8-27b",
+    "gpt-4o": "openai/gpt-oss-120b",
+    "gpt-4": "openai/gpt-oss-120b",
+    "gpt-3.5-turbo": "openai/gpt-oss-20b",
 }
 
 
