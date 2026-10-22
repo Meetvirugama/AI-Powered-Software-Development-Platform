@@ -539,6 +539,33 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day7] 2026-10-22 — Shared Context Verification, Revision Hardening & Budget Audit
+**Type:** Feature  
+**Developer:** Meet  
+**Changes:**
+- `backend/ai/context/service.py`:
+  - Added `RevisionDriftError` exception with fail-closed semantics for drift detection
+  - Implemented `verify_revision_consistency` supporting both strict equality and loose branch matching with explicit drift detail reporting
+  - Implemented `assert_revision_consistency` raising `RevisionDriftError` on drift detection
+  - Fixed multi-file review cache key collisions by hashing sorted modified file paths and diff lengths into a deterministic SHA-256 digest
+  - Implemented `invalidate_cache_for_repository` with optional revision targeting, eviction tracking, and metric logging
+  - Added repository-aware `CacheEntry` tracking `repository_id`
+  - Added static budget audit and estimation utilities: `audit_context_budget` and `estimate_context_tokens`
+  - Enforced `ALLOWED_AI_PROVIDERS = frozenset({"gemini", "groq"})` across all four intelligence context retrievers (`get_explanation_context`, `get_bug_context`, `get_test_context`, `get_review_context`)
+- `backend/ai/context/__init__.py`:
+  - Exported `RevisionDriftError` in public package API
+- `backend/tests/test_meet_day7_context_verification.py`:
+  - Added 12 comprehensive unit and integration tests covering shared retrieval across all 4 features, review cache collision resolution, revision drift handling, repository cache invalidation, provider policy enforcement, token budget audits, hard truncation limits, missing context transparency, LRU eviction, and acceptance scenarios
+- `Docs/engineering/10_development_tasks.md` & `Docs/daily_tasks.md`:
+  - Updated Week 2 Day 7 verification and quality gate task status
+
+**Impact:** Guarantees deterministic, fail-closed context retrieval, tamper-resistant caching, and strict provider/token budget enforcement across all four Week 2 developer intelligence features.
+
+**Related Docs:** `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 

@@ -53,13 +53,27 @@ logger = logging.getLogger(__name__)
 ALLOWED_AI_PROVIDERS = frozenset({"gemini", "groq"})
 
 
+class RevisionDriftError(ValueError):
+    """Raised when repository context detects revision drift or unauthorized divergence."""
+
+    def __init__(self, expected_revision: str, actual_revision: str | None, details: str = ""):
+        self.expected_revision = expected_revision
+        self.actual_revision = actual_revision
+        self.details = details
+        msg = f"Revision drift detected: expected '{expected_revision}', found '{actual_revision}'."
+        if details:
+            msg += f" {details}"
+        super().__init__(msg)
+
+
 @dataclass
 class CacheEntry:
-    """Cached intelligence context with creation timestamp and revision hash."""
+    """Cached intelligence context with creation timestamp, revision hash, and repository ID."""
 
     context: IntelligenceContext
     created_at: float
     revision: str | None
+    repository_id: str = ""
 
 
 class RepositoryContextService:
@@ -97,6 +111,36 @@ class RepositoryContextService:
         self._hits = 0
         self._misses = 0
 
+    def invalidate_cache_for_repository(
+        self,
+        repository_id: str,
+        new_revision: str | None = None,
+    ) -> int:
+        """
+        Evict cached entries for a given repository.
+        If new_revision is provided, invalidates entries whose revision does not match new_revision.
+        If new_revision is None, invalidates all entries for repository_id.
+        Returns the number of evicted entries.
+        """
+        keys_to_delete = [
+            k
+            for k, entry in self._cache.items()
+            if entry.repository_id == repository_id
+            and (new_revision is None or entry.revision != new_revision)
+        ]
+        for k in keys_to_delete:
+            del self._cache[k]
+
+        logger.info(
+            "repository_cache_invalidated",
+            extra={
+                "repository_id": repository_id,
+                "evicted": len(keys_to_delete),
+                "new_revision": new_revision,
+            },
+        )
+        return len(keys_to_delete)
+
     @staticmethod
     def validate_provider_policy(provider_name: str) -> None:
         """
@@ -113,14 +157,103 @@ class RepositoryContextService:
     def verify_revision_consistency(
         expected_revision: str | None,
         context: IntelligenceContext,
+        *,
+        strict: bool = False,
     ) -> bool:
         """
         Verify that all elements in the context match the expected source revision.
-        Returns True if consistent, False if drift detected.
+        In non-strict mode: returns True if either expected_revision or context.revision is unset.
+        In strict mode: expected_revision must be provided and must match context.revision
+        and target_snippet.revision (if set).
         """
-        if not expected_revision or not context.revision:
-            return True
-        return context.revision == expected_revision
+        if not expected_revision:
+            return not strict or context.revision is None
+
+        if strict and not context.revision:
+            return False
+
+        if context.revision and context.revision != expected_revision:
+            return False
+
+        if context.target and context.target.revision:
+            if context.target.revision != expected_revision:
+                return False
+
+        return True
+
+    @classmethod
+    def assert_revision_consistency(
+        cls,
+        expected_revision: str | None,
+        context: IntelligenceContext,
+        *,
+        strict: bool = True,
+    ) -> None:
+        """
+        Fail-closed assertion ensuring revision consistency.
+        Raises RevisionDriftError if any drift is detected.
+        """
+        if not cls.verify_revision_consistency(expected_revision, context, strict=strict):
+            actual = context.revision or (context.target.revision if context.target else None)
+            target_path = context.target.file_path if context.target else "unknown"
+            raise RevisionDriftError(
+                expected_revision=str(expected_revision),
+                actual_revision=actual,
+                details=f"Context target: {target_path}",
+            )
+
+    @staticmethod
+    def audit_context_budget(
+        context: IntelligenceContext,
+        limits: ContextLimits | None = None,
+    ) -> dict[str, Any]:
+        """
+        Audit the token consumption and bounding compliance of an assembled IntelligenceContext.
+        Provides breakdown across target code, symbols, rules, chunks, and missing context.
+        """
+        budget = limits.max_tokens if limits else context.token_budget
+        target_tokens = count_tokens(context.target.content) if context.target else 0
+        symbol_tokens = sum(count_tokens(s.content) for s in context.related_symbols)
+        rule_tokens = sum(count_tokens(r) for r in context.project_rules)
+        chunk_tokens = sum(count_tokens(getattr(c, "content", "")) for c in context.relevant_chunks)
+
+        within_budget = context.total_tokens <= budget
+        utilization = round((context.total_tokens / budget), 4) if budget > 0 else 0.0
+
+        return {
+            "total_tokens": context.total_tokens,
+            "token_budget": budget,
+            "within_budget": within_budget,
+            "utilization_ratio": utilization,
+            "status": context.status.value if hasattr(context.status, "value") else str(context.status),
+            "target_tokens": target_tokens,
+            "symbol_tokens": symbol_tokens,
+            "rule_tokens": rule_tokens,
+            "chunk_tokens": chunk_tokens,
+            "symbol_count": len(context.related_symbols),
+            "missing_context_count": len(context.missing_context),
+            "is_complete": context.is_complete,
+            "revision": context.revision,
+        }
+
+    @staticmethod
+    def estimate_context_tokens(
+        target_code: str,
+        related_symbols: Sequence[SymbolContext] | None = None,
+        repository_files: Sequence[RepositoryFile] | None = None,
+        project_rules: Sequence[str] | None = None,
+    ) -> int:
+        """
+        Rapid token pre-flight estimator before executing full multi-source assembly.
+        """
+        total = count_tokens(target_code or "")
+        if related_symbols:
+            total += sum(count_tokens(s.content or s.name) for s in related_symbols)
+        if repository_files:
+            total += len(repository_files) * 5
+        if project_rules:
+            total += sum(count_tokens(r) for r in project_rules)
+        return total
 
     def _cache_key(
         self,
@@ -157,7 +290,13 @@ class RepositoryContextService:
         self._hits += 1
         return entry.context
 
-    def _store_cache(self, key: str, context: IntelligenceContext, revision: str | None) -> None:
+    def _store_cache(
+        self,
+        key: str,
+        context: IntelligenceContext,
+        revision: str | None,
+        repository_id: str = "",
+    ) -> None:
         if len(self._cache) >= self.max_cache_size:
             # Evict oldest entry
             oldest_key = min(self._cache, key=lambda k: self._cache[k].created_at)
@@ -167,6 +306,7 @@ class RepositoryContextService:
             context=context,
             created_at=time.time(),
             revision=revision,
+            repository_id=repository_id,
         )
 
     # ------------------------------------------------------------------
@@ -183,8 +323,12 @@ class RepositoryContextService:
         repository_files: Sequence[RepositoryFile] | None = None,
         limits: ContextLimits | None = None,
         revision: str | None = None,
+        ai_provider: str | None = None,
         use_cache: bool = True,
     ) -> IntelligenceContextResponse:
+        if ai_provider:
+            self.validate_provider_policy(ai_provider)
+
         t0 = time.time()
         rev = revision or target.revision
         ckey = self._cache_key(
@@ -212,7 +356,7 @@ class RepositoryContextService:
         )
 
         if use_cache and ctx.is_complete:
-            self._store_cache(ckey, ctx, rev)
+            self._store_cache(ckey, ctx, rev, repository_id=repository_id)
 
         elapsed = (time.time() - t0) * 1000
         return IntelligenceContextResponse(
@@ -234,8 +378,12 @@ class RepositoryContextService:
         repository_files: Sequence[RepositoryFile] | None = None,
         limits: ContextLimits | None = None,
         revision: str | None = None,
+        ai_provider: str | None = None,
         use_cache: bool = True,
     ) -> IntelligenceContextResponse:
+        if ai_provider:
+            self.validate_provider_policy(ai_provider)
+
         t0 = time.time()
         rev = revision or target.revision
         ckey = self._cache_key(
@@ -262,7 +410,7 @@ class RepositoryContextService:
         )
 
         if use_cache and ctx.is_complete:
-            self._store_cache(ckey, ctx, rev)
+            self._store_cache(ckey, ctx, rev, repository_id=repository_id)
 
         elapsed = (time.time() - t0) * 1000
         return IntelligenceContextResponse(
@@ -286,8 +434,12 @@ class RepositoryContextService:
         repository_files: Sequence[RepositoryFile] | None = None,
         limits: ContextLimits | None = None,
         revision: str | None = None,
+        ai_provider: str | None = None,
         use_cache: bool = True,
     ) -> IntelligenceContextResponse:
+        if ai_provider:
+            self.validate_provider_policy(ai_provider)
+
         t0 = time.time()
         rev = revision or target.revision
         ckey = self._cache_key(
@@ -316,7 +468,7 @@ class RepositoryContextService:
         )
 
         if use_cache and ctx.is_complete:
-            self._store_cache(ckey, ctx, rev)
+            self._store_cache(ckey, ctx, rev, repository_id=repository_id)
 
         elapsed = (time.time() - t0) * 1000
         return IntelligenceContextResponse(
@@ -337,12 +489,22 @@ class RepositoryContextService:
         symbol_graph: Sequence[SymbolContext] | None = None,
         repository_files: Sequence[RepositoryFile] | None = None,
         limits: ContextLimits | None = None,
+        ai_provider: str | None = None,
         use_cache: bool = True,
     ) -> IntelligenceContextResponse:
+        if ai_provider:
+            self.validate_provider_policy(ai_provider)
+
         t0 = time.time()
         rev = f"{base_revision}..{head_revision}"
+        # Compute deterministic files digest to avoid collisions across distinct diffs with identical file count
+        files_sig = "|".join(
+            f"{mf.file_path}:{mf.change_type}:{len(mf.diff_hunks)}"
+            for mf in sorted(modified_files, key=lambda m: m.file_path)
+        )
+        files_hash = hashlib.sha256(files_sig.encode("utf-8")).hexdigest()[:16]
         ckey = self._cache_key(
-            "review", repository_id, "multi-diff", 1, len(modified_files), None, rev
+            "review", repository_id, f"multi-diff:{files_hash}", 1, len(modified_files), None, rev
         )
 
         if use_cache:
@@ -364,7 +526,7 @@ class RepositoryContextService:
         )
 
         if use_cache and ctx.is_complete:
-            self._store_cache(ckey, ctx, rev)
+            self._store_cache(ckey, ctx, rev, repository_id=repository_id)
 
         elapsed = (time.time() - t0) * 1000
         return IntelligenceContextResponse(
