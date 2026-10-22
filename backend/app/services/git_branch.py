@@ -161,13 +161,35 @@ class GitBranchService:
         branch_name = format_agent_branch_name(task_id)
         source_branch = base_branch or repo.default_branch or "main"
 
-        # Resolve latest commit SHA of source branch
+        # Check if agent branch already exists first (idempotent resume/re-execution)
+        if await self.branch_exists(repository_id, branch_name, user_id):
+            logger.info("Agent branch %s already exists for repo %s", branch_name, repo.id)
+            existing_sha = ""
+            try:
+                clean_branch = branch_name.removeprefix("refs/heads/")
+                existing_info = await client.get_branch(repo.owner, repo.name, clean_branch)
+                if isinstance(existing_info, dict):
+                    existing_sha = existing_info.get("commit", {}).get("sha", "")
+            except GitHubAPIError:
+                pass
+
+            return AgentBranchInfo(
+                branch_name=branch_name,
+                base_branch=source_branch,
+                base_sha=existing_sha,
+                repository_id=str(repository_id),
+                task_id=str(task_id),
+                status="ready",
+            )
+
+        # Resolve latest commit SHA of source branch only when creating new branch
         try:
             branch_info = await client.get_branch(repo.owner, repo.name, source_branch)
-            source_sha = branch_info.get("commit", {}).get("sha")
+            source_sha = branch_info.get("commit", {}).get("sha") if isinstance(branch_info, dict) else None
             if not source_sha:
                 ref_info = await client.get_ref(repo.owner, repo.name, f"heads/{source_branch}")
-                source_sha = ref_info.get("object", {}).get("sha")
+                if isinstance(ref_info, dict):
+                    source_sha = ref_info.get("object", {}).get("sha")
         except GitHubAPIError as exc:
             raise APIError(
                 502,
@@ -181,18 +203,6 @@ class GitBranchService:
                 500,
                 ErrorCode.INTERNAL_SERVER_ERROR,
                 f"Could not determine commit SHA for base branch '{source_branch}'.",
-            )
-
-        # Check if agent branch already exists (idempotent resume/re-execution)
-        if await self.branch_exists(repository_id, branch_name, user_id):
-            logger.info("Agent branch %s already exists for repo %s", branch_name, repo.id)
-            return AgentBranchInfo(
-                branch_name=branch_name,
-                base_branch=source_branch,
-                base_sha=source_sha,
-                repository_id=str(repository_id),
-                task_id=str(task_id),
-                status="ready",
             )
 
         # Create branch ref pointing to source_sha

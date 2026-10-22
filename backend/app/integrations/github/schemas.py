@@ -273,3 +273,22 @@ class PullRequestListRequest(BaseModel):
     state: str = Field(default="open", pattern="^(open|closed|all)$")
     per_page: int = Field(default=30, ge=1, le=100)
     page: int = Field(default=1, ge=1)
+
+
+# ---------------------------------------------------------------------------
+# Agent branch creation
+# ---------------------------------------------------------------------------
+
+class AgentBranchRequest(BaseModel):
+    """Request schema for creating an agent execution branch."""
+    task_id: str = Field(..., min_length=1, description="Task ID transitioning to EXECUTING")
+    base_branch: Optional[str] = Field(default=None, description="Optional base branch (defaults to repo default)")
+
+
+class AgentBranchResponse(BaseModel):
+    """Response schema for agent branch creation/reuse."""
+    branch_name: str
+    base_branch: str
+    base_sha: str
+    status: str
+
