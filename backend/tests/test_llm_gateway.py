@@ -415,3 +415,12 @@ class TestSDE3GatewayFeatures:
         async with gateway as gw:
             assert gw.provider_name == "groq"
 
+    def test_groq_model_resolution(self):
+        from ai.llm.groq_provider import GroqProvider
+
+        provider = GroqProvider(api_keys=["gsk-test"])
+        assert provider._resolve_model("openai/gpt-oss-120b") == "openai/gpt-oss-120b"
+        assert provider._resolve_model("llama-3.3-70b-versatile") == "openai/gpt-oss-120b"
+        assert provider._resolve_model("qwen/qwen3.8-27b") == "qwen/qwen3.8-27b"
+        assert provider._resolve_model("unknown-model") == "openai/gpt-oss-120b"
+

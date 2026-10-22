@@ -23,6 +23,13 @@ class TestGeminiProvider:
         assert provider._next_key() == "key2"
         assert provider._next_key() == "key1"
 
+    def test_model_alias_resolution(self):
+        provider = GeminiProvider(api_keys=["test-key"])
+        payload, model = provider._build_payload(
+            LLMRequest(model="gemini-flash-lite-latest", messages=[Message(role="user", content="Hi")])
+        )
+        assert model == "gemini-flash-latest"
+
     @pytest.mark.asyncio
     async def test_generate_success(self):
         mock_response = MagicMock(spec=httpx.Response)

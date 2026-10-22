@@ -47,7 +47,7 @@ class GeminiProvider(LLMProvider):
     def __init__(
         self,
         api_keys: Sequence[str],
-        default_model: str = "gemini-flash-lite-latest",
+        default_model: str = "gemini-flash-latest",
         timeout_seconds: float = 30.0,
         max_retries: int = 3,
         client: httpx.AsyncClient | None = None,
@@ -103,6 +103,8 @@ class GeminiProvider(LLMProvider):
         # Strip models/ prefix if present
         if model_name.startswith("models/"):
             model_name = model_name[len("models/"):]
+        if model_name in ("gemini-flash-lite-latest", "gemini-1.5-flash", "gemini-2.0-flash"):
+            model_name = "gemini-flash-latest"
 
         payload: dict[str, Any] = {"contents": contents}
 
