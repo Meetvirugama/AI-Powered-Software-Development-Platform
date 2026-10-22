@@ -47,6 +47,13 @@ npm run build
 | `test_health.py` | 2 | Health endpoint availability (`GET /health`) without DB dependency | 🟢 Pass |
 | `test_hybrid_retrieval.py` | 15 | Lexical FTS, Vector search, RRF score fusion ($k=60$), reranker | 🟢 Pass |
 | `test_llm_gateway.py` | 16 | Gemini & Groq provider adapters, rate limit retries, timeout enforcement | 🟢 Pass |
+| `test_meet_day1_intelligence_context.py` | 10 | TargetSnippet, SymbolContext, boundary fences, serialization, oversized limits | 🟢 Pass |
+| `test_meet_day2_explanation_context.py` | 8 | Caller enrichment, import extraction, source reference grounding, leaf functions | 🟢 Pass |
+| `test_meet_day3_bug_context.py` | 8 | Caller sites, error handling blocks, external library detection, missing context | 🟢 Pass |
+| `test_meet_day4_test_context.py` | 8 | Test path inference, mockable DB/HTTP calls, existing test patterns, revision preservation | 🟢 Pass |
+| `test_meet_day5_review_context.py` | 8 | Diff hunk parsing, blast radius calculation, fair token distribution, base..head tracking | 🟢 Pass |
+| `test_meet_day6_shared_integration.py` | 8 | Unified facade across 4 features, LRU cache hit/miss, TTL expiration, provider validation | 🟢 Pass |
+| `test_meet_day7_context_verification.py` | 12 | Revision drift assertion, review cache collision resolution, repo invalidation, budget audit, acceptance gate | 🟢 Pass |
 | `test_pipeline_integration.py` | 3 | Full AI pipeline from question to validated answer | 🟢 Pass |
 | `test_prompts.py` | 11 | PromptBuilder system/data separation, template placeholders | 🟢 Pass |
 | `test_rag.py` | 6 | RAG prompt assembly and grounding checks | 🟢 Pass |

@@ -617,16 +617,26 @@ React 19 + TypeScript single-page application built with Vite and Tailwind CSS. 
 
 ---
 
-## Feature: Shared IntelligenceContext (Week 2 Foundation)
+## Feature: Shared IntelligenceContext & Repository Context Service (Week 2 Foundation & Integration)
 
 **Status:** 🟢 Done | **Priority:** P0 | **Owner:** Meet
 
 ### Purpose
-Provide a unified, budget-bounded context abstraction capturing exact target code snippets, enclosing AST symbols, and caller/dependency relationships for all Week 2 developer intelligence services.
+Provide a unified, budget-bounded context abstraction capturing exact target code snippets, enclosing AST symbols, caller/dependency relationships, diff hunks, blast radius, caching, and revision drift hardening across all Week 2 developer intelligence services.
 
-### Components
-- `backend/ai/context/builder.py`: `TargetSnippet`, `SymbolContext`, `IntelligenceContext`, `build_intelligence_context()`, `render_intelligence_data()`.
-- Verified by `backend/tests/test_context_builder.py` (39 passing unit tests).
+### Core Architecture & Modules
+- `backend/ai/context/builder.py`: `TargetSnippet`, `SymbolContext`, `IntelligenceContext`, `build_intelligence_context()`, `render_intelligence_data()`, prompt boundary fence protection (`<<<UNTRUSTED_CODE_SNIPPET>>>`).
+- `backend/ai/context/explanation.py`: `ExplanationContextEnricher`, `enrich_explanation_context()`, `extract_imports()`, and `generate_source_references()`.
+- `backend/ai/context/bug_context.py`: `BugContextExtractor`, `extract_bug_context()`, `extract_error_handling_blocks()`, and `detect_external_library_calls()`.
+- `backend/ai/context/test_context.py`: `TestContextBuilder`, `build_test_generation_context()`, `infer_candidate_test_paths()`, and `detect_mockable_calls()`.
+- `backend/ai/context/review_context.py`: `ReviewContextBuilder`, `build_multi_file_review_context()`, `parse_diff_hunks()`, and `calculate_blast_radius()`.
+- `backend/ai/context/service.py`: `RepositoryContextService`, `shared_context_service` facade:
+  - Methods: `get_explanation_context`, `get_bug_context`, `get_test_context`, `get_review_context`.
+  - Invariants: In-memory TTL/LRU caching with SHA-256 multi-file diff digest collision resolution.
+  - Hardening: Strict/loose revision drift enforcement (`verify_revision_consistency`, `assert_revision_consistency`, `RevisionDriftError`).
+  - Auditing: `audit_context_budget()` and `estimate_context_tokens()`.
+  - Policy: Strict `ALLOWED_AI_PROVIDERS = frozenset({"gemini", "groq"})`.
+- **Comprehensive QA Validation:** Verified by 7 test suites (`backend/tests/test_meet_day1_intelligence_context.py` through `backend/tests/test_meet_day7_context_verification.py`), totaling 62 unit and integration tests passing at 100%. See `Docs/shared_intelligence_integration_report.md`.
 
 ---
 
