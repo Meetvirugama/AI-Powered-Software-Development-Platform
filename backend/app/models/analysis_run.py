@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -9,6 +11,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.base import TimestampedModel
+
+if TYPE_CHECKING:
+    from app.models.analysis_finding import AnalysisFinding
 
 
 class AnalysisRunStatus(str, enum.Enum):

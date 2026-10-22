@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import uuid
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -7,6 +9,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.base import TimestampedModel
+
+if TYPE_CHECKING:
+    from app.models.analysis_run import AnalysisRun
 
 
 class AnalysisFinding(TimestampedModel, Base):
