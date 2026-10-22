@@ -77,6 +77,7 @@ export function RepositoryDetail() {
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
+  const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
   const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
 
   // ------------------------------------------------------------------
@@ -179,10 +180,17 @@ export function RepositoryDetail() {
       return;
     }
 
+    if (!target.path) {
+      setAnalysisError('Please select a source file from the explorer before requesting an analysis.');
+      setAnalysisStatus('FAILED');
+      return;
+    }
+
     setAnalysisStatus('RUNNING');
     setAnalysisError(null);
 
     if (feature === 'explain') {
+      setExplainedFile(selectedFile);
       triggerExplain({
         target: {
           type: target.type,
@@ -227,9 +235,12 @@ export function RepositoryDetail() {
     setHighlightedSource(source);
 
     // If cited reference points to a different file in the repository, navigate to it
-    if (selectedFile && source.file_path !== selectedFile.path && filesData?.items) {
+    if (filesData?.items && (!selectedFile || source.file_path !== selectedFile.path)) {
       const matchingFile = filesData.items.find(
-        (f) => f.path === source.file_path || f.path.endsWith(source.file_path)
+        (f) =>
+          f.path === source.file_path ||
+          f.path.endsWith('/' + source.file_path) ||
+          source.file_path.endsWith('/' + f.path)
       );
       if (matchingFile) {
         setUserSelectedFile(matchingFile);
@@ -238,10 +249,14 @@ export function RepositoryDetail() {
   }
 
   function handleSelectSymbolFromExplanation(sym: SymbolSummary) {
-    if (!selectedFile) return;
+    const targetFile = explainedFile || selectedFile;
+    if (!targetFile) return;
+    if (selectedFile?.id !== targetFile.id) {
+      setUserSelectedFile(targetFile);
+    }
     setCustomTarget({
       type: 'symbol',
-      path: selectedFile.path,
+      path: targetFile.path,
       symbol: sym.name,
       start_line: sym.start_line ?? undefined,
       end_line: sym.end_line ?? undefined,
@@ -706,6 +721,10 @@ export function RepositoryDetail() {
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
                       setHighlightedSource(null);
+                      setExplanationResult(null);
+                      setExplainedFile(null);
+                      setAnalysisStatus('IDLE');
+                      setAnalysisError(null);
                     }}
                   />
                 </div>
@@ -721,6 +740,11 @@ export function RepositoryDetail() {
                       onTargetChange={setCustomTarget}
                       highlightedSource={highlightedSource}
                       onClearHighlightedSource={() => setHighlightedSource(null)}
+                      isAnalyzing={
+                        analysisStatus === 'RUNNING' ||
+                        analysisStatus === 'PENDING' ||
+                        isExplainPending
+                      }
                       onTriggerExplain={() => {
                         setActiveFeature('explain');
                         handleRunAnalysis('explain', activeTarget);

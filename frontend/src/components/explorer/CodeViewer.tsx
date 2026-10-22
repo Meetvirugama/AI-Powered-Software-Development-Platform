@@ -14,6 +14,7 @@ export interface CodeViewerProps {
   highlightedSource?: SourceReference | null;
   onClearHighlightedSource?: () => void;
   onTriggerExplain?: () => void;
+  isAnalyzing?: boolean;
   className?: string;
 }
 
@@ -200,6 +201,7 @@ export function CodeViewer({
   highlightedSource,
   onClearHighlightedSource,
   onTriggerExplain,
+  isAnalyzing = false,
   className,
 }: CodeViewerProps) {
   const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
@@ -352,12 +354,13 @@ export function CodeViewer({
           {onTriggerExplain && (
             <button
               type="button"
+              disabled={isAnalyzing}
               onClick={onTriggerExplain}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground transition-all shadow-xs"
-              title="Explain current target"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground transition-all shadow-xs disabled:opacity-50 disabled:pointer-events-none"
+              title={isAnalyzing ? 'Analysis in progress…' : 'Explain current target'}
             >
-              <Sparkles className="h-3 w-3" />
-              <span>Explain Target</span>
+              <Sparkles className={cn('h-3 w-3', isAnalyzing && 'animate-spin')} />
+              <span>{isAnalyzing ? 'Explaining…' : 'Explain Target'}</span>
             </button>
           )}
 
@@ -465,8 +468,8 @@ export function CodeViewer({
 
                 const isInCited =
                   isCitedSourceActive &&
-                  highlightedSource.start_line <= lineNum &&
-                  lineNum <= highlightedSource.end_line;
+                  highlightedSource!.start_line! <= lineNum &&
+                  lineNum <= highlightedSource!.end_line!;
 
                 return (
                   <button
@@ -500,8 +503,8 @@ export function CodeViewer({
 
                 const isInCited =
                   isCitedSourceActive &&
-                  highlightedSource.start_line <= lineNum &&
-                  lineNum <= highlightedSource.end_line;
+                  highlightedSource!.start_line! <= lineNum &&
+                  lineNum <= highlightedSource!.end_line!;
 
                 return (
                   <div

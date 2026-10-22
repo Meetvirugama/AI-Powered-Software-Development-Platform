@@ -49,8 +49,8 @@ export type ConfidenceLevel = 'high' | 'medium' | 'low';
 export interface SourceReference {
   repository_id?: string | null;
   file_path: string;
-  start_line: number;
-  end_line: number;
+  start_line?: number | null;
+  end_line?: number | null;
   revision?: string | null;
   symbol_name?: string | null;
 }

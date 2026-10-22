@@ -243,12 +243,19 @@ export function AnalysisResultPanel({
               <div className="pt-2">
                 <button
                   type="button"
-                  disabled={isRunning}
+                  disabled={isRunning || !target.path}
                   onClick={() => onRunAnalysis?.(feature, target)}
                   className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-all shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none"
+                  title={!target.path ? 'Select a file to run analysis' : undefined}
                 >
                   <currentMeta.icon className="h-4 w-4" />
-                  <span>{isRunning ? 'Running…' : currentMeta.runLabel}</span>
+                  <span>
+                    {isRunning
+                      ? 'Running…'
+                      : !target.path
+                      ? 'Select File to Run'
+                      : currentMeta.runLabel}
+                  </span>
                 </button>
               </div>
             </div>
@@ -349,7 +356,9 @@ export function AnalysisResultPanel({
                         {src.file_path}
                       </span>
                       <span className="text-muted-foreground text-[10px] shrink-0">
-                        L{src.start_line}–{src.end_line}
+                        {typeof src.start_line === 'number' && typeof src.end_line === 'number'
+                          ? `L${src.start_line}–${src.end_line}`
+                          : 'File'}
                       </span>
                     </button>
                   ))}

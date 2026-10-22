@@ -316,6 +316,8 @@ export function ExplanationResultView({
 
           <div className="space-y-1.5 pt-1">
             {sources.map((src, idx) => {
+              const hasLines =
+                typeof src.start_line === 'number' && typeof src.end_line === 'number';
               const isSelected =
                 activeSourceReference?.file_path === src.file_path &&
                 activeSourceReference?.start_line === src.start_line &&
@@ -332,7 +334,11 @@ export function ExplanationResultView({
                       ? 'bg-primary/20 border-primary text-primary font-semibold shadow-xs'
                       : 'bg-muted/20 border-border/50 text-foreground hover:bg-accent hover:border-border'
                   )}
-                  title={`Navigate to ${src.file_path}:L${src.start_line}-L${src.end_line}`}
+                  title={
+                    hasLines
+                      ? `Navigate to ${src.file_path}:L${src.start_line}-L${src.end_line}`
+                      : `Navigate to ${src.file_path}`
+                  }
                 >
                   <div className="flex items-center gap-1.5 min-w-0">
                     <ExternalLink className="h-3 w-3 text-primary shrink-0" />
@@ -344,7 +350,7 @@ export function ExplanationResultView({
                     )}
                   </div>
                   <span className="text-[10px] text-muted-foreground shrink-0 bg-background/70 px-1.5 py-0.5 rounded border border-border/40">
-                    L{src.start_line}–{src.end_line}
+                    {hasLines ? `L${src.start_line}–${src.end_line}` : 'File'}
                   </span>
                 </button>
               );
