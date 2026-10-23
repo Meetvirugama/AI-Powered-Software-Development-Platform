@@ -39,7 +39,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { useExplainCode } from '../hooks/useAnalysis';
+import { useExplainCode, useDetectBugs } from '../hooks/useAnalysis';
 import type { SyncStage, RepositoryFile } from '../types/api';
 import type {
   AnalysisFeatureType,
@@ -47,6 +47,7 @@ import type {
   AnalysisStatus,
   SourceReference,
   CodeExplanation,
+  BugDetectionResponse,
   SymbolSummary,
 } from '../types/analysis';
 
@@ -77,6 +78,7 @@ export function RepositoryDetail() {
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
+  const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
   const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
   const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
 
@@ -99,6 +101,22 @@ export function RepositoryDetail() {
       );
     },
   });
+
+  const { mutate: triggerDetectBugs, isPending: isDetectBugsPending } = useDetectBugs(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus('COMPLETED');
+      setBugResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Unable to complete bug scan. The backend service endpoint may be temporarily unavailable.'
+      );
+    },
+  });
+
 
   // ------------------------------------------------------------------
   // Data Fetching
@@ -174,8 +192,14 @@ export function RepositoryDetail() {
     );
   }, [dependencies, dependencyFilter]);
 
+  const isAnalysisPending =
+    analysisStatus === 'RUNNING' ||
+    analysisStatus === 'PENDING' ||
+    isExplainPending ||
+    isDetectBugsPending;
+
   function handleRunAnalysis(feature: AnalysisFeatureType, target: AnalysisTarget) {
-    if (analysisStatus === 'RUNNING' || analysisStatus === 'PENDING' || isExplainPending) {
+    if (isAnalysisPending) {
       // Guard against duplicate simultaneous requests
       return;
     }
@@ -209,7 +233,29 @@ export function RepositoryDetail() {
       return;
     }
 
-    // Other three feature entry points remain intact as placeholders for Days 3–5
+    if (feature === 'bugs') {
+      triggerDetectBugs({
+        target: {
+          type: target.type,
+          path: target.path,
+          start_line: target.start_line,
+          end_line: target.end_line,
+          symbol: target.symbol,
+          revision: repo?.default_branch || 'main',
+        },
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        include_static: true,
+        include_ai: true,
+        min_severity: 'LOW',
+      });
+      return;
+    }
+
+    // Other two feature entry points remain intact as placeholders for Days 4–5
     const targetDesc =
       target.type === 'symbol' && target.symbol
         ? `${target.path} (${target.symbol})`
@@ -220,10 +266,11 @@ export function RepositoryDetail() {
     setTimeout(() => {
       setAnalysisStatus('FAILED');
       setAnalysisError(
-        `The "${feature}" workflow for ${targetDesc} is scheduled for Days 3–5. Week 2 Day 2 activates the real Code Explanation API.`
+        `The "${feature}" workflow for ${targetDesc} is scheduled for Days 4–5. Week 2 Days 2 & 3 activate the real Code Explanation and Bug Detection APIs.`
       );
     }, 500);
   }
+
 
   function handleRetry() {
     if (activeFeature) {
@@ -700,7 +747,7 @@ export function RepositoryDetail() {
                 <AnalysisActionBar
                   activeFeature={activeFeature}
                   activeTarget={activeTarget}
-                  disabled={analysisStatus === 'RUNNING' || analysisStatus === 'PENDING'}
+                  disabled={isAnalysisPending}
                   onSelectFeature={(feat) => {
                     setActiveFeature((prev) => (prev === feat ? null : feat));
                     setAnalysisStatus('IDLE');
@@ -722,6 +769,7 @@ export function RepositoryDetail() {
                       setUserSelectedFile(file);
                       setHighlightedSource(null);
                       setExplanationResult(null);
+                      setBugResult(null);
                       setExplainedFile(null);
                       setAnalysisStatus('IDLE');
                       setAnalysisError(null);
@@ -740,11 +788,7 @@ export function RepositoryDetail() {
                       onTargetChange={setCustomTarget}
                       highlightedSource={highlightedSource}
                       onClearHighlightedSource={() => setHighlightedSource(null)}
-                      isAnalyzing={
-                        analysisStatus === 'RUNNING' ||
-                        analysisStatus === 'PENDING' ||
-                        isExplainPending
-                      }
+                      isAnalyzing={isAnalysisPending}
                       onTriggerExplain={() => {
                         setActiveFeature('explain');
                         handleRunAnalysis('explain', activeTarget);
@@ -770,7 +814,12 @@ export function RepositoryDetail() {
                       status={analysisStatus}
                       error={analysisError}
                       explanation={activeFeature === 'explain' ? explanationResult : null}
-                      sources={explanationResult?.sources || []}
+                      bugResult={activeFeature === 'bugs' ? bugResult : null}
+                      sources={
+                        activeFeature === 'explain'
+                          ? explanationResult?.sources || []
+                          : []
+                      }
                       activeSourceReference={highlightedSource}
                       onSelectSourceReference={handleSelectSourceReference}
                       onSelectSymbol={handleSelectSymbolFromExplanation}
