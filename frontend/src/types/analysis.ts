@@ -126,3 +126,47 @@ export type AnalysisResult =
   | { type: 'bugs'; data: BugDetectionResult }
   | { type: 'tests'; data: TestGenerationResult }
   | { type: 'review'; data: CodeReviewResult };
+
+export interface AnalysisRunSummary {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface PaginatedAnalysisRunResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: AnalysisRunSummary[];
+}
+
+export interface AnalysisRunDetailResponse {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  result_payload?: Record<string, any> | null;
+  findings?: AnalysisFinding[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
