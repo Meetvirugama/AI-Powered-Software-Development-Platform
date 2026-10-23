@@ -1,0 +1,384 @@
+"""Database query-layer for Analysis Runs and Findings (Week 2 — Day 1).
+
+Owner: Om — Database & Persistence.
+Provides repository methods for saving, querying, updating, and paginating
+analysis runs and structured findings, strictly enforcing multi-tenant repository isolation.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from typing import Any, List, Optional, Sequence, Tuple
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session, selectinload
+
+from app.models.analysis_finding import AnalysisFinding
+from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
+
+
+def _ensure_uuid(val: Any) -> Optional[uuid.UUID]:
+    if val is None:
+        return None
+    if isinstance(val, uuid.UUID):
+        return val
+    try:
+        return uuid.UUID(str(val))
+    except (ValueError, TypeError):
+        return None
+
+
+def _ensure_datetime(val: Any) -> Optional[datetime]:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, str):
+        try:
+            return datetime.fromisoformat(val.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+class AnalysisRunRepository:
+    """Repository managing persistence for analysis runs and structured findings."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    # -----------------------------------------------------------------------
+    # Create & Save
+    # -----------------------------------------------------------------------
+
+    def create_run(
+        self,
+        *,
+        id: Optional[uuid.UUID | str] = None,
+        repository_id: uuid.UUID | str,
+        user_id: Optional[uuid.UUID | str] = None,
+        feature_type: str,
+        status: str = AnalysisRunStatus.PENDING.value,
+        target_path: Optional[str] = None,
+        target_symbol: Optional[str] = None,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+        source_revision: Optional[str] = None,
+        findings_count: int = 0,
+        result_payload: Optional[dict[str, Any]] = None,
+        test_output: Optional[str] = None,
+        findings: Optional[Sequence[Any]] = None,
+        error_message: Optional[str] = None,
+        created_at: Optional[datetime | str] = None,
+        completed_at: Optional[datetime | str] = None,
+        **extra_kwargs: Any,
+    ) -> AnalysisRun:
+        """Create and persist an AnalysisRun, optionally with associated findings.
+
+        Accepts both dict kwargs and explicit parameters.
+        Handles UUID/datetime coercion and extracts test_output from result_payload if present.
+        """
+        run_uuid = _ensure_uuid(id) or uuid.uuid4()
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            raise ValueError(f"Invalid repository_id: {repository_id}")
+
+        user_uuid = _ensure_uuid(user_id)
+        created_dt = _ensure_datetime(created_at) or datetime.now(timezone.utc)
+        completed_dt = _ensure_datetime(completed_at)
+
+        # If completed or failed status and completed_at is None, set to now
+        if completed_dt is None and status in (
+            AnalysisRunStatus.COMPLETED.value,
+            AnalysisRunStatus.FAILED.value,
+            AnalysisRunStatus.CANCELLED.value,
+        ):
+            completed_dt = datetime.now(timezone.utc)
+
+        # Extract large test outputs if passed in payload or kwargs
+        if test_output is None and result_payload:
+            test_output = (
+                result_payload.get("test_content")
+                or result_payload.get("complete_test_code")
+                or result_payload.get("test_output")
+            )
+
+        # Normalize feature_type and status strings
+        feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
+        status_val = status.value if hasattr(status, "value") else str(status)
+
+        finding_items = list(findings or [])
+        calculated_findings_count = findings_count or len(finding_items)
+
+        run = AnalysisRun(
+            id=run_uuid,
+            repository_id=repo_uuid,
+            user_id=user_uuid,
+            feature_type=feat_val,
+            status=status_val,
+            target_path=target_path,
+            target_symbol=target_symbol,
+            start_line=start_line,
+            end_line=end_line,
+            source_revision=source_revision,
+            findings_count=calculated_findings_count,
+            result_payload=result_payload,
+            test_output=test_output,
+            error_message=error_message,
+            created_at=created_dt,
+            completed_at=completed_dt,
+        )
+
+        self.session.add(run)
+
+        # Persist associated structured findings
+        if finding_items:
+            for item in finding_items:
+                self._attach_finding_to_run(run, item)
+
+        self.session.commit()
+        self.session.refresh(run)
+        return run
+
+    # Aliases for orchestrator compatibility
+    create = create_run
+    save = create_run
+
+    def _attach_finding_to_run(self, run: AnalysisRun, item: Any) -> AnalysisFinding:
+        """Helper to coerce a dict or Pydantic finding into an AnalysisFinding model."""
+        if isinstance(item, AnalysisFinding):
+            item.analysis_run_id = run.id
+            item.repository_id = run.repository_id
+            self.session.add(item)
+            return item
+
+        # Extract dictionary
+        raw: dict[str, Any] = {}
+        if hasattr(item, "model_dump"):
+            raw = item.model_dump()
+        elif hasattr(item, "dict"):
+            raw = item.dict()
+        elif isinstance(item, dict):
+            raw = dict(item)
+
+        finding_uuid = _ensure_uuid(raw.get("id")) or uuid.uuid4()
+        source_ref = raw.get("source_reference") or {}
+        if hasattr(source_ref, "model_dump"):
+            source_ref = source_ref.model_dump()
+        elif hasattr(source_ref, "dict"):
+            source_ref = source_ref.dict()
+        elif not isinstance(source_ref, dict):
+            source_ref = {}
+
+        file_path = raw.get("file_path") or source_ref.get("file_path") or run.target_path or "unknown"
+        start_line = raw.get("start_line") if "start_line" in raw else source_ref.get("start_line")
+        end_line = raw.get("end_line") if "end_line" in raw else source_ref.get("end_line")
+        rev = raw.get("source_revision") or source_ref.get("revision") or run.source_revision
+        sym = raw.get("symbol_name") or source_ref.get("symbol_name") or run.target_symbol
+
+        finding = AnalysisFinding(
+            id=finding_uuid,
+            analysis_run_id=run.id,
+            repository_id=run.repository_id,
+            category=str(raw.get("category", "general")),
+            severity=str(raw.get("severity", "MEDIUM")).upper(),
+            title=str(raw.get("title", "Finding")),
+            description=str(raw.get("description", "")),
+            file_path=file_path,
+            start_line=start_line,
+            end_line=end_line,
+            source_revision=rev,
+            symbol_name=sym,
+            evidence=str(raw.get("evidence", "")),
+            suggested_fix=raw.get("suggested_fix"),
+            confidence=str(raw.get("confidence", "medium")),
+            is_uncertain=bool(raw.get("is_uncertain", False)),
+            is_new_in_change=bool(raw.get("is_new_in_change", True)),
+            source_type=str(raw.get("source_type", "AI")),
+            rule_id=raw.get("rule_id"),
+            finding_metadata=raw.get("metadata") or raw.get("finding_metadata"),
+        )
+        self.session.add(finding)
+        return finding
+
+    # -----------------------------------------------------------------------
+    # Retrieval & Listing (Repository-Isolated)
+    # -----------------------------------------------------------------------
+
+    def get_by_id(self, run_id: uuid.UUID | str) -> Optional[AnalysisRun]:
+        """Retrieve an AnalysisRun with eager-loaded findings by primary key ID."""
+        r_uuid = _ensure_uuid(run_id)
+        if r_uuid is None:
+            return None
+
+        stmt = (
+            select(AnalysisRun)
+            .where(AnalysisRun.id == r_uuid)
+            .options(selectinload(AnalysisRun.findings))
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    # Alias matching AnalysisRunPersistenceProtocol
+    get_run = get_by_id
+
+    def get_by_id_and_repository(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+    ) -> Optional[AnalysisRun]:
+        """Retrieve an AnalysisRun strictly enforcing repository scoping."""
+        r_uuid = _ensure_uuid(run_id)
+        repo_uuid = _ensure_uuid(repository_id)
+        if r_uuid is None or repo_uuid is None:
+            return None
+
+        stmt = (
+            select(AnalysisRun)
+            .where(
+                AnalysisRun.id == r_uuid,
+                AnalysisRun.repository_id == repo_uuid,
+            )
+            .options(selectinload(AnalysisRun.findings))
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_by_repository(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[AnalysisRun], int]:
+        """List paginated analysis runs for an authorized repository, ordered newest first.
+
+        Returns (items, total_count).
+        """
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            return [], 0
+
+        stmt = select(AnalysisRun).where(AnalysisRun.repository_id == repo_uuid)
+
+        if feature_type:
+            feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
+            stmt = stmt.where(AnalysisRun.feature_type == feat_val)
+
+        if status:
+            status_val = status.value if hasattr(status, "value") else str(status)
+            stmt = stmt.where(AnalysisRun.status == status_val)
+
+        # Count query
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = self.session.scalar(count_stmt) or 0
+
+        # Query paginated runs ordered by created_at descending
+        ordered_stmt = (
+            stmt.order_by(AnalysisRun.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .options(selectinload(AnalysisRun.findings))
+        )
+        items = list(self.session.scalars(ordered_stmt).all())
+        return items, total
+
+    # Alias matching AnalysisRunPersistenceProtocol
+    list_runs = list_by_repository
+
+    # -----------------------------------------------------------------------
+    # Status Updates & Findings Management
+    # -----------------------------------------------------------------------
+
+    def update_status(
+        self,
+        run_id: uuid.UUID | str,
+        status: str,
+        *,
+        error_message: Optional[str] = None,
+        result_payload: Optional[dict[str, Any]] = None,
+        test_output: Optional[str] = None,
+        completed_at: Optional[datetime] = None,
+    ) -> Optional[AnalysisRun]:
+        """Update lifecycle status and output payloads of an existing analysis run."""
+        run = self.get_by_id(run_id)
+        if run is None:
+            return None
+
+        status_val = status.value if hasattr(status, "value") else str(status)
+        run.status = status_val
+
+        if error_message is not None:
+            run.error_message = error_message
+        if result_payload is not None:
+            run.result_payload = result_payload
+        if test_output is not None:
+            run.test_output = test_output
+
+        if completed_at is not None:
+            run.completed_at = completed_at
+        elif status_val in (
+            AnalysisRunStatus.COMPLETED.value,
+            AnalysisRunStatus.FAILED.value,
+            AnalysisRunStatus.CANCELLED.value,
+        ):
+            run.completed_at = datetime.now(timezone.utc)
+
+        self.session.commit()
+        self.session.refresh(run)
+        return run
+
+    def add_findings(
+        self,
+        run_id: uuid.UUID | str,
+        findings: Sequence[Any],
+    ) -> List[AnalysisFinding]:
+        """Append findings to an existing analysis run and update its findings count."""
+        run = self.get_by_id(run_id)
+        if run is None:
+            raise ValueError(f"AnalysisRun not found: {run_id}")
+
+        added: list[AnalysisFinding] = []
+        for item in findings:
+            finding = self._attach_finding_to_run(run, item)
+            added.append(finding)
+
+        run.findings_count = (run.findings_count or 0) + len(added)
+        self.session.commit()
+        self.session.refresh(run)
+        return added
+
+    # -----------------------------------------------------------------------
+    # Deletion (Cascade Cleanup)
+    # -----------------------------------------------------------------------
+
+    def delete(self, run_id: uuid.UUID | str) -> bool:
+        """Delete an analysis run and its associated findings."""
+        run = self.get_by_id(run_id)
+        if run is None:
+            return False
+
+        self.session.delete(run)
+        self.session.commit()
+        return True
+
+    def delete_by_repository(self, repository_id: uuid.UUID | str) -> int:
+        """Delete all analysis runs and findings for a repository."""
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            return 0
+
+        stmt = select(AnalysisRun.id).where(AnalysisRun.repository_id == repo_uuid)
+        run_ids = list(self.session.scalars(stmt).all())
+        if not run_ids:
+            return 0
+
+        self.session.execute(
+            delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_uuid)
+        )
+        self.session.execute(
+            delete(AnalysisRun).where(AnalysisRun.repository_id == repo_uuid)
+        )
+        self.session.commit()
+        return len(run_ids)
