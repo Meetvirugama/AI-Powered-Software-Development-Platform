@@ -39,27 +39,22 @@ Verifies all Day 3 deliverables and acceptance criteria from `Docs/week2.md` §7
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
-import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.core.database import Base
 from app.main import app
 from app.models.analysis_finding import AnalysisFinding
-from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
 from app.models.code_chunk import CodeChunk
-from app.models.code_symbol import CodeSymbol
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.repository_file import RepositoryFile
 from app.models.user import User
 from app.repositories.analysis_run_repository import AnalysisRunRepository
-from app.schemas.analysis import AnalysisSourceReference, AnalysisTarget, BugDetectionResponse, BugFinding
 from app.services.bug_scan_history_service import BugScanHistoryService
+
 
 
 # ---------------------------------------------------------------------------
@@ -741,7 +736,7 @@ def test_bug_scan_history_service_full_workflow(db_session: Session) -> None:
 
 
 def test_end_to_end_api_integration_detect_bugs(
-    client: Any,
+    client: TestClient,
     db_session: Session,
     test_user: User,
     auth_headers: dict[str, str],
