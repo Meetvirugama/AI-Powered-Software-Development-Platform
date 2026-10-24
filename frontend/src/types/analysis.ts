@@ -151,13 +151,41 @@ export interface CodeExplanationResponse {
 }
 
 
+export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
+
+export type TestScenarioCategory = 'normal' | 'edge_case' | 'failure_path';
+
+export interface TestScenario {
+  name: string;
+  category: TestScenarioCategory;
+  description: string;
+}
+
+export interface TestGenerationRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
+  framework?: SupportedTestFramework | null;
+}
+
 export interface TestGenerationResult {
-  framework: string;
-  test_file_path: string;
-  code: string;
-  scenarios_covered?: string[];
-  assumptions?: string[];
-  validation_warnings?: string[];
+  detected_framework: SupportedTestFramework;
+  proposed_test_path: string;
+  test_content: string;
+  covered_scenarios: TestScenario[];
+  assumptions_and_warnings: string[];
+  syntax_valid: boolean;
+  validation_errors: string[];
+  sources?: SourceReference[];
+}
+
+export interface TestGenerationResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  result: TestGenerationResult;
+  created_at: string;
 }
 
 export interface CodeReviewResult {
@@ -169,7 +197,7 @@ export interface CodeReviewResult {
 export type AnalysisResult =
   | { type: 'explain'; data: CodeExplanation }
   | { type: 'bugs'; data: BugDetectionResponse }
-  | { type: 'tests'; data: TestGenerationResult }
+  | { type: 'tests'; data: TestGenerationResponse }
   | { type: 'review'; data: CodeReviewResult };
 
 export interface AnalysisRunSummary {

@@ -1155,4 +1155,370 @@ export const handlers = [
       created_at: new Date().toISOString(),
     });
   }),
+
+  // -------------------------------------------------------------------------
+  // Feature 3: Framework-Aware Test Generation (Week 2 Day 4)
+  //
+  // POST /api/v1/repositories/:id/generate-tests
+  //
+  // Matches real backend contract in backend/app/schemas/analysis.py
+  // -------------------------------------------------------------------------
+  http.post(`${BASE}/repositories/:id/generate-tests`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+    let body: any = null;
+    try {
+      body = (await request.json()) as any;
+    } catch {
+      // Malformed body
+    }
+
+    const target = body?.target || {
+      type: 'file',
+      path: body?.path || 'backend/app/services/auth.py',
+    };
+
+    const filePath = target.path || 'backend/app/services/auth.py';
+    const symbol = target.symbol || null;
+
+    // Error simulation 1: Service unavailable (503)
+    if (filePath.includes('503') || filePath.includes('unavailable') || filePath.includes('timeout')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Test generation is not available because `test_generation_service` is not configured.',
+            retryable: true,
+          },
+        },
+        { status: 503 }
+      );
+    }
+
+    // Error simulation 2: Analysis failed (500)
+    if (filePath.includes('500') || filePath.includes('fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ANALYSIS_FAILED',
+            message: 'Test generation failed due to an unrecoverable internal error.',
+            retryable: true,
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    // Determine target framework
+    const isTsOrJs =
+      filePath.endsWith('.ts') ||
+      filePath.endsWith('.tsx') ||
+      filePath.endsWith('.js') ||
+      filePath.endsWith('.jsx');
+
+    let detectedFramework: 'pytest' | 'unittest' | 'jest' = isTsOrJs ? 'jest' : 'pytest';
+    if (body?.framework && ['pytest', 'unittest', 'jest'].includes(body.framework)) {
+      detectedFramework = body.framework;
+    }
+
+    // Determine proposed test path
+    const fileStem = filePath.split('/').pop()?.replace(/\.[^/.]+$/, '') || 'component';
+    let proposedTestPath = '';
+    if (filePath.includes('exists') || filePath.includes('collision')) {
+      // Return a path that intentionally exists in standard repo file lists
+      proposedTestPath = 'backend/tests/test_analysis_api.py';
+    } else if (detectedFramework === 'jest') {
+      proposedTestPath = `frontend/src/components/__tests__/${fileStem}.test.tsx`;
+    } else if (detectedFramework === 'unittest') {
+      proposedTestPath = `backend/tests/test_${fileStem}_unit.py`;
+    } else {
+      proposedTestPath = `backend/tests/services/test_${fileStem}.py`;
+    }
+
+    // Syntax validation status simulation
+    const isSyntaxInvalid = filePath.includes('syntax-error') || filePath.includes('invalid');
+    const syntaxValid = !isSyntaxInvalid;
+    const validationErrors = isSyntaxInvalid
+      ? [
+          'SyntaxError: unexpected EOF while parsing (line 28)',
+          'StructuralError: Missing fixture dependency in test module scope',
+        ]
+      : [];
+
+    // Empty content edge case simulation
+    const isEmptyContent = filePath.includes('empty-test');
+
+    // Generate complete code content according to framework
+    let testContent = '';
+    if (isEmptyContent) {
+      testContent = '';
+    } else if (detectedFramework === 'jest') {
+      testContent = `import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ${symbol || fileStem} } from '../${fileStem}';
+
+describe('${symbol || fileStem}', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  describe('Normal Behavior', () => {
+    it('renders default state without crashing', () => {
+      render(<${symbol || fileStem} />);
+      expect(document.body).toBeInTheDocument();
+    });
+
+    it('handles standard user interaction correctly', async () => {
+      const handleAction = vi.fn();
+      render(<${symbol || fileStem} onAction={handleAction} />);
+      const button = screen.queryByRole('button');
+      if (button) {
+        fireEvent.click(button);
+        expect(handleAction).toHaveBeenCalledTimes(1);
+      }
+    });
+  });
+
+  describe('Edge Cases', () => {
+    it('handles empty or null props gracefully', () => {
+      const { container } = render(<${symbol || fileStem} items={[]} data={null} />);
+      expect(container).toBeDefined();
+    });
+
+    it('renders correctly with long boundary text strings', () => {
+      const longText = 'A'.repeat(500);
+      render(<${symbol || fileStem} title={longText} />);
+      expect(screen.getByText(longText)).toBeInTheDocument();
+    });
+  });
+
+  describe('Failure Paths', () => {
+    it('displays error fallback UI when asynchronous operation rejects', async () => {
+      const mockFailingApi = vi.fn().mockRejectedValue(new Error('Network connection timeout'));
+      render(<${symbol || fileStem} fetcher={mockFailingApi} />);
+      const errorIndicator = await screen.findByText(/error|failed|timeout/i);
+      expect(errorIndicator).toBeInTheDocument();
+    });
+  });
+});
+`;
+    } else if (detectedFramework === 'unittest') {
+      testContent = `"""Unit tests for ${filePath} using Python standard unittest."""
+
+import unittest
+from unittest.mock import MagicMock, patch
+
+try:
+    from app.services.${fileStem} import ${symbol || fileStem}
+except ImportError:
+    # Fallback import structure for test discovery
+    ${symbol || fileStem} = MagicMock()
+
+
+class Test${symbol || fileStem.charAt(0).toUpperCase() + fileStem.slice(1)}(unittest.TestCase):
+    """Test suite covering normal, edge-case, and failure behavior."""
+
+    def setUp(self):
+        """Set up test environment before each test method."""
+        self.mock_db = MagicMock()
+        self.sample_payload = {
+            "id": "test-item-001",
+            "name": "Standard Test Item",
+            "status": "ACTIVE",
+        }
+
+    def test_normal_execution_success(self):
+        """Verify successful operation with valid inputs."""
+        result = ${symbol || fileStem}(self.sample_payload, db=self.mock_db)
+        self.assertIsNotNone(result)
+
+    def test_edge_case_empty_collection(self):
+        """Verify handling when collection or list parameter is empty."""
+        empty_payload = {"id": "", "name": "", "items": []}
+        result = ${symbol || fileStem}(empty_payload, db=self.mock_db)
+        self.assertTrue(result is not None or result == {})
+
+    def test_edge_case_boundary_values(self):
+        """Verify handling of extreme numeric boundary values."""
+        boundary_payload = {"count": 0, "limit": 100000}
+        result = ${symbol || fileStem}(boundary_payload, db=self.mock_db)
+        self.assertIsNotNone(result)
+
+    def test_failure_path_invalid_type_raises_value_error(self):
+        """Verify passing an invalid type raises ValueError."""
+        with self.assertRaises((ValueError, TypeError)):
+            ${symbol || fileStem}(None, db=self.mock_db)
+
+    def test_failure_path_database_connection_error(self):
+        """Verify database exception is caught or propagated appropriately."""
+        self.mock_db.query.side_effect = ConnectionError("Database unreachable")
+        with self.assertRaises(ConnectionError):
+            ${symbol || fileStem}(self.sample_payload, db=self.mock_db)
+
+
+if __name__ == '__main__':
+    unittest.main()
+`;
+    } else {
+      // Default: pytest
+      testContent = `"""Framework-aware test suite for ${filePath} using pytest."""
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+
+try:
+    from app.services.${fileStem} import ${symbol || fileStem}
+except ImportError:
+    # Fallback stub for test runners outside the active virtual environment
+    ${symbol || fileStem} = MagicMock()
+
+
+@pytest.fixture
+def mock_db_session():
+    """Provides a mocked database session with query capabilities."""
+    session = MagicMock()
+    session.add = MagicMock()
+    session.commit = MagicMock()
+    session.rollback = MagicMock()
+    return session
+
+
+@pytest.fixture
+def valid_context_payload():
+    """Provides standard valid test payload."""
+    return {
+        "repository_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+        "file_path": "${filePath}",
+        "max_tokens": 4096,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 1. Normal Scenarios
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_${fileStem}_successful_execution(mock_db_session, valid_context_payload):
+    """Verify normal operation with valid parameters returns expected outcome."""
+    result = ${symbol || fileStem}(valid_context_payload, db=mock_db_session)
+    assert result is not None
+    assert getattr(result, "status", "SUCCESS") != "FAILED"
+
+
+def test_${fileStem}_preserves_deterministic_invariants(valid_context_payload):
+    """Verify invariant structure is maintained across multiple invocations."""
+    res1 = ${symbol || fileStem}(valid_context_payload)
+    res2 = ${symbol || fileStem}(valid_context_payload)
+    assert type(res1) == type(res2)
+
+
+# ---------------------------------------------------------------------------
+# 2. Edge Case Scenarios
+# ---------------------------------------------------------------------------
+
+def test_${fileStem}_handles_empty_sequences():
+    """Verify behavior when empty collections or whitespace strings are passed."""
+    empty_payload = {"file_path": "", "tokens": []}
+    result = ${symbol || fileStem}(empty_payload)
+    assert result is not None
+
+
+def test_${fileStem}_unicode_and_special_characters():
+    """Verify handling of special characters, quotes, and international characters."""
+    special_payload = {"query": "test_search\\n\\t\\u2705 'quoted' \\"double\\""}
+    result = ${symbol || fileStem}(special_payload)
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# 3. Failure Path Scenarios
+# ---------------------------------------------------------------------------
+
+def test_${fileStem}_raises_on_unhandled_type():
+    """Verify passing None or malformed target raises expected exception."""
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        ${symbol || fileStem}(None)
+
+
+@pytest.mark.asyncio
+async def test_${fileStem}_upstream_service_timeout(mock_db_session):
+    """Verify that network or DB timeout fails gracefully with clear error."""
+    mock_db_session.execute.side_effect = TimeoutError("Connection to backend database timed out.")
+    with pytest.raises((TimeoutError, RuntimeError, Exception)):
+        ${symbol || fileStem}({"target": "invalid"}, db=mock_db_session)
+`;
+    }
+
+    const coveredScenarios = [
+      {
+        name: `test_${fileStem}_successful_execution`,
+        category: 'normal' as const,
+        description: `Verifies that ${symbol || fileStem} executes as expected with valid parameters.`,
+      },
+      {
+        name: `test_${fileStem}_preserves_deterministic_invariants`,
+        category: 'normal' as const,
+        description: 'Verifies consistent output types and schema invariants across invocations.',
+      },
+      {
+        name: `test_${fileStem}_handles_empty_sequences`,
+        category: 'edge_case' as const,
+        description: 'Verifies graceful fallback when given empty inputs, zero lengths, or missing keys.',
+      },
+      {
+        name: `test_${fileStem}_unicode_and_special_characters`,
+        category: 'edge_case' as const,
+        description: 'Verifies correct handling of multiline strings, escape sequences, and unicode.',
+      },
+      {
+        name: `test_${fileStem}_raises_on_unhandled_type`,
+        category: 'failure_path' as const,
+        description: 'Verifies that invalid or null inputs raise appropriate validation exceptions.',
+      },
+      {
+        name: `test_${fileStem}_upstream_service_timeout`,
+        category: 'failure_path' as const,
+        description: 'Verifies timeout and connection failures trigger controlled error responses.',
+      },
+    ];
+
+    const assumptionsAndWarnings = [
+      `Detected runner '${detectedFramework}' matching repository conventions.`,
+      `Proposed test file '${proposedTestPath}' derived from convention detector.`,
+      'Assumes shared test fixtures and environment configuration are accessible in root test directory.',
+    ];
+
+    if (filePath.includes('exists') || filePath.includes('collision')) {
+      assumptionsAndWarnings.push(
+        `Warning: Target file '${proposedTestPath}' already exists in this repository.`
+      );
+    }
+
+    return HttpResponse.json({
+      run_id: 'mock-gen-test-' + Date.now(),
+      repository_id: id,
+      status: 'COMPLETED',
+      target,
+      revision: target.revision ?? 'main',
+      result: {
+        detected_framework: detectedFramework,
+        proposed_test_path: proposedTestPath,
+        test_content: testContent,
+        covered_scenarios: coveredScenarios,
+        assumptions_and_warnings: assumptionsAndWarnings,
+        syntax_valid: syntaxValid,
+        validation_errors: validationErrors,
+        sources: [
+          {
+            repository_id: id,
+            file_path: filePath,
+            start_line: target.start_line ?? 1,
+            end_line: target.end_line ?? 50,
+            revision: target.revision ?? 'main',
+            symbol_name: symbol,
+          },
+        ],
+      },
+      created_at: new Date().toISOString(),
+    });
+  }),
 ];

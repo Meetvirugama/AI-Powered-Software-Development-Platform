@@ -39,7 +39,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { useExplainCode, useDetectBugs } from '../hooks/useAnalysis';
+import { useExplainCode, useDetectBugs, useGenerateTests } from '../hooks/useAnalysis';
 import type { SyncStage, RepositoryFile } from '../types/api';
 import type {
   AnalysisFeatureType,
@@ -48,6 +48,8 @@ import type {
   SourceReference,
   CodeExplanation,
   BugDetectionResponse,
+  TestGenerationResponse,
+  SupportedTestFramework,
   SymbolSummary,
 } from '../types/analysis';
 
@@ -79,6 +81,8 @@ export function RepositoryDetail() {
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
   const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
+  const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
+  const [selectedFrameworkOverride, setSelectedFrameworkOverride] = useState<SupportedTestFramework | null>(null);
   const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
   const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
 
@@ -113,6 +117,21 @@ export function RepositoryDetail() {
       setAnalysisError(
         err.message ||
           'Unable to complete bug scan. The backend service endpoint may be temporarily unavailable.'
+      );
+    },
+  });
+
+  const { mutate: triggerGenerateTests, isPending: isGenerateTestsPending } = useGenerateTests(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus(data.status || 'COMPLETED');
+      setTestResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Failed to generate tests. The backend service endpoint may be temporarily unavailable.'
       );
     },
   });
@@ -192,13 +211,31 @@ export function RepositoryDetail() {
     );
   }, [dependencies, dependencyFilter]);
 
+  // Detect whether proposed test path collides with an existing file in the repository or is unverified
+  const proposedTestPathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
+    if (!testResult?.result?.proposed_test_path) return 'UNKNOWN';
+    if (filesLoading || filesError || !filesData?.items) return 'UNKNOWN';
+    const normalizedProposed = testResult.result.proposed_test_path.replace(/\\/g, '/').toLowerCase();
+    const exists = filesData.items.some(
+      (f) => f.path.replace(/\\/g, '/').toLowerCase() === normalizedProposed
+    );
+    return exists ? 'EXISTS' : 'NEW';
+  }, [testResult, filesData, filesLoading, filesError]);
+
+  const proposedTestPathExists = proposedTestPathStatus === 'EXISTS';
+
   const isAnalysisPending =
     analysisStatus === 'RUNNING' ||
     analysisStatus === 'PENDING' ||
     isExplainPending ||
-    isDetectBugsPending;
+    isDetectBugsPending ||
+    isGenerateTestsPending;
 
-  function handleRunAnalysis(feature: AnalysisFeatureType, target: AnalysisTarget) {
+  function handleRunAnalysis(
+    feature: AnalysisFeatureType,
+    target: AnalysisTarget,
+    frameworkOverride?: SupportedTestFramework
+  ) {
     if (isAnalysisPending) {
       // Guard against duplicate simultaneous requests
       return;
@@ -255,7 +292,28 @@ export function RepositoryDetail() {
       return;
     }
 
-    // Other two feature entry points remain intact as placeholders for Days 4–5
+    if (feature === 'tests') {
+      const activeRunner = frameworkOverride || selectedFrameworkOverride;
+      triggerGenerateTests({
+        target: {
+          type: target.type,
+          path: target.path,
+          start_line: target.start_line,
+          end_line: target.end_line,
+          symbol: target.symbol,
+          revision: repo?.default_branch || 'main',
+        },
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        framework: activeRunner || undefined,
+      });
+      return;
+    }
+
+    // Code review feature entry point remains intact as placeholder for Day 5
     const targetDesc =
       target.type === 'symbol' && target.symbol
         ? `${target.path} (${target.symbol})`
@@ -266,15 +324,21 @@ export function RepositoryDetail() {
     setTimeout(() => {
       setAnalysisStatus('FAILED');
       setAnalysisError(
-        `The "${feature}" workflow for ${targetDesc} is scheduled for Days 4–5. Week 2 Days 2 & 3 activate the real Code Explanation and Bug Detection APIs.`
+        `The "${feature}" workflow for ${targetDesc} is scheduled for Day 5. Week 2 Days 2, 3, & 4 activate the real Code Explanation, Bug Detection, and Test Generation APIs.`
       );
     }, 500);
   }
 
+  function handleFrameworkChange(framework: SupportedTestFramework) {
+    setSelectedFrameworkOverride(framework);
+    if (activeFeature === 'tests' && activeTarget.path) {
+      handleRunAnalysis('tests', activeTarget, framework);
+    }
+  }
 
   function handleRetry() {
     if (activeFeature) {
-      handleRunAnalysis(activeFeature, activeTarget);
+      handleRunAnalysis(activeFeature, activeTarget, selectedFrameworkOverride || undefined);
     }
   }
 
@@ -770,6 +834,7 @@ export function RepositoryDetail() {
                       setHighlightedSource(null);
                       setExplanationResult(null);
                       setBugResult(null);
+                      setTestResult(null);
                       setExplainedFile(null);
                       setAnalysisStatus('IDLE');
                       setAnalysisError(null);
@@ -815,14 +880,21 @@ export function RepositoryDetail() {
                       error={analysisError}
                       explanation={activeFeature === 'explain' ? explanationResult : null}
                       bugResult={activeFeature === 'bugs' ? bugResult : null}
+                      testResult={activeFeature === 'tests' ? testResult : null}
+                      proposedPathStatus={proposedTestPathStatus}
+                      proposedPathExists={proposedTestPathExists}
                       sources={
                         activeFeature === 'explain'
                           ? explanationResult?.sources || []
+                          : activeFeature === 'tests'
+                          ? testResult?.result?.sources || []
                           : []
                       }
                       activeSourceReference={highlightedSource}
                       onSelectSourceReference={handleSelectSourceReference}
                       onSelectSymbol={handleSelectSymbolFromExplanation}
+                      onSelectFramework={handleFrameworkChange}
+                      selectedFrameworkOverride={selectedFrameworkOverride}
                       onClose={() => setActiveFeature(null)}
                       onRunAnalysis={handleRunAnalysis}
                       onRetry={handleRetry}

@@ -11,6 +11,8 @@ import type {
   CodeExplanationResponse,
   BugDetectionRequest,
   BugDetectionResponse,
+  TestGenerationRequest,
+  TestGenerationResponse,
   PaginatedAnalysisRunResponse,
   AnalysisRunDetailResponse,
   AnalysisRunFeatureType,
@@ -49,6 +51,26 @@ export async function detectBugs(
 ): Promise<BugDetectionResponse> {
   const response = await apiClient.post<BugDetectionResponse>(
     `/repositories/${repositoryId}/detect-bugs`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * Generate a framework-aware test file following repository conventions (Week 2 — Day 4).
+ *
+ * Calls POST /api/v1/repositories/{repository_id}/generate-tests
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param payload Target, options, and optional framework override.
+ * @returns The structured test generation response envelope.
+ */
+export async function generateTests(
+  repositoryId: string,
+  payload: TestGenerationRequest
+): Promise<TestGenerationResponse> {
+  const response = await apiClient.post<TestGenerationResponse>(
+    `/repositories/${repositoryId}/generate-tests`,
     payload
   );
   return response.data;
