@@ -11,6 +11,9 @@ import type {
   CodeExplanationResponse,
   BugDetectionRequest,
   BugDetectionResponse,
+  PaginatedAnalysisRunResponse,
+  AnalysisRunDetailResponse,
+  AnalysisRunFeatureType,
 } from '../types/analysis';
 
 /**
@@ -32,7 +35,7 @@ export async function explainCode(
 }
 
 /**
- * Scan for bugs using static analysis rules and AI reasoning.
+ * Scan for bugs using static analysis rules and AI reasoning (Week 2 — Day 3).
  *
  * Calls POST /api/v1/repositories/{repository_id}/detect-bugs
  *
@@ -50,3 +53,77 @@ export async function detectBugs(
   );
   return response.data;
 }
+
+/**
+ * List historical analysis runs (e.g. explanation runs, bug scans) for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getAnalysisRuns(
+  repositoryId: string,
+  params?: {
+    feature_type?: AnalysisRunFeatureType;
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  const response = await apiClient.get<PaginatedAnalysisRunResponse>(
+    `/repositories/${repositoryId}/analysis-runs`,
+    { params }
+  );
+  return response.data;
+}
+
+/**
+ * List historical bug detection scans for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getBugScanHistory(
+  repositoryId: string,
+  params?: {
+    status?: string;
+    target_path?: string;
+    source_revision?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  return getAnalysisRuns(repositoryId, {
+    ...params,
+    feature_type: 'detect_bugs',
+  });
+}
+
+/**
+ * Reopen a specific analysis run (e.g. past explanation or bug scan) from persistent history.
+ *
+ * @param runId The UUID of the analysis run.
+ * @returns Detailed record with target coordinates and structured result payload.
+ */
+export async function getAnalysisRun(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  const response = await apiClient.get<AnalysisRunDetailResponse>(
+    `/analysis-runs/${runId}`
+  );
+  return response.data;
+}
+
+/**
+ * Reopen a specific bug detection scan run from persistent history.
+ *
+ * @param runId The UUID of the bug detection analysis run.
+ * @returns Detailed record with findings and structured result payload.
+ */
+export async function reopenBugScan(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  return getAnalysisRun(runId);
+}
+
