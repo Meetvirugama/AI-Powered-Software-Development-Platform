@@ -51,7 +51,7 @@ class SymbolExtractor:
             return ""
 
         def get_text(node: Any) -> str:
-            return node.text.decode("utf-8")
+            return node.text.decode("utf-8", errors="replace")
 
         def walk(node: Any, parent_id: Optional[UUID] = None):
             t = node.type

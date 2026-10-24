@@ -65,7 +65,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
 | W2-13 | Feature 3: `TestGenerationService` & `FrameworkDetector` | Dev / Prit | P0 | IN PROGRESS | `FrameworkDetector` (DONE - Prit), test file generation (Dev) |
 | W2-14 | Feature 4: `AICodeReviewEngine` & `ReviewSourceMapper` | Dev / Parth / Prit | P0 | IN PROGRESS | `ReviewSourceMapper` (DONE - Prit), diff review engine (Dev/Parth) |
-| W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | IN PROGRESS | Scenarios A–E, zero mock in production, docs update (Meet: Shared context verification DONE; Prit: AST & framework reliability, multi-fixture validation, test report DONE) |
+| W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | IN PROGRESS | Scenarios A–E, zero mock in production, docs update (Meet: Shared context verification DONE; Prit: AST & framework reliability, Day 7 acceptance suite & language limitations DONE) |
 
 ---
 
