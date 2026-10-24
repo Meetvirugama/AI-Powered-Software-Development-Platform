@@ -215,10 +215,9 @@ export function RepositoryDetail() {
   const proposedTestPathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
     if (!testResult?.result?.proposed_test_path) return 'UNKNOWN';
     if (filesLoading || filesError || !filesData?.items) return 'UNKNOWN';
-    const normalizedProposed = testResult.result.proposed_test_path.replace(/\\/g, '/').toLowerCase();
-    const exists = filesData.items.some(
-      (f) => f.path.replace(/\\/g, '/').toLowerCase() === normalizedProposed
-    );
+    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+    const normalizedProposed = normalize(testResult.result.proposed_test_path);
+    const exists = filesData.items.some((f) => normalize(f.path) === normalizedProposed);
     return exists ? 'EXISTS' : 'NEW';
   }, [testResult, filesData, filesLoading, filesError]);
 
@@ -234,7 +233,7 @@ export function RepositoryDetail() {
   function handleRunAnalysis(
     feature: AnalysisFeatureType,
     target: AnalysisTarget,
-    frameworkOverride?: SupportedTestFramework
+    frameworkOverride?: SupportedTestFramework | null
   ) {
     if (isAnalysisPending) {
       // Guard against duplicate simultaneous requests
@@ -293,7 +292,8 @@ export function RepositoryDetail() {
     }
 
     if (feature === 'tests') {
-      const activeRunner = frameworkOverride || selectedFrameworkOverride;
+      const activeRunner =
+        frameworkOverride !== undefined ? frameworkOverride : selectedFrameworkOverride;
       triggerGenerateTests({
         target: {
           type: target.type,
@@ -329,9 +329,9 @@ export function RepositoryDetail() {
     }, 500);
   }
 
-  function handleFrameworkChange(framework: SupportedTestFramework) {
+  function handleFrameworkChange(framework: SupportedTestFramework | null) {
     setSelectedFrameworkOverride(framework);
-    if (activeFeature === 'tests' && activeTarget.path) {
+    if (activeFeature === 'tests' && activeTarget.path && testResult) {
       handleRunAnalysis('tests', activeTarget, framework);
     }
   }
@@ -813,8 +813,14 @@ export function RepositoryDetail() {
                   activeTarget={activeTarget}
                   disabled={isAnalysisPending}
                   onSelectFeature={(feat) => {
-                    setActiveFeature((prev) => (prev === feat ? null : feat));
-                    setAnalysisStatus('IDLE');
+                    setActiveFeature((prev) => {
+                      if (prev === feat) return null;
+                      if (feat === 'explain' && explanationResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'bugs' && bugResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'tests' && testResult) setAnalysisStatus('COMPLETED');
+                      else setAnalysisStatus('IDLE');
+                      return feat;
+                    });
                     setAnalysisError(null);
                   }}
                 />

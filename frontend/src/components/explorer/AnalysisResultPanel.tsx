@@ -43,7 +43,7 @@ export interface AnalysisResultPanelProps {
   onSelectSourceReference?: (source: SourceReference) => void;
   activeSourceReference?: SourceReference | null;
   onSelectSymbol?: (symbol: SymbolSummary) => void;
-  onSelectFramework?: (framework: SupportedTestFramework) => void;
+  onSelectFramework?: (framework: SupportedTestFramework | null) => void;
   selectedFrameworkOverride?: SupportedTestFramework | null;
   sources?: SourceReference[];
   className?: string;
@@ -263,7 +263,7 @@ export function AnalysisResultPanel({
                       value={selectedFrameworkOverride || ''}
                       onChange={(e) =>
                         onSelectFramework(
-                          (e.target.value ? e.target.value : null) as SupportedTestFramework
+                          (e.target.value ? e.target.value : null) as SupportedTestFramework | null
                         )
                       }
                       className="px-1.5 py-0.5 rounded border border-border bg-card text-foreground font-mono text-[10px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -300,7 +300,11 @@ export function AnalysisResultPanel({
             <div className="rounded-lg bg-muted/20 border border-border/60 p-3 flex items-start gap-2.5 text-xs text-muted-foreground">
               <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed">
-                Analysis requests are scoped strictly to authorized repository context. Explanations decompose purpose, execution flow, key symbols, parameters, and limitations.
+                {feature === 'tests'
+                  ? 'Test generation inspects repository conventions, fixtures, and target semantics to construct framework-aware unit tests without mutating repository files.'
+                  : feature === 'bugs'
+                  ? 'Bug scans combine static AST pattern analysis with grounded AI reasoning to identify logic defects, edge case vulnerabilities, and regressions.'
+                  : 'Analysis requests are scoped strictly to authorized repository context. Explanations decompose purpose, execution flow, key symbols, parameters, and limitations.'}
               </p>
             </div>
           </div>

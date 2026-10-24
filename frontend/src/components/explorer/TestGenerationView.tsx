@@ -31,7 +31,7 @@ export interface TestGenerationViewProps {
   proposedPathExists?: boolean;
   onSelectSourceReference?: (source: SourceReference) => void;
   activeSourceReference?: SourceReference | null;
-  onSelectFramework?: (framework: SupportedTestFramework) => void;
+  onSelectFramework?: (framework: SupportedTestFramework | null) => void;
   selectedFrameworkOverride?: SupportedTestFramework | null;
   className?: string;
 }
@@ -95,6 +95,7 @@ export function TestGenerationView({
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<TestScenarioCategory | 'ALL'>('ALL');
   const [showAssumptions, setShowAssumptions] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [copiedCommand, setCopiedCommand] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
 
@@ -220,6 +221,30 @@ export function TestGenerationView({
     }
   }
 
+  // Copy terminal runner command handler
+  async function handleCopyCommand() {
+    const formatted = runnerCommand.replace('<path>', proposed_test_path || '<path>');
+    if (!formatted) return;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(formatted);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = formatted;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedCommand(true);
+      setTimeout(() => setCopiedCommand(false), 2000);
+    } catch {
+      // Ignore clipboard write failures
+    }
+  }
+
   const effectiveFramework = selectedFrameworkOverride || detected_framework;
   const runnerCommand = FRAMEWORK_COMMANDS[effectiveFramework] || 'pytest <path>';
 
@@ -246,7 +271,7 @@ export function TestGenerationView({
                   {detected_framework}
                 </span>
                 {hasFrameworkOverride && (
-                  <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/15 text-purple-300 border border-purple-500/30">
                     Active Override: {selectedFrameworkOverride}
                   </span>
                 )}
@@ -260,7 +285,13 @@ export function TestGenerationView({
               <span className="text-muted-foreground">Runner:</span>
               <select
                 value={selectedFrameworkOverride || detected_framework}
-                onChange={(e) => onSelectFramework(e.target.value as SupportedTestFramework)}
+                onChange={(e) =>
+                  onSelectFramework(
+                    e.target.value === detected_framework
+                      ? null
+                      : (e.target.value as SupportedTestFramework)
+                  )
+                }
                 className="px-2 py-1 rounded-md border border-border bg-card text-foreground font-mono text-[11px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
                 aria-label="Select test framework override"
               >
@@ -275,13 +306,26 @@ export function TestGenerationView({
         </div>
 
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/40 text-[11px] font-mono text-muted-foreground">
-          <div className="flex items-center gap-1.5 truncate">
+          <div className="flex items-center gap-1.5 truncate flex-1 min-w-0">
             <Terminal className="h-3 w-3 text-primary shrink-0" />
-            <span className="truncate">Runner Command:</span>
-            <code className="text-foreground bg-muted/40 px-1.5 py-0.5 rounded text-[10px]">
+            <span className="truncate shrink-0">Runner Command:</span>
+            <code className="text-foreground bg-muted/40 px-1.5 py-0.5 rounded text-[10px] truncate">
               {runnerCommand.replace('<path>', proposed_test_path || '<path>')}
             </code>
           </div>
+          <button
+            type="button"
+            onClick={handleCopyCommand}
+            className="shrink-0 p-1 rounded hover:bg-muted/40 text-muted-foreground hover:text-foreground transition-colors"
+            title="Copy test runner command"
+            aria-label="Copy test runner command"
+          >
+            {copiedCommand ? (
+              <Check className="h-3 w-3 text-emerald-400" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
+          </button>
         </div>
       </div>
 
@@ -507,7 +551,7 @@ export function TestGenerationView({
                       )}
                     >
                       <span className={cn('h-1.5 w-1.5 rounded-full', catConfig.dotClass)} />
-                      {scenario.category.replace('_', ' ')}
+                      {(scenario.category || '').replace(/_/g, ' ')}
                     </span>
                   </div>
                   <p className="text-[11px] text-muted-foreground leading-relaxed">
