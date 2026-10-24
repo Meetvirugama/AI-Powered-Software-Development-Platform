@@ -33,6 +33,7 @@ from ai.llm.schemas import (
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
+from app.core.secret_redaction import redact_obj
 from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.repositories.repository_repository import RepositoryRepository
@@ -443,6 +444,9 @@ async def explain_code(
         revision=revision,
         explanation=grounded_explanation,
     )
+    # Security (W2 Day 2): the model may copy secrets from the source code into
+    # its explanation — redact before the result is returned or saved.
+    response = CodeExplanationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
