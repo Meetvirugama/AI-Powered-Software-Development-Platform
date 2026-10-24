@@ -10,6 +10,11 @@
 
 export type AnalysisFeatureType = 'explain' | 'bugs' | 'tests' | 'review';
 
+export type AnalysisRunFeatureType =
+  | AnalysisFeatureType
+  | 'detect_bugs'
+  | 'generate_tests';
+
 export type AnalysisTargetType = 'file' | 'symbol' | 'range';
 
 export interface AnalysisTarget {
@@ -101,10 +106,35 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
+export interface BugDetectionRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
+  min_severity?: FindingSeverity;
+  include_static?: boolean;
+  include_ai?: boolean;
+}
+
+export interface BugDetectionResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  findings: AnalysisFinding[];
+  total_findings: number;
+  static_findings_count: number;
+  ai_findings_count: number;
+  missing_context: string[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
 export interface BugDetectionResult {
   findings: AnalysisFinding[];
   summary?: string;
 }
+
 
 export interface TestGenerationResult {
   framework: string;
@@ -131,7 +161,7 @@ export interface AnalysisRunSummary {
   id: string;
   repository_id: string;
   user_id?: string | null;
-  feature_type: AnalysisFeatureType;
+  feature_type: AnalysisRunFeatureType;
   status: AnalysisStatus;
   target_path?: string | null;
   target_symbol?: string | null;
@@ -155,7 +185,7 @@ export interface AnalysisRunDetailResponse {
   id: string;
   repository_id: string;
   user_id?: string | null;
-  feature_type: AnalysisFeatureType;
+  feature_type: AnalysisRunFeatureType;
   status: AnalysisStatus;
   target_path?: string | null;
   target_symbol?: string | null;

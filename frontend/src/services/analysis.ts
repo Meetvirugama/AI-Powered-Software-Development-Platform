@@ -9,9 +9,11 @@ import { apiClient } from './api';
 import type {
   ExplainCodeRequest,
   CodeExplanationResponse,
+  BugDetectionRequest,
+  BugDetectionResponse,
   PaginatedAnalysisRunResponse,
   AnalysisRunDetailResponse,
-  AnalysisFeatureType,
+  AnalysisRunFeatureType,
 } from '../types/analysis';
 
 /**
@@ -33,7 +35,25 @@ export async function explainCode(
 }
 
 /**
- * List historical analysis runs (e.g. explanation runs) for an authorized repository.
+ * Execute bug detection on a target file, symbol, or line range (Week 2 — Day 3).
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param payload The validated target and execution options.
+ * @returns The structured bug detection response envelope.
+ */
+export async function detectBugs(
+  repositoryId: string,
+  payload: BugDetectionRequest
+): Promise<BugDetectionResponse> {
+  const response = await apiClient.post<BugDetectionResponse>(
+    `/repositories/${repositoryId}/detect-bugs`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * List historical analysis runs (e.g. explanation runs, bug scans) for an authorized repository.
  *
  * @param repositoryId The UUID of the authorized repository.
  * @param params Query filtering and pagination options.
@@ -42,7 +62,7 @@ export async function explainCode(
 export async function getAnalysisRuns(
   repositoryId: string,
   params?: {
-    feature_type?: AnalysisFeatureType;
+    feature_type?: AnalysisRunFeatureType;
     status?: string;
     page?: number;
     page_size?: number;
@@ -56,7 +76,30 @@ export async function getAnalysisRuns(
 }
 
 /**
- * Reopen a specific analysis run (e.g. past explanation) from persistent history.
+ * List historical bug detection scans for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getBugScanHistory(
+  repositoryId: string,
+  params?: {
+    status?: string;
+    target_path?: string;
+    source_revision?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  return getAnalysisRuns(repositoryId, {
+    ...params,
+    feature_type: 'detect_bugs',
+  });
+}
+
+/**
+ * Reopen a specific analysis run (e.g. past explanation or bug scan) from persistent history.
  *
  * @param runId The UUID of the analysis run.
  * @returns Detailed record with target coordinates and structured result payload.
@@ -69,4 +112,17 @@ export async function getAnalysisRun(
   );
   return response.data;
 }
+
+/**
+ * Reopen a specific bug detection scan run from persistent history.
+ *
+ * @param runId The UUID of the bug detection analysis run.
+ * @returns Detailed record with findings and structured result payload.
+ */
+export async function reopenBugScan(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  return getAnalysisRun(runId);
+}
+
 
