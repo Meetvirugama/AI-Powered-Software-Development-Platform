@@ -1,4 +1,3 @@
-
 """Combine AST bug analysis with normalized static-review findings."""
 
 from typing import Any
@@ -11,6 +10,33 @@ class StaticBugScanner:
 
     def __init__(self, analyzer: ASTBugAnalyzer | None = None) -> None:
         self.analyzer = analyzer or ASTBugAnalyzer()
+
+    def scan(
+        self,
+        *,
+        repository_id: Any = None,
+        file_path: str = "snippet.py",
+        code_content: str = "",
+        target: Any = None,
+        repo_root: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Adapter method compatible with analysis orchestrator hooks."""
+        if not code_content:
+            return {
+                "success": True,
+                "file_path": file_path,
+                "parse_status": "empty",
+                "has_syntax_errors": False,
+                "error_message": None,
+                "findings": [],
+                "rules_evaluated": 0,
+            }
+        return self.scan_code(
+            content=code_content,
+            file_path=file_path,
+            repo_root=repo_root,
+        )
 
     def scan_code(
         self,

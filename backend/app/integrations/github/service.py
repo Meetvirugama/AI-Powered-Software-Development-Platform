@@ -315,13 +315,23 @@ class GitHubService(GitHubIntegrationBase):
             ValueError: If ``workspace_path`` escapes the workspace root.
             GitHubCloneError: If the ``git clone`` process fails.
         """
-        # --- path traversal guard ---
+        # --- path traversal & argument injection guards ---
+        import re
+        from app.core.input_security import is_within
+
         target = Path(workspace_path).resolve()
-        if not str(target).startswith(str(self._workspace_root)):
+        if not is_within(self._workspace_root, target) or target == self._workspace_root:
             raise ValueError(
                 f"workspace_path '{workspace_path}' is outside the allowed "
                 f"workspace root '{self._workspace_root}'."
             )
+
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", owner or ""):
+            raise ValueError(f"Invalid repository owner: {owner!r}")
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", repo or ""):
+            raise ValueError(f"Invalid repository name: {repo!r}")
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
+            raise ValueError(f"Invalid branch name: {branch!r}")
 
         # --- get installation token (never touches disk) ---
         token = await self._token_manager.get_token(installation_id)
@@ -331,7 +341,9 @@ class GitHubService(GitHubIntegrationBase):
             "git",
             "clone",
             "--depth=1",
-            f"--branch={branch}",
+            "--branch",
+            branch,
+            "--",
             auth_url,
             str(target),
         ]
@@ -350,6 +362,8 @@ class GitHubService(GitHubIntegrationBase):
 
             if result.returncode != 0:
                 stderr_text = stderr.decode(errors="replace")
+                if token:
+                    stderr_text = stderr_text.replace(token, "[REDACTED]")
                 logger.error("git clone failed (rc=%d): %s", result.returncode, stderr_text)
                 raise GitHubCloneError(
                     f"git clone failed for {owner}/{repo}: {stderr_text}",
@@ -368,4 +382,3 @@ class GitHubService(GitHubIntegrationBase):
 
 # Re-export GitHubSourceService for backwards compatibility with Week 2 source routes
 from .source_service import GitHubSourceService  # noqa: E402
-

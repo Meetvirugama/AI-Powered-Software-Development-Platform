@@ -103,8 +103,8 @@ class AnalysisRunRepository:
         ):
             completed_dt = datetime.now(timezone.utc)
 
-        # Extract large test outputs if passed in payload or kwargs
-        if test_output is None and result_payload:
+        # Extract large test outputs if passed in payload or kwargs (top-level or nested under "result")
+        if test_output is None and isinstance(result_payload, dict):
             test_output = (
                 result_payload.get("test_content")
                 or result_payload.get("complete_test_code")
@@ -115,6 +115,12 @@ class AnalysisRunRepository:
                     else None
                 )
             )
+            if test_output is None and isinstance(result_payload.get("result"), dict):
+                test_output = (
+                    result_payload["result"].get("test_content")
+                    or result_payload["result"].get("complete_test_code")
+                    or result_payload["result"].get("test_output")
+                )
 
         # Normalize feature_type and status strings
         feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)

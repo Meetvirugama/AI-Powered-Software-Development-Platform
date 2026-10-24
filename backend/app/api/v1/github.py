@@ -10,8 +10,10 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
@@ -294,18 +296,25 @@ async def github_webhook(
     settings = get_settings()
     body_bytes = await request.body()
 
-    # Verify signature if secret configured
-    if settings.github_webhook_secret:
-        signature_header = request.headers.get("X-Hub-Signature-256")
-        if not signature_header:
-            raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing GitHub webhook signature.")
-        expected_sig = "sha256=" + hmac.new(
-            settings.github_webhook_secret.encode("utf-8"),
-            body_bytes,
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(signature_header, expected_sig):
-            raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
+    # Security Fix: Fail closed if webhook secret is not configured
+    if not settings.github_webhook_secret:
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "GitHub webhook secret is not configured.",
+            retryable=False,
+        )
+
+    signature_header = request.headers.get("X-Hub-Signature-256")
+    if not signature_header:
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing GitHub webhook signature.")
+    expected_sig = "sha256=" + hmac.new(
+        settings.github_webhook_secret.encode("utf-8"),
+        body_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature_header, expected_sig):
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
 
     event = request.headers.get("X-GitHub-Event", "ping")
     if event == "ping":
