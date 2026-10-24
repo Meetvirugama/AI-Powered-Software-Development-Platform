@@ -6,7 +6,7 @@ Features:
 - Converts standardized ``LLMRequest`` to Gemini's ``system_instruction`` and ``contents`` format.
 - Round-robin key rotation across free-tier keys on rate-limits (HTTP 429).
 - Normalizes output to ``LLMResponse`` with latency, token usage, and finish reasons.
-- Translates API errors into structured ``LLMError`` hierarchy.
+- Translates API errors into structured ``LLMError`` hierarchy with API key redaction.
 """
 
 from __future__ import annotations
@@ -37,6 +37,12 @@ logger = logging.getLogger(__name__)
 
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+
+def _redact_key(text: str, key: str) -> str:
+    if not text or not key:
+        return text
+    return text.replace(key, "[REDACTED]")
 
 
 class GeminiProvider(LLMProvider):
@@ -98,8 +104,17 @@ class GeminiProvider(LLMProvider):
             elif msg.role == "assistant":
                 contents.append({"role": "model", "parts": [{"text": msg.content}]})
 
-        # Default model resolution
-        model_name = request.model if request.model and request.model != "default" else self._default_model
+        # Default model resolution (including legacy gpt-* fallback safety)
+        requested_model = (request.model or "").strip()
+        if (
+            not requested_model
+            or requested_model == "default"
+            or requested_model.startswith("gpt-")
+            or requested_model.startswith("openai/")
+        ):
+            model_name = self._default_model
+        else:
+            model_name = requested_model
         # Strip models/ prefix if present
         if model_name.startswith("models/"):
             model_name = model_name[len("models/"):]
@@ -155,7 +170,6 @@ class GeminiProvider(LLMProvider):
                     candidate = candidates[0]
                     content_parts = candidate.get("content", {}).get("parts", [])
                     content_text = "".join(p.get("text", "") for p in content_parts)
-                    finish_reason = candidate.get("finishReason", "STOP")
 
                     usage = data.get("usageMetadata", {})
                     input_tokens = usage.get("promptTokenCount", 0)
@@ -193,7 +207,7 @@ class GeminiProvider(LLMProvider):
                     )
 
                 if response.status_code in (401, 403):
-                    error_msg = response.text
+                    error_msg = _redact_key(response.text, current_key)
                     logger.error("gemini_auth_failed", extra={"status": response.status_code, "body": error_msg[:200]})
                     raise LLMAuthenticationError(
                         f"Gemini authentication failed (HTTP {response.status_code})",
@@ -211,9 +225,10 @@ class GeminiProvider(LLMProvider):
                     continue
 
                 if response.status_code in _RETRYABLE_STATUS_CODES:
+                    safe_body = _redact_key(response.text[:200], current_key)
                     logger.warning("gemini_transient_error", extra={"status": response.status_code, "attempt": attempt + 1})
                     last_error = LLMUnavailableError(
-                        f"Gemini service error (HTTP {response.status_code}): {response.text[:200]}",
+                        f"Gemini service error (HTTP {response.status_code}): {safe_body}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )
@@ -221,19 +236,22 @@ class GeminiProvider(LLMProvider):
                     continue
 
                 # Non-retryable error
+                safe_body = _redact_key(response.text[:300], current_key)
                 raise LLMError(
-                    f"Gemini API error (HTTP {response.status_code}): {response.text[:300]}",
+                    f"Gemini API error (HTTP {response.status_code}): {safe_body}",
                     status_code=response.status_code,
                     provider=self.provider_name,
                 )
 
             except (httpx.TimeoutException, httpx.ConnectTimeout) as exc:
-                last_error = LLMTimeoutError(f"Gemini request timed out: {exc}", provider=self.provider_name)
-                logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": str(exc)})
+                safe_err = _redact_key(str(exc), current_key)
+                last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
+                logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
                 await asyncio.sleep(0.5)
             except (httpx.NetworkError, httpx.TransportError) as exc:
-                last_error = LLMUnavailableError(f"Gemini network error: {exc}", provider=self.provider_name)
-                logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": str(exc)})
+                safe_err = _redact_key(str(exc), current_key)
+                last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
+                logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
                 await asyncio.sleep(0.5)
 
         if isinstance(last_error, LLMError):

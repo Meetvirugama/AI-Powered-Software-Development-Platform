@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         from ai.llm.groq_provider import GroqProvider
 
         gemini_keys = settings.all_gemini_keys
-        groq_keys = [k for k in (settings.groq_api_keys or "").split(",") if k.strip()]
+        groq_keys = settings.all_groq_keys
 
         primary_provider = None
         fallback_provider = None
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("rag_pipeline_ready", extra={"has_retriever": retriever is not None})
 
-        # ── Week 2 Day 2 & Day 3: Default Explanation & Bug Detection Services ──
+        # ── Week 2 Day 2–5: Default Intelligence Suite Services ──────────────
         if getattr(app.state, "llm_gateway", None) is not None:
             if getattr(app.state, "explanation_service", None) is None:
                 from app.services.explanation_orchestrator import LLMCodeExplanationService
@@ -142,6 +142,24 @@ async def lifespan(app: FastAPI):
                     model=settings.gemini_chat_model,
                 )
                 logger.info("bug_detection_service_ready")
+
+            if getattr(app.state, "test_generation_service", None) is None:
+                from app.services.test_generation_orchestrator import LLMTestGenerationService
+
+                app.state.test_generation_service = LLMTestGenerationService(
+                    llm_gateway=app.state.llm_gateway,
+                    model=settings.gemini_chat_model,
+                )
+                logger.info("test_generation_service_ready")
+
+            if getattr(app.state, "code_review_service", None) is None:
+                from app.services.code_review_orchestrator import LLMCodeReviewService
+
+                app.state.code_review_service = LLMCodeReviewService(
+                    llm_gateway=app.state.llm_gateway,
+                    model=settings.gemini_chat_model,
+                )
+                logger.info("code_review_service_ready")
 
         # ── Week 2: Shared Repository Context Service ────────────────────────
         from ai.context import shared_context_service

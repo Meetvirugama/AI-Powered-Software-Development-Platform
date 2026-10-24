@@ -115,6 +115,8 @@ _COMPATIBLE_CATEGORIES: dict[str, frozenset[str]] = {
 
 _SECRET_REDACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("openai_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}")),
+    ("groq_key", re.compile(r"\bgsk_[A-Za-z0-9]{20,}")),
+    ("gemini_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     (
@@ -907,3 +909,5 @@ class LLMBugDetectionService:
         if match:
             return match.group(1).strip()
         return text.strip()
+
+redact_secrets_from_text = redact_secrets_in_text

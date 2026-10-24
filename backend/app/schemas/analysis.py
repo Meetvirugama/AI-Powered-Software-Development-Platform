@@ -39,7 +39,7 @@ CodeTargetType = Literal["file", "symbol", "range"]
 ReviewTargetType = Literal["file", "commit", "diff", "pr"]
 AnalysisStatus = Literal["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
 FindingSeverity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
-FindingSourceType = Literal["STATIC", "AI", "COMBINED"]
+FindingSourceType = Literal["STATIC", "AI", "COMBINED", "HYBRID"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 SupportedTestFramework = Literal["pytest", "unittest", "jest"]
 
@@ -306,7 +306,7 @@ class CodeExplanation(BaseModel):
     inputs_and_outputs: str = Field(
         ...,
         min_length=1,
-        description="Parameters, return values, and observable side effects.",
+        description="Parameters, return values, and side effects.",
     )
     dependencies: list[str] = Field(
         default_factory=list,
@@ -754,3 +754,23 @@ class AnalysisRunDetailResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+_FEATURE_TYPE_ALIASES: dict[str, str] = {
+    "bugs": "detect_bugs",
+    "detect_bugs": "detect_bugs",
+    "tests": "generate_tests",
+    "generate_tests": "generate_tests",
+    "explain": "explain",
+    "review": "review",
+}
+
+
+def normalize_analysis_feature_type(value: str | None) -> str | None:
+    """Normalize shorthand feature_type query aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests')."""
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in _FEATURE_TYPE_ALIASES:
+        return _FEATURE_TYPE_ALIASES[raw]
+    raise ValueError(f"Unsupported feature_type: {value}")

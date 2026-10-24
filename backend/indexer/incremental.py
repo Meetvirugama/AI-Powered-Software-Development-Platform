@@ -1,9 +1,12 @@
 """
-Incremental Indexer — Hash-based change detection, chunking, and embedding.
+Incremental Indexer — Hash-based change detection, symbol persistence, chunking, and embedding.
 
 Responsibilities:
 - Detects new and modified files using SHA-256 content hashes.
+- Normalizes file paths to POSIX forward slashes.
 - Inserts/updates `repository_files` with mandatory `size_bytes`, `line_count`, `language`, and `content_hash`.
+- Persists extracted `CodeSymbol` rows into `code_symbols` BEFORE inserting `code_chunks`
+  so foreign-key references (`code_chunks.symbol_id -> code_symbols.id`) and symbol queries succeed.
 - Splits modified files using `SymbolChunker` into syntax-aware or block-level chunks.
 - Embeds all generated code chunks via `EmbeddingService` with real 768-dimensional vectors.
 - Persists chunks with pgvector embeddings and JSON metadata.
@@ -11,17 +14,17 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
 import uuid
 from typing import Any
-import asyncio
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from indexer.chunker import SymbolChunker
 from scanner.detector import LanguageDetector
@@ -53,7 +56,7 @@ def _vec_to_pg_literal(vector: list[float]) -> str:
 class IncrementalIndexer:
     """
     Orchestrates repository incremental indexing:
-    detection → parsing → symbol chunking → embedding → vector storage.
+    detection → parsing → symbol persistence → symbol chunking → embedding → vector storage.
     """
 
     def __init__(
@@ -72,8 +75,7 @@ class IncrementalIndexer:
     async def _execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         """Helper to run SQL across AsyncSession, sync Session, or sessionmaker."""
         if hasattr(self._db, "execute"):
-            import asyncio
-            if asyncio.iscoroutinefunction(self._db.execute):
+            if inspect.iscoroutinefunction(self._db.execute):
                 return await self._db.execute(stmt, params or {})
             return self._db.execute(stmt, params or {})
         else:
@@ -85,8 +87,7 @@ class IncrementalIndexer:
     async def _commit(self) -> None:
         """Helper to commit transactions."""
         if hasattr(self._db, "commit"):
-            import asyncio
-            if asyncio.iscoroutinefunction(self._db.commit):
+            if inspect.iscoroutinefunction(self._db.commit):
                 await self._db.commit()
             else:
                 self._db.commit()
@@ -103,7 +104,7 @@ class IncrementalIndexer:
         1. Fetch existing (path, content_hash) pairs from repository_files.
         2. Compare with newly scanned files.
         3. Skip unchanged files (hash match).
-        4. For changed/new files: delete old chunks, chunk symbols, embed, insert.
+        4. For changed/new files: delete old chunks & symbols, insert symbols, chunk symbols, embed, insert chunks.
         """
         logger.info(
             "Starting incremental sync for repo %s with %d files",
@@ -126,7 +127,8 @@ class IncrementalIndexer:
         skipped_count = 0
 
         for file_info in scanned_files:
-            file_rel_path = getattr(file_info, "path", str(file_info))
+            raw_rel_path = getattr(file_info, "path", str(file_info))
+            file_rel_path = raw_rel_path.replace("\\", "/")
             full_path = (
                 os.path.join(root_path, file_rel_path)
                 if root_path and not os.path.isabs(file_rel_path)
@@ -163,14 +165,15 @@ class IncrementalIndexer:
             logger.info("Indexing changed/new file: %s (%s)", file_rel_path, language)
 
             if file_id:
-                # Delete old chunks for this file
-                delete_query = text(
-                    """
-                    DELETE FROM code_chunks 
-                    WHERE repository_id = :repo_id AND file_id = :file_id
-                    """
+                # Delete old chunks and old symbols for this file before re-inserting
+                await self._execute(
+                    text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
+                    {"repo_id": repository_id, "file_id": file_id},
                 )
-                await self._execute(delete_query, {"repo_id": repository_id, "file_id": file_id})
+                await self._execute(
+                    text("DELETE FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id"),
+                    {"repo_id": repository_id, "file_id": file_id},
+                )
 
                 # Update the record in repository_files
                 update_query = text(
@@ -180,7 +183,7 @@ class IncrementalIndexer:
                         size_bytes = :size_bytes,
                         line_count = :line_count,
                         language = :language,
-                        last_indexed_at = NOW()
+                        last_indexed_at = CURRENT_TIMESTAMP
                     WHERE id = :file_id
                     """
                 )
@@ -199,7 +202,7 @@ class IncrementalIndexer:
                 insert_query = text(
                     """
                     INSERT INTO repository_files (id, repository_id, path, language, size_bytes, line_count, content_hash, last_indexed_at)
-                    VALUES (:id, :repo_id, :path, :language, :size_bytes, :line_count, :hash, NOW())
+                    VALUES (:id, :repo_id, :path, :language, :size_bytes, :line_count, :hash, CURRENT_TIMESTAMP)
                     """
                 )
                 await self._execute(
@@ -215,12 +218,46 @@ class IncrementalIndexer:
                     },
                 )
 
-            # Extract symbols if language is supported
+            # Extract symbols if language is supported and persist them to code_symbols
             symbols = []
             try:
+                if hasattr(file_info, "language"):
+                    file_info.language = language
                 symbols = self.extractor.extract(file_info, content, file_id=file_id)
             except Exception as e:
                 logger.debug("Symbol extraction skipped for %s: %s", file_rel_path, e)
+
+            persisted_symbol_ids: set[UUID] = set()
+            if symbols:
+                symbol_insert_query = text(
+                    """
+                    INSERT INTO code_symbols
+                    (id, file_id, repository_id, name, kind, start_line, end_line, signature, parent_id)
+                    VALUES (:id, :file_id, :repo_id, :name, :kind, :start_line, :end_line, :signature, :parent_id)
+                    """
+                )
+                for sym in symbols:
+                    sym_uuid = sym.id if isinstance(sym.id, UUID) else uuid.uuid4()
+                    sym.id = sym_uuid
+                    parent_uuid = sym.parent_id if sym.parent_id in persisted_symbol_ids else None
+                    try:
+                        await self._execute(
+                            symbol_insert_query,
+                            {
+                                "id": sym_uuid,
+                                "file_id": file_id,
+                                "repo_id": repository_id,
+                                "name": (sym.name or "anonymous")[:255],
+                                "kind": (sym.kind or "symbol")[:50],
+                                "start_line": max(1, int(sym.start_line or 1)),
+                                "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
+                                "signature": sym.signature,
+                                "parent_id": parent_uuid,
+                            },
+                        )
+                        persisted_symbol_ids.add(sym_uuid)
+                    except Exception as sym_exc:
+                        logger.debug("Symbol persistence skipped for %s in %s: %s", sym.name, file_rel_path, sym_exc)
 
             # Chunk the file using SymbolChunker (symbol-aware or fallback line blocks)
             chunks = self.chunker.chunk_symbols(
@@ -249,8 +286,6 @@ class IncrementalIndexer:
                     )
                     vectors = []
 
-            # If embedding was required but failed, skip persisting chunks without vectors
-            # to avoid pgvector NOT NULL violations on code_chunks.embedding
             if self.embedding_service is not None and not vectors:
                 logger.warning(
                     "Skipping code_chunks persistence for file %s because embeddings could not be generated.",
@@ -273,6 +308,7 @@ class IncrementalIndexer:
                 chunk_id = uuid.uuid4()
                 vec = vectors[i] if i < len(vectors) else None
                 vec_literal = _vec_to_pg_literal(vec) if vec is not None else None
+                safe_symbol_id = chunk.symbol_id if chunk.symbol_id in persisted_symbol_ids else None
 
                 metadata = {
                     "file_path": file_rel_path,
@@ -286,7 +322,7 @@ class IncrementalIndexer:
                         "id": chunk_id,
                         "repo_id": repository_id,
                         "file_id": file_id,
-                        "symbol_id": chunk.symbol_id,
+                        "symbol_id": safe_symbol_id,
                         "content": chunk.content,
                         "tokens": chunk.token_count,
                         "embedding": vec_literal,

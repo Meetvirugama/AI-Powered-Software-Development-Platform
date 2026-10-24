@@ -128,12 +128,15 @@ async def list_commits(
     page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
 ) -> CommitListResponse:
+    from app.core.input_security import require_safe_repo_path
+
+    safe_path = require_safe_repo_path(path) if path is not None else None
     service = GitHubSourceService(db)
     return await service.list_commits(
         repository_id,
         _request_user_id(request),
         ref=ref,
-        path=path,
+        path=safe_path,
         per_page=per_page,
         page=page,
     )
@@ -151,11 +154,20 @@ async def get_commit_detail(
     request: Request,
     db: Session = Depends(get_db),
 ) -> CommitDetail:
+    import re
+
+    clean_sha = sha.strip()
+    if not re.match(r"^[0-9a-fA-F]{7,64}$", clean_sha):
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Invalid commit SHA format; expected a 7-to-64 character hexadecimal SHA.",
+        )
     service = GitHubSourceService(db)
     return await service.get_commit_detail(
         repository_id,
         _request_user_id(request),
-        sha,
+        clean_sha,
     )
 
 
@@ -246,4 +258,3 @@ async def create_agent_branch_endpoint(
         base_sha=info.base_sha,
         status=info.status,
     )
-

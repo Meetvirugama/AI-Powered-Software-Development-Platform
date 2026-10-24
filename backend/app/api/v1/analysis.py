@@ -60,11 +60,23 @@ from app.services.bug_detection_orchestrator import (
     merge_and_deduplicate_findings,
     normalize_and_ground_findings,
 )
+from app.services.code_review_orchestrator import (
+    build_grounded_review_report,
+    merge_and_rank_review_findings,
+    normalize_and_ground_review_findings,
+    resolve_review_target_and_build_context,
+    run_static_review_on_changes,
+)
 from app.services.explanation_orchestrator import (
     MAX_ANALYZABLE_FILE_BYTES,
     ground_explanation_sources,
     record_analysis_run,
     resolve_target_and_build_context,
+)
+from app.services.test_generation_orchestrator import (
+    build_repository_test_context,
+    detect_repository_test_framework,
+    validate_and_sanitize_generated_tests,
 )
 
 logger = logging.getLogger(__name__)
@@ -692,59 +704,104 @@ async def generate_tests(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TestGenerationResponse:
-    """Generate a previewable test file following the repository's test conventions."""
+    """Execute the Week 2 Day 4 Framework-Aware Test Generation pipeline."""
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    file_record = _validate_and_normalize_code_target(repository_id, payload.target, db)
+
+    explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
+    resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+    payload.target = resolved.target
+
+    detection, manifest_contents, all_repo_files = detect_repository_test_framework(
+        repository_id=repository_id,
+        target_path=resolved.target.path,
+        requested_framework=payload.framework,
+        db=db,
+    )
+    test_context, proposed_test_path = build_repository_test_context(
+        repository_id=repository_id,
+        resolved=resolved,
+        detection=detection,
+        manifest_contents=manifest_contents,
+        all_repo_files=all_repo_files,
+        token_budget=payload.options.max_context_tokens,
+    )
 
     service = _get_service(request, "test_generation_service", "Test generation")
     method = service.generate_tests if hasattr(service, "generate_tests") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-        file_record=file_record,
-    )
+    run_id = str(uuid4())
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+            file_record=resolved.file_record,
+            extra_kwargs={
+                "context": test_context,
+                "code_content": resolved.code_content,
+                "detected_framework": detection.framework or "pytest",
+                "proposed_test_path": proposed_test_path,
+                "fixtures": list(detection.fixtures),
+                "revision": resolved.revision,
+            },
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=exc.message,
+            )
+        raise
 
-    revision = payload.target.revision or getattr(repo, "default_branch", "main")
+    status_val = "COMPLETED"
+    revision = resolved.revision
     try:
         if isinstance(raw_result, TestGenerationResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            revision = raw_result.revision or resolved.revision
+            test_result = raw_result.result
         elif isinstance(raw_result, TestGenerationResult):
-            response = TestGenerationResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                result=raw_result,
-            )
+            test_result = raw_result
         elif isinstance(raw_result, dict) and "result" in raw_result:
-            response = TestGenerationResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "revision": raw_result.get("revision") or revision,
-                    "result": raw_result["result"],
-                }
-            )
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            revision = raw_result.get("revision") or resolved.revision
+            test_result = TestGenerationResult.model_validate(raw_result["result"])
         else:
-            test_result = TestGenerationResult.model_validate(raw_result)
-            response = TestGenerationResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                result=test_result,
-            )
-    except ValidationError as exc:
+            if isinstance(raw_result, dict):
+                raw_copy = dict(raw_result)
+                raw_copy.setdefault("detected_framework", detection.framework or "pytest")
+                raw_copy.setdefault("proposed_test_path", proposed_test_path)
+                test_result = TestGenerationResult.model_validate(raw_copy)
+            else:
+                test_result = TestGenerationResult.model_validate(raw_result)
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.error("generate_tests_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=resolved.target,
+                revision=revision,
+                error_message="Test generation service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -752,13 +809,61 @@ async def generate_tests(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
+    if status_val == "FAILED":
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=resolved.target,
+                revision=revision,
+                error_message="Test generation failed.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
             "Test generation failed.",
             retryable=True,
         )
+
+    sanitized_result = validate_and_sanitize_generated_tests(
+        test_result,
+        repository_id=repository_id,
+        resolved=resolved,
+        detection=detection,
+        default_proposed_path=proposed_test_path,
+    )
+
+    response = TestGenerationResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=resolved.target,
+        revision=revision,
+        result=sanitized_result,
+    )
+
+    if payload.options.persist_run:
+        payload_dict = response.model_dump(mode="json")
+        payload_dict["test_content"] = sanitized_result.test_content
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="generate_tests",
+            status=response.status,
+            target=response.target,
+            revision=response.revision,
+            result_payload=payload_dict,
+            findings_count=len(sanitized_result.covered_scenarios),
+        )
+
     return response
 
 
@@ -777,56 +882,117 @@ async def review_code(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ReviewReportResponse:
-    """Review a file, commit SHA, PR diff, or unified diff without starting an autonomous task."""
+    """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
     user_id = _request_user_id(request)
-    _owned_repository(repository_id, request, db)
+    repo = _owned_repository(repository_id, request, db)
 
-    if payload.target.path is not None:
-        payload.target.path = require_safe_repo_path(payload.target.path)
+    resolved = await resolve_review_target_and_build_context(
+        repository_id=repository_id,
+        repo=repo,
+        payload=payload,
+        user_id=user_id,
+        db=db,
+        app_state=request.app.state,
+    )
+    payload.target = resolved.target
+
+    history_target = AnalysisTarget(
+        type="file",
+        path=resolved.target_path_summary or "diff",
+        revision=resolved.revision,
+    )
 
     service = _get_service(request, "code_review_service", "AI code review")
     method = service.review if hasattr(service, "review") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-    )
+    run_id = str(uuid4())
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+            extra_kwargs={
+                "context": resolved.intelligence_context,
+                "modified_files": resolved.modified_files,
+                "source_map": resolved.source_map,
+                "revision": resolved.revision,
+            },
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=history_target,
+                revision=resolved.revision,
+                error_message=exc.message,
+            )
+        raise
 
+    extra_static_raw: list[Any] = []
+    scanner_warnings: list[str] = []
+    if payload.include_static:
+        ext_reviewer = getattr(request.app.state, "static_reviewer", None)
+        if ext_reviewer is not None:
+            rev_fn = getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer))
+            if callable(rev_fn):
+                try:
+                    mod_paths = [mf.file_path for mf in resolved.modified_files]
+                    ext_res = rev_fn(mod_paths)
+                    if inspect.isawaitable(ext_res):
+                        ext_res = await ext_res
+                    if isinstance(ext_res, dict):
+                        extra_static_raw.extend(ext_res.get("findings", []))
+                    elif isinstance(ext_res, list):
+                        extra_static_raw.extend(ext_res)
+                except Exception as exc:
+                    logger.warning("external_static_reviewer_error", extra={"error": str(exc)})
+                    scanner_warnings.append("External static reviewer encountered an error.")
+
+        builtin_static, builtin_warns = run_static_review_on_changes(
+            repository_id=repository_id,
+            resolved=resolved,
+            app_state=request.app.state,
+        )
+        extra_static_raw.extend(builtin_static)
+        scanner_warnings.extend(builtin_warns)
+
+    status_val = "COMPLETED"
     try:
         if isinstance(raw_result, ReviewReportResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            raw_report = raw_result.report
         elif isinstance(raw_result, ReviewReport):
-            response = ReviewReportResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                report=raw_result,
-            )
+            raw_report = raw_result
         elif isinstance(raw_result, dict) and "report" in raw_result:
-            response = ReviewReportResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "report": raw_result["report"],
-                }
-            )
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            raw_report = ReviewReport.model_validate(raw_result["report"])
         else:
-            report = ReviewReport.model_validate(raw_result)
-            response = ReviewReportResponse(
-                run_id=str(uuid4()),
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                report=report,
-            )
-    except ValidationError as exc:
+            raw_report = ReviewReport.model_validate(raw_result)
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.error("review_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=history_target,
+                revision=resolved.revision,
+                error_message="AI code review service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -834,13 +1000,78 @@ async def review_code(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
+    if status_val == "FAILED":
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=history_target,
+                revision=resolved.revision,
+                error_message="Code review execution failed.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
             "Code review execution failed.",
             retryable=True,
         )
+
+    grounded_ai = normalize_and_ground_review_findings(
+        list(raw_report.findings),
+        repository_id=repository_id,
+        resolved=resolved,
+    )
+    grounded_static = normalize_and_ground_review_findings(
+        extra_static_raw,
+        repository_id=repository_id,
+        resolved=resolved,
+        default_source_type="STATIC",
+    )
+
+    merged_findings = merge_and_rank_review_findings(
+        [*grounded_static, *grounded_ai],
+        include_static=payload.include_static,
+    )
+    merged_missing = list(
+        dict.fromkeys([*resolved.missing_context, *scanner_warnings, *raw_report.missing_context])
+    )
+
+    grounded_report = build_grounded_review_report(
+        summary=raw_report.summary,
+        findings=merged_findings,
+        missing_context=merged_missing,
+        explicit_risk_level=raw_report.risk_level,
+    )
+
+    response = ReviewReportResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=resolved.target,
+        report=grounded_report,
+    )
+
+    if payload.options.persist_run:
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="review",
+            status=response.status,
+            target=history_target,
+            revision=resolved.revision,
+            result_payload=response.model_dump(mode="json"),
+            findings=[f.model_dump(mode="json") for f in merged_findings],
+            findings_count=len(merged_findings),
+        )
+
     return response
 
 
