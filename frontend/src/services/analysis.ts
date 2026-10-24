@@ -35,10 +35,12 @@ export async function explainCode(
 }
 
 /**
- * Execute bug detection on a target file, symbol, or line range (Week 2 — Day 3).
+ * Scan for bugs using static analysis rules and AI reasoning (Week 2 — Day 3).
+ *
+ * Calls POST /api/v1/repositories/{repository_id}/detect-bugs
  *
  * @param repositoryId The UUID of the authorized repository.
- * @param payload The validated target and execution options.
+ * @param payload Target, options, and engine flags.
  * @returns The structured bug detection response envelope.
  */
 export async function detectBugs(
@@ -124,5 +126,4 @@ export async function reopenBugScan(
 ): Promise<AnalysisRunDetailResponse> {
   return getAnalysisRun(runId);
 }
-
 
