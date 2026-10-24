@@ -471,9 +471,26 @@ def record_analysis_run(
     findings: list[dict[str, Any]] | None = None,
     error_message: str | None = None,
     findings_count: int = 0,
+    test_output: str | None = None,
+    **extra_kwargs: Any,
 ) -> None:
     """Step 8: Persist analysis run (COMPLETED or FAILED) to Om's repository or in-memory history store."""
     now = datetime.now(timezone.utc)
+
+    # Extract test_output from result_payload if available
+    resolved_test_output = test_output
+    if resolved_test_output is None and result_payload:
+        resolved_test_output = (
+            result_payload.get("test_content")
+            or result_payload.get("complete_test_code")
+            or result_payload.get("test_output")
+            or (
+                result_payload.get("result", {}).get("test_content")
+                if isinstance(result_payload.get("result"), dict)
+                else None
+            )
+        )
+
     record = {
         "id": str(run_id),
         "repository_id": str(repository_id),
@@ -487,26 +504,36 @@ def record_analysis_run(
         "source_revision": revision,
         "findings_count": findings_count,
         "result_payload": result_payload,
+        "test_output": resolved_test_output,
         "findings": findings or [],
         "error_message": error_message,
         "created_at": now,
         "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
     }
 
-    # 1. Try app.state.analysis_run_service if it exposes save_run / create_run / record_run
-    run_service = getattr(app_state, "analysis_run_service", None)
-    if run_service is not None:
+    # 1. Try feature-specific history service or general analysis_run_service
+    target_service = getattr(app_state, "analysis_run_service", None)
+    if feature_type in ("generate_tests", "tests"):
+        target_service = getattr(app_state, "test_generation_history_service", None) or target_service
+    elif feature_type in ("detect_bugs", "bugs"):
+        target_service = getattr(app_state, "bug_scan_history_service", None) or target_service
+    elif feature_type == "explain":
+        target_service = getattr(app_state, "explanation_history_service", None) or target_service
+
+    saved = False
+    if target_service is not None:
         for method_name in ("record_run", "save_run", "create_run"):
-            fn = getattr(run_service, method_name, None)
+            fn = getattr(target_service, method_name, None)
             if callable(fn):
                 try:
                     fn(record)
+                    saved = True
                     break
                 except Exception as exc:
                     logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
 
     # 2. Try Om's AnalysisRunRepository if available in app.repositories
-    if hasattr(db, "query"):
+    if not saved and hasattr(db, "query"):
         try:
             from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
 

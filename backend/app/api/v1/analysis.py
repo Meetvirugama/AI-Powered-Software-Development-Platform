@@ -696,26 +696,58 @@ async def generate_tests(
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
     file_record = _validate_and_normalize_code_target(repository_id, payload.target, db)
+    run_id = str(uuid4())
+    revision = payload.target.revision or getattr(repo, "default_branch", "main")
 
     service = _get_service(request, "test_generation_service", "Test generation")
     method = service.generate_tests if hasattr(service, "generate_tests") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-        file_record=file_record,
-    )
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+            file_record=file_record,
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message=exc.message,
+            )
+        raise
+    except Exception as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message=str(exc),
+            )
+        raise
 
-    revision = payload.target.revision or getattr(repo, "default_branch", "main")
     try:
         if isinstance(raw_result, TestGenerationResponse):
             response = raw_result
         elif isinstance(raw_result, TestGenerationResult):
             response = TestGenerationResponse(
-                run_id=str(uuid4()),
+                run_id=run_id,
                 repository_id=str(repository_id),
                 status="COMPLETED",
                 target=payload.target,
@@ -725,7 +757,7 @@ async def generate_tests(
         elif isinstance(raw_result, dict) and "result" in raw_result:
             response = TestGenerationResponse.model_validate(
                 {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
+                    "run_id": str(raw_result.get("run_id") or run_id),
                     "repository_id": str(raw_result.get("repository_id") or repository_id),
                     "status": raw_result.get("status", "COMPLETED"),
                     "target": raw_result.get("target") or payload.target,
@@ -736,7 +768,7 @@ async def generate_tests(
         else:
             test_result = TestGenerationResult.model_validate(raw_result)
             response = TestGenerationResponse(
-                run_id=str(uuid4()),
+                run_id=run_id,
                 repository_id=str(repository_id),
                 status="COMPLETED",
                 target=payload.target,
@@ -745,6 +777,19 @@ async def generate_tests(
             )
     except ValidationError as exc:
         logger.error("generate_tests_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message="Test generation service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -753,12 +798,42 @@ async def generate_tests(
         ) from exc
 
     if response.status == "FAILED":
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=response.run_id or run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=response.target,
+                revision=response.revision or revision,
+                error_message="Test generation failed during execution.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
             "Test generation failed.",
             retryable=True,
         )
+
+    if payload.options.persist_run:
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="generate_tests",
+            status=response.status,
+            target=response.target,
+            revision=response.revision,
+            result_payload=response.model_dump(mode="json"),
+            test_output=response.result.test_content,
+            findings_count=0,
+        )
+
     return response
 
 
@@ -1032,6 +1107,7 @@ async def get_analysis_run(
         source_revision=getattr(run_record, "source_revision", None),
         findings_count=getattr(run_record, "findings_count", 0) or 0,
         result_payload=getattr(run_record, "result_payload", None),
+        test_output=getattr(run_record, "test_output", None),
         findings=[
             f.to_dict() if hasattr(f, "to_dict") else f
             for f in (getattr(run_record, "findings", []) or [])

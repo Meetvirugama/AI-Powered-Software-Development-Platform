@@ -136,13 +136,48 @@ export interface BugDetectionResult {
 }
 
 
+export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
+
+export interface TestScenario {
+  name: string;
+  category: 'normal' | 'edge_case' | 'failure_path';
+  description: string;
+}
+
 export interface TestGenerationResult {
-  framework: string;
-  test_file_path: string;
-  code: string;
+  detected_framework?: SupportedTestFramework | string;
+  framework?: SupportedTestFramework | string;
+  proposed_test_path?: string;
+  test_file_path?: string;
+  test_content?: string;
+  code?: string;
+  covered_scenarios?: TestScenario[] | string[];
   scenarios_covered?: string[];
+  assumptions_and_warnings?: string[];
   assumptions?: string[];
+  syntax_valid?: boolean;
+  validation_errors?: string[];
   validation_warnings?: string[];
+  sources?: SourceReference[];
+}
+
+export interface TestGenerationRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
+  framework?: SupportedTestFramework | null;
+}
+
+export interface TestGenerationResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  result: TestGenerationResult;
+  test_output?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
 }
 
 export interface CodeReviewResult {
@@ -194,6 +229,7 @@ export interface AnalysisRunDetailResponse {
   source_revision?: string | null;
   findings_count: number;
   result_payload?: Record<string, any> | null;
+  test_output?: string | null;
   findings?: AnalysisFinding[];
   error_message?: string | null;
   created_at: string;
