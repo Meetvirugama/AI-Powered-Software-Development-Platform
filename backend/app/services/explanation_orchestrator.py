@@ -53,6 +53,7 @@ from ai.llm.schemas import (
 from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.secret_redaction import redact, redact_obj
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.memory_entry import MemoryEntry
@@ -473,6 +474,11 @@ def record_analysis_run(
     findings_count: int = 0,
 ) -> None:
     """Step 8: Persist analysis run (COMPLETED or FAILED) to Om's repository or in-memory history store."""
+    # Security (W2 Day 2): saved history must never contain secrets copied from
+    # repository code or model output — applies to every analysis feature.
+    result_payload = redact_obj(result_payload) if result_payload is not None else None
+    findings = redact_obj(findings) if findings else findings
+    error_message = redact(error_message) if error_message else error_message
     now = datetime.now(timezone.utc)
     record = {
         "id": str(run_id),
@@ -587,7 +593,8 @@ class LLMCodeExplanationService:
         )
         user_prompt = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
-            f"{_fence(rendered)}\n\n"
+            # Security (W2 Day 2): secrets in indexed code never reach the LLM provider.
+            f"{_fence(redact(rendered))}\n\n"
             "EXPLANATION TARGET:\n"
             f"Explain `{payload.target.path}` "
             f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
