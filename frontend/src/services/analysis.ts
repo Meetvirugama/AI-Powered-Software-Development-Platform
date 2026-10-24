@@ -148,4 +148,37 @@ export async function reopenBugScan(
 ): Promise<AnalysisRunDetailResponse> {
   return getAnalysisRun(runId);
 }
+/**
+ * List historical test generation runs for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getTestGenerationHistory(
+  repositoryId: string,
+  params?: {
+    status?: string;
+    target_path?: string;
+    source_revision?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  return getAnalysisRuns(repositoryId, {
+    ...params,
+    feature_type: 'generate_tests',
+  });
+}
 
+/**
+ * Reopen a specific test generation run from persistent history (Scenario C Step 7).
+ *
+ * @param runId The UUID of the test generation analysis run.
+ * @returns Detailed record with test output, covered scenarios, and structured result payload.
+ */
+export async function reopenTestGeneration(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  return getAnalysisRun(runId);
+}

@@ -711,7 +711,6 @@ async def generate_tests(
     """Execute the Week 2 Day 4 Framework-Aware Test Generation pipeline."""
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-
     explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
     resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
     payload.target = resolved.target
@@ -765,6 +764,21 @@ async def generate_tests(
                 target=resolved.target,
                 revision=resolved.revision,
                 error_message=exc.message,
+            )
+        raise
+    except Exception as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="generate_tests",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=str(exc),
             )
         raise
 
@@ -825,7 +839,7 @@ async def generate_tests(
                 status="FAILED",
                 target=resolved.target,
                 revision=revision,
-                error_message="Test generation failed.",
+                error_message="Test generation failed during execution.",
             )
         raise APIError(
             500,
@@ -865,6 +879,7 @@ async def generate_tests(
             target=response.target,
             revision=response.revision,
             result_payload=payload_dict,
+            test_output=sanitized_result.test_content,
             findings_count=len(sanitized_result.covered_scenarios),
         )
 
@@ -1267,6 +1282,7 @@ async def get_analysis_run(
         source_revision=getattr(run_record, "source_revision", None),
         findings_count=getattr(run_record, "findings_count", 0) or 0,
         result_payload=getattr(run_record, "result_payload", None),
+        test_output=getattr(run_record, "test_output", None),
         findings=[
             f.to_dict() if hasattr(f, "to_dict") else f
             for f in (getattr(run_record, "findings", []) or [])

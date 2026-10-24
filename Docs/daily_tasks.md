@@ -543,7 +543,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
 - ⬜ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings
 - ⬜ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights
-- ⬜ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
+- ✅ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
 
 ## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
@@ -553,6 +553,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions
 - ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
 - ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
+- ✅ Om: Persisting generated-test runs and relevant metadata (`test_output`, scenarios, framework, revision)
 
 ## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 

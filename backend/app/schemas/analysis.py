@@ -750,6 +750,7 @@ class AnalysisRunDetailResponse(BaseModel):
     source_revision: str | None = None
     findings_count: int = 0
     result_payload: dict[str, Any] | None = None
+    test_output: str | None = None
     findings: list[BugFinding | ReviewFinding] = Field(default_factory=list)
     error_message: str | None = None
     created_at: datetime

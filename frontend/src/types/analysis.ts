@@ -169,12 +169,18 @@ export interface TestGenerationRequest {
 
 export interface TestGenerationResult {
   detected_framework: SupportedTestFramework;
+  framework?: SupportedTestFramework | string;
   proposed_test_path: string;
+  test_file_path?: string;
   test_content: string;
+  code?: string;
   covered_scenarios: TestScenario[];
+  scenarios_covered?: string[];
   assumptions_and_warnings: string[];
+  assumptions?: string[];
   syntax_valid: boolean;
   validation_errors: string[];
+  validation_warnings?: string[];
   sources?: SourceReference[];
 }
 
@@ -185,7 +191,10 @@ export interface TestGenerationResponse {
   target: AnalysisTarget;
   revision?: string | null;
   result: TestGenerationResult;
+  test_output?: string | null;
+  error_message?: string | null;
   created_at: string;
+  completed_at?: string | null;
 }
 
 export interface CodeReviewResult {
@@ -237,6 +246,7 @@ export interface AnalysisRunDetailResponse {
   source_revision?: string | null;
   findings_count: number;
   result_payload?: Record<string, any> | null;
+  test_output?: string | null;
   findings?: AnalysisFinding[];
   error_message?: string | null;
   created_at: string;
