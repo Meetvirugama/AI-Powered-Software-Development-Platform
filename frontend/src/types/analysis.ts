@@ -10,6 +10,11 @@
 
 export type AnalysisFeatureType = 'explain' | 'bugs' | 'tests' | 'review';
 
+export type AnalysisRunFeatureType =
+  | AnalysisFeatureType
+  | 'detect_bugs'
+  | 'generate_tests';
+
 export type AnalysisTargetType = 'file' | 'symbol' | 'range';
 
 export interface AnalysisTarget {
@@ -101,10 +106,35 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
+export interface BugDetectionRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
+  min_severity?: FindingSeverity;
+  include_static?: boolean;
+  include_ai?: boolean;
+}
+
+export interface BugDetectionResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  findings: AnalysisFinding[];
+  total_findings: number;
+  static_findings_count: number;
+  ai_findings_count: number;
+  missing_context: string[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
 export interface BugDetectionResult {
   findings: AnalysisFinding[];
   summary?: string;
 }
+
 
 export interface TestGenerationResult {
   framework: string;
@@ -126,3 +156,47 @@ export type AnalysisResult =
   | { type: 'bugs'; data: BugDetectionResult }
   | { type: 'tests'; data: TestGenerationResult }
   | { type: 'review'; data: CodeReviewResult };
+
+export interface AnalysisRunSummary {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisRunFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface PaginatedAnalysisRunResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: AnalysisRunSummary[];
+}
+
+export interface AnalysisRunDetailResponse {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisRunFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  result_payload?: Record<string, any> | null;
+  findings?: AnalysisFinding[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
