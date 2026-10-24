@@ -340,7 +340,8 @@ class ReviewSourceMapResult:
 
 ## 10. Verification & Acceptance Gate
 
-The AST, source location, rules, framework detector, and review source mapping foundation is verified by 95 automated test suites:
+The AST, source location, rules, framework detector, and review source mapping foundation is verified by **111 automated tests** with 100% pass rate:
+- `backend/tests/test_parser_reliability.py`: 24 unit and integration tests verifying multi-language source range fidelity across all sample fixtures, class/method extraction across Python, TypeScript, and JavaScript, framework detection and POSIX test path proposals, zero-crash resilience on malformed syntax and unsupported languages, empty file handling, and cross-component line indexing agreement. Published deliverable: `Docs/parser_and_framework_test_report.md`.
 - `backend/tests/test_source_mapper.py`: 21 unit and integration tests verifying diff header parsing, hunk boundary math, symbol mapping (functions, classes, methods), multi-language AST context (Python, TypeScript), scoped AST defect rule evaluation, file additions, renames, deletions, boundary out-of-bounds, syntax error resilience, module-level limitation tracking, commit changes helper, dictionary serialization, and conversions to `AnalysisSourceReference` and `ModifiedFile`.
 - `backend/tests/test_framework_detector.py`: 15 unit and integration tests verifying pytest options, conftest fixture AST extraction, unittest detection, Jest detection, Vitest/ambiguous handling, test path proposals, and dictionary serialization.
 - `backend/tests/test_ast_rules.py`: 22 unit and integration tests verifying all 10 structural rules, clean fixture zero findings, syntax error resilience, symbol/range scoping, path traversal guards, and static findings adapters.

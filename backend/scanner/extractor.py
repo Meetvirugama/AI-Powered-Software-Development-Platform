@@ -96,7 +96,12 @@ class SymbolExtractor:
                     walk(c, sym_id)
                 return
 
-            if t in ("function_definition", "function_declaration"):
+            if t in (
+                "function_definition",
+                "function_declaration",
+                "method_definition",
+                "method_declaration",
+            ):
                 name = ""
                 for c in node.children:
                     if c.type in ("identifier", "property_identifier"):
