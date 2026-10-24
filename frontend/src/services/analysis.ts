@@ -13,7 +13,7 @@ import type {
   BugDetectionResponse,
   PaginatedAnalysisRunResponse,
   AnalysisRunDetailResponse,
-  AnalysisFeatureType,
+  AnalysisRunFeatureType,
 } from '../types/analysis';
 
 /**
@@ -62,7 +62,7 @@ export async function detectBugs(
 export async function getAnalysisRuns(
   repositoryId: string,
   params?: {
-    feature_type?: AnalysisFeatureType;
+    feature_type?: AnalysisRunFeatureType;
     status?: string;
     page?: number;
     page_size?: number;
@@ -94,7 +94,7 @@ export async function getBugScanHistory(
 ): Promise<PaginatedAnalysisRunResponse> {
   return getAnalysisRuns(repositoryId, {
     ...params,
-    feature_type: 'bugs',
+    feature_type: 'detect_bugs',
   });
 }
 

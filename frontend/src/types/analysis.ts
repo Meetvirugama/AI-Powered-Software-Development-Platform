@@ -10,6 +10,11 @@
 
 export type AnalysisFeatureType = 'explain' | 'bugs' | 'tests' | 'review';
 
+export type AnalysisRunFeatureType =
+  | AnalysisFeatureType
+  | 'detect_bugs'
+  | 'generate_tests';
+
 export type AnalysisTargetType = 'file' | 'symbol' | 'range';
 
 export interface AnalysisTarget {
@@ -156,7 +161,7 @@ export interface AnalysisRunSummary {
   id: string;
   repository_id: string;
   user_id?: string | null;
-  feature_type: AnalysisFeatureType;
+  feature_type: AnalysisRunFeatureType;
   status: AnalysisStatus;
   target_path?: string | null;
   target_symbol?: string | null;
@@ -180,7 +185,7 @@ export interface AnalysisRunDetailResponse {
   id: string;
   repository_id: string;
   user_id?: string | null;
-  feature_type: AnalysisFeatureType;
+  feature_type: AnalysisRunFeatureType;
   status: AnalysisStatus;
   target_path?: string | null;
   target_symbol?: string | null;

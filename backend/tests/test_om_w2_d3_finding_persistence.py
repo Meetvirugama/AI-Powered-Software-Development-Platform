@@ -868,6 +868,15 @@ def test_end_to_end_api_integration_detect_bugs(
         list_data = list_resp.json()
         assert list_data["total"] >= 1
         assert any(item["id"] == run_id for item in list_data["items"])
+
+        # Verify listing via GET with alias feature_type=bugs resolves to detect_bugs
+        list_alias_resp = client.get(
+            f"/api/v1/repositories/{repo.id}/analysis-runs?feature_type=bugs",
+            headers=auth_headers,
+        )
+        assert list_alias_resp.status_code == 200
+        assert list_alias_resp.json()["total"] >= 1
+        assert any(item["id"] == run_id for item in list_alias_resp.json()["items"])
     finally:
         if hasattr(app.state, "bug_detection_service"):
             del app.state.bug_detection_service

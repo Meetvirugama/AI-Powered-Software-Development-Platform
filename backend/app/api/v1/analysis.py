@@ -858,6 +858,8 @@ async def list_analysis_runs(
     request: Request,
     feature_type: AnalysisFeatureType | None = Query(default=None),
     status: str | None = Query(default=None),
+    target_path: str | None = Query(default=None),
+    source_revision: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -866,15 +868,37 @@ async def list_analysis_runs(
     _owned_repository(repository_id, request, db)
     offset = (page - 1) * page_size
 
+    # Normalize feature_type aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests')
+    normalized_feature_type = feature_type
+    if feature_type == "bugs":
+        normalized_feature_type = "detect_bugs"
+    elif feature_type == "tests":
+        normalized_feature_type = "generate_tests"
+
     run_service = getattr(request.app.state, "analysis_run_service", None)
     if run_service is not None and hasattr(run_service, "list_runs"):
-        res = run_service.list_runs(
-            repository_id,
-            feature_type=feature_type,
-            status=status,
-            offset=offset,
-            limit=page_size,
-        )
+        kwargs: dict[str, Any] = {
+            "feature_type": normalized_feature_type,
+            "status": status,
+            "offset": offset,
+            "limit": page_size,
+        }
+        if target_path:
+            kwargs["target_path"] = target_path
+        if source_revision:
+            kwargs["source_revision"] = source_revision
+
+        try:
+            res = run_service.list_runs(repository_id, **kwargs)
+        except TypeError:
+            res = run_service.list_runs(
+                repository_id,
+                feature_type=normalized_feature_type,
+                status=status,
+                offset=offset,
+                limit=page_size,
+            )
+
         if inspect.isawaitable(res):
             res = await res
         items, total = res
@@ -891,8 +915,10 @@ async def list_analysis_runs(
         repo_layer = AnalysisRunRepository(db)
         items, total = repo_layer.list_by_repository(
             repository_id,
-            feature_type=feature_type,
+            feature_type=normalized_feature_type,
             status=status,
+            target_path=target_path,
+            source_revision=source_revision,
             offset=offset,
             limit=page_size,
         )
@@ -912,8 +938,10 @@ async def list_analysis_runs(
         r
         for r in history_store.values()
         if str(r.get("repository_id")) == str(repository_id)
-        and (feature_type is None or r.get("feature_type") == feature_type)
+        and (normalized_feature_type is None or r.get("feature_type") == normalized_feature_type)
         and (status is None or r.get("status") == status)
+        and (target_path is None or r.get("target_path") == target_path)
+        and (source_revision is None or r.get("source_revision") == source_revision)
     ]
     matching.sort(key=lambda r: r.get("created_at", datetime.min), reverse=True)
     total = len(matching)

@@ -34,7 +34,7 @@ MAX_LINE_RANGE_SPAN = 5_000
 MAX_DIFF_CHARS = 200_000
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
-AnalysisFeatureType = Literal["explain", "detect_bugs", "generate_tests", "review"]
+AnalysisFeatureType = Literal["explain", "detect_bugs", "generate_tests", "review", "bugs", "tests"]
 CodeTargetType = Literal["file", "symbol", "range"]
 ReviewTargetType = Literal["file", "commit", "diff", "pr"]
 AnalysisStatus = Literal["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
