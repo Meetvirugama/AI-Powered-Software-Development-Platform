@@ -56,6 +56,7 @@ from ai.llm.schemas import (
 from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.secret_redaction import redact as _shared_redact
 from app.models.repository import Repository
 from app.schemas.analysis import (
     AnalysisSourceReference,
@@ -157,7 +158,11 @@ def redact_secrets_in_text(text: str | None) -> str:
             redacted = pattern.sub(_repl_assign, redacted)
         else:
             redacted = pattern.sub("[REDACTED]", redacted)
-    return redacted
+    # Security (W2 Day 3, Sukun): also apply the shared platform redactor, which
+    # covers more formats (Google/Groq keys, .env-style KEY=value, URL credentials,
+    # Bearer tokens) and does not skip values just because they contain words
+    # like "test" or "sample".
+    return _shared_redact(redacted)
 
 
 def sanitize_finding_secrets(finding: BugFinding) -> BugFinding:
@@ -849,7 +854,8 @@ class LLMBugDetectionService:
             )
             user_prompt = (
                 "REPOSITORY DATA (untrusted, between the markers):\n"
-                f"{_fence(rendered)}\n\n"
+                # Security (W2 Day 3, Sukun): secrets in the code never reach the LLM provider.
+                f"{_fence(_shared_redact(rendered))}\n\n"
                 "BUG DETECTION TARGET:\n"
                 f"Analyze `{payload.target.path}` "
                 f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
