@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { ExplanationResultView } from './ExplanationResultView';
+import { BugScannerView } from './BugScannerView';
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
@@ -19,6 +20,7 @@ import type {
   AnalysisStatus,
   SourceReference,
   CodeExplanation,
+  BugDetectionResponse,
   SymbolSummary,
 } from '../../types/analysis';
 
@@ -28,6 +30,7 @@ export interface AnalysisResultPanelProps {
   status: AnalysisStatus;
   error?: string | null;
   explanation?: CodeExplanation | null;
+  bugResult?: BugDetectionResponse | null;
   onRetry?: () => void;
   onRunAnalysis?: (feature: AnalysisFeatureType, target: AnalysisTarget) => void;
   onClose?: () => void;
@@ -38,6 +41,7 @@ export interface AnalysisResultPanelProps {
   className?: string;
   children?: React.ReactNode;
 }
+
 
 const FEATURE_META: Record<
   AnalysisFeatureType,
@@ -90,6 +94,7 @@ export function AnalysisResultPanel({
   status,
   error,
   explanation,
+  bugResult,
   onRetry,
   onRunAnalysis,
   onClose,
@@ -326,6 +331,12 @@ export function AnalysisResultPanel({
                 activeSourceReference={activeSourceReference}
                 onSelectSymbol={onSelectSymbol}
               />
+            ) : feature === 'bugs' && bugResult ? (
+              <BugScannerView
+                result={bugResult}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+              />
             ) : children ? (
               children
             ) : (
@@ -339,7 +350,7 @@ export function AnalysisResultPanel({
             )}
 
             {/* Evidence & Sources Section (for other features or fallback) */}
-            {(!explanation || feature !== 'explain') && sources && sources.length > 0 && (
+            {(!explanation || feature !== 'explain') && feature !== 'bugs' && sources && sources.length > 0 && (
               <div className="pt-3 border-t border-border/60 space-y-2">
                 <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono">
                   Cited Evidence ({sources.length}):

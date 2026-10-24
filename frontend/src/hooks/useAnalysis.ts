@@ -3,8 +3,13 @@
  */
 
 import { useMutation, type UseMutationOptions } from '@tanstack/react-query';
-import { explainCode } from '../services/analysis';
-import type { ExplainCodeRequest, CodeExplanationResponse } from '../types/analysis';
+import { explainCode, detectBugs } from '../services/analysis';
+import type {
+  ExplainCodeRequest,
+  CodeExplanationResponse,
+  BugDetectionRequest,
+  BugDetectionResponse,
+} from '../types/analysis';
 import type { ApiError } from '../types/api';
 
 /**
@@ -20,6 +25,23 @@ export function useExplainCode(
   return useMutation<CodeExplanationResponse, ApiError, ExplainCodeRequest>({
     mutationKey: ['explain-code', repositoryId],
     mutationFn: (payload: ExplainCodeRequest) => explainCode(repositoryId, payload),
+    ...options,
+  });
+}
+
+/**
+ * Hook to detect bugs in a repository target (file, symbol, or range).
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param options Optional React Query mutation options (e.g. onSuccess, onError).
+ */
+export function useDetectBugs(
+  repositoryId: string,
+  options?: UseMutationOptions<BugDetectionResponse, ApiError, BugDetectionRequest>
+) {
+  return useMutation<BugDetectionResponse, ApiError, BugDetectionRequest>({
+    mutationKey: ['detect-bugs', repositoryId],
+    mutationFn: (payload: BugDetectionRequest) => detectBugs(repositoryId, payload),
     ...options,
   });
 }

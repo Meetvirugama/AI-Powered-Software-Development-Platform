@@ -10,6 +10,11 @@
 
 export type AnalysisFeatureType = 'explain' | 'bugs' | 'tests' | 'review';
 
+export type AnalysisRunFeatureType =
+  | AnalysisFeatureType
+  | 'detect_bugs'
+  | 'generate_tests';
+
 export type AnalysisTargetType = 'file' | 'symbol' | 'range';
 
 export interface AnalysisTarget {
@@ -40,11 +45,23 @@ export type AnalysisStatus =
   | 'FAILED'
   | 'CANCELLED';
 
-export type FindingSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+export type FindingSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
 export type FindingSourceType = 'STATIC' | 'AI' | 'COMBINED';
 
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
+
+export type BugCategory =
+  | 'off_by_one'
+  | 'null_safety'
+  | 'unhandled_exception'
+  | 'boundary_condition'
+  | 'resource_leak'
+  | 'race_condition'
+  | 'logic_error'
+  | 'security'
+  | 'other'
+  | (string & {});
 
 export interface SourceReference {
   repository_id?: string | null;
@@ -63,18 +80,50 @@ export interface SymbolSummary {
   end_line?: number | null;
 }
 
-export interface AnalysisFinding {
+export interface BugFinding {
   id: string;
-  category: string;
+  category: BugCategory | string;
   severity: FindingSeverity;
   title: string;
   description: string;
   source_reference: SourceReference;
-  evidence?: string;
-  suggested_fix?: string;
-  confidence?: string;
+  evidence: string;
+  suggested_fix?: string | null;
+  confidence?: ConfidenceLevel | string;
+  is_uncertain?: boolean;
   source_type: FindingSourceType;
+  rule_id?: string | null;
 }
+
+/** Backward-compatible alias for AnalysisFinding */
+export type AnalysisFinding = BugFinding;
+
+export interface BugDetectionRequest {
+  target: AnalysisTarget;
+  options?: AnalysisOptions;
+  include_static?: boolean;
+  include_ai?: boolean;
+  min_severity?: FindingSeverity;
+}
+
+export interface BugDetectionResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: AnalysisTarget;
+  revision?: string | null;
+  findings: BugFinding[];
+  total_findings: number;
+  static_findings_count: number;
+  ai_findings_count: number;
+  missing_context: string[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+/** Backward-compatible alias for BugDetectionResult */
+export type BugDetectionResult = BugDetectionResponse;
 
 export interface CodeExplanation {
   purpose: string;
@@ -101,10 +150,6 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
-export interface BugDetectionResult {
-  findings: AnalysisFinding[];
-  summary?: string;
-}
 
 export interface TestGenerationResult {
   framework: string;
@@ -117,12 +162,56 @@ export interface TestGenerationResult {
 
 export interface CodeReviewResult {
   summary: string;
-  findings: AnalysisFinding[];
+  findings: BugFinding[];
   overall_status?: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENT';
 }
 
 export type AnalysisResult =
   | { type: 'explain'; data: CodeExplanation }
-  | { type: 'bugs'; data: BugDetectionResult }
+  | { type: 'bugs'; data: BugDetectionResponse }
   | { type: 'tests'; data: TestGenerationResult }
   | { type: 'review'; data: CodeReviewResult };
+
+export interface AnalysisRunSummary {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisRunFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+export interface PaginatedAnalysisRunResponse {
+  page: number;
+  page_size: number;
+  total: number;
+  items: AnalysisRunSummary[];
+}
+
+export interface AnalysisRunDetailResponse {
+  id: string;
+  repository_id: string;
+  user_id?: string | null;
+  feature_type: AnalysisRunFeatureType;
+  status: AnalysisStatus;
+  target_path?: string | null;
+  target_symbol?: string | null;
+  start_line?: number | null;
+  end_line?: number | null;
+  source_revision?: string | null;
+  findings_count: number;
+  result_payload?: Record<string, any> | null;
+  findings?: AnalysisFinding[];
+  error_message?: string | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+

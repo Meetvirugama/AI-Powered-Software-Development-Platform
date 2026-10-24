@@ -54,7 +54,7 @@ class TestContextBuilder:
 
         if framework in ("pytest", "unittest"):
             test_filename = f"test_{stem}.py"
-            candidates.append(str(p.parent / test_filename))
+            candidates.append((p.parent / test_filename).as_posix())
             candidates.append(f"tests/{test_filename}")
             candidates.append(f"backend/tests/{test_filename}")
             if len(p.parts) > 1:
@@ -63,9 +63,9 @@ class TestContextBuilder:
                     candidates.append(f"backend/tests/{subpath}/{test_filename}")
                     candidates.append(f"tests/{subpath}/{test_filename}")
         elif framework in ("jest", "vitest"):
-            candidates.append(str(p.parent / f"{stem}.test.ts"))
-            candidates.append(str(p.parent / f"{stem}.test.tsx"))
-            candidates.append(str(p.parent / f"{stem}.spec.ts"))
+            candidates.append((p.parent / f"{stem}.test.ts").as_posix())
+            candidates.append((p.parent / f"{stem}.test.tsx").as_posix())
+            candidates.append((p.parent / f"{stem}.spec.ts").as_posix())
             candidates.append(f"src/__tests__/{stem}.test.ts")
 
         # De-duplicate preserving order

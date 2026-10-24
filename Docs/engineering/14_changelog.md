@@ -565,6 +565,34 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day6] 2026-10-23 — AST and Framework Reliability Verification & Test Report
+**Type:** Feature / Reliability  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/extractor.py`:
+  - Added support for `method_definition` and `method_declaration` in Tree-sitter extractor for TypeScript, JavaScript, and other class-based languages, ensuring member methods are correctly extracted with `parent_id` and `kind="method"`.
+- `backend/ai/context/test_context.py`:
+  - Normalized candidate test paths using `.as_posix()` to prevent Windows backslash path divergence.
+- `backend/tests/test_parser_reliability.py`:
+  - Added 24 comprehensive reliability and acceptance tests (100% passing) verifying:
+    - Multi-language source range fidelity on Python, TypeScript, and JavaScript sample fixtures.
+    - Class and method extraction, container enclosing invariants, and ambiguous symbol disambiguation.
+    - Framework detection across `pytest`, `unittest`, `jest`, `vitest`, and ambiguous manifests.
+    - Test path proposal logic and POSIX slash normalization across platforms.
+    - Zero-crash error resilience on malformed syntax, syntax errors, empty files (0 bytes), and unsupported languages.
+    - Strict 1-indexed line number agreement across all scanner components.
+- `Docs/parser_and_framework_test_report.md`:
+  - Authored and published the formal Day 6 deliverable: Parser and Framework Reliability Test Report documenting the test matrix, architectural invariants, 111-test suite inventory, and SLA benchmarks.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/scanner_languages.md`:
+  - Updated task tracking, release gate status, and language verification documentation.
+
+**Impact:** Provides bulletproof, zero-crash AST parsing, symbol extraction, framework convention discovery, and diff source mapping across all Developer Intelligence features (Code Explanation, Bug Detection, Test Generation, and Standalone AI Code Review).
+
+**Related Docs:** `Docs/parser_and_framework_test_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 

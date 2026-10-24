@@ -47,10 +47,10 @@ class Settings(BaseSettings):
     ai_fallback_provider: str | None = "groq"
     gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
-    gemini_chat_model: str = "gemini-flash-lite-latest"
+    gemini_chat_model: str = "gemini-flash-latest"
     groq_api_key: str | None = None
     groq_api_keys: str | None = None       # comma-separated list
-    groq_chat_model: str = "llama-3.3-70b-versatile"
+    groq_chat_model: str = "openai/gpt-oss-120b"
     ai_embedding_provider: str = "gemini"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timezone
 from uuid import UUID
@@ -19,6 +20,8 @@ from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.auth import AuthenticatedUser, TokenResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -44,6 +47,12 @@ def github_login() -> RedirectResponse:
             }
         )
     )
+    try:
+        redis_client = get_redis()
+        redis_client.setex(f"oauth_state:{state}", 600, "1")
+    except Exception as exc:
+        logger.warning("Could not persist oauth_state in Redis: %s", exc)
+
     redirect.set_cookie(
         "oauth_state",
         state,
@@ -51,7 +60,7 @@ def github_login() -> RedirectResponse:
         secure=settings.cookie_secure,
         samesite="lax",
         max_age=600,
-        path="/api/v1/auth/github",
+        path="/",
     )
     return redirect
 
@@ -92,8 +101,28 @@ async def github_callback(
         raise APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
 
     expected_state = request.cookies.get("oauth_state")
-    if not expected_state or not secrets.compare_digest(state, expected_state):
+    state_valid = False
+
+    if expected_state and secrets.compare_digest(state, expected_state):
+        state_valid = True
+    else:
+        try:
+            redis_client = get_redis()
+            redis_key = f"oauth_state:{state}"
+            if redis_client and redis_client.exists(redis_key):
+                state_valid = True
+        except Exception as exc:
+            logger.warning("Could not verify oauth_state via Redis: %s", exc)
+
+    if not state_valid:
         raise APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+
+    try:
+        redis_client = get_redis()
+        if redis_client and hasattr(redis_client, "delete"):
+            redis_client.delete(f"oauth_state:{state}")
+    except Exception:
+        pass
 
     github_user = await _github_user_for_code(code)
     github_id = github_user.get("id")
@@ -122,6 +151,7 @@ async def github_callback(
         max_age=expires_in,
         path="/",
     )
+    redirect.delete_cookie("oauth_state", path="/")
     redirect.delete_cookie("oauth_state", path="/api/v1/auth/github")
 
     if request.headers.get("accept") == "application/json":
@@ -134,6 +164,7 @@ async def github_callback(
             max_age=expires_in,
             path="/",
         )
+        response.delete_cookie("oauth_state", path="/")
         response.delete_cookie("oauth_state", path="/api/v1/auth/github")
         return TokenResponse(
             access_token=token,

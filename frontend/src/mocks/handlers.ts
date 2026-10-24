@@ -946,4 +946,213 @@ export const handlers = [
       created_at: new Date().toISOString(),
     });
   }),
+
+  // -------------------------------------------------------------------------
+  // Feature 2: Dedicated Bug Detection (Week 2 Day 3)
+  //
+  // POST /api/v1/repositories/:id/detect-bugs
+  //
+  // Matches real backend contract in backend/app/schemas/analysis.py
+  // -------------------------------------------------------------------------
+  http.post(`${BASE}/repositories/:id/detect-bugs`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+    let body: any = null;
+    try {
+      body = (await request.json()) as any;
+    } catch {
+      // Malformed body
+    }
+
+    const target = body?.target || {
+      type: 'file',
+      path: body?.path || 'src/main.py',
+    };
+
+    // Error simulation paths for testing
+    if (target.path?.includes('500') || target.path?.includes('fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ANALYSIS_FAILED',
+            message: 'Bug detection scan failed due to an unrecoverable internal error.',
+            retryable: false,
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    if (target.path?.includes('503') || target.path?.includes('timeout')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Bug detection service is temporarily unavailable. Please retry.',
+            retryable: true,
+          },
+        },
+        { status: 503 }
+      );
+    }
+
+    const filePath = target.path || 'src/main.py';
+
+    // Zero findings / clean scan simulation for README.md or clean files
+    if (filePath.toLowerCase().endsWith('readme.md') || filePath.includes('clean')) {
+      return HttpResponse.json({
+        run_id: 'mock-bug-run-' + Date.now(),
+        repository_id: id,
+        status: 'COMPLETED',
+        target,
+        revision: target.revision ?? 'main',
+        findings: [],
+        total_findings: 0,
+        static_findings_count: 0,
+        ai_findings_count: 0,
+        missing_context: [],
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    const allFindings = [
+      {
+        id: 'mock-bug-1',
+        category: 'off_by_one',
+        severity: 'CRITICAL',
+        title: 'Off-by-one loop bound in collection pagination',
+        description: 'Loop termination condition uses len(items) + 1 with 0-indexed offset, causing potential IndexError.',
+        source_reference: {
+          repository_id: id,
+          file_path: filePath,
+          start_line: 12,
+          end_line: 15,
+          revision: target.revision ?? 'main',
+          symbol_name: target.symbol ?? null,
+        },
+        evidence: 'for i in range(0, len(items) + 1):',
+        suggested_fix: 'for i in range(0, len(items)):  # Correct boundary',
+        confidence: 'high',
+        is_uncertain: false,
+        source_type: 'COMBINED',
+        rule_id: 'AST001',
+      },
+      {
+        id: 'mock-bug-2',
+        category: 'security',
+        severity: 'HIGH',
+        title: 'Potential SQL query string interpolation',
+        description: 'Raw string formatting detected inside database execute call; risk of SQL injection vulnerability.',
+        source_reference: {
+          repository_id: id,
+          file_path: filePath,
+          start_line: 28,
+          end_line: 30,
+          revision: target.revision ?? 'main',
+          symbol_name: null,
+        },
+        evidence: 'db.execute(f"SELECT * FROM items WHERE id = {item_id}")',
+        suggested_fix: 'db.execute("SELECT * FROM items WHERE id = :id", {"id": item_id})',
+        confidence: 'high',
+        is_uncertain: false,
+        source_type: 'STATIC',
+        rule_id: 'B608',
+      },
+      {
+        id: 'mock-bug-3',
+        category: 'null_safety',
+        severity: 'MEDIUM',
+        title: 'Unchecked nullable property access on optional configuration',
+        description: 'Variable config is accessed without ensuring None check after initialization.',
+        source_reference: {
+          repository_id: id,
+          file_path: filePath,
+          start_line: 42,
+          end_line: 45,
+          revision: target.revision ?? 'main',
+          symbol_name: null,
+        },
+        evidence: 'return config.timeout_seconds',
+        suggested_fix: 'return config.timeout_seconds if config else DEFAULT_TIMEOUT',
+        confidence: 'medium',
+        is_uncertain: true,
+        source_type: 'AI',
+        rule_id: null,
+      },
+      {
+        id: 'mock-bug-4',
+        category: 'resource_leak',
+        severity: 'LOW',
+        title: 'Unclosed file descriptor across asynchronous task boundary',
+        description: 'File handle opened without a context manager inside background task.',
+        source_reference: {
+          repository_id: id,
+          file_path: filePath,
+          start_line: null,
+          end_line: null,
+          revision: target.revision ?? 'main',
+          symbol_name: null,
+        },
+        evidence: 'f = open(log_path, "w")',
+        suggested_fix: null,
+        confidence: 'low',
+        is_uncertain: false,
+        source_type: 'AI',
+        rule_id: null,
+      },
+      {
+        id: 'mock-bug-5',
+        category: 'other',
+        severity: 'INFO',
+        title: 'Mutable default argument in function signature',
+        description: 'Default argument cache: list = [] is shared across function invocations.',
+        source_reference: {
+          repository_id: id,
+          file_path: filePath,
+          start_line: 8,
+          end_line: 9,
+          revision: target.revision ?? 'main',
+          symbol_name: null,
+        },
+        evidence: 'def slice_page(items: list, cache: list = []):',
+        suggested_fix: 'def slice_page(items: list, cache: list | None = None):',
+        confidence: 'high',
+        is_uncertain: false,
+        source_type: 'STATIC',
+        rule_id: 'AST004',
+      },
+    ];
+
+    const severityRank: Record<string, number> = {
+      CRITICAL: 5,
+      HIGH: 4,
+      MEDIUM: 3,
+      LOW: 2,
+      INFO: 1,
+    };
+    const minThreshold = severityRank[body?.min_severity ?? 'LOW'] ?? 2;
+    const filteredFindings = allFindings.filter(
+      (f) => (severityRank[f.severity] ?? 0) >= minThreshold
+    );
+
+    const staticCount = filteredFindings.filter((f) => f.source_type === 'STATIC').length;
+    const aiCount = filteredFindings.filter(
+      (f) => f.source_type === 'AI' || f.source_type === 'COMBINED'
+    ).length;
+
+    return HttpResponse.json({
+      run_id: 'mock-bug-run-' + Date.now(),
+      repository_id: id,
+      status: 'COMPLETED',
+      target,
+      revision: target.revision ?? 'main',
+      findings: filteredFindings,
+      total_findings: filteredFindings.length,
+      static_findings_count: staticCount,
+      ai_findings_count: aiCount,
+      missing_context: [
+        'Runtime test suite coverage metrics outside the active file were not evaluated.',
+      ],
+      created_at: new Date().toISOString(),
+    });
+  }),
 ];

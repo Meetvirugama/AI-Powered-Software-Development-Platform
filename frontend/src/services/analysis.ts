@@ -6,7 +6,15 @@
  */
 
 import { apiClient } from './api';
-import type { ExplainCodeRequest, CodeExplanationResponse } from '../types/analysis';
+import type {
+  ExplainCodeRequest,
+  CodeExplanationResponse,
+  BugDetectionRequest,
+  BugDetectionResponse,
+  PaginatedAnalysisRunResponse,
+  AnalysisRunDetailResponse,
+  AnalysisRunFeatureType,
+} from '../types/analysis';
 
 /**
  * Request an AI-powered explanation for a file, symbol, or line range.
@@ -25,3 +33,97 @@ export async function explainCode(
   );
   return response.data;
 }
+
+/**
+ * Scan for bugs using static analysis rules and AI reasoning (Week 2 — Day 3).
+ *
+ * Calls POST /api/v1/repositories/{repository_id}/detect-bugs
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param payload Target, options, and engine flags.
+ * @returns The structured bug detection response envelope.
+ */
+export async function detectBugs(
+  repositoryId: string,
+  payload: BugDetectionRequest
+): Promise<BugDetectionResponse> {
+  const response = await apiClient.post<BugDetectionResponse>(
+    `/repositories/${repositoryId}/detect-bugs`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * List historical analysis runs (e.g. explanation runs, bug scans) for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getAnalysisRuns(
+  repositoryId: string,
+  params?: {
+    feature_type?: AnalysisRunFeatureType;
+    status?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  const response = await apiClient.get<PaginatedAnalysisRunResponse>(
+    `/repositories/${repositoryId}/analysis-runs`,
+    { params }
+  );
+  return response.data;
+}
+
+/**
+ * List historical bug detection scans for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getBugScanHistory(
+  repositoryId: string,
+  params?: {
+    status?: string;
+    target_path?: string;
+    source_revision?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  return getAnalysisRuns(repositoryId, {
+    ...params,
+    feature_type: 'detect_bugs',
+  });
+}
+
+/**
+ * Reopen a specific analysis run (e.g. past explanation or bug scan) from persistent history.
+ *
+ * @param runId The UUID of the analysis run.
+ * @returns Detailed record with target coordinates and structured result payload.
+ */
+export async function getAnalysisRun(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  const response = await apiClient.get<AnalysisRunDetailResponse>(
+    `/analysis-runs/${runId}`
+  );
+  return response.data;
+}
+
+/**
+ * Reopen a specific bug detection scan run from persistent history.
+ *
+ * @param runId The UUID of the bug detection analysis run.
+ * @returns Detailed record with findings and structured result payload.
+ */
+export async function reopenBugScan(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  return getAnalysisRun(runId);
+}
+
