@@ -385,6 +385,51 @@ def validate_generated_test_syntax(
     return len(errors) == 0, errors
 
 
+# ---------------------------------------------------------------------------
+# Generated test-file path policy (W2 Day 4 — Sukun)
+# ---------------------------------------------------------------------------
+
+# Files that tools run or load automatically (or that define the project). A
+# generated "test" must never be proposed under one of these names, because a
+# developer exporting it would silently create auto-executed code.
+_RESERVED_TEST_PATH_NAMES = frozenset({
+    "conftest.py", "__init__.py", "setup.py", "setup.cfg", "pyproject.toml",
+    "pytest.ini", "tox.ini", "noxfile.py", "manage.py", "sitecustomize.py",
+    "usercustomize.py", "package.json", "package-lock.json", "tsconfig.json",
+    "jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.cjs",
+    "jest.setup.js", "jest.setup.ts", "babel.config.js", ".babelrc", "makefile",
+    "dockerfile", "docker-compose.yml",
+})
+_PY_TEST_NAME = re.compile(r"^(test_[\w\-]*|[\w\-]+_test)\.py$")
+_JS_TEST_NAME = re.compile(r"^[\w.\-]+\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs)$")
+_JS_EXT = re.compile(r"\.(js|jsx|ts|tsx|mjs|cjs)$")
+
+
+def check_generated_test_path(path: str, framework: str | None) -> str | None:
+    """Return a reason string if `path` is not an acceptable generated-test location, else None.
+
+    `path` must already be repo-relative and traversal-free (validate_repo_relative_path).
+    Rules: no hidden directories (.github/, .git/, .husky/ ...), no reserved/auto-run file
+    names, and the file name must look like a test for the detected framework.
+    """
+    parts = path.split("/")
+    name = parts[-1]
+    if any(part.startswith(".") for part in parts):
+        return "hidden directories such as .github/ or .git/ are not allowed"
+    if name.lower() in _RESERVED_TEST_PATH_NAMES:
+        return f"'{name}' is a reserved or automatically executed file"
+    fw = (framework or "").lower()
+    if fw in ("pytest", "unittest"):
+        if not _PY_TEST_NAME.match(name):
+            return "Python test files must be named test_<name>.py or <name>_test.py"
+    elif fw == "jest":
+        if not (_JS_TEST_NAME.match(name) or ("__tests__" in parts[:-1] and _JS_EXT.search(name))):
+            return "Jest test files must be named <name>.test.<ext> / <name>.spec.<ext> or live in __tests__/"
+    elif not (_PY_TEST_NAME.match(name) or _JS_TEST_NAME.match(name)):
+        return "file name does not look like a test file"
+    return None
+
+
 def validate_and_sanitize_generated_tests(
     result: TestGenerationResult,
     *,
@@ -406,6 +451,29 @@ def validate_and_sanitize_generated_tests(
             retryable=False,
         ) from exc
 
+    # 1b. Security (W2 Day 4, Sukun): a safe path is not enough — the model must not
+    # propose overwriting source/config files or auto-executed files (conftest.py,
+    # .github/workflows/...). Fall back to the convention-derived path instead.
+    path_policy_warning: str | None = None
+    rejection = check_generated_test_path(safe_test_path, result.detected_framework)
+    if rejection is not None:
+        try:
+            fallback = validate_repo_relative_path(default_proposed_path)
+        except UnsafePathError:
+            fallback = None
+        if fallback is None or check_generated_test_path(fallback, result.detected_framework) is not None:
+            raise APIError(
+                500,
+                ErrorCode.ANALYSIS_FAILED,
+                "Test generation produced a test file path that is not allowed.",
+                retryable=False,
+            )
+        path_policy_warning = (
+            f"The AI proposed '{safe_test_path}', which is not allowed ({rejection}); "
+            f"using '{fallback}' instead."
+        )
+        safe_test_path = fallback
+
     # 2. Redact secrets from generated test code, scenarios, and warnings
     clean_content = redact_secrets_in_text(result.test_content)
     clean_scenarios = [
@@ -423,6 +491,8 @@ def validate_and_sanitize_generated_tests(
     ]
     if detection.is_ambiguous and detection.ambiguity_reason:
         warnings.append(detection.ambiguity_reason)
+    if path_policy_warning:
+        warnings.insert(0, path_policy_warning)
 
     # 3. Warn if proposed_test_path already exists in indexed repository (never overwrite silently!)
     if safe_test_path in resolved.indexed_paths:
@@ -439,7 +509,10 @@ def validate_and_sanitize_generated_tests(
         result.detected_framework,
         safe_test_path,
     )
-    merged_val_errors = list(dict.fromkeys([*result.validation_errors, *syntax_errs]))
+    # Syntax errors can quote source lines — redact them too.
+    merged_val_errors = list(dict.fromkeys(
+        redact_secrets_in_text(e) for e in [*result.validation_errors, *syntax_errs]
+    ))
     final_syntax_valid = result.syntax_valid and syntax_ok and (len(merged_val_errors) == 0)
 
     # 5. Ground source references against indexed repository files
@@ -559,7 +632,8 @@ class LLMTestGenerationService:
         fixture_note = f"Available fixtures: {', '.join(fixtures)}" if fixtures else "No custom fixtures detected."
         user_prompt = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
-            f"{_fence(rendered)}\n\n"
+            # Security (W2 Day 4, Sukun): secrets in the code never reach the LLM provider.
+            f"{_fence(redact_secrets_in_text(rendered))}\n\n"
             "TEST GENERATION TARGET:\n"
             f"Target File: `{payload.target.path}`\n"
             f"Target Type: {payload.target.type} (symbol={payload.target.symbol or 'N/A'}, "
