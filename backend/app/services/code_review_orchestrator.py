@@ -706,6 +706,29 @@ def sanitize_review_finding(finding: ReviewFinding) -> ReviewFinding:
     )
 
 
+_HUNK_HEADER = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def _max_known_line(resolved: "ResolvedReviewTarget", path: str) -> int:
+    """Highest line number that can exist for `path` in the reviewed revision (0 = unknown).
+
+    Uses the indexed file length and the new-file ranges of every diff hunk
+    (`@@ -a,b +c,d @@` -> last line c+d-1), whichever is larger.
+    """
+    best = int(resolved.indexed_paths.get(path, 0) or 0)
+    for modified in resolved.modified_files:
+        if modified.file_path != path:
+            continue
+        for hunk in modified.diff_hunks or []:
+            for match in _HUNK_HEADER.finditer(hunk or ""):
+                start = int(match.group(1))
+                length = int(match.group(2)) if match.group(2) is not None else 1
+                best = max(best, start + max(length, 1) - 1)
+        if modified.content:
+            best = max(best, modified.content.count("\n") + 1) if not modified.diff_hunks else best
+    return best
+
+
 def normalize_and_ground_review_findings(
     raw_items: list[Any],
     *,
@@ -764,15 +787,17 @@ def normalize_and_ground_review_findings(
         if resolved.allowed_paths and clean_path not in resolved.allowed_paths:
             continue
 
-        if clean_path in resolved.indexed_paths:
-            max_lines = resolved.indexed_paths[clean_path]
-            if max_lines > 0 and resolved.target.type == "file":
-                s_line = finding.source_reference.start_line
-                e_line = finding.source_reference.end_line
-                if s_line is not None and s_line > max_lines:
-                    continue
-                if e_line is not None and e_line > max_lines:
-                    continue
+        # Security (W2 Day 5, Sukun): bound line references for EVERY target type
+        # (file, commit, PR, diff), not only `file`, so the model cannot cite lines
+        # that do not exist in the reviewed revision.
+        max_lines = _max_known_line(resolved, clean_path)
+        if max_lines > 0:
+            s_line = finding.source_reference.start_line
+            e_line = finding.source_reference.end_line
+            if s_line is not None and s_line > max_lines:
+                continue
+            if e_line is not None and e_line > max_lines:
+                continue
 
         updated_ref = finding.source_reference.model_copy(
             update={
@@ -1022,7 +1047,8 @@ class LLMCodeReviewService:
         )
         user_prompt = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
-            f"{_fence(rendered)}\n\n"
+            # Security (W2 Day 5, Sukun): secrets in code, diffs and PR text never reach the LLM provider.
+            f"{_fence(redact_secrets_in_text(rendered))}\n\n"
             "CODE REVIEW TARGET:\n"
             f"Review target type={payload.target.type}, path={payload.target.path or 'N/A'}, "
             f"commit_sha={payload.target.commit_sha or 'N/A'}, pr_number={payload.target.pr_number or 'N/A'}."
