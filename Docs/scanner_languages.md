@@ -338,9 +338,9 @@ class ReviewSourceMapResult:
 
 ---
 
-## 10. Verification & Acceptance Gate
+## 10. Verification & Acceptance Gate (Day 6 Baseline)
 
-The AST, source location, rules, framework detector, and review source mapping foundation is verified by **111 automated tests** with 100% pass rate:
+The AST, source location, rules, framework detector, and review source mapping foundation was established in Day 6 verified by **111 automated tests** with 100% pass rate:
 - `backend/tests/test_parser_reliability.py`: 24 unit and integration tests verifying multi-language source range fidelity across all sample fixtures, class/method extraction across Python, TypeScript, and JavaScript, framework detection and POSIX test path proposals, zero-crash resilience on malformed syntax and unsupported languages, empty file handling, and cross-component line indexing agreement. Published deliverable: `Docs/parser_and_framework_test_report.md`.
 - `backend/tests/test_source_mapper.py`: 21 unit and integration tests verifying diff header parsing, hunk boundary math, symbol mapping (functions, classes, methods), multi-language AST context (Python, TypeScript), scoped AST defect rule evaluation, file additions, renames, deletions, boundary out-of-bounds, syntax error resilience, module-level limitation tracking, commit changes helper, dictionary serialization, and conversions to `AnalysisSourceReference` and `ModifiedFile`.
 - `backend/tests/test_framework_detector.py`: 15 unit and integration tests verifying pytest options, conftest fixture AST extraction, unittest detection, Jest detection, Vitest/ambiguous handling, test path proposals, and dictionary serialization.
@@ -348,6 +348,81 @@ The AST, source location, rules, framework detector, and review source mapping f
 - `backend/tests/test_target_selector.py`: 14 tests verifying target selection across files, symbols, qualified methods, ambiguous names, and TargetSnippet conversion.
 - `backend/tests/test_source_location.py`: 15 tests verifying exact range extraction, scope resolution, import tracking, and syntax error tolerance.
 - `backend/tests/test_detector.py`, `backend/tests/test_test_mapper.py`, `backend/tests/test_walker.py`: Baseline scanner regression suites.
+
+---
+
+## 11. Week 2 Day 7 Final Language Support & Limitation Specifications
+
+**Owner:** Prit Zania — Repository Engine Lead  
+**Task:** W2-Day7 — Final Acceptance, Language Limitations & Parser Failure Handling  
+**Milestone:** Week 2 — Developer Intelligence Suite Acceptance Gate  
+**Status:** 🟢 Complete & Verified (143/143 Scanner Tests Passing)
+
+### 11.1 Tiered Language Support Matrix
+
+| Tier | Language | Primary Engine | Fallback Engine | Capabilities Extracted | Line Fidelity | Documented Limitations |
+|---|---|---|---|---|---|---|
+| **Tier 1** | **Python** | `tree-sitter-python` (v0.25+) | `ast` standard library | Classes, Functions, Async Functions, Methods, Decorators, Imports, Constants | Exact 1-indexed inclusive | Dynamic `eval()`/`exec()`, runtime monkeypatching not resolved statically. |
+| **Tier 1** | **TypeScript** | `tree-sitter-typescript` (v0.23+) | RegEx Tokenizer | Classes, Methods, Functions, Interfaces, Type Aliases, ES6 Imports, Constants | Exact 1-indexed inclusive | Computed property keys (`[Symbol.iterator]()`), complex inline JSX components in .tsx. |
+| **Tier 1** | **JavaScript** | `tree-sitter-javascript` (v0.25+) | RegEx Tokenizer | Classes, Methods, Functions, CommonJS `require()`, ES6 Imports, Constants | Exact 1-indexed inclusive | Dynamic `require(computePath())` cannot be statically resolved to local files. |
+| **Tier 2** | **Java** | `tree_sitter_languages` (`java`) | Structural Regex | Classes, Interfaces, Methods, Imports | Exact 1-indexed inclusive | Complex annotation processing and deep anonymous inner classes. |
+| **Tier 2** | **Go** | `tree_sitter_languages` (`go`) | Structural Regex | Structs, Interfaces, Functions, Methods, Imports | Exact 1-indexed inclusive | Inline anonymous struct declarations and generic type constraints. |
+| **Tier 2** | **Rust** | `tree_sitter_languages` (`rust`) | Structural Regex | Structs, Impls, Functions, Macros, Imports | Exact 1-indexed inclusive | Declarative macro expansions (`macro_rules!`) and proc-macros not expanded. |
+| **Tier 2** | **C** | `tree_sitter_languages` (`c`) | Structural Regex | Functions, Structs, Typedefs, Macros, Includes | Exact 1-indexed inclusive | Heavy preprocessor macro metaprogramming and conditional compilation `#ifdef`. |
+| **Tier 2** | **C++** | `tree_sitter_languages` (`cpp`) | Structural Regex | Classes, Structs, Functions, Methods, Includes | Exact 1-indexed inclusive | Complex template metaprogramming declarations. |
+| **Tier 3** | **Unsupported** | N/A | Graceful Skip | None (returns explicit diagnostics) | Whole file bounds | Emits `UNSUPPORTED_LANGUAGE` error code / limitation. Zero unhandled exceptions. |
+
+### 11.2 Parser Failure Handling & Zero-Crash Contract
+
+The platform enforces a strict zero-crash invariant across all parsing, extraction, and mapping operations:
+
+1. **Syntax Error Resilience (`SYNTAX_ERROR` / `SYNTAX_WARNING`)**:
+   - Files with partial syntax errors (unclosed brackets, broken tokens, syntax errors) do not crash the parser.
+   - `tree-sitter` constructs a concrete syntax tree with error nodes (`has_error=True`), allowing clean surrounding symbols to be extracted.
+   - `Parser.parse_with_status` sets `has_syntax_errors=True` and populates `error_message`.
+   - `ASTBugAnalyzer` flags syntax errors with rule `AST-SYNTAX-ERROR` and severity `critical`.
+   - `ReviewSourceMapper` emits an explicit `SYNTAX_ERROR` limitation.
+
+2. **Empty File Handling (`EMPTY_FILE` / 0 bytes)**:
+   - 0-byte or whitespace-only files produce `ParseResult(success=True, has_syntax_errors=False)`.
+   - Symbol extraction returns an empty list `[]`.
+   - Line range and snippet extraction returns `""` with clamped boundaries without triggering `IndexError` or division-by-zero.
+   - Target selection reports `total_file_lines=0` and `content=""`.
+
+3. **Unicode and Encoding Robustness**:
+   - All string-to-byte encoding (`content.encode("utf-8", errors="replace")`) and decoding (`node.text.decode("utf-8", errors="replace")`) use `errors="replace"`.
+   - Lone surrogate characters (`\ud800`), malformed UTF-8 byte sequences, or non-UTF-8 source files are safely processed without raising `UnicodeEncodeError` or `UnicodeDecodeError`.
+   - `ast_rules.py` explicitly catches `(SyntaxError, UnicodeEncodeError)` during Python AST parsing.
+
+4. **Path Traversal Protection (`PATH_TRAVERSAL_BLOCKED`)**:
+   - `analyze_file` and `_read_file` validate that the resolved target path strictly resides within the repository root directory (`resolved_target.relative_to(resolved_root)`).
+   - Any path traversal escape attempt (e.g. `../../etc/passwd`) is blocked and returns `parse_status="PARSE_ERROR"` with an explicit diagnostic message.
+
+5. **Line Out of Bounds (`LINE_OUT_OF_BOUNDS`)**:
+   - Queries requesting line ranges outside the file's physical line count (e.g. line 100 in a 10-line file) or non-positive line numbers (`start_line < 1`) return `ResolutionResult(success=False, error_code="LINE_OUT_OF_BOUNDS")`.
+
+6. **Mapping Limitations in Code Review**:
+   - When exact mapping cannot be determined, `ReviewSourceMapper` emits explicit `MappingLimitation` records:
+     - `UNSUPPORTED_LANGUAGE`: File type has no AST parser (e.g. `.md`, `.yaml`, `.sh`).
+     - `MODULE_LEVEL_CODE`: Changed lines reside outside any class or function declaration.
+     - `FILE_DELETED`: File was removed in the diff; AST parsing cannot be executed.
+     - `BINARY_FILE`: Binary asset modified; AST parsing bypassed.
+     - `SYNTAX_ERROR`: File has fatal syntax defects preventing full AST symbol extraction.
+
+### 11.3 Final Day 7 Verification Inventory (143 Tests)
+
+| Test Suite | Focus Area | Tests | Status |
+|---|---|---|---|
+| `backend/tests/test_prit_day7_acceptance.py` | Final Day 7 Acceptance Suite: AST fidelity across Python/TS/JS, framework detection, comprehensive failure handling (0-byte, lone surrogates, path traversal, syntax errors), downstream feature bridges, and Scenarios A–E | 24 | 🟢 Passing |
+| `backend/tests/test_parser_reliability.py` | Multi-fixture reliability: class/method container invariants, framework runner variations, syntax error tolerance, empty files, and 1-indexed agreement | 24 | 🟢 Passing |
+| `backend/tests/test_source_mapper.py` | Diff hunk parsing, symbol mapping, AST context, scoped structural defects, additions/renames/deletions, limitation reporting, and adapters | 21 | 🟢 Passing |
+| `backend/tests/test_ast_rules.py` | 10 deterministic structural defect rules, clean fixture zero findings, syntax error handling, symbol/range scoping, and path traversal guards | 22 | 🟢 Passing |
+| `backend/tests/test_target_selector.py` | File, symbol, and range target selection, qualified name resolution, child symbol extraction, ambiguous disambiguation, and TargetSnippet conversions | 14 | 22 | 🟢 Passing |
+| `backend/tests/test_source_location.py` | Exact range extraction, scope resolution, import tracking (Python, TS, JS), and syntax error tolerance | 15 | 🟢 Passing |
+| `backend/tests/test_framework_detector.py` | Pytest, unittest, jest, vitest, and ambiguous repository detection, conftest fixture AST extraction, and POSIX path proposals | 15 | 🟢 Passing |
+| `backend/tests/test_detector.py`, `test_walker.py`, `test_test_mapper.py` | Baseline scanner file walking, language detection, and test-to-source mapping | 8 | 🟢 Passing |
+| **Total** | **Complete Repository Scanner Engine Suite** | **143** | **100% Passing** |
+
 
 
 

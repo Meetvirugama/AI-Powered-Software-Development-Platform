@@ -669,7 +669,7 @@ class ReviewSourceMapper:
         # Extract symbols and parse status
         file_info = FileInfo(
             path=norm_path,
-            size_bytes=len(content.encode("utf-8")),
+            size_bytes=len(content.encode("utf-8", errors="replace")),
             language=detected_lang,
             is_binary=False,
         )
@@ -948,7 +948,7 @@ class ReviewSourceMapper:
 
         file_info = FileInfo(
             path=norm_path,
-            size_bytes=len(content.encode("utf-8")),
+            size_bytes=len(content.encode("utf-8", errors="replace")),
             language=detected_lang,
             is_binary=False,
         )

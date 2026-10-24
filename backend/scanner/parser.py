@@ -93,7 +93,7 @@ class Parser:
                 parser = tree_sitter.Parser()
                 parser.set_language(language)
 
-            tree = parser.parse(bytes(content, "utf8"))
+            tree = parser.parse(content.encode("utf-8", errors="replace"))
             has_syntax_errors = bool(tree.root_node.has_error)
             
             return ParseResult(

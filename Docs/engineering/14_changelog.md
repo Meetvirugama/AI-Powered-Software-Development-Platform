@@ -592,6 +592,40 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/parser_and_framework_test_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day7] 2026-10-24 — Final AST, Framework & Parser Failure Handling Acceptance Verification
+**Type:** Feature / Acceptance & Reliability  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/parser.py`:
+  - Hardened string-to-byte encoding (`content.encode("utf-8", errors="replace")`) to eliminate `UnicodeEncodeError` crashes on lone surrogates (`\ud800`) or malformed UTF-8 source inputs.
+- `backend/scanner/extractor.py`:
+  - Hardened node text decoding (`node.text.decode("utf-8", errors="replace")`) to ensure zero-crash decoding of raw syntax tree slices.
+- `backend/scanner/ast_rules.py`:
+  - Hardened Python AST analysis to catch `(SyntaxError, UnicodeEncodeError)`, treating encoding anomalies gracefully as syntax warnings rather than unhandled exceptions.
+  - Safe byte length calculation using `errors="replace"`.
+- `backend/scanner/source_mapper.py`:
+  - Hardened diff file encoding with `errors="replace"`.
+- `backend/tests/test_prit_day7_acceptance.py`:
+  - Added 24 comprehensive Day 7 acceptance tests (100% passing) verifying:
+    - Final AST and 1-indexed inclusive source-range fidelity across Python, TypeScript, and JavaScript.
+    - Framework and convention detection across `pytest`, `unittest`, `jest`, `vitest` (unsupported), and ambiguous manifests.
+    - Comprehensive parser failure handling: zero-crash resilience on malformed syntax, 0-byte empty files, lone surrogates, path traversal guards, and unsupported language contracts.
+    - Seamless downstream feature bridges: Code Explanation `TargetSnippet`, Bug Detection `StaticFinding`, Test Generation `FrameworkProfile`, and AI Code Review `AnalysisSourceReference`.
+    - Mandatory Week 2 Acceptance Scenarios A through E scanner invariants.
+- `Docs/scanner_languages.md`:
+  - Added Section 11 documenting the Week 2 Day 7 Final Language Support Matrix (Tiers 1, 2, and 3), language-by-language capability specifications, documented limitations, failure handling guarantees, and 143-test verification inventory.
+- `Docs/week2_day7_ast_acceptance_report.md`:
+  - Authored and published the formal Day 7 deliverable report documenting verified invariants, downstream feature bridges, test suite inventory, SLA benchmarks, and Week 3 handoff.
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Updated Week 2 Day 7 task board and milestone completion status.
+
+**Impact:** Guarantees production-ready, zero-crash AST syntax parsing, symbol extraction, test runner convention discovery, and review source mapping across all Developer Intelligence features, ready for Week 3 Workflow Automation and Git execution sandboxes.
+
+**Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 

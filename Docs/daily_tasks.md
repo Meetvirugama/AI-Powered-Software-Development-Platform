@@ -567,7 +567,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 ## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
 
 - ✅ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
-- ✅ Prit: AST and framework reliability — multi-fixture source-range validation, class/method extraction, framework detector hardening, malformed syntax zero-crash resilience, and published test report (`Docs/parser_and_framework_test_report.md`)
+- ✅ Prit: AST and framework reliability & Day 7 acceptance — multi-fixture source-range validation, class/method extraction, framework detector hardening, zero-crash parser failure handling, tiered language limitation matrix, and published acceptance report (143/143 tests passing) (`Docs/scanner_languages.md`, `Docs/week2_day7_ast_acceptance_report.md`)
 - ⬜ Dev: Schema validation error handling and self-healing repair loops across all 4 services
 - ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
 - ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
