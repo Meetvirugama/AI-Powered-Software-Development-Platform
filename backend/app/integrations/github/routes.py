@@ -211,6 +211,12 @@ async def get_pull_request_diff(
     request: Request,
     db: Session = Depends(get_db),
 ) -> PullRequestDiffResponse:
+    if pr_number < 1:
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Pull request number must be a positive integer.",
+        )
     service = GitHubSourceService(db)
     return await service.get_pull_request_diff(
         repository_id,

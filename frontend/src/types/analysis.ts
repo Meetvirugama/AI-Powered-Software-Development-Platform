@@ -150,7 +150,6 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
-
 export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
 
 export type TestScenarioCategory = 'normal' | 'edge_case' | 'failure_path';
@@ -197,9 +196,75 @@ export interface TestGenerationResponse {
   completed_at?: string | null;
 }
 
+export type ReviewTargetType = 'file' | 'commit' | 'diff' | 'pr';
+
+export type ReviewCategory =
+  | 'correctness'
+  | 'security'
+  | 'performance'
+  | 'reliability'
+  | 'maintainability';
+
+export type ReviewRiskLevel = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
+
+export interface ReviewTarget {
+  type: ReviewTargetType;
+  path?: string | null;
+  commit_sha?: string | null;
+  pr_number?: number | null;
+  diff?: string | null;
+  base_revision?: string | null;
+  head_revision?: string | null;
+}
+
+export interface CodeReviewRequest {
+  target: ReviewTarget;
+  options?: AnalysisOptions;
+  include_static?: boolean;
+}
+
+export interface ReviewFinding {
+  id: string;
+  category: ReviewCategory;
+  severity: FindingSeverity;
+  title: string;
+  description: string;
+  source_reference: SourceReference;
+  evidence: string;
+  suggested_fix?: string | null;
+  confidence?: ConfidenceLevel;
+  is_uncertain?: boolean;
+  is_new_in_change?: boolean;
+  source_type: FindingSourceType;
+  rule_id?: string | null;
+}
+
+export interface ReviewReport {
+  summary: string;
+  risk_level: ReviewRiskLevel;
+  findings: ReviewFinding[];
+  total_findings: number;
+  category_counts: Record<string, number>;
+  missing_context: string[];
+}
+
+export interface ReviewReportResponse {
+  run_id: string;
+  repository_id: string;
+  status: AnalysisStatus;
+  target: ReviewTarget;
+  report: ReviewReport;
+  created_at: string;
+  completed_at?: string | null;
+}
+
 export interface CodeReviewResult {
   summary: string;
-  findings: BugFinding[];
+  findings: (BugFinding | ReviewFinding)[];
+  risk_level?: ReviewRiskLevel;
+  total_findings?: number;
+  category_counts?: Record<string, number>;
+  missing_context?: string[];
   overall_status?: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENT';
 }
 
@@ -229,9 +294,11 @@ export interface AnalysisRunSummary {
 export interface PaginatedAnalysisRunResponse {
   page: number;
   page_size: number;
-  total: number;
+  total: int | number;
   items: AnalysisRunSummary[];
 }
+
+type int = number;
 
 export interface AnalysisRunDetailResponse {
   id: string;
@@ -247,9 +314,8 @@ export interface AnalysisRunDetailResponse {
   findings_count: number;
   result_payload?: Record<string, any> | null;
   test_output?: string | null;
-  findings?: AnalysisFinding[];
+  findings?: (AnalysisFinding | ReviewFinding)[];
   error_message?: string | null;
   created_at: string;
   completed_at?: string | null;
 }
-

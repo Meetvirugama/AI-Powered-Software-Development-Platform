@@ -592,7 +592,7 @@ class ReviewTarget(BaseModel):
             if self.pr_number is None:
                 raise ValueError("target.pr_number is required when review target.type is 'pr'.")
         elif self.type == "diff":
-            if not self.diff or not self.diff.strip():
+            if self.diff is not None and not self.diff.strip():
                 raise ValueError("target.diff must be a non-empty unified diff when type='diff'.")
         return self
 
@@ -606,6 +606,12 @@ class CodeReviewRequest(BaseModel):
         default=True,
         description="Run static linters and secret checks on reviewed files.",
     )
+
+    @model_validator(mode="after")
+    def _require_diff_on_request(self) -> "CodeReviewRequest":
+        if self.target.type == "diff" and (not self.target.diff or not self.target.diff.strip()):
+            raise ValueError("target.diff must be a non-empty unified diff when type='diff'.")
+        return self
 
     @model_validator(mode="before")
     @classmethod

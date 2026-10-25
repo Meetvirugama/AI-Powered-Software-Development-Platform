@@ -1039,6 +1039,9 @@ class LLMCodeReviewService:
                 "AI code review LLM gateway is not configured.",
                 retryable=True,
             )
+        from app.services.explanation_orchestrator import enforce_gateway_provider_policy
+
+        enforce_gateway_provider_policy(self._llm)
 
         rendered = (
             ContextBuilder().render_intelligence_data(context)

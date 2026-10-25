@@ -167,18 +167,24 @@ async def lifespan(app: FastAPI):
         app.state.context_service = shared_context_service
         logger.info("context_service_ready")
 
-        # ── Week 2 Day 3: Bug Scan History Service (Om) ──────────────────────
+        # ── Week 2 Day 2–5: History Persistence Services (Om) ────────────────
         from app.core.database import SessionLocal
+        from app.services.explanation_history_service import ExplanationHistoryService
         from app.services.bug_scan_history_service import BugScanHistoryService
+        from app.services.test_generation_history_service import TestGenerationHistoryService
+        from app.services.review_history_service import ReviewHistoryService
+
+        app.state.explanation_history_service = ExplanationHistoryService(session_factory=SessionLocal)
+        logger.info("explanation_history_service_ready")
 
         app.state.bug_scan_history_service = BugScanHistoryService(session_factory=SessionLocal)
         logger.info("bug_scan_history_service_ready")
 
-        # ── Week 2 Day 4: Test Generation History Service (Om) ───────────────
-        from app.services.test_generation_history_service import TestGenerationHistoryService
-
         app.state.test_generation_history_service = TestGenerationHistoryService(session_factory=SessionLocal)
         logger.info("test_generation_history_service_ready")
+
+        app.state.review_history_service = ReviewHistoryService(session_factory=SessionLocal)
+        logger.info("review_history_service_ready")
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None
