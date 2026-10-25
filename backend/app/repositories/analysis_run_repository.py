@@ -298,7 +298,14 @@ class AnalysisRunRepository:
 
         if feature_type:
             feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
-            stmt = stmt.where(AnalysisRun.feature_type == feat_val)
+            if feat_val in ("review", "code_review"):
+                stmt = stmt.where(AnalysisRun.feature_type.in_(["review", "code_review"]))
+            elif feat_val in ("detect_bugs", "bugs"):
+                stmt = stmt.where(AnalysisRun.feature_type.in_(["detect_bugs", "bugs"]))
+            elif feat_val in ("generate_tests", "tests"):
+                stmt = stmt.where(AnalysisRun.feature_type.in_(["generate_tests", "tests"]))
+            else:
+                stmt = stmt.where(AnalysisRun.feature_type == feat_val)
 
         if status:
             status_val = status.value if hasattr(status, "value") else str(status)
@@ -2041,3 +2048,182 @@ class AnalysisRunRepository:
         )
         self.session.commit()
         return len(run_ids)
+
+    def delete_run(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> bool:
+        """Delete an analysis run with optional repository boundary validation."""
+        run_uuid = _ensure_uuid(run_id)
+        if run_uuid is None:
+            return False
+
+        if repository_id is not None:
+            run = self.get_by_id_and_repository(run_uuid, repository_id)
+        else:
+            run = self.get_by_id(run_uuid)
+
+        if run is None:
+            return False
+
+        self.session.delete(run)
+        self.session.commit()
+        return True
+
+    def get_run_summary(
+        self,
+        repository_id: uuid.UUID | str,
+    ) -> dict[str, Any]:
+        """Aggregate analysis run and finding metrics for an authorized repository (Week 2 — Day 6)."""
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            return {
+                "total_runs": 0,
+                "by_feature": {},
+                "by_status": {},
+                "total_findings": 0,
+                "findings_by_severity": {},
+                "findings_by_category": {},
+            }
+
+        # 1. Total runs & breakdown by feature and status
+        runs_stmt = select(
+            AnalysisRun.feature_type,
+            AnalysisRun.status,
+            func.count(AnalysisRun.id),
+        ).where(
+            AnalysisRun.repository_id == repo_uuid
+        ).group_by(
+            AnalysisRun.feature_type,
+            AnalysisRun.status,
+        )
+
+        rows = self.session.execute(runs_stmt).all()
+        total_runs = 0
+        by_feature: dict[str, int] = {}
+        by_status: dict[str, int] = {}
+
+        for feat, stat, cnt in rows:
+            feat_str = str(feat.value if hasattr(feat, "value") else feat)
+            stat_str = str(stat.value if hasattr(stat, "value") else stat)
+            total_runs += cnt
+            by_feature[feat_str] = by_feature.get(feat_str, 0) + cnt
+            by_status[stat_str] = by_status.get(stat_str, 0) + cnt
+
+        # 2. Findings breakdown by severity and category
+        findings_stmt = select(
+            AnalysisFinding.severity,
+            AnalysisFinding.category,
+            func.count(AnalysisFinding.id),
+        ).where(
+            AnalysisFinding.repository_id == repo_uuid
+        ).group_by(
+            AnalysisFinding.severity,
+            AnalysisFinding.category,
+        )
+
+        f_rows = self.session.execute(findings_stmt).all()
+        total_findings = 0
+        by_severity: dict[str, int] = {}
+        by_category: dict[str, int] = {}
+
+        for sev, cat, cnt in f_rows:
+            sev_str = str(sev).upper()
+            cat_str = str(cat).lower()
+            total_findings += cnt
+            by_severity[sev_str] = by_severity.get(sev_str, 0) + cnt
+            by_category[cat_str] = by_category.get(cat_str, 0) + cnt
+
+        return {
+            "repository_id": str(repo_uuid),
+            "total_runs": total_runs,
+            "by_feature": by_feature,
+            "by_status": by_status,
+            "total_findings": total_findings,
+            "findings_by_severity": by_severity,
+            "findings_by_category": by_category,
+        }
+
+    def verify_integrity(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> dict[str, Any]:
+        """Perform comprehensive database integrity verification across runs and findings (Week 2 — Day 6).
+
+        Verifies:
+        1. Absence of orphaned findings (findings without a valid parent analysis_run).
+        2. Synchronization between findings_count column and actual associated findings count.
+        3. Status and timestamp consistency (COMPLETED must have completed_at; FAILED must have error_message).
+        4. Cross-repository foreign key attribution integrity.
+        """
+        issues: List[dict[str, Any]] = []
+
+        # 1. Check for orphaned findings
+        orphan_stmt = select(AnalysisFinding).where(
+            ~AnalysisFinding.analysis_run_id.in_(select(AnalysisRun.id))
+        )
+        if repository_id is not None:
+            repo_uuid = _ensure_uuid(repository_id)
+            if repo_uuid:
+                orphan_stmt = orphan_stmt.where(AnalysisFinding.repository_id == repo_uuid)
+
+        orphans = list(self.session.scalars(orphan_stmt).all())
+        for orphan in orphans:
+            issues.append({
+                "type": "ORPHANED_FINDING",
+                "finding_id": str(orphan.id),
+                "analysis_run_id": str(orphan.analysis_run_id),
+                "details": f"Finding '{orphan.title}' points to non-existent analysis_run '{orphan.analysis_run_id}'.",
+            })
+
+        # 2. Check run count synchronization and status consistency
+        run_query = select(AnalysisRun).options(selectinload(AnalysisRun.findings))
+        if repository_id is not None:
+            repo_uuid = _ensure_uuid(repository_id)
+            if repo_uuid:
+                run_query = run_query.where(AnalysisRun.repository_id == repo_uuid)
+
+        all_runs = list(self.session.scalars(run_query).all())
+        desynchronized_count = 0
+        inconsistent_status_count = 0
+
+        for run in all_runs:
+            actual_findings_count = len(run.findings)
+            if run.findings_count != actual_findings_count:
+                desynchronized_count += 1
+                issues.append({
+                    "type": "DESYNCHRONIZED_FINDINGS_COUNT",
+                    "run_id": str(run.id),
+                    "recorded_count": run.findings_count,
+                    "actual_count": actual_findings_count,
+                    "details": f"Run '{run.id}' recorded findings_count={run.findings_count} but has {actual_findings_count} associated findings.",
+                })
+
+            # Status consistency checks
+            if run.status == AnalysisRunStatus.COMPLETED.value and run.completed_at is None:
+                inconsistent_status_count += 1
+                issues.append({
+                    "type": "MISSING_COMPLETION_TIMESTAMP",
+                    "run_id": str(run.id),
+                    "details": f"Run '{run.id}' is COMPLETED but completed_at is null.",
+                })
+
+            if run.status == AnalysisRunStatus.FAILED.value and not run.error_message:
+                inconsistent_status_count += 1
+                issues.append({
+                    "type": "MISSING_ERROR_MESSAGE",
+                    "run_id": str(run.id),
+                    "details": f"Run '{run.id}' is FAILED but error_message is missing or empty.",
+                })
+
+        return {
+            "status": "CLEAN" if len(issues) == 0 else "ISSUES_FOUND",
+            "total_runs_checked": len(all_runs),
+            "orphaned_findings_count": len(orphans),
+            "desynchronized_runs_count": desynchronized_count,
+            "inconsistent_status_count": inconsistent_status_count,
+            "issues_count": len(issues),
+            "issues": issues,
+        }
+

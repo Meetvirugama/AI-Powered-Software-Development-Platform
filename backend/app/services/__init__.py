@@ -1,3 +1,4 @@
+from app.services.analysis_run_history_service import AnalysisRunHistoryService
 from app.services.bug_scan_history_service import BugScanHistoryService
 from app.services.explanation_history_service import ExplanationHistoryService
 from app.services.git_branch import AgentBranchInfo, GitBranchService, format_agent_branch_name
@@ -6,6 +7,7 @@ from app.services.test_generation_history_service import TestGenerationHistorySe
 
 __all__ = [
     "AgentBranchInfo",
+    "AnalysisRunHistoryService",
     "BugScanHistoryService",
     "ExplanationHistoryService",
     "GitBranchService",

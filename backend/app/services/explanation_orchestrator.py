@@ -550,9 +550,16 @@ def record_analysis_run(
             fn = getattr(target_service, method_name, None)
             if callable(fn):
                 try:
-                    fn(record)
+                    fn(record, db=db)
                     saved = True
                     break
+                except TypeError:
+                    try:
+                        fn(record)
+                        saved = True
+                        break
+                    except Exception as exc:
+                        logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
                 except Exception as exc:
                     logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
 
