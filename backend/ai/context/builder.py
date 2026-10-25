@@ -22,9 +22,10 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any
-
-import tiktoken
+try:
+    import tiktoken
+except ImportError:
+    tiktoken = None  # type: ignore
 
 try:
     from ai.retrieval.base import CodeChunk
@@ -56,8 +57,10 @@ _ENCODING_NAME: str = "cl100k_base"
 
 
 @functools.lru_cache(maxsize=8)
-def _get_encoder(encoding_name: str = _ENCODING_NAME) -> tiktoken.Encoding:
+def _get_encoder(encoding_name: str = _ENCODING_NAME) -> Any:
     """Return the cached tiktoken encoder (thread-safe and reusable)."""
+    if tiktoken is None:
+        return None
     return tiktoken.get_encoding(encoding_name)
 
 
@@ -71,8 +74,12 @@ def count_tokens(text: str, encoding_name: str = _ENCODING_NAME) -> int:
     """
     if not text:
         return 0
+    if tiktoken is None:
+        return max(1, len(text) // 4)
     try:
         enc = _get_encoder(encoding_name)
+        if enc is None:
+            return max(1, len(text) // 4)
         return len(enc.encode(text, disallowed_special=()))
     except (ValueError, UnicodeError, TypeError, KeyError) as exc:
         logger.warning(
