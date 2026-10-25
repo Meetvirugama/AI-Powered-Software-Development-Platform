@@ -14,6 +14,7 @@ import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { ExplanationResultView } from './ExplanationResultView';
 import { BugScannerView } from './BugScannerView';
 import { TestGenerationView } from './TestGenerationView';
+import { CodeReviewView, ReviewTargetSelector } from './CodeReviewView';
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
@@ -23,6 +24,8 @@ import type {
   CodeExplanation,
   BugDetectionResponse,
   TestGenerationResponse,
+  ReviewReportResponse,
+  ReviewTarget,
   SupportedTestFramework,
   SymbolSummary,
 } from '../../types/analysis';
@@ -35,10 +38,15 @@ export interface AnalysisResultPanelProps {
   explanation?: CodeExplanation | null;
   bugResult?: BugDetectionResponse | null;
   testResult?: TestGenerationResponse | null;
+  reviewResult?: ReviewReportResponse | null;
+  reviewTarget?: ReviewTarget;
+  repositoryId?: string;
+  onReopenReview?: (result: ReviewReportResponse) => void;
   proposedPathStatus?: 'EXISTS' | 'NEW' | 'UNKNOWN';
   proposedPathExists?: boolean;
   onRetry?: () => void;
   onRunAnalysis?: (feature: AnalysisFeatureType, target: AnalysisTarget) => void;
+  onRunReviewTarget?: (target: ReviewTarget) => void;
   onClose?: () => void;
   onSelectSourceReference?: (source: SourceReference) => void;
   activeSourceReference?: SourceReference | null;
@@ -46,6 +54,7 @@ export interface AnalysisResultPanelProps {
   onSelectFramework?: (framework: SupportedTestFramework | null) => void;
   selectedFrameworkOverride?: SupportedTestFramework | null;
   sources?: SourceReference[];
+  activeFileTreePaths?: string[];
   className?: string;
   children?: React.ReactNode;
 }
@@ -104,10 +113,15 @@ export function AnalysisResultPanel({
   explanation,
   bugResult,
   testResult,
+  reviewResult,
+  reviewTarget,
+  repositoryId,
+  onReopenReview,
   proposedPathStatus,
   proposedPathExists = false,
   onRetry,
   onRunAnalysis,
+  onRunReviewTarget,
   onClose,
   onSelectSourceReference,
   activeSourceReference,
@@ -115,6 +129,7 @@ export function AnalysisResultPanel({
   onSelectFramework,
   selectedFrameworkOverride,
   sources = [],
+  activeFileTreePaths = [],
   className,
   children,
 }: AnalysisResultPanelProps) {
@@ -218,7 +233,22 @@ export function AnalysisResultPanel({
         )}
 
         {/* State 2: IDLE (Feature selected, ready to run) */}
-        {feature && status === 'IDLE' && currentMeta && (
+        {feature === 'review' && status === 'IDLE' ? (
+          <ReviewTargetSelector
+            initialTarget={reviewTarget || { type: 'file', path: target.path }}
+            currentFilePath={target.path}
+            onRunReview={(revTarget) => {
+              if (onRunReviewTarget) {
+                onRunReviewTarget(revTarget);
+              } else {
+                onRunAnalysis?.('review', target);
+              }
+            }}
+            isRunning={isRunning}
+            repositoryId={repositoryId}
+            onReopenReview={onReopenReview}
+          />
+        ) : feature && status === 'IDLE' && currentMeta ? (
           <div className="space-y-4 py-2">
             <div className="rounded-xl border border-border/80 bg-background/60 p-4 space-y-3">
               <div className="flex items-start gap-3">
@@ -308,7 +338,7 @@ export function AnalysisResultPanel({
               </p>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* State 3: RUNNING / PENDING */}
         {isRunning && (
@@ -383,6 +413,17 @@ export function AnalysisResultPanel({
                 onSelectFramework={onSelectFramework}
                 selectedFrameworkOverride={selectedFrameworkOverride}
               />
+            ) : feature === 'review' && reviewResult ? (
+              <CodeReviewView
+                result={reviewResult}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+                onRunReview={onRunReviewTarget}
+                isRunning={isRunning}
+                activeFileTreePaths={activeFileTreePaths}
+                repositoryId={repositoryId}
+                onReopenReview={onReopenReview}
+              />
             ) : children ? (
               children
             ) : (
@@ -399,6 +440,7 @@ export function AnalysisResultPanel({
             {(!explanation || feature !== 'explain') &&
               feature !== 'bugs' &&
               feature !== 'tests' &&
+              feature !== 'review' &&
               sources &&
               sources.length > 0 && (
                 <div className="pt-3 border-t border-border/60 space-y-2">

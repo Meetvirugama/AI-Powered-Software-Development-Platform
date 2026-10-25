@@ -13,6 +13,8 @@ import type {
   BugDetectionResponse,
   TestGenerationRequest,
   TestGenerationResponse,
+  CodeReviewRequest,
+  ReviewReportResponse,
   PaginatedAnalysisRunResponse,
   AnalysisRunDetailResponse,
   AnalysisRunFeatureType,
@@ -71,6 +73,26 @@ export async function generateTests(
 ): Promise<TestGenerationResponse> {
   const response = await apiClient.post<TestGenerationResponse>(
     `/repositories/${repositoryId}/generate-tests`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * Run a standalone AI and static code review on a file, commit, PR, or diff (Week 2 — Day 5).
+ *
+ * Calls POST /api/v1/repositories/{repository_id}/review
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param payload Target, options, and static analysis flags.
+ * @returns The structured review report response envelope.
+ */
+export async function reviewCode(
+  repositoryId: string,
+  payload: CodeReviewRequest
+): Promise<ReviewReportResponse> {
+  const response = await apiClient.post<ReviewReportResponse>(
+    `/repositories/${repositoryId}/review`,
     payload
   );
   return response.data;
@@ -178,6 +200,41 @@ export async function getTestGenerationHistory(
  * @returns Detailed record with test output, covered scenarios, and structured result payload.
  */
 export async function reopenTestGeneration(
+  runId: string
+): Promise<AnalysisRunDetailResponse> {
+  return getAnalysisRun(runId);
+}
+
+/**
+ * List historical code review runs for an authorized repository.
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
+ */
+export async function getCodeReviewHistory(
+  repositoryId: string,
+  params?: {
+    status?: string;
+    target_path?: string;
+    source_revision?: string;
+    page?: number;
+    page_size?: number;
+  }
+): Promise<PaginatedAnalysisRunResponse> {
+  return getAnalysisRuns(repositoryId, {
+    ...params,
+    feature_type: 'review',
+  });
+}
+
+/**
+ * Reopen a specific code review run from persistent history (Scenario D Step 7).
+ *
+ * @param runId The UUID of the code review analysis run.
+ * @returns Detailed record with findings and structured result payload.
+ */
+export async function reopenCodeReview(
   runId: string
 ): Promise<AnalysisRunDetailResponse> {
   return getAnalysisRun(runId);

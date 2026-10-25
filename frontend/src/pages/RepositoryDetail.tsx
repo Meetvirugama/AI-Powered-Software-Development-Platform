@@ -39,7 +39,12 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { useExplainCode, useDetectBugs, useGenerateTests } from '../hooks/useAnalysis';
+import {
+  useExplainCode,
+  useDetectBugs,
+  useGenerateTests,
+  useReviewCode,
+} from '../hooks/useAnalysis';
 import type { SyncStage, RepositoryFile } from '../types/api';
 import type {
   AnalysisFeatureType,
@@ -49,6 +54,8 @@ import type {
   CodeExplanation,
   BugDetectionResponse,
   TestGenerationResponse,
+  ReviewReportResponse,
+  ReviewTarget,
   SupportedTestFramework,
   SymbolSummary,
 } from '../types/analysis';
@@ -82,6 +89,11 @@ export function RepositoryDetail() {
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
   const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
   const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget>({
+    type: 'file',
+    path: '',
+  });
   const [selectedFrameworkOverride, setSelectedFrameworkOverride] = useState<SupportedTestFramework | null>(null);
   const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
   const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
@@ -132,6 +144,21 @@ export function RepositoryDetail() {
       setAnalysisError(
         err.message ||
           'Failed to generate tests. The backend service endpoint may be temporarily unavailable.'
+      );
+    },
+  });
+
+  const { mutate: triggerReview, isPending: isReviewPending } = useReviewCode(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus(data.status || 'COMPLETED');
+      setReviewResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Failed to run code review. The backend review service may be temporarily unavailable.'
       );
     },
   });
@@ -228,7 +255,8 @@ export function RepositoryDetail() {
     analysisStatus === 'PENDING' ||
     isExplainPending ||
     isDetectBugsPending ||
-    isGenerateTestsPending;
+    isGenerateTestsPending ||
+    isReviewPending;
 
   function handleRunAnalysis(
     feature: AnalysisFeatureType,
@@ -240,7 +268,7 @@ export function RepositoryDetail() {
       return;
     }
 
-    if (!target.path) {
+    if (!target.path && feature !== 'review') {
       setAnalysisError('Please select a source file from the explorer before requesting an analysis.');
       setAnalysisStatus('FAILED');
       return;
@@ -313,20 +341,42 @@ export function RepositoryDetail() {
       return;
     }
 
-    // Code review feature entry point remains intact as placeholder for Day 5
-    const targetDesc =
-      target.type === 'symbol' && target.symbol
-        ? `${target.path} (${target.symbol})`
-        : target.start_line
-        ? `${target.path}:L${target.start_line}-${target.end_line}`
-        : target.path;
+    if (feature === 'review') {
+      const activeReviewTarget: ReviewTarget =
+        reviewTarget && (reviewTarget.path || reviewTarget.commit_sha || reviewTarget.pr_number || reviewTarget.diff)
+          ? reviewTarget
+          : {
+              type: 'file',
+              path: target.path,
+            };
+      setReviewTarget(activeReviewTarget);
+      triggerReview({
+        target: activeReviewTarget,
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        include_static: true,
+      });
+      return;
+    }
+  }
 
-    setTimeout(() => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        `The "${feature}" workflow for ${targetDesc} is scheduled for Day 5. Week 2 Days 2, 3, & 4 activate the real Code Explanation, Bug Detection, and Test Generation APIs.`
-      );
-    }, 500);
+  function handleRunReviewTarget(t: ReviewTarget) {
+    if (isAnalysisPending) return;
+    setReviewTarget(t);
+    setAnalysisStatus('RUNNING');
+    setAnalysisError(null);
+    triggerReview({
+      target: t,
+      options: {
+        include_context: true,
+        max_context_tokens: 10000,
+        persist_run: true,
+      },
+      include_static: true,
+    });
   }
 
   function handleFrameworkChange(framework: SupportedTestFramework | null) {
@@ -337,26 +387,60 @@ export function RepositoryDetail() {
   }
 
   function handleRetry() {
+    if (activeFeature === 'review') {
+      handleRunReviewTarget(reviewTarget);
+      return;
+    }
     if (activeFeature) {
       handleRunAnalysis(activeFeature, activeTarget, selectedFrameworkOverride || undefined);
     }
   }
 
   function handleSelectSourceReference(source: SourceReference) {
-    setHighlightedSource(source);
+    if (!source.file_path) {
+      setHighlightedSource(null);
+      return;
+    }
+
+    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+    const targetNorm = normalize(source.file_path);
+
+    // If currently selected file matches
+    if (selectedFile && normalize(selectedFile.path) === targetNorm) {
+      setHighlightedSource({
+        ...source,
+        file_path: selectedFile.path,
+      });
+      return;
+    }
 
     // If cited reference points to a different file in the repository, navigate to it
-    if (filesData?.items && (!selectedFile || source.file_path !== selectedFile.path)) {
+    if (filesData?.items) {
       const matchingFile = filesData.items.find(
         (f) =>
-          f.path === source.file_path ||
-          f.path.endsWith('/' + source.file_path) ||
-          source.file_path.endsWith('/' + f.path)
+          normalize(f.path) === targetNorm ||
+          normalize(f.path).endsWith('/' + targetNorm) ||
+          targetNorm.endsWith('/' + normalize(f.path))
       );
       if (matchingFile) {
         setUserSelectedFile(matchingFile);
+        setHighlightedSource({
+          ...source,
+          file_path: matchingFile.path,
+        });
+        return;
       }
     }
+
+    // Target file is unavailable in the file tree; do not highlight unrelated lines in current file
+    setHighlightedSource(null);
+  }
+
+  function handleReopenReview(data: ReviewReportResponse) {
+    setReviewResult(data);
+    setReviewTarget(data.target);
+    setAnalysisStatus(data.status || 'COMPLETED');
+    setAnalysisError(null);
   }
 
   function handleSelectSymbolFromExplanation(sym: SymbolSummary) {
@@ -818,6 +902,7 @@ export function RepositoryDetail() {
                       if (feat === 'explain' && explanationResult) setAnalysisStatus('COMPLETED');
                       else if (feat === 'bugs' && bugResult) setAnalysisStatus('COMPLETED');
                       else if (feat === 'tests' && testResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'review' && reviewResult) setAnalysisStatus('COMPLETED');
                       else setAnalysisStatus('IDLE');
                       return feat;
                     });
@@ -841,6 +926,8 @@ export function RepositoryDetail() {
                       setExplanationResult(null);
                       setBugResult(null);
                       setTestResult(null);
+                      setReviewResult(null);
+                      setReviewTarget({ type: 'file', path: file.path });
                       setExplainedFile(null);
                       setAnalysisStatus('IDLE');
                       setAnalysisError(null);
@@ -877,7 +964,7 @@ export function RepositoryDetail() {
                 </div>
 
                 {/* Sub-pane 3: Reusable Analysis Result Panel */}
-                {activeFeature && selectedFile && (
+                {activeFeature && (selectedFile || activeFeature === 'review') && (
                   <div className="w-full sm:w-80 lg:w-96 border-t sm:border-t-0 sm:border-l border-border flex flex-col shrink-0 min-h-0">
                     <AnalysisResultPanel
                       feature={activeFeature}
@@ -887,6 +974,12 @@ export function RepositoryDetail() {
                       explanation={activeFeature === 'explain' ? explanationResult : null}
                       bugResult={activeFeature === 'bugs' ? bugResult : null}
                       testResult={activeFeature === 'tests' ? testResult : null}
+                      reviewResult={activeFeature === 'review' ? reviewResult : null}
+                      reviewTarget={reviewTarget}
+                      repositoryId={id}
+                      onReopenReview={handleReopenReview}
+                      onRunReviewTarget={handleRunReviewTarget}
+                      activeFileTreePaths={filesData?.items?.map((f) => f.path) || []}
                       proposedPathStatus={proposedTestPathStatus}
                       proposedPathExists={proposedTestPathExists}
                       sources={
