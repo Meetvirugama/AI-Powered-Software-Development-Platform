@@ -515,7 +515,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Person | Publish | Status |
 |--------|---------|--------|
 | Meet | Shared `IntelligenceContext` interface & token budget rules | ✅ Done |
-| Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ⬜ Todo |
+| Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ✅ Done |
 | Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ⬜ Todo |
 | Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
 | Om | `analysis_runs` and `code_findings` database models & Alembic migration | ⬜ Todo |
