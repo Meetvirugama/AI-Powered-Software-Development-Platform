@@ -11,6 +11,7 @@ We use Alembic for managing database migrations with PostgreSQL.
 | `aef3bb17eb34` | `aef3bb17eb34_content_tables.py` | Content tables — repository_files, code_symbols, symbol_edges, code_chunks |
 | `cb4e2a7d0f31` | `cb4e2a7d0f31_add_sync_jobs.py` | Adds sync_jobs table for repository sync tracking |
 | `e7b8c9d0f1a2` | `e7b8c9d0f1a2_add_code_chunks_and_memory.py` | Adds memory_entries table, vector indexes, and chunk enhancements |
+| `f1c2d3e4b5a6` | `f1c2d3e4b5a6_add_analysis_runs_and_findings.py` | Developer Intelligence Suite — analysis_runs & analysis_findings |
 
 ## How to Create a Migration
 
@@ -59,5 +60,7 @@ alembic downgrade <revision_id>
 | `code_chunks` | `aef3bb17eb34_content_tables` | Chunked code with pgvector `vector(1536)` embeddings |
 | `sync_jobs` | `cb4e2a7d0f31_add_sync_jobs` | Background sync job tracking & statuses |
 | `memory_entries` | `e7b8c9d0f1a2_add_code_chunks_and_memory` | Repository memory, architectural decisions, and learnings |
+| `analysis_runs` | `f1c2d3e4b5a6_add_analysis_runs_and_findings` | Analysis execution runs, targets, source revisions & outputs |
+| `analysis_findings` | `f1c2d3e4b5a6_add_analysis_runs_and_findings` | Categorized defect & review findings with source references |
 
 Make sure your local PostgreSQL database (via `docker compose up -d`) is running before executing these commands.

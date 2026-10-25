@@ -854,7 +854,15 @@ async def review_code(
 ) -> ReviewReportResponse:
     """Review a file, commit SHA, PR diff, or unified diff without starting an autonomous task."""
     user_id = _request_user_id(request)
-    _owned_repository(repository_id, request, db)
+    repo = _owned_repository(repository_id, request, db)
+    run_id = str(uuid4())
+    revision = (
+        payload.target.head_revision
+        or payload.target.commit_sha
+        or (f"pr/{payload.target.pr_number}" if payload.target.pr_number is not None else None)
+        or payload.target.base_revision
+        or getattr(repo, "default_branch", "main")
+    )
 
     if payload.target.path is not None:
         payload.target.path = require_safe_repo_path(payload.target.path)
@@ -862,20 +870,51 @@ async def review_code(
     service = _get_service(request, "code_review_service", "AI code review")
     method = service.review if hasattr(service, "review") else service
 
-    raw_result = await _invoke_service_method(
-        method,
-        repository_id,
-        payload,
-        user_id=user_id,
-        db=db,
-    )
+    try:
+        raw_result = await _invoke_service_method(
+            method,
+            repository_id,
+            payload,
+            user_id=user_id,
+            db=db,
+        )
+    except APIError as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message=exc.message,
+            )
+        raise
+    except Exception as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message=str(exc),
+            )
+        raise
 
     try:
         if isinstance(raw_result, ReviewReportResponse):
             response = raw_result
         elif isinstance(raw_result, ReviewReport):
             response = ReviewReportResponse(
-                run_id=str(uuid4()),
+                run_id=run_id,
                 repository_id=str(repository_id),
                 status="COMPLETED",
                 target=payload.target,
@@ -884,7 +923,7 @@ async def review_code(
         elif isinstance(raw_result, dict) and "report" in raw_result:
             response = ReviewReportResponse.model_validate(
                 {
-                    "run_id": str(raw_result.get("run_id") or uuid4()),
+                    "run_id": str(raw_result.get("run_id") or run_id),
                     "repository_id": str(raw_result.get("repository_id") or repository_id),
                     "status": raw_result.get("status", "COMPLETED"),
                     "target": raw_result.get("target") or payload.target,
@@ -894,7 +933,7 @@ async def review_code(
         else:
             report = ReviewReport.model_validate(raw_result)
             response = ReviewReportResponse(
-                run_id=str(uuid4()),
+                run_id=run_id,
                 repository_id=str(repository_id),
                 status="COMPLETED",
                 target=payload.target,
@@ -902,6 +941,19 @@ async def review_code(
             )
     except ValidationError as exc:
         logger.error("review_output_schema_invalid", extra={"error": str(exc)})
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message="AI code review service returned an invalid output schema.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
@@ -910,12 +962,42 @@ async def review_code(
         ) from exc
 
     if response.status == "FAILED":
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=response.run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=payload.target,
+                revision=revision,
+                error_message="Code review execution failed.",
+            )
         raise APIError(
             500,
             ErrorCode.ANALYSIS_FAILED,
             "Code review execution failed.",
             retryable=True,
         )
+
+    if payload.options.persist_run:
+        record_analysis_run(
+            request.app.state,
+            db,
+            run_id=response.run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type="review",
+            status=response.status,
+            target=response.target,
+            revision=revision,
+            result_payload=response.model_dump(mode="json"),
+            findings=[f.model_dump(mode="json") for f in response.report.findings],
+            findings_count=len(response.report.findings),
+        )
+
     return response
 
 

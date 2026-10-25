@@ -161,6 +161,12 @@ async def lifespan(app: FastAPI):
 
         app.state.test_generation_history_service = TestGenerationHistoryService(session_factory=SessionLocal)
         logger.info("test_generation_history_service_ready")
+
+        # ── Week 2 Day 5: Review History Service (Om) ────────────────────────
+        from app.services.review_history_service import ReviewHistoryService
+
+        app.state.review_history_service = ReviewHistoryService(session_factory=SessionLocal)
+        logger.info("review_history_service_ready")
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None

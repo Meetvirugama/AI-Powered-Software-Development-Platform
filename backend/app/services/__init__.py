@@ -1,6 +1,7 @@
 from app.services.bug_scan_history_service import BugScanHistoryService
 from app.services.explanation_history_service import ExplanationHistoryService
 from app.services.git_branch import AgentBranchInfo, GitBranchService, format_agent_branch_name
+from app.services.review_history_service import ReviewHistoryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 
 __all__ = [
@@ -8,6 +9,7 @@ __all__ = [
     "BugScanHistoryService",
     "ExplanationHistoryService",
     "GitBranchService",
+    "ReviewHistoryService",
     "TestGenerationHistoryService",
     "format_agent_branch_name",
 ]
