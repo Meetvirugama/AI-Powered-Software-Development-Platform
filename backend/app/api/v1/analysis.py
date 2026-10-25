@@ -89,48 +89,12 @@ router = APIRouter(tags=["analysis"])
 # Service Protocols (Published Day 1 Interfaces for Dev, Meet, Devu, Om)
 # ---------------------------------------------------------------------------
 
-class CodeExplanationServiceProtocol(Protocol):
-    """Protocol implemented by Dev's CodeExplanationService (Day 2)."""
-
-    async def explain(
-        self,
-        repository_id: UUID,
-        payload: ExplainCodeRequest,
-        **kwargs: Any,
-    ) -> CodeExplanationResponse | CodeExplanation | dict[str, Any]: ...
-
-
-class BugDetectionServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Devu's BugDetectionEngine (Day 3)."""
-
-    async def detect_bugs(
-        self,
-        repository_id: UUID,
-        payload: BugDetectionRequest,
-        **kwargs: Any,
-    ) -> BugDetectionResponse | dict[str, Any]: ...
-
-
-class TestGenerationServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Prit's TestGenerationService (Day 4)."""
-
-    async def generate_tests(
-        self,
-        repository_id: UUID,
-        payload: TestGenerationRequest,
-        **kwargs: Any,
-    ) -> TestGenerationResponse | TestGenerationResult | dict[str, Any]: ...
-
-
-class CodeReviewServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Parth's AICodeReviewEngine (Day 5)."""
-
-    async def review(
-        self,
-        repository_id: UUID,
-        payload: CodeReviewRequest,
-        **kwargs: Any,
-    ) -> ReviewReportResponse | ReviewReport | dict[str, Any]: ...
+from ai.interfaces import (
+    BugDetectionServiceProtocol,
+    CodeExplanationServiceProtocol,
+    CodeReviewServiceProtocol,
+    TestGenerationServiceProtocol,
+)
 
 
 class AnalysisRunPersistenceProtocol(Protocol):
