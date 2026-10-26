@@ -633,5 +633,5 @@ def enforce_gateway_provider_policy(gateway: Any) -> None:
 
 from ai.services.explanation_service import CodeExplanationService
 
-# Maintain backward compatibility with existing tests and routes
-LLMCodeExplanationService = CodeExplanationService
+# Maintain backward compatibility
+CodeExplanationService = LLMCodeExplanationService
