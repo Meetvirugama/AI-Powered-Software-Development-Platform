@@ -1131,7 +1131,7 @@ class ASTBugAnalyzer:
 
         file_info = FileInfo(
             path=file_path or "sample.py",
-            size_bytes=len(content.encode("utf-8")),
+            size_bytes=len(content.encode("utf-8", errors="replace")),
             language="unknown",
             is_binary=False,
         )
@@ -1167,21 +1167,26 @@ class ASTBugAnalyzer:
             python_ast: Optional[ast.AST] = None
             try:
                 python_ast = ast.parse(content, filename=file_path or "<string>")
-            except SyntaxError as e:
+            except (SyntaxError, UnicodeEncodeError) as e:
                 parse_status = "SYNTAX_WARNING"
                 has_syntax_errors = True
-                error_message = f"SyntaxError: {e.msg} at line {e.lineno}"
+                msg = getattr(e, "msg", str(e))
+                lineno = getattr(e, "lineno", 1) or 1
+                end_lineno = getattr(e, "end_lineno", lineno) or lineno
+                offset = getattr(e, "offset", 1) or 1
+                text = (getattr(e, "text", "") or "").strip()
+                error_message = f"SyntaxError/EncodingError: {msg} at line {lineno}"
                 raw_findings.append(
                     ASTBugFinding(
                         rule_id="AST-SYNTAX-ERROR",
                         category="syntax_error",
                         severity="critical",
-                        message=f"Syntax error: {e.msg}",
+                        message=f"Syntax error: {msg}",
                         file_path=file_path,
-                        line_number=e.lineno or 1,
-                        end_line=e.end_lineno or e.lineno or 1,
-                        column=e.offset or 1,
-                        evidence=(e.text or "").strip(),
+                        line_number=lineno,
+                        end_line=end_lineno,
+                        column=offset,
+                        evidence=text,
                         remediation="Fix syntax error so file can be parsed cleanly.",
                         confidence="high",
                     )
@@ -1205,7 +1210,7 @@ class ASTBugAnalyzer:
         elif self.parser.is_language_supported(detected_lang):
             file_info = FileInfo(
                 path=file_path,
-                size_bytes=len(content.encode("utf-8")),
+                size_bytes=len(content.encode("utf-8", errors="replace")),
                 language=detected_lang,
                 is_binary=False,
             )

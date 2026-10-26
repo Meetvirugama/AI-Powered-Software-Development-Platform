@@ -39,7 +39,7 @@ CodeTargetType = Literal["file", "symbol", "range"]
 ReviewTargetType = Literal["file", "commit", "diff", "pr"]
 AnalysisStatus = Literal["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"]
 FindingSeverity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
-FindingSourceType = Literal["STATIC", "AI", "COMBINED"]
+FindingSourceType = Literal["STATIC", "AI", "COMBINED", "HYBRID"]
 ConfidenceLevel = Literal["high", "medium", "low"]
 SupportedTestFramework = Literal["pytest", "unittest", "jest"]
 
@@ -306,7 +306,7 @@ class CodeExplanation(BaseModel):
     inputs_and_outputs: str = Field(
         ...,
         min_length=1,
-        description="Parameters, return values, and observable side effects.",
+        description="Parameters, return values, and side effects.",
     )
     dependencies: list[str] = Field(
         default_factory=list,
@@ -592,7 +592,7 @@ class ReviewTarget(BaseModel):
             if self.pr_number is None:
                 raise ValueError("target.pr_number is required when review target.type is 'pr'.")
         elif self.type == "diff":
-            if not self.diff or not self.diff.strip():
+            if self.diff is not None and not self.diff.strip():
                 raise ValueError("target.diff must be a non-empty unified diff when type='diff'.")
         return self
 
@@ -606,6 +606,12 @@ class CodeReviewRequest(BaseModel):
         default=True,
         description="Run static linters and secret checks on reviewed files.",
     )
+
+    @model_validator(mode="after")
+    def _require_diff_on_request(self) -> "CodeReviewRequest":
+        if self.target.type == "diff" and (not self.target.diff or not self.target.diff.strip()):
+            raise ValueError("target.diff must be a non-empty unified diff when type='diff'.")
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -755,3 +761,23 @@ class AnalysisRunDetailResponse(BaseModel):
     error_message: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+_FEATURE_TYPE_ALIASES: dict[str, str] = {
+    "bugs": "detect_bugs",
+    "detect_bugs": "detect_bugs",
+    "tests": "generate_tests",
+    "generate_tests": "generate_tests",
+    "explain": "explain",
+    "review": "review",
+}
+
+
+def normalize_analysis_feature_type(value: str | None) -> str | None:
+    """Normalize shorthand feature_type query aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests')."""
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if raw in _FEATURE_TYPE_ALIASES:
+        return _FEATURE_TYPE_ALIASES[raw]
+    raise ValueError(f"Unsupported feature_type: {value}")

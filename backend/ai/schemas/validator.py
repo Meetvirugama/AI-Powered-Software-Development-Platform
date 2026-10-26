@@ -146,6 +146,13 @@ class OutputValidator:
 
         current_raw = raw
         current_error = error
+        repair_model = getattr(
+            getattr(self._gateway, "provider", None),
+            "default_model",
+            "gemini-flash-lite-latest",
+        )
+        if not isinstance(repair_model, str) or not repair_model.strip():
+            repair_model = "gemini-flash-lite-latest"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
             repair_prompt = (
@@ -157,7 +164,7 @@ class OutputValidator:
             )
 
             request = LLMRequest(
-                model="gpt-4o",
+                model=repair_model,
                 messages=[Message(role="user", content=repair_prompt)],
                 temperature=0.0,
                 max_tokens=1024,

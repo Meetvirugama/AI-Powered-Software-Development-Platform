@@ -103,8 +103,8 @@ class AnalysisRunRepository:
         ):
             completed_dt = datetime.now(timezone.utc)
 
-        # Extract large test outputs if passed in payload or kwargs
-        if test_output is None and result_payload:
+        # Extract large test outputs if passed in payload or kwargs (top-level or nested under "result")
+        if test_output is None and isinstance(result_payload, dict):
             test_output = (
                 result_payload.get("test_content")
                 or result_payload.get("complete_test_code")
@@ -115,6 +115,12 @@ class AnalysisRunRepository:
                     else None
                 )
             )
+            if test_output is None and isinstance(result_payload.get("result"), dict):
+                test_output = (
+                    result_payload["result"].get("test_content")
+                    or result_payload["result"].get("complete_test_code")
+                    or result_payload["result"].get("test_output")
+                )
 
         # Normalize feature_type and status strings
         feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
@@ -1737,7 +1743,7 @@ class AnalysisRunRepository:
         self,
         *,
         repository_id: uuid.UUID | str,
-        error_message: str,
+        error_message: str = "Code review execution failed.",
         target_path: Optional[str] = None,
         review_target: Optional[Any] = None,
         source_revision: Optional[str] = None,
@@ -1745,13 +1751,15 @@ class AnalysisRunRepository:
         pr_number: Optional[int] = None,
         user_id: Optional[uuid.UUID | str] = None,
         run_id: Optional[uuid.UUID | str] = None,
+        target: Optional[Any] = None,
         created_at: Optional[datetime | str] = None,
+        **extra_kwargs: Any,
     ) -> AnalysisRun:
         """Explicitly record a failed code review run (Scenario D failure isolation)."""
         created_dt = _ensure_datetime(created_at)
         return self.save_review_run(
             repository_id=repository_id,
-            review_target=review_target,
+            review_target=review_target or target,
             target_path=target_path,
             source_revision=source_revision,
             commit_sha=commit_sha,
@@ -1761,6 +1769,7 @@ class AnalysisRunRepository:
             error_message=error_message,
             run_id=run_id,
             created_at=created_dt,
+            **extra_kwargs,
         )
 
     def list_review_runs(
@@ -1884,7 +1893,9 @@ class AnalysisRunRepository:
             "repository_id": str(run.repository_id),
             "status": run.status,
             "target": target_dict,
+            "revision": run.source_revision,
             "report": report_dict,
+            "findings": findings_list,
             "error_message": run.error_message,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -1893,8 +1904,8 @@ class AnalysisRunRepository:
     def get_latest_review(
         self,
         repository_id: uuid.UUID | str,
-        *,
         target_path: Optional[str] = None,
+        *,
         source_revision: Optional[str] = None,
         commit_sha: Optional[str] = None,
         pr_number: Optional[int] = None,
@@ -1945,7 +1956,6 @@ class AnalysisRunRepository:
         self.session.delete(run)
         self.session.commit()
         return True
-
     # -----------------------------------------------------------------------
     # Status Updates & Findings Management
     # -----------------------------------------------------------------------

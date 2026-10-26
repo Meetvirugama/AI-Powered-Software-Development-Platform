@@ -53,6 +53,7 @@ from ai.llm.schemas import (
 from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.secret_redaction import redact, redact_obj
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.memory_entry import MemoryEntry
@@ -475,6 +476,11 @@ def record_analysis_run(
     **extra_kwargs: Any,
 ) -> None:
     """Step 8: Persist analysis run (COMPLETED or FAILED) to Om's repository or in-memory history store."""
+    # Security (W2 Day 2): saved history must never contain secrets copied from
+    # repository code or model output — applies to every analysis feature.
+    result_payload = redact_obj(result_payload) if result_payload is not None else None
+    findings = redact_obj(findings) if findings else findings
+    error_message = redact(error_message) if error_message else error_message
     now = datetime.now(timezone.utc)
 
     # Extract test_output from result_payload if available
@@ -534,23 +540,45 @@ def record_analysis_run(
     }
 
     # 1. Try feature-specific history service or general analysis_run_service
-    target_service = getattr(app_state, "analysis_run_service", None)
+    candidate_services = []
     if feature_type in ("generate_tests", "tests"):
-        target_service = getattr(app_state, "test_generation_history_service", None) or target_service
+        svc = getattr(app_state, "test_generation_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
     elif feature_type in ("detect_bugs", "bugs"):
-        target_service = getattr(app_state, "bug_scan_history_service", None) or target_service
+        svc = getattr(app_state, "bug_scan_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
     elif feature_type == "explain":
-        target_service = getattr(app_state, "explanation_history_service", None) or target_service
+        svc = getattr(app_state, "explanation_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
     elif feature_type in ("review", "code_review"):
-        target_service = getattr(app_state, "review_history_service", None) or target_service
+        svc = getattr(app_state, "review_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
+
+    general_run_svc = getattr(app_state, "analysis_run_service", None)
+    if general_run_svc is not None and general_run_svc not in candidate_services:
+        candidate_services.append(general_run_svc)
 
     saved = False
-    if target_service is not None:
+    for target_service in candidate_services:
+        if saved:
+            break
         for method_name in ("record_run", "save_run", "create_run"):
             fn = getattr(target_service, method_name, None)
             if callable(fn):
                 try:
-                    fn(record)
+                    try:
+                        import inspect
+                        sig = inspect.signature(fn)
+                        if "db" in sig.parameters and db is not None:
+                            fn(record, db=db)
+                        else:
+                            fn(record)
+                    except (TypeError, ValueError):
+                        fn(record)
                     saved = True
                     break
                 except Exception as exc:
@@ -581,6 +609,29 @@ def record_analysis_run(
         except Exception:
             return
     history_store[str(run_id)] = record
+
+
+def enforce_gateway_provider_policy(llm_gateway: Any) -> None:
+    """Enforce Week 2 §4.5 & §10 provider policy: only Gemini and Groq are permitted."""
+    from ai.context.service import RepositoryContextService
+
+    for candidate in (
+        llm_gateway,
+        getattr(llm_gateway, "provider", None),
+        getattr(llm_gateway, "fallback_provider", None),
+    ):
+        if candidate is None:
+            continue
+        pname = getattr(candidate, "provider_name", None)
+        if isinstance(pname, str) and pname.strip():
+            try:
+                RepositoryContextService.validate_provider_policy(pname)
+            except ValueError as exc:
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    str(exc),
+                ) from exc
 
 
 class LLMCodeExplanationService:
@@ -630,6 +681,7 @@ class LLMCodeExplanationService:
                 "Code explanation LLM gateway is not configured.",
                 retryable=True,
             )
+        enforce_gateway_provider_policy(self._llm)
 
         rendered = (
             ContextBuilder().render_intelligence_data(context)
@@ -638,7 +690,8 @@ class LLMCodeExplanationService:
         )
         user_prompt = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
-            f"{_fence(rendered)}\n\n"
+            # Security (W2 Day 2): secrets in indexed code never reach the LLM provider.
+            f"{_fence(redact(rendered))}\n\n"
             "EXPLANATION TARGET:\n"
             f"Explain `{payload.target.path}` "
             f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "

@@ -6,6 +6,8 @@ try:
 except ImportError:
     from backend.scanner.symbols import Symbol
 
+from app.core.secret_redaction import redact
+
 from .models import Chunk
 
 
@@ -13,7 +15,7 @@ MAX_CHUNK_TOKENS = 512
 
 
 class SymbolChunker:
-    """Creates symbol-aware chunks from parsed symbols."""
+    """Creates symbol-aware chunks from parsed symbols with automatic secret redaction."""
 
     def _token_count(self, content: str) -> int:
         """Return the project's lightweight token-count estimate."""
@@ -135,7 +137,8 @@ class SymbolChunker:
 
         while start_idx < total_lines:
             end_idx = min(start_idx + 60, total_lines)
-            block = "\n".join(lines[start_idx:end_idx])
+            raw_block = "\n".join(lines[start_idx:end_idx])
+            block = redact(raw_block)
             start_line = start_idx + 1
             end_line = end_idx
             chunks.append(
@@ -195,7 +198,7 @@ class SymbolChunker:
                 )
 
                 if len(split_chunks) == 1:
-                    chunk_content = split_chunks[0][0]
+                    chunk_content = redact(split_chunks[0][0])
 
                     chunks.append(
                         Chunk(
@@ -218,10 +221,11 @@ class SymbolChunker:
                     )
                 else:
                     for (
-                        chunk_content,
+                        raw_chunk_content,
                         chunk_start,
                         chunk_end,
                     ) in split_chunks:
+                        chunk_content = redact(raw_chunk_content)
                         chunks.append(
                             Chunk(
                                 repository_id=repository_id,
@@ -256,9 +260,9 @@ class SymbolChunker:
                 for symbol in module_symbols
             )
 
-            module_content = "\n".join(
+            module_content = redact("\n".join(
                 lines[start_line - 1:end_line]
-            )
+            ))
 
             chunks.append(
                 Chunk(

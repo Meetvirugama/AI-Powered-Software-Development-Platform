@@ -56,6 +56,7 @@ from ai.llm.schemas import (
 from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.secret_redaction import redact as _shared_redact
 from app.models.repository import Repository
 from app.schemas.analysis import (
     AnalysisSourceReference,
@@ -115,6 +116,8 @@ _COMPATIBLE_CATEGORIES: dict[str, frozenset[str]] = {
 
 _SECRET_REDACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("openai_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}")),
+    ("groq_key", re.compile(r"\bgsk_[A-Za-z0-9]{20,}")),
+    ("gemini_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     (
@@ -157,7 +160,11 @@ def redact_secrets_in_text(text: str | None) -> str:
             redacted = pattern.sub(_repl_assign, redacted)
         else:
             redacted = pattern.sub("[REDACTED]", redacted)
-    return redacted
+    # Security (W2 Day 3, Sukun): also apply the shared platform redactor, which
+    # covers more formats (Google/Groq keys, .env-style KEY=value, URL credentials,
+    # Bearer tokens) and does not skip values just because they contain words
+    # like "test" or "sample".
+    return _shared_redact(redacted)
 
 
 def sanitize_finding_secrets(finding: BugFinding) -> BugFinding:
@@ -842,6 +849,9 @@ class LLMBugDetectionService:
                     "AI bug detection LLM gateway is not configured.",
                     retryable=True,
                 )
+            from app.services.explanation_orchestrator import enforce_gateway_provider_policy
+
+            enforce_gateway_provider_policy(self._llm)
             rendered = (
                 ContextBuilder().render_intelligence_data(context)
                 if context is not None
@@ -849,7 +859,8 @@ class LLMBugDetectionService:
             )
             user_prompt = (
                 "REPOSITORY DATA (untrusted, between the markers):\n"
-                f"{_fence(rendered)}\n\n"
+                # Security (W2 Day 3, Sukun): secrets in the code never reach the LLM provider.
+                f"{_fence(_shared_redact(rendered))}\n\n"
                 "BUG DETECTION TARGET:\n"
                 f"Analyze `{payload.target.path}` "
                 f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
@@ -907,3 +918,5 @@ class LLMBugDetectionService:
         if match:
             return match.group(1).strip()
         return text.strip()
+
+redact_secrets_from_text = redact_secrets_in_text

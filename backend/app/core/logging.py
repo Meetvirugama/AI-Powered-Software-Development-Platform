@@ -12,6 +12,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from app.core.secret_redaction import SecretRedactingFilter
+
 request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
@@ -34,6 +36,9 @@ def configure_logging(level: str) -> None:
     """Configure the application logger once at startup."""
     handler = logging.StreamHandler()
     handler.setFormatter(JsonFormatter())
+    # Security (W2 Day 1): never write secrets from repository content, model
+    # output or exception text into logs.
+    handler.addFilter(SecretRedactingFilter())
     root_logger = logging.getLogger()
     root_logger.handlers = [handler]
     root_logger.setLevel(level.upper())
