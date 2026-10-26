@@ -1,3 +1,4 @@
+from app.services.analysis_run_history_service import AnalysisRunHistoryService
 from app.services.bug_scan_history_service import BugScanHistoryService
 from app.services.code_review_orchestrator import LLMCodeReviewService
 from app.services.explanation_history_service import ExplanationHistoryService
@@ -10,6 +11,7 @@ from app.services.test_generation_orchestrator import LLMTestGenerationService
 
 __all__ = [
     "AgentBranchInfo",
+    "AnalysisRunHistoryService",
     "BugScanHistoryService",
     "ExplanationHistoryService",
     "GitBranchService",

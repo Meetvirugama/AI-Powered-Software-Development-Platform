@@ -570,19 +570,23 @@ def record_analysis_run(
             fn = getattr(target_service, method_name, None)
             if callable(fn):
                 try:
-                    try:
-                        import inspect
-                        sig = inspect.signature(fn)
-                        if "db" in sig.parameters and db is not None:
-                            fn(record, db=db)
-                        else:
-                            fn(record)
-                    except (TypeError, ValueError):
+                    import inspect
+                    sig = inspect.signature(fn)
+                    if "db" in sig.parameters and db is not None:
+                        fn(record, db=db)
+                    else:
                         fn(record)
-                    saved = True
-                    break
+                except (TypeError, ValueError):
+                    try:
+                        fn(record)
+                    except Exception as inner_exc:
+                        logger.debug("analysis_run_service_save_fallback_failed", extra={"error": str(inner_exc)})
+                        continue
                 except Exception as exc:
                     logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
+                    continue
+                saved = True
+                break
 
     # 2. Try Om's AnalysisRunRepository if available in app.repositories
     if not saved and hasattr(db, "query"):

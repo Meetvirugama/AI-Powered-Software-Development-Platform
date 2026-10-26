@@ -90,4 +90,6 @@ class AnalysisRun(TimestampedModel, Base):
         Index("ix_analysis_runs_repo_created", "repository_id", "created_at"),
         Index("ix_analysis_runs_repo_feature_status", "repository_id", "feature_type", "status"),
         Index("ix_analysis_runs_repo_revision", "repository_id", "source_revision"),
+        Index("ix_analysis_runs_repo_target_path", "repository_id", "target_path"),
     )
+

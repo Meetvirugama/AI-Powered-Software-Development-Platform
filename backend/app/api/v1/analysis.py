@@ -1257,15 +1257,18 @@ async def list_analysis_runs(
             kwargs["source_revision"] = source_revision
 
         try:
-            res = run_service.list_runs(repository_id, **kwargs)
+            res = run_service.list_runs(repository_id, db=db, **kwargs)
         except TypeError:
-            res = run_service.list_runs(
-                repository_id,
-                feature_type=normalized_feature_type,
-                status=status,
-                offset=offset,
-                limit=page_size,
-            )
+            try:
+                res = run_service.list_runs(repository_id, **kwargs)
+            except TypeError:
+                res = run_service.list_runs(
+                    repository_id,
+                    feature_type=normalized_feature_type,
+                    status=status,
+                    offset=offset,
+                    limit=page_size,
+                )
 
         if inspect.isawaitable(res):
             res = await res
@@ -1350,7 +1353,10 @@ async def get_analysis_run(
     run_record: Any = None
     run_service = getattr(request.app.state, "analysis_run_service", None)
     if run_service is not None and hasattr(run_service, "get_run"):
-        res = run_service.get_run(run_id)
+        try:
+            res = run_service.get_run(run_id, db=db)
+        except TypeError:
+            res = run_service.get_run(run_id)
         if inspect.isawaitable(res):
             res = await res
         run_record = res
