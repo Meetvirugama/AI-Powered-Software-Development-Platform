@@ -36,21 +36,31 @@ export function RepositoryChat() {
   const { messages, isPending, error, sendMessage, clearConversation } =
     useRepositoryChat(id);
 
+  const fileParam = searchParams.get('file');
+
   // Input state — initialized with ?file= query parameter if present.
   const [draft, setDraft] = useState(() => {
-    const fileParam = new URLSearchParams(window.location.search).get('file');
     return fileParam ? `Can you explain the structure and logic of \`${fileParam}\`?` : '';
   });
+  const [prevFileParam, setPrevFileParam] = useState(fileParam);
+  if (fileParam !== prevFileParam) {
+    setPrevFileParam(fileParam);
+    if (fileParam) {
+      setDraft(`Can you explain the structure and logic of \`${fileParam}\`?`);
+    }
+  }
+
   const [activeSource, setActiveSource] = useState<ChatSource | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (searchParams.get('file')) {
+    if (fileParam) {
       textareaRef.current?.focus();
     }
-  }, [searchParams]);
+  }, [fileParam]);
+
 
 
   // Auto-scroll: always scroll to bottom when a new message is ADDED to the list
@@ -272,7 +282,7 @@ export function RepositoryChat() {
 
             <div className="pt-3 border-t border-border">
               <Link
-                to={`/app/repositories/${id}`}
+                to={`/app/repositories/${id}?file=${encodeURIComponent(activeSource.file)}&start=${activeSource.start_line}&end=${activeSource.end_line}${activeSource.symbol ? `&symbol=${encodeURIComponent(activeSource.symbol)}` : ''}`}
                 className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
@@ -509,11 +519,18 @@ function MessageContent({ content }: { content: string }) {
 
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setCopyFailed(false);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 2500);
+    }
   };
 
   return (
@@ -530,6 +547,11 @@ function CodeBlock({ code }: { code: string }) {
               <Check className="h-3 w-3 text-emerald-400" />
               <span className="text-emerald-400">Copied</span>
             </>
+          ) : copyFailed ? (
+            <>
+              <X className="h-3 w-3 text-destructive" />
+              <span className="text-destructive">Failed to copy</span>
+            </>
           ) : (
             <>
               <Copy className="h-3 w-3" />
@@ -544,6 +566,7 @@ function CodeBlock({ code }: { code: string }) {
     </div>
   );
 }
+
 
 // ---------------------------------------------------------------------------
 // ConfidenceBadge — shows backend-provided confidence

@@ -52,10 +52,12 @@ import type { RepositoryChatRequest, RepositoryChatResponse } from '../types/api
 export async function askRepositoryQuestion(
   repositoryId: string,
   payload: RepositoryChatRequest,
+  signal?: AbortSignal,
 ): Promise<RepositoryChatResponse> {
   const response = await apiClient.post<RepositoryChatResponse>(
     `/repositories/${repositoryId}/chat`,
     payload,
+    { signal },
   );
   return response.data;
 }

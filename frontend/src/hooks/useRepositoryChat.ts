@@ -32,7 +32,8 @@
  * 6. No Zustand.
  *    Conversation state is local to this hook. No global store is introduced.
  */
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import axios from 'axios';
 import { askRepositoryQuestion } from '../services/chat';
 import type {
   ChatMessage,
@@ -90,16 +91,48 @@ export interface UseRepositoryChatReturn {
 export function useRepositoryChat(
   repositoryId: string | undefined,
 ): UseRepositoryChatReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [isPending, setIsPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Key state by repositoryId for immediate isolation across navigation
+  const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
+  const [pendingRepos, setPendingRepos] = useState<Record<string, boolean>>({});
+  const [errorMap, setErrorMap] = useState<Record<string, string | null>>({});
 
-  // Prevent state updates after unmount.
-  const cancelledRef = useRef(false);
+  // Active AbortControllers per repository
+  const abortControllersRef = useRef<Record<string, AbortController>>({});
+
+  // Cleanly derive current repository view with zero transient leakage
+  const messages = useMemo(() => {
+    if (!repositoryId) return [];
+    return conversations[repositoryId] ?? [];
+  }, [repositoryId, conversations]);
+
+  const isPending = Boolean(repositoryId && pendingRepos[repositoryId]);
+  const error = repositoryId ? (errorMap[repositoryId] ?? null) : null;
+
+  // Track repositoryId changes: abort previous repository request if navigating away
+  const prevRepoIdRef = useRef<string | undefined>(repositoryId);
   useEffect(() => {
-    cancelledRef.current = false;
+    if (prevRepoIdRef.current && prevRepoIdRef.current !== repositoryId) {
+      const prevId = prevRepoIdRef.current;
+      if (abortControllersRef.current[prevId]) {
+        abortControllersRef.current[prevId].abort();
+        delete abortControllersRef.current[prevId];
+      }
+      setPendingRepos((prev) => ({ ...prev, [prevId]: false }));
+    }
+    prevRepoIdRef.current = repositoryId;
+  }, [repositoryId]);
+
+  // Abort all active requests on hook unmount
+  useEffect(() => {
     return () => {
-      cancelledRef.current = true;
+      Object.values(abortControllersRef.current).forEach((ctrl) => {
+        try {
+          ctrl.abort();
+        } catch {
+          // ignore
+        }
+      });
+      abortControllersRef.current = {};
     };
   }, []);
 
@@ -108,43 +141,70 @@ export function useRepositoryChat(
       const trimmed = question.trim();
       if (!trimmed || isPending || !repositoryId) return;
 
-      setError(null);
-      setIsPending(true);
+      // Abort any existing in-flight request for this repository
+      if (abortControllersRef.current[repositoryId]) {
+        abortControllersRef.current[repositoryId].abort();
+        delete abortControllersRef.current[repositoryId];
+      }
+
+      const controller = new AbortController();
+      abortControllersRef.current[repositoryId] = controller;
 
       // 1. Capture history BEFORE adding the new user message.
-      //    The current question must NOT appear in history.
-      setMessages((prev) => {
-        const history = buildHistory(prev);
+      const currentHistory = buildHistory(conversations[repositoryId] ?? []);
 
-        // 2. Optimistically add the user message.
-        const userMessage: ChatMessage = {
-          id: newMessageId(),
-          role: 'user',
-          content: trimmed,
-          timestamp: new Date().toISOString(),
-          sources: [],
-          isStreaming: false,
-        };
+      // 2. Optimistic user message and assistant placeholder
+      const userMessage: ChatMessage = {
+        id: newMessageId(),
+        role: 'user',
+        content: trimmed,
+        timestamp: new Date().toISOString(),
+        sources: [],
+        isStreaming: false,
+      };
 
-        // 3. Add an assistant placeholder in pending state.
-        const assistantId = newMessageId();
-        const assistantPlaceholder: ChatMessage = {
-          id: assistantId,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-          sources: [],
-          isStreaming: true,
-        };
+      const assistantId = newMessageId();
+      const assistantPlaceholder: ChatMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+        sources: [],
+        isStreaming: true,
+      };
 
-        const next = [...prev, userMessage, assistantPlaceholder];
+      // 3. Update state synchronously — pure state update, NO API calls inside updater
+      setConversations((prev) => ({
+        ...prev,
+        [repositoryId]: [...(prev[repositoryId] ?? []), userMessage, assistantPlaceholder],
+      }));
+      setPendingRepos((prev) => ({
+        ...prev,
+        [repositoryId]: true,
+      }));
+      setErrorMap((prev) => ({
+        ...prev,
+        [repositoryId]: null,
+      }));
 
-        // 4. Fire the real API request.
-        askRepositoryQuestion(repositoryId, { question: trimmed, history })
-          .then((response: RepositoryChatResponse) => {
-            if (cancelledRef.current) return;
-            setMessages((current) =>
-              current.map((msg) =>
+      // 4. Fire API request outside the state setter
+      askRepositoryQuestion(
+        repositoryId,
+        { question: trimmed, history: currentHistory },
+        controller.signal,
+      )
+        .then((response: RepositoryChatResponse) => {
+          // Ignore if request was aborted or superseded
+          if (controller.signal.aborted || abortControllersRef.current[repositoryId] !== controller) {
+            return;
+          }
+          delete abortControllersRef.current[repositoryId];
+
+          setConversations((prev) => {
+            const repoMsgs = prev[repositoryId] ?? [];
+            return {
+              ...prev,
+              [repositoryId]: repoMsgs.map((msg) =>
                 msg.id === assistantId
                   ? {
                       ...msg,
@@ -155,32 +215,98 @@ export function useRepositoryChat(
                     }
                   : msg,
               ),
-            );
-            setIsPending(false);
-          })
-          .catch((err: unknown) => {
-            if (cancelledRef.current) return;
-            const message =
-              err instanceof Error
-                ? err.message
-                : 'The assistant could not complete the response. Please try again.';
-            // Remove the failed placeholder message so no empty bubble remains.
-            setMessages((current) => current.filter((msg) => msg.id !== assistantId));
-            setError(message);
-            setIsPending(false);
+            };
           });
+          setPendingRepos((prev) => ({
+            ...prev,
+            [repositoryId]: false,
+          }));
+        })
+        .catch((err: unknown) => {
+          // Do not treat cancellation as an ordinary error
+          const isCancelled =
+            controller.signal.aborted ||
+            axios.isCancel(err) ||
+            (err instanceof Error && (err.name === 'CanceledError' || err.name === 'AbortError')) ||
+            (typeof err === 'object' &&
+              err !== null &&
+              'message' in err &&
+              (err as { message?: string }).message === 'canceled');
 
-        return next;
-      });
+          if (isCancelled) {
+            // Remove the pending placeholder silently so no hanging bubble is left
+            setConversations((prev) => {
+              const repoMsgs = prev[repositoryId] ?? [];
+              return {
+                ...prev,
+                [repositoryId]: repoMsgs.filter((msg) => msg.id !== assistantId),
+              };
+            });
+            if (abortControllersRef.current[repositoryId] === controller) {
+              delete abortControllersRef.current[repositoryId];
+              setPendingRepos((prev) => ({
+                ...prev,
+                [repositoryId]: false,
+              }));
+            }
+            return;
+          }
+
+          // If a newer request was already started, let it control state
+          if (abortControllersRef.current[repositoryId] !== controller) {
+            return;
+          }
+          delete abortControllersRef.current[repositoryId];
+
+          const message =
+            err instanceof Error
+              ? err.message
+              : typeof err === 'object' && err !== null && 'message' in err && typeof (err as any).message === 'string'
+              ? (err as any).message
+              : 'The assistant could not complete the response. Please try again.';
+
+          // Remove the failed placeholder message
+          setConversations((prev) => {
+            const repoMsgs = prev[repositoryId] ?? [];
+            return {
+              ...prev,
+              [repositoryId]: repoMsgs.filter((msg) => msg.id !== assistantId),
+            };
+          });
+          setErrorMap((prev) => ({
+            ...prev,
+            [repositoryId]: message,
+          }));
+          setPendingRepos((prev) => ({
+            ...prev,
+            [repositoryId]: false,
+          }));
+        });
     },
-    [isPending, repositoryId],
+    [conversations, isPending, repositoryId],
   );
 
   const clearConversation = useCallback(() => {
-    setMessages([]);
-    setError(null);
-    setIsPending(false);
-  }, []);
+    if (!repositoryId) return;
+
+    if (abortControllersRef.current[repositoryId]) {
+      abortControllersRef.current[repositoryId].abort();
+      delete abortControllersRef.current[repositoryId];
+    }
+
+    setConversations((prev) => ({
+      ...prev,
+      [repositoryId]: [],
+    }));
+    setErrorMap((prev) => ({
+      ...prev,
+      [repositoryId]: null,
+    }));
+    setPendingRepos((prev) => ({
+      ...prev,
+      [repositoryId]: false,
+    }));
+  }, [repositoryId]);
 
   return { messages, isPending, error, sendMessage, clearConversation };
 }

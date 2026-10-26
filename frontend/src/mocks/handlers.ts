@@ -499,6 +499,185 @@ export const handlers = [
     return HttpResponse.json(repo);
   }),
 
+  // POST /api/v1/repositories/:id/chat — repository-scoped chat (Day 6 + Day 7).
+  // Matches backend schema:
+  //   Request:  { question: string (1-4000 chars, non-whitespace), history: ChatHistoryMessage[] (max 50) }
+  //   Response: RepositoryAnswer { answer: string, sources: SourceReference[], confidence: 'high' | 'medium' | 'low' }
+  http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
+    const { id } = params;
+
+    // Route validation: repository existence
+    const repo = MOCK_REPOSITORIES.find((r) => r.id === id);
+    if (!repo && id !== '11111111-1111-1111-1111-111111111111') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'REPOSITORY_NOT_FOUND',
+            message: 'Repository does not exist or you do not have access.',
+            retryable: false,
+          },
+        },
+        { status: 404 },
+      );
+    }
+
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'Invalid JSON request body.',
+            retryable: false,
+          },
+        },
+        { status: 422 },
+      );
+    }
+
+    const question = typeof body?.question === 'string' ? body.question : '';
+    const trimmedQuestion = question.trim();
+
+    // Empty or whitespace-only question rejection (matches backend Pydantic validator)
+    if (!trimmedQuestion) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'question must contain non-whitespace characters',
+            retryable: false,
+          },
+        },
+        { status: 422 },
+      );
+    }
+
+    // Question length validation (1 - 4000 chars)
+    if (question.length > 4000) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'question exceeds maximum length of 4000 characters',
+            retryable: false,
+          },
+        },
+        { status: 422 },
+      );
+    }
+
+    // History validation (max 50 messages)
+    if (Array.isArray(body?.history) && body.history.length > 50) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_REQUEST',
+            message: 'history exceeds maximum length of 50 messages',
+            retryable: false,
+          },
+        },
+        { status: 422 },
+      );
+    }
+
+    // Simulated 503 Service Unavailable scenario
+    if (trimmedQuestion.includes('503') || trimmedQuestion.toLowerCase().includes('unavailable')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Repository chat is not available because the RAG pipeline is temporarily unavailable.',
+            retryable: true,
+          },
+        },
+        { status: 503 },
+      );
+    }
+
+    // Simulated 500 Server Error scenario
+    if (trimmedQuestion.includes('500') || trimmedQuestion.toLowerCase().includes('server error')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: 'An internal server error occurred while generating the answer.',
+            retryable: false,
+          },
+        },
+        { status: 500 },
+      );
+    }
+
+    // Grounded mock responses matching RepositoryAnswer shape
+    const q = trimmedQuestion.toLowerCase();
+    let answer = `Based on the repository source files, the project uses FastAPI for backend services and React with TypeScript for the frontend client interface.`;
+    let sources = [
+      {
+        file: 'backend/app/main.py',
+        start_line: 1,
+        end_line: 20,
+        symbol: 'app',
+      },
+      {
+        file: 'frontend/src/App.tsx',
+        start_line: 15,
+        end_line: 45,
+        symbol: 'App',
+      },
+    ];
+    let confidence: 'high' | 'medium' | 'low' = 'high';
+
+    if (q.includes('auth') || q.includes('login') || q.includes('token') || q.includes('cookie')) {
+      answer = `Authentication is managed via HTTP-only session cookies and GitHub OAuth. In \`backend/app/api/v1/auth.py\`, the \`/auth/callback\` endpoint issues secure session cookies, while client requests authenticate automatically using \`withCredentials: true\`.`;
+      sources = [
+        {
+          file: 'backend/app/api/v1/auth.py',
+          start_line: 25,
+          end_line: 60,
+          symbol: 'auth_callback',
+        },
+        {
+          file: 'frontend/src/services/api.ts',
+          start_line: 10,
+          end_line: 25,
+          symbol: 'apiClient',
+        },
+      ];
+      confidence = 'high';
+    } else if (q.includes('bug') || q.includes('scan') || q.includes('detect')) {
+      answer = `The bug detection pipeline combines static AST heuristics with AI analysis in \`backend/app/services/bug_detector.py\`. Scans are initiated per-file or symbol and return categorized findings with code snippets.`;
+      sources = [
+        {
+          file: 'backend/app/services/bug_detector.py',
+          start_line: 40,
+          end_line: 85,
+          symbol: 'detect_bugs_in_file',
+        },
+      ];
+      confidence = 'high';
+    } else if (q.includes('test') || q.includes('pytest') || q.includes('generate')) {
+      answer = `Test generation automatically identifies target framework conventions (e.g. pytest or Vitest) and drafts isolated test suites covering normal, edge, and failure scenarios.`;
+      sources = [
+        {
+          file: 'tests/test_services.py',
+          start_line: 10,
+          end_line: 55,
+          symbol: 'test_pipeline',
+        },
+      ];
+      confidence = 'medium';
+    }
+
+    return HttpResponse.json({
+      answer,
+      sources,
+      confidence,
+    });
+  }),
+
+
   // GET /api/v1/repositories/:id/files — repository file tree (Day 5).
   // Mock returns MOCK_FILES paginated.
   http.get(`${BASE}/repositories/:id/files`, ({ request }) => {
