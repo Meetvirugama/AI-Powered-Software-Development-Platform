@@ -45,6 +45,10 @@ import type {
 // Helper
 // ---------------------------------------------------------------------------
 
+/**
+ * Generate a unique ID for chat messages.
+ * Uses crypto.randomUUID when available, falling back to Math.random.
+ */
 function newMessageId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -58,13 +62,18 @@ function newMessageId(): string {
  * Rules:
  *  - Only completed (non-streaming, non-empty) messages are included.
  *  - Strips UI-only fields: id, timestamp, sources, confidence, isStreaming.
+ *  - Excludes any trailing unanswered user turn so history strictly contains completed dialog turns.
  *  - Enforces the backend max-50-messages constraint (most-recent 50).
  */
 function buildHistory(messages: ChatMessage[]): ChatHistoryMessage[] {
   const completed = messages.filter(
     (m) => !m.isStreaming && m.content.trim().length > 0,
   );
-  const limited = completed.slice(-50); // backend max: 50
+  let validTurns = completed;
+  while (validTurns.length > 0 && validTurns[validTurns.length - 1].role === 'user') {
+    validTurns = validTurns.slice(0, -1);
+  }
+  const limited = validTurns.slice(-50); // backend max: 50
   return limited.map((m) => ({ role: m.role, content: m.content }));
 }
 
@@ -96,7 +105,7 @@ export interface UseRepositoryChatReturn {
  * @param repositoryId Repository to display, or undefined for an empty, inactive view.
  * @returns Current repository's messages, pending status, error, and send/reset actions.
  * Request failures remove the assistant placeholder and populate error; cancellation
- * removes the placeholder silently. The submitted user message remains in either case.
+ * due to repo switch retains the user message and sets a retryable error.
  */
 export function useRepositoryChat(
   repositoryId: string | undefined,
@@ -108,6 +117,8 @@ export function useRepositoryChat(
 
   // Active AbortControllers per repository
   const abortControllersRef = useRef<Record<string, AbortController>>({});
+  // Track specific abort reason per repository to distinguish intentional clear vs repo switch
+  const abortReasonsRef = useRef<Record<string, 'repo_switch' | 'clear' | 'unmount' | 'superseded'>>({});
 
   // Cleanly derive current repository view with zero transient leakage
   const messages = useMemo(() => {
@@ -124,6 +135,7 @@ export function useRepositoryChat(
     if (prevRepoIdRef.current && prevRepoIdRef.current !== repositoryId) {
       const prevId = prevRepoIdRef.current;
       if (abortControllersRef.current[prevId]) {
+        abortReasonsRef.current[prevId] = 'repo_switch';
         abortControllersRef.current[prevId].abort();
         delete abortControllersRef.current[prevId];
       }
@@ -134,15 +146,20 @@ export function useRepositoryChat(
 
   // Abort all active requests on hook unmount
   useEffect(() => {
+    const reasons = abortReasonsRef.current;
+    const controllers = abortControllersRef.current;
     return () => {
-      Object.values(abortControllersRef.current).forEach((ctrl) => {
+      Object.entries(controllers).forEach(([id, ctrl]) => {
         try {
+          reasons[id] = 'unmount';
           ctrl.abort();
         } catch {
           // ignore
         }
       });
-      abortControllersRef.current = {};
+      Object.keys(controllers).forEach((id) => {
+        delete controllers[id];
+      });
     };
   }, []);
 
@@ -150,6 +167,7 @@ export function useRepositoryChat(
    * Submit a trimmed question with up to 50 prior completed messages, immediately
    * adding the user message and a pending assistant placeholder. Ignore blank
    * questions, a missing repository ID, or sends while this view is pending.
+   * If retrying an unanswered user question, reuses the existing user turn.
    */
   const sendMessage = useCallback(
     (question: string) => {
@@ -158,6 +176,7 @@ export function useRepositoryChat(
 
       // Abort any existing in-flight request for this repository
       if (abortControllersRef.current[repositoryId]) {
+        abortReasonsRef.current[repositoryId] = 'superseded';
         abortControllersRef.current[repositoryId].abort();
         delete abortControllersRef.current[repositoryId];
       }
@@ -165,8 +184,15 @@ export function useRepositoryChat(
       const controller = new AbortController();
       abortControllersRef.current[repositoryId] = controller;
 
-      // 1. Capture history BEFORE adding the new user message.
-      const currentHistory = buildHistory(conversations[repositoryId] ?? []);
+      // Check whether the current conversation ends with an unanswered user message
+      const currentMessages = conversations[repositoryId] ?? [];
+      const lastMessage = currentMessages[currentMessages.length - 1];
+      const isLastUnansweredUser = Boolean(lastMessage && lastMessage.role === 'user');
+
+      // 1. Capture history BEFORE adding the new user message, excluding any trailing unanswered user turn
+      const currentHistory = buildHistory(
+        isLastUnansweredUser ? currentMessages.slice(0, -1) : currentMessages,
+      );
 
       // 2. Optimistic user message and assistant placeholder
       const userMessage: ChatMessage = {
@@ -188,11 +214,29 @@ export function useRepositoryChat(
         isStreaming: true,
       };
 
-      // 3. Update state synchronously — pure state update, NO API calls inside updater
-      setConversations((prev) => ({
-        ...prev,
-        [repositoryId]: [...(prev[repositoryId] ?? []), userMessage, assistantPlaceholder],
-      }));
+      // 3. Update state synchronously — pure state update, NO API calls inside updater.
+      // If retrying the same unanswered question, preserve the user bubble and append the assistant placeholder.
+      setConversations((prev) => {
+        const existing = prev[repositoryId] ?? [];
+        const last = existing[existing.length - 1];
+        if (last && last.role === 'user') {
+          if (last.content === trimmed) {
+            return {
+              ...prev,
+              [repositoryId]: [...existing, assistantPlaceholder],
+            };
+          }
+          return {
+            ...prev,
+            [repositoryId]: [...existing.slice(0, -1), userMessage, assistantPlaceholder],
+          };
+        }
+        return {
+          ...prev,
+          [repositoryId]: [...existing, userMessage, assistantPlaceholder],
+        };
+      });
+
       setPendingRepos((prev) => ({
         ...prev,
         [repositoryId]: true,
@@ -214,6 +258,7 @@ export function useRepositoryChat(
             return;
           }
           delete abortControllersRef.current[repositoryId];
+          delete abortReasonsRef.current[repositoryId];
 
           setConversations((prev) => {
             const repoMsgs = prev[repositoryId] ?? [];
@@ -238,7 +283,7 @@ export function useRepositoryChat(
           }));
         })
         .catch((err: unknown) => {
-          // Do not treat cancellation as an ordinary error
+          const reason = abortReasonsRef.current[repositoryId];
           const isCancelled =
             controller.signal.aborted ||
             axios.isCancel(err) ||
@@ -249,7 +294,7 @@ export function useRepositoryChat(
               (err as { message?: string }).message === 'canceled');
 
           if (isCancelled) {
-            // Remove the pending placeholder silently so no hanging bubble is left
+            // Remove the pending placeholder so no hanging bubble is left
             setConversations((prev) => {
               const repoMsgs = prev[repositoryId] ?? [];
               return {
@@ -264,6 +309,18 @@ export function useRepositoryChat(
                 [repositoryId]: false,
               }));
             }
+
+            // If cancelled due to repo switch, provide retryable error for the unanswered question
+            if (reason === 'repo_switch') {
+              delete abortReasonsRef.current[repositoryId];
+              setErrorMap((prev) => ({
+                ...prev,
+                [repositoryId]:
+                  'Request was interrupted because you switched repositories. Click Retry to continue.',
+              }));
+            } else {
+              delete abortReasonsRef.current[repositoryId];
+            }
             return;
           }
 
@@ -272,6 +329,7 @@ export function useRepositoryChat(
             return;
           }
           delete abortControllersRef.current[repositoryId];
+          delete abortReasonsRef.current[repositoryId];
 
           const message =
             err instanceof Error
@@ -306,6 +364,7 @@ export function useRepositoryChat(
     if (!repositoryId) return;
 
     if (abortControllersRef.current[repositoryId]) {
+      abortReasonsRef.current[repositoryId] = 'clear';
       abortControllersRef.current[repositoryId].abort();
       delete abortControllersRef.current[repositoryId];
     }

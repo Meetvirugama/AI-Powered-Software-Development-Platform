@@ -66,6 +66,49 @@ import type {
 
 const SYNC_POLL_INTERVAL_MS = 3000;
 
+/**
+ * Normalize a repository file path for consistent matching across platforms:
+ * - Trims leading and trailing whitespace
+ * - Converts backslashes to forward slashes
+ * - Strips leading relative prefixes ('./' or '/')
+ * - Normalizes to lowercase for case-insensitive lookup
+ */
+function normalizeFilePath(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .toLowerCase();
+}
+
+/**
+ * Find a repository file matching the requested path.
+ * Searches for an exact normalized path match first, and falls back to
+ * a suffix match at path boundaries only if no exact match is found.
+ *
+ * @param files Array of loaded repository files
+ * @param requestedPath Path requested via query parameter or cited source reference
+ * @returns The matching RepositoryFile or undefined
+ */
+function findMatchingRepositoryFile(
+  files: RepositoryFile[],
+  requestedPath: string | null | undefined,
+): RepositoryFile | undefined {
+  if (!requestedPath || !files || files.length === 0) return undefined;
+  const targetNorm = normalizeFilePath(requestedPath);
+  if (!targetNorm) return undefined;
+
+  // 1. Exact normalized path match has strict priority
+  const exact = files.find((f) => normalizeFilePath(f.path) === targetNorm);
+  if (exact) return exact;
+
+  // 2. Suffix match at path segment boundary only if no exact match exists
+  return files.find((f) => {
+    const fileNorm = normalizeFilePath(f.path);
+    return fileNorm.endsWith('/' + targetNorm) || targetNorm.endsWith('/' + fileNorm);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Repository Detail Page (Code Intelligence Workbench)
 // ---------------------------------------------------------------------------
@@ -214,18 +257,16 @@ export function RepositoryDetail() {
     isError: depsError,
   } = useRepositoryDependencies(id, { enabled: isReady });
 
-  // Check if cited file from query parameters is unavailable in indexed files
+  // Check if cited file from query parameters is unavailable in indexed files.
+  // A file is only reported unavailable when the loaded file list is complete.
   const citedFileUnavailable = useMemo(() => {
     if (!fileParam || !filesData?.items || filesLoading) return null;
-    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    const targetNorm = normalize(fileParam);
-    const exists = filesData.items.some(
-      (f) =>
-        normalize(f.path) === targetNorm ||
-        normalize(f.path).endsWith('/' + targetNorm) ||
-        targetNorm.endsWith('/' + normalize(f.path))
-    );
-    return exists ? null : fileParam;
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (matching) return null;
+
+    // Only report unavailable if the loaded file list is known to be complete
+    const isListComplete = (filesData.total ?? filesData.items.length) <= filesData.items.length;
+    return isListComplete ? fileParam : null;
   }, [fileParam, filesData, filesLoading]);
 
   // Deep-linked cited source reference computed declaratively from searchParams
@@ -236,14 +277,7 @@ export function RepositoryDetail() {
     const end = endParam ? parseInt(endParam, 10) : start;
     const validEnd = !isNaN(end) && end >= start ? end : start;
 
-    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    const targetNorm = normalize(fileParam);
-    const matching = filesData.items.find(
-      (f) =>
-        normalize(f.path) === targetNorm ||
-        normalize(f.path).endsWith('/' + targetNorm) ||
-        targetNorm.endsWith('/' + normalize(f.path))
-    );
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
     if (!matching) return null;
 
     return {
@@ -262,15 +296,10 @@ export function RepositoryDetail() {
   const selectedFile = useMemo(() => {
     if (userSelectedFile) return userSelectedFile;
     if (fileParam && filesData?.items) {
-      const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-      const targetNorm = normalize(fileParam);
-      const matching = filesData.items.find(
-        (f) =>
-          normalize(f.path) === targetNorm ||
-          normalize(f.path).endsWith('/' + targetNorm) ||
-          targetNorm.endsWith('/' + normalize(f.path))
-      );
+      const matching = findMatchingRepositoryFile(filesData.items, fileParam);
       if (matching) return matching;
+      // If a cited file was requested but not found in the loaded files, do not select an unrelated file
+      return null;
     }
     // If a deep-linked file was cited but is unavailable, DO NOT select an unrelated file as though it matched
     if (citedFileUnavailable) return null;
@@ -483,11 +512,10 @@ export function RepositoryDetail() {
       return;
     }
 
-    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    const targetNorm = normalize(source.file_path);
+    const targetNorm = normalizeFilePath(source.file_path);
 
     // If currently selected file matches
-    if (selectedFile && normalize(selectedFile.path) === targetNorm) {
+    if (selectedFile && normalizeFilePath(selectedFile.path) === targetNorm) {
       setUserHighlightedSource({
         ...source,
         file_path: selectedFile.path,
@@ -497,12 +525,7 @@ export function RepositoryDetail() {
 
     // If cited reference points to a different file in the repository, navigate to it
     if (filesData?.items) {
-      const matchingFile = filesData.items.find(
-        (f) =>
-          normalize(f.path) === targetNorm ||
-          normalize(f.path).endsWith('/' + targetNorm) ||
-          targetNorm.endsWith('/' + normalize(f.path))
-      );
+      const matchingFile = findMatchingRepositoryFile(filesData.items, source.file_path);
       if (matchingFile) {
         setUserSelectedFile(matchingFile);
         setUserHighlightedSource({
@@ -1040,6 +1063,19 @@ export function RepositoryDetail() {
                         <h4 className="text-sm font-semibold text-foreground">Cited File Unavailable</h4>
                         <p className="text-xs text-muted-foreground mt-1 break-all">
                           The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{citedFileUnavailable}</code> was not found in the indexed repository files.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          Please select an available file from the explorer tree on the left.
+                        </p>
+                      </div>
+                    </div>
+                  ) : fileParam && !filesLoading ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-6 max-w-md">
+                        <FileCode className="h-8 w-8 mb-2 mx-auto text-blue-400" />
+                        <h4 className="text-sm font-semibold text-foreground">Cited File Not in Loaded Preview</h4>
+                        <p className="text-xs text-muted-foreground mt-1 break-all">
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{fileParam}</code> was not found in the first {filesData?.items?.length ?? 0} loaded files (total: {filesData?.total ?? 'unknown'}).
                         </p>
                         <p className="text-[11px] text-muted-foreground mt-2">
                           Please select an available file from the explorer tree on the left.

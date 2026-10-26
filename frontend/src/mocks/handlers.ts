@@ -504,14 +504,12 @@ export const handlers = [
   //   Request:  { question: string (1-4000 chars, non-whitespace), history: ChatHistoryMessage[] (max 50) }
   //   Response: RepositoryAnswer { answer: string, sources: SourceReference[], confidence: 'high' | 'medium' | 'low' }
   http.post(`${BASE}/repositories/:id/chat`, /**
-   * Return canned answers, citations, and confidence for known mock repositories
-   * or the demo UUID 11111111-1111-1111-1111-111111111111; otherwise return 404.
-   * Invalid JSON, a missing/non-string/blank question, more than 4000 UTF-16 code
-   * units before trimming, or an array history longer than 50 produce 422.
-   * History entries and non-array history are not validated or used in answers.
-   * After validation, questions containing `503` or case-insensitive `unavailable`
-   * produce retryable 503 responses; otherwise `500` or case-insensitive
-   * `server error` produce non-retryable 500 responses.
+   * Authoritative repository-scoped chat handler.
+   * Validates repository existence (404 for unknown repos except demo UUID 11111111-1111-1111-1111-111111111111).
+   * Validates question (1-4000 Unicode code points, non-whitespace) and history (array of up to 50
+   * valid ChatHistoryMessage objects, each with role 'user'|'assistant' and content up to 20,000 code points).
+   * Returns retryable 503 for '503' or 'unavailable', and 500 for '500', 'server error', or 'fail'.
+   * All cited source references correspond strictly to selectable files in MOCK_FILES.
    */ async ({ params, request }) => {
     const { id } = params;
 
@@ -563,8 +561,8 @@ export const handlers = [
       );
     }
 
-    // Question length validation (1 - 4000 chars)
-    if (question.length > 4000) {
+    // Question length validation (1 - 4000 Unicode code points)
+    if (Array.from(question).length > 4000) {
       return HttpResponse.json(
         {
           error: {
@@ -577,18 +575,33 @@ export const handlers = [
       );
     }
 
-    // History validation (max 50 messages)
-    if (Array.isArray(body?.history) && body.history.length > 50) {
-      return HttpResponse.json(
-        {
-          error: {
-            code: 'INVALID_REQUEST',
-            message: 'history exceeds maximum length of 50 messages',
-            retryable: false,
-          },
-        },
-        { status: 422 },
+    // History validation: optional, but if present must be array of <= 50 valid ChatHistoryMessage objects
+    const history = body?.history;
+    const isValidHistoryMessage = (message: unknown): boolean => {
+      if (typeof message !== 'object' || message === null) return false;
+      const { role, content } = message as { role?: unknown; content?: unknown };
+      return (
+        (role === 'user' || role === 'assistant') &&
+        typeof content === 'string' &&
+        content.trim().length > 0 &&
+        Array.from(content).length <= 20000
       );
+    };
+
+    if (history !== undefined) {
+      if (!Array.isArray(history) || history.length > 50 || !history.every(isValidHistoryMessage)) {
+        return HttpResponse.json(
+          {
+            error: {
+              code: 'INVALID_REQUEST',
+              message:
+                'history must be an array of at most 50 messages with role "user" or "assistant" and non-empty content (up to 20,000 code points)',
+              retryable: false,
+            },
+          },
+          { status: 422 },
+        );
+      }
     }
 
     // Simulated 503 Service Unavailable scenario
@@ -605,75 +618,94 @@ export const handlers = [
       );
     }
 
-    // Simulated 500 Server Error scenario
-    if (trimmedQuestion.includes('500') || trimmedQuestion.toLowerCase().includes('server error')) {
+    // Simulated 500 Server Error scenario (including "fail", "500", "server error")
+    if (
+      trimmedQuestion.includes('500') ||
+      trimmedQuestion.toLowerCase().includes('server error') ||
+      trimmedQuestion.toLowerCase().includes('fail')
+    ) {
       return HttpResponse.json(
         {
           error: {
-            code: 'INTERNAL_ERROR',
-            message: 'An internal server error occurred while generating the answer.',
-            retryable: false,
+            code: 'CHAT_ERROR',
+            message: 'The assistant encountered an error processing your question.',
+            retryable: true,
           },
         },
         { status: 500 },
       );
     }
 
-    // Grounded mock responses matching RepositoryAnswer shape
+    // Grounded mock responses matching RepositoryAnswer shape and backed by MOCK_FILES
     const q = trimmedQuestion.toLowerCase();
-    let answer = `Based on the repository source files, the project uses FastAPI for backend services and React with TypeScript for the frontend client interface.`;
+    const repoName = repo?.name ?? 'this repository';
+
+    let answer = `In ${repoName}, application bootstrapping and FastAPI server entry points are configured in \`src/main.py\`. Documentation and project overview can be found in \`README.md\`.`;
     let sources = [
       {
-        file: 'backend/app/main.py',
+        file: 'src/main.py',
         start_line: 1,
-        end_line: 20,
-        symbol: 'app',
+        end_line: 18,
+        symbol: 'health_check',
       },
       {
-        file: 'frontend/src/App.tsx',
-        start_line: 15,
-        end_line: 45,
-        symbol: 'App',
+        file: 'README.md',
+        start_line: 1,
+        end_line: 12,
+        symbol: null,
       },
     ];
     let confidence: 'high' | 'medium' | 'low' = 'high';
 
-    if (q.includes('auth') || q.includes('login') || q.includes('token') || q.includes('cookie')) {
-      answer = `Authentication is managed via HTTP-only session cookies and GitHub OAuth. In \`backend/app/api/v1/auth.py\`, the \`/auth/callback\` endpoint issues secure session cookies, while client requests authenticate automatically using \`withCredentials: true\`.`;
+    if (
+      q.includes('auth') ||
+      q.includes('login') ||
+      q.includes('token') ||
+      q.includes('cookie') ||
+      q.includes('route') ||
+      q.includes('item')
+    ) {
+      answer = `API routing and request handling are implemented in \`src/api/routes.py\`. Endpoints define path handlers for listing and creating items, with dependency injection and error management.`;
       sources = [
         {
-          file: 'backend/app/api/v1/auth.py',
-          start_line: 25,
-          end_line: 60,
-          symbol: 'auth_callback',
+          file: 'src/api/routes.py',
+          start_line: 1,
+          end_line: 16,
+          symbol: 'create_item',
         },
         {
-          file: 'frontend/src/services/api.ts',
-          start_line: 10,
-          end_line: 25,
-          symbol: 'apiClient',
-        },
-      ];
-      confidence = 'high';
-    } else if (q.includes('bug') || q.includes('scan') || q.includes('detect')) {
-      answer = `The bug detection pipeline combines static AST heuristics with AI analysis in \`backend/app/services/bug_detector.py\`. Scans are initiated per-file or symbol and return categorized findings with code snippets.`;
-      sources = [
-        {
-          file: 'backend/app/services/bug_detector.py',
-          start_line: 40,
-          end_line: 85,
-          symbol: 'detect_bugs_in_file',
+          file: 'src/main.py',
+          start_line: 4,
+          end_line: 8,
+          symbol: null,
         },
       ];
       confidence = 'high';
-    } else if (q.includes('test') || q.includes('pytest') || q.includes('generate')) {
-      answer = `Test generation automatically identifies target framework conventions (e.g. pytest or Vitest) and drafts isolated test suites covering normal, edge, and failure scenarios.`;
+    } else if (q.includes('bug') || q.includes('scan') || q.includes('detect') || q.includes('error')) {
+      answer = `Validation rules and exception handling are enforced in \`src/api/routes.py\`. Missing or malformed request payloads trigger explicit HTTP exceptions.`;
       sources = [
         {
-          file: 'tests/test_services.py',
+          file: 'src/api/routes.py',
           start_line: 10,
-          end_line: 55,
-          symbol: 'test_pipeline',
+          end_line: 14,
+          symbol: 'create_item',
+        },
+      ];
+      confidence = 'high';
+    } else if (q.includes('test') || q.includes('pytest') || q.includes('generate') || q.includes('dep')) {
+      answer = `Project dependencies including FastAPI, Pydantic, and pytest are pinned in \`requirements.txt\`. The main application entry point is in \`src/main.py\`.`;
+      sources = [
+        {
+          file: 'requirements.txt',
+          start_line: 1,
+          end_line: 6,
+          symbol: null,
+        },
+        {
+          file: 'src/main.py',
+          start_line: 8,
+          end_line: 14,
+          symbol: 'health_check',
         },
       ];
       confidence = 'medium';
@@ -685,6 +717,7 @@ export const handlers = [
       confidence,
     });
   }),
+
 
 
   // GET /api/v1/repositories/:id/files — repository file tree (Day 5).
@@ -913,88 +946,7 @@ export const handlers = [
     );
   }),
 
-  // -------------------------------------------------------------------------
-  // Chat — Day 7
-  //
-  // POST /api/v1/repositories/:id/chat
-  //
-  // Matches the real backend contract:
-  //   Request:  { question: string, history: { role, content }[] }
-  //   Response: { answer: string, sources: SourceReference[], confidence: "high"|"medium"|"low" }
-  //
-  // Source fields match backend SourceReference (backend/ai/schemas/output.py):
-  //   { file: string, start_line: number, end_line: number, symbol?: string | null }
-  //
-  // Error simulation: include "fail" in the question body.
-  // -------------------------------------------------------------------------
 
-  http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
-    const { id } = params as { id: string };
-
-    // Parse request body — real contract: { question, history }
-    let question = '';
-    try {
-      const body = await request.json() as { question?: string; history?: unknown[] };
-      question = body?.question ?? '';
-    } catch {
-      // Malformed body — treat as empty question.
-    }
-
-    // Force-error simulation: include "fail" in the question.
-    if (question.toLowerCase().includes('fail')) {
-      return HttpResponse.json(
-        {
-          error: {
-            code: 'CHAT_ERROR',
-            message: 'The assistant encountered an error processing your question.',
-            retryable: true,
-          },
-        },
-        { status: 500 },
-      );
-    }
-
-    // Deterministic mock response based on repository ID.
-    const repoName =
-      MOCK_REPOSITORIES.find((r) => r.id === id)?.name ?? 'this repository';
-
-    const mockAnswer =
-      `In ${repoName}, authentication is handled through the backend authentication module. ` +
-      `The \`/api/v1/auth\` route group manages OAuth login via GitHub, ` +
-      `token validation, and session management using HTTP-only cookies. ` +
-      `The \`AuthService\` class in \`backend/app/services/auth_service.py\` ` +
-      `encapsulates the JWT creation and verification logic. ` +
-      `Route-level protection is enforced through a FastAPI dependency ` +
-      `injected into each protected endpoint.`;
-
-    // Sources use the REAL backend field names: file, start_line, end_line, symbol.
-    const mockSources = [
-      {
-        file: 'backend/app/api/v1/auth.py',
-        start_line: 1,
-        end_line: 45,
-        symbol: 'router',
-      },
-      {
-        file: 'backend/app/services/auth_service.py',
-        start_line: 22,
-        end_line: 68,
-        symbol: 'AuthService',
-      },
-      {
-        file: 'backend/app/core/dependencies.py',
-        start_line: 10,
-        end_line: 30,
-        symbol: 'get_current_user',
-      },
-    ];
-
-    return HttpResponse.json({
-      answer: mockAnswer,
-      sources: mockSources,
-      confidence: 'high',
-    });
-  }),
 
   // -------------------------------------------------------------------------
   // Feature 1: Code Explanation (Week 2 Day 2)
