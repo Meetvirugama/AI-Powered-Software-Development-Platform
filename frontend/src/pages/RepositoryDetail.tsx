@@ -70,6 +70,19 @@ const SYNC_POLL_INTERVAL_MS = 3000;
 // Repository Detail Page (Code Intelligence Workbench)
 // ---------------------------------------------------------------------------
 
+/**
+ * Render the route's repository explorer and analysis workbench.
+ * The `file` query parameter selects a matching path among the first 100 fetched
+ * files unless the user has selected a file. Matching ignores case, normalizes
+ * separators and a leading `/` or `./`, and accepts suffixes at path boundaries.
+ * Without a user selection, an unmatched citation shows an unavailable-file
+ * message after files load; no `file` defaults to README.md or the first file.
+ *
+ * With a matching file, `start` supplies a positive, 1-based line number parsed
+ * as an integer; `end` is inclusive and defaults to start if absent, invalid, or
+ * earlier. `symbol` optionally labels the citation. Explicit highlight selection
+ * or clearing takes precedence over this query-derived highlight.
+ */
 export function RepositoryDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -459,6 +472,11 @@ export function RepositoryDetail() {
     }
   }
 
+  /**
+   * Highlight a citation in the selected file or switch to the first matching
+   * loaded file, storing its actual path. Missing or unmatched paths clear the
+   * highlight without changing the selected file or restoring the URL highlight.
+   */
   function handleSelectSourceReference(source: SourceReference) {
     if (!source.file_path) {
       setUserHighlightedSource(null);

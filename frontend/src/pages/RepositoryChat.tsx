@@ -25,6 +25,11 @@ import type { ChatMessage, ChatSource, ChatConfidence } from '../types/api';
 // Page
 // ---------------------------------------------------------------------------
 
+/**
+ * Render chat for the route's repository, with cited sources linked to explorer
+ * files and line ranges. A nonempty `file` query parameter prefills and focuses
+ * the composer on arrival or change; removing it leaves the draft unchanged.
+ */
 export function RepositoryChat() {
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
@@ -517,10 +522,12 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
+/** Render code with a copy action and temporary success or failure feedback. */
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
+  /** Copy the code, catching clipboard failures and showing feedback in the button. */
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);

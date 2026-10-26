@@ -88,6 +88,16 @@ export interface UseRepositoryChatReturn {
 // Hook
 // ---------------------------------------------------------------------------
 
+/**
+ * Manage separate, in-memory conversations for each repository in this hook instance.
+ * Switching repositories preserves messages and errors but aborts the previous
+ * repository's request; unmounting aborts all active requests.
+ *
+ * @param repositoryId Repository to display, or undefined for an empty, inactive view.
+ * @returns Current repository's messages, pending status, error, and send/reset actions.
+ * Request failures remove the assistant placeholder and populate error; cancellation
+ * removes the placeholder silently. The submitted user message remains in either case.
+ */
 export function useRepositoryChat(
   repositoryId: string | undefined,
 ): UseRepositoryChatReturn {
@@ -136,6 +146,11 @@ export function useRepositoryChat(
     };
   }, []);
 
+  /**
+   * Submit a trimmed question with up to 50 prior completed messages, immediately
+   * adding the user message and a pending assistant placeholder. Ignore blank
+   * questions, a missing repository ID, or sends while this view is pending.
+   */
   const sendMessage = useCallback(
     (question: string) => {
       const trimmed = question.trim();
@@ -286,6 +301,7 @@ export function useRepositoryChat(
     [conversations, isPending, repositoryId],
   );
 
+  /** Abort the current repository's request and clear its messages, error, and pending status. */
   const clearConversation = useCallback(() => {
     if (!repositoryId) return;
 

@@ -503,7 +503,16 @@ export const handlers = [
   // Matches backend schema:
   //   Request:  { question: string (1-4000 chars, non-whitespace), history: ChatHistoryMessage[] (max 50) }
   //   Response: RepositoryAnswer { answer: string, sources: SourceReference[], confidence: 'high' | 'medium' | 'low' }
-  http.post(`${BASE}/repositories/:id/chat`, async ({ params, request }) => {
+  http.post(`${BASE}/repositories/:id/chat`, /**
+   * Return canned answers, citations, and confidence for known mock repositories
+   * or the demo UUID 11111111-1111-1111-1111-111111111111; otherwise return 404.
+   * Invalid JSON, a missing/non-string/blank question, more than 4000 UTF-16 code
+   * units before trimming, or an array history longer than 50 produce 422.
+   * History entries and non-array history are not validated or used in answers.
+   * After validation, questions containing `503` or case-insensitive `unavailable`
+   * produce retryable 503 responses; otherwise `500` or case-insensitive
+   * `server error` produce non-retryable 500 responses.
+   */ async ({ params, request }) => {
     const { id } = params;
 
     // Route validation: repository existence

@@ -41,8 +41,12 @@ import type { RepositoryChatRequest, RepositoryChatResponse } from '../types/api
  * POST /api/v1/repositories/{repositoryId}/chat
  *
  * @param repositoryId  Internal UUID of the target repository (from route params).
- * @param payload       The validated request payload (question + history).
+ * @param payload       Question and history, forwarded without local validation.
+ * @param signal        Optional signal to cancel the request.
  * @returns             RepositoryChatResponse with answer, sources, and confidence.
+ * @throws              Rejects with the shared client's normalized ApiError on
+ *                      HTTP, network, timeout, or cancellation failures. A 401
+ *                      may also redirect the browser to the login page.
  *
  * History note:
  *   The caller (useRepositoryChat hook) is responsible for building the history
