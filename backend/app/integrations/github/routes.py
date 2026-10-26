@@ -26,8 +26,11 @@ from app.core.errors import APIError, ErrorCode
 from app.integrations.github.schemas import (
     CommitDetail,
     CommitListResponse,
+    CommitStagingRequest,
+    CommitStagingResponse,
     FileContentResponse,
     FileTreeResponse,
+    PRMetadata,
     PullRequestDiffResponse,
     PullRequestInfo,
 )
@@ -236,4 +239,100 @@ async def create_agent_branch_endpoint(
         "base_sha": info.base_sha,
         "status": info.status,
     }
+
+
+# ---------------------------------------------------------------------------
+# Day 4: Commit Staging
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/commit",
+    response_model=CommitStagingResponse,
+    summary="Stage and commit agent workspace changes",
+    description="Creates a local Git commit on the agent branch in the workspace. No remote push is executed.",
+)
+async def commit_workspace_changes_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: CommitStagingRequest,
+    db: Session = Depends(get_db),
+):
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    result = await service.commit(
+        workspace_path=payload.workspace_path,
+        commit_message=payload.commit_message,
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+        files=payload.files,
+        author_name=payload.author_name,
+        author_email=payload.author_email,
+        allow_empty=payload.allow_empty,
+    )
+    return CommitStagingResponse(
+        commit_sha=result.commit_sha,
+        branch=result.branch,
+        message=result.message,
+        files_changed=result.files_changed,
+        insertions=result.insertions,
+        deletions=result.deletions,
+        pushed=result.pushed,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Day 5: PR Metadata Preparation
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/pr-metadata",
+    response_model=PRMetadata,
+    summary="Prepare and persist PR metadata",
+    description="Collects and stores branch, commit, test, and verification summaries required for Week 3 PR opening.",
+)
+def prepare_pr_metadata_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: PRMetadata,
+    db: Session = Depends(get_db),
+):
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    return service.prepare_pr_metadata(
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        branch=payload.branch,
+        base_branch=payload.base_branch,
+        changed_files=payload.changed_files,
+        commit_message=payload.commit_message,
+        test_summary=payload.test_summary,
+        verification_summary=payload.verification_summary,
+        user_id=_request_user_id(request),
+        status=payload.status,
+    )
+
+
+@router.get(
+    "/{repository_id}/source/pr-metadata/{task_id}",
+    response_model=PRMetadata,
+    summary="Retrieve prepared PR metadata",
+    description="Gets stored PR metadata for a specific agent task.",
+)
+def get_pr_metadata_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    return service.get_pr_metadata(
+        task_id=task_id,
+        user_id=_request_user_id(request),
+    )
+
 

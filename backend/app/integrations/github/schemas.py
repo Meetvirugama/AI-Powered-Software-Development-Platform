@@ -13,6 +13,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -273,3 +274,49 @@ class PullRequestListRequest(BaseModel):
     state: str = Field(default="open", pattern="^(open|closed|all)$")
     per_page: int = Field(default=30, ge=1, le=100)
     page: int = Field(default=1, ge=1)
+
+
+# ---------------------------------------------------------------------------
+# Day 4: Commit Staging
+# ---------------------------------------------------------------------------
+
+class CommitStagingRequest(BaseModel):
+    """Request to stage workspace agent changes into a local Git commit."""
+    workspace_path: str = Field(..., description="Absolute or relative path to agent workspace")
+    commit_message: str = Field(..., min_length=1, description="Commit message")
+    task_id: Optional[UUID | str] = Field(default=None, description="Task ID for branch validation")
+    files: Optional[list[str]] = Field(default=None, description="Specific relative file paths to stage")
+    author_name: str = Field(default="Agent", description="Git author name")
+    author_email: str = Field(default="agent@ai-platform.local", description="Git author email")
+    allow_empty: bool = Field(default=False, description="Allow empty commit if no changes exist")
+
+
+class CommitStagingResponse(BaseModel):
+    """Result of a local workspace commit."""
+    commit_sha: str
+    branch: str
+    message: str
+    files_changed: list[str]
+    insertions: int = 0
+    deletions: int = 0
+    pushed: bool = False  # Always False in Week 2
+
+
+# ---------------------------------------------------------------------------
+# Day 5: PR Metadata Preparation
+# ---------------------------------------------------------------------------
+
+class PRMetadata(BaseModel):
+    """PR Metadata collected for Week 3 GitHub PR opening (week2.md Day 5)."""
+    task_id: UUID
+    branch: str
+    base_branch: str = "main"
+    changed_files: list[str]
+    commit_message: str
+    test_summary: str
+    verification_summary: str
+    repository_id: Optional[UUID] = None
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    status: str = "prepared"
+
