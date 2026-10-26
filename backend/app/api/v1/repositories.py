@@ -153,6 +153,8 @@ async def search_repository(
     db: Session = Depends(get_db),
 ) -> RepositorySearchResponse:
     """Search only code indexed for a repository the authenticated user owns."""
+    from app.core.secret_redaction import redact
+
     _owned_repository(repository_id, request, db)
     pipeline = get_rag_pipeline(request)
     chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
@@ -164,7 +166,7 @@ async def search_repository(
                 file_path=chunk.file_path,
                 start_line=chunk.start_line,
                 end_line=chunk.end_line,
-                content=chunk.content,
+                content=redact(chunk.content),
                 score=chunk.score,
             )
             for chunk in chunks
@@ -196,6 +198,8 @@ def get_file_content(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RepositoryFileContentResponse:
+    from app.core.secret_redaction import redact
+
     _owned_repository(repository_id, request, db)
     file_record = (
         db.query(RepositoryFile)
@@ -211,7 +215,7 @@ def get_file_content(
         .order_by(CodeChunk.start_line)
         .all()
     )
-    content = "\n".join(chunk.content for chunk in chunks)
+    content = redact("\n".join(chunk.content for chunk in chunks))
 
     symbols = (
         db.query(CodeSymbol)

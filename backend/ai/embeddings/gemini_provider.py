@@ -42,6 +42,12 @@ _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
+def _redact_key(text: str, key: str) -> str:
+    if not text or not key:
+        return text
+    return text.replace(key, "[REDACTED]")
+
+
 class GeminiEmbeddingProvider(EmbeddingProvider):
     """
     Concrete EmbeddingProvider for Google Gemini Embeddings API.
@@ -201,21 +207,21 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
                 if response.status_code in {401, 403}:
                     raise AuthenticationError(
-                        f"Gemini authentication failed (HTTP {response.status_code}): {response.text[:200]}",
+                        f"Gemini authentication failed (HTTP {response.status_code}): {_redact_key(response.text[:200], api_key)}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )
 
                 if response.status_code == 400:
                     raise InvalidRequestError(
-                        f"Gemini 400 Bad Request: {response.text[:200]}",
+                        f"Gemini 400 Bad Request: {_redact_key(response.text[:200], api_key)}",
                         status_code=400,
                         provider=self.provider_name,
                     )
 
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     last_error = ProviderUnavailableError(
-                        f"Gemini embedding temporary failure (HTTP {response.status_code}): {response.text[:200]}",
+                        f"Gemini embedding temporary failure (HTTP {response.status_code}): {_redact_key(response.text[:200], api_key)}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )

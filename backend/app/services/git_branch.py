@@ -93,14 +93,29 @@ class GitBranchService:
         if self._client is not None:
             return self._client
 
-        stmt = select(GitHubInstallation).where(
-            GitHubInstallation.installation_id == repo.installation_id,
-        )
-        installation = self._db.scalars(stmt).first()
-        if not installation or not installation.access_token:
-            token = await GitHubClient.get_installation_token(repo.installation_id)
+        installation = None
+        if hasattr(self._db, "get"):
+            try:
+                installation = self._db.get(GitHubInstallation, repo.installation_id)
+            except Exception:
+                installation = None
+
+        if installation is None:
+            stmt = select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == str(repo.installation_id),
+            )
+            installation = self._db.scalars(stmt).first()
+
+        access_token = getattr(installation, "access_token", None) if installation else None
+        if access_token:
+            token = access_token
         else:
-            token = installation.access_token
+            ext_inst_id = (
+                installation.installation_id
+                if installation is not None and getattr(installation, "installation_id", None)
+                else str(repo.installation_id)
+            )
+            token = await GitHubClient.get_installation_token(str(ext_inst_id))
 
         return GitHubClient(token)
 
