@@ -66,6 +66,13 @@ def upgrade() -> None:
         ["repository_id", "source_revision"],
         unique=False,
     )
+    op.create_index(
+        "ix_analysis_runs_repo_target_path",
+        "analysis_runs",
+        ["repository_id", "target_path"],
+        unique=False,
+    )
+
 
     # 2. analysis_findings table
     op.create_table(
@@ -132,6 +139,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_analysis_findings_analysis_run_id"), table_name="analysis_findings")
     op.drop_table("analysis_findings")
 
+    op.drop_index("ix_analysis_runs_repo_target_path", table_name="analysis_runs")
     op.drop_index("ix_analysis_runs_repo_revision", table_name="analysis_runs")
     op.drop_index("ix_analysis_runs_repo_feature_status", table_name="analysis_runs")
     op.drop_index("ix_analysis_runs_repo_created", table_name="analysis_runs")

@@ -204,6 +204,21 @@ class GitHubSourceService:
         - Handles deleted or inaccessible files with descriptive revision errors.
         - Prevents cached content from silently representing a different revision.
         """
+        from app.core.input_security import require_safe_repo_path
+
+        safe_path = require_safe_repo_path(request.path)
+        request.path = safe_path
+        if (
+            request.start_line is not None
+            and request.end_line is not None
+            and request.end_line < request.start_line
+        ):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "end_line must be greater than or equal to start_line.",
+            )
+
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
         ref = request.ref or repository.default_branch or "main"
@@ -458,6 +473,15 @@ class GitHubSourceService:
         sha: str,
     ) -> CommitDetail:
         """Get full commit detail including file changes."""
+        import re
+
+        clean_sha = (sha or "").strip()
+        if not re.match(r"^[A-Za-z0-9._-]{4,64}$", clean_sha) or ".." in clean_sha:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Invalid commit SHA or ref format.",
+            )
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 
@@ -465,14 +489,14 @@ class GitHubSourceService:
             data = await client.get_commit(
                 repository.owner,
                 repository.name,
-                sha,
+                clean_sha,
             )
         except GitHubAPIError as exc:
             if exc.status_code == 404:
                 raise APIError(
                     404,
                     ErrorCode.NOT_FOUND,
-                    f"Commit not found: {sha}",
+                    f"Commit not found: {clean_sha}",
                 ) from exc
             raise APIError(
                 502,
@@ -492,6 +516,12 @@ class GitHubSourceService:
         pr_number: int,
     ) -> PullRequestDiffResponse:
         """Retrieve the full diff for a pull request."""
+        if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number < 1:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Pull request number must be a positive integer.",
+            )
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 

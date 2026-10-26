@@ -1,5 +1,5 @@
 """
-Incremental Indexer — Hash-based change detection, symbol persistence, chunking, and embedding.
+Incremental Indexer — Hash-based change detection, symbol persistence, chunking, secret redaction, and embedding.
 
 Responsibilities:
 - Detects new and modified files using SHA-256 content hashes.
@@ -8,6 +8,7 @@ Responsibilities:
 - Persists extracted `CodeSymbol` rows into `code_symbols` BEFORE inserting `code_chunks`
   so foreign-key references (`code_chunks.symbol_id -> code_symbols.id`) and symbol queries succeed.
 - Splits modified files using `SymbolChunker` into syntax-aware or block-level chunks.
+- Redacts secrets (`[REDACTED]`) from chunk content before embedding and storing in `code_chunks` (W2-S1).
 - Embeds all generated code chunks via `EmbeddingService` with real 768-dimensional vectors.
 - Persists chunks with pgvector embeddings and JSON metadata.
 """
@@ -16,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import json
 import logging
 import os
@@ -26,6 +26,7 @@ from uuid import UUID
 
 from sqlalchemy import text
 
+from app.core.secret_redaction import redact
 from indexer.chunker import SymbolChunker
 from scanner.detector import LanguageDetector
 from scanner.extractor import SymbolExtractor
@@ -56,7 +57,7 @@ def _vec_to_pg_literal(vector: list[float]) -> str:
 class IncrementalIndexer:
     """
     Orchestrates repository incremental indexing:
-    detection → parsing → symbol persistence → symbol chunking → embedding → vector storage.
+    detection → parsing → symbol persistence → symbol chunking → secret redaction → embedding → vector storage.
     """
 
     def __init__(
@@ -75,7 +76,7 @@ class IncrementalIndexer:
     async def _execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         """Helper to run SQL across AsyncSession, sync Session, or sessionmaker."""
         if hasattr(self._db, "execute"):
-            if inspect.iscoroutinefunction(self._db.execute):
+            if asyncio.iscoroutinefunction(self._db.execute):
                 return await self._db.execute(stmt, params or {})
             return self._db.execute(stmt, params or {})
         else:
@@ -87,7 +88,7 @@ class IncrementalIndexer:
     async def _commit(self) -> None:
         """Helper to commit transactions."""
         if hasattr(self._db, "commit"):
-            if inspect.iscoroutinefunction(self._db.commit):
+            if asyncio.iscoroutinefunction(self._db.commit):
                 await self._db.commit()
             else:
                 self._db.commit()
@@ -104,7 +105,7 @@ class IncrementalIndexer:
         1. Fetch existing (path, content_hash) pairs from repository_files.
         2. Compare with newly scanned files.
         3. Skip unchanged files (hash match).
-        4. For changed/new files: delete old chunks & symbols, insert symbols, chunk symbols, embed, insert chunks.
+        4. For changed/new files: delete old chunks & symbols, insert symbols, chunk symbols, redact secrets, embed, insert chunks.
         """
         logger.info(
             "Starting incremental sync for repo %s with %d files",
@@ -251,7 +252,7 @@ class IncrementalIndexer:
                                 "kind": (sym.kind or "symbol")[:50],
                                 "start_line": max(1, int(sym.start_line or 1)),
                                 "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
-                                "signature": sym.signature,
+                                "signature": redact(sym.signature) if sym.signature else None,
                                 "parent_id": parent_uuid,
                             },
                         )
@@ -270,6 +271,10 @@ class IncrementalIndexer:
 
             if not chunks:
                 continue
+
+            # Security (W2-S1): Guarantee all chunk contents are redacted before embedding & DB storage
+            for c in chunks:
+                c.content = redact(c.content)
 
             # Embed the chunks
             chunk_texts = [c.content for c in chunks]

@@ -1,6 +1,7 @@
-"""Developer Intelligence Suite API endpoints (Week 2 — Day 1, Day 2 & Day 3).
+"""Developer Intelligence Suite API endpoints (Week 2 — Days 1 through 6).
 
-Owner: Yug — W2, Day 1–3 (API Foundation, Code Explanation & Dedicated Bug Detection)
+Owner: Yug — W2, Day 1–6 (API Foundation, Code Explanation, Bug Detection, Test Generation,
+       Standalone AI Code Review, Run History & OpenAPI Integration)
 
 Endpoints registered:
 - POST /api/v1/repositories/{repository_id}/explain
@@ -20,7 +21,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.llm.schemas import (
@@ -33,7 +34,7 @@ from ai.llm.schemas import (
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
-from app.core.secret_redaction import redact_obj
+from app.core.secret_redaction import redact, redact_obj
 from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.repositories.repository_repository import RepositoryRepository
@@ -54,6 +55,7 @@ from app.schemas.analysis import (
     TestGenerationRequest,
     TestGenerationResponse,
     TestGenerationResult,
+    normalize_analysis_feature_type,
 )
 from app.services.bug_detection_orchestrator import (
     BuiltinStaticBugScanner,
@@ -86,6 +88,60 @@ router = APIRouter(tags=["analysis"])
 
 
 # ---------------------------------------------------------------------------
+# OpenAPI Error Schemas & Standard Responses (Docs/week2.md §4.6 & §10)
+# ---------------------------------------------------------------------------
+
+class ErrorDetailSchema(BaseModel):
+    """Machine-readable error payload returned on all failure responses."""
+
+    code: str = Field(..., description="Machine-readable error code (e.g. UNAUTHORIZED, REPOSITORY_NOT_FOUND).")
+    message: str = Field(..., description="Human-readable, secret-redacted error description.")
+    retryable: bool = Field(default=False, description="True when the client may safely retry the request.")
+
+
+class ErrorResponseEnvelope(BaseModel):
+    """Standardized error envelope across all Developer Intelligence APIs."""
+
+    error: ErrorDetailSchema
+
+
+ANALYSIS_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    400: {
+        "model": ErrorResponseEnvelope,
+        "description": "Invalid request parameters, unsafe path traversal, out-of-bounds line range, or unsupported target/framework.",
+    },
+    401: {
+        "model": ErrorResponseEnvelope,
+        "description": "Missing, expired, or revoked authentication token.",
+    },
+    404: {
+        "model": ErrorResponseEnvelope,
+        "description": "Repository, target file, symbol, commit/PR, or analysis run not found or not owned by caller.",
+    },
+    413: {
+        "model": ErrorResponseEnvelope,
+        "description": "Target file exceeds the 1 MB analyzable size limit.",
+    },
+    422: {
+        "model": ErrorResponseEnvelope,
+        "description": "Request body or query parameter schema validation failed.",
+    },
+    429: {
+        "model": ErrorResponseEnvelope,
+        "description": "Per-user rate limit exceeded (20 requests/minute).",
+    },
+    500: {
+        "model": ErrorResponseEnvelope,
+        "description": "Analysis execution or structured AI output validation failed after bounded repair attempts.",
+    },
+    503: {
+        "model": ErrorResponseEnvelope,
+        "description": "AI analysis provider or required service is temporarily unavailable.",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Service Protocols (Published Day 1 Interfaces for Dev, Meet, Devu, Om)
 # ---------------------------------------------------------------------------
 
@@ -98,7 +154,7 @@ from ai.interfaces import (
 
 
 class AnalysisRunPersistenceProtocol(Protocol):
-    """Protocol implemented by Om's AnalysisRunRepository / service (Day 1–5)."""
+    """Protocol implemented by Om's AnalysisRunRepository / service (Day 1–6)."""
 
     def list_runs(
         self,
@@ -283,7 +339,13 @@ async def _invoke_service_method(
 @router.post(
     "/repositories/{repository_id}/explain",
     response_model=CodeExplanationResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Explain a file, symbol, or line range using repository context",
+    description=(
+        "Generate a structured, source-grounded explanation (`purpose`, `logic_flow`, `key_symbols`, "
+        "`inputs_and_outputs`, `dependencies`, `assumptions_and_limitations`, `sources`) for a file, "
+        "symbol, or 1-indexed inclusive line range in an authorized repository."
+    ),
 )
 async def explain_code(
     repository_id: UUID,
@@ -408,8 +470,6 @@ async def explain_code(
         revision=revision,
         explanation=grounded_explanation,
     )
-    # Security (W2 Day 2): the model may copy secrets from the source code into
-    # its explanation — redact before the result is returned or saved.
     response = CodeExplanationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
@@ -437,7 +497,13 @@ async def explain_code(
 @router.post(
     "/repositories/{repository_id}/detect-bugs",
     response_model=BugDetectionResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Detect potential bugs using static analysis and AI reasoning",
+    description=(
+        "Scan an authorized repository file, symbol, or line range using deterministic AST/static rules "
+        "and AI defect reasoning. Merges overlapping findings into `COMBINED`, redacts secret values, "
+        "and ranks findings by severity."
+    ),
 )
 async def detect_bugs(
     repository_id: UUID,
@@ -637,6 +703,7 @@ async def detect_bugs(
         ai_findings_count=ai_count,
         missing_context=merged_missing,
     )
+    response = BugDetectionResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
@@ -650,8 +717,8 @@ async def detect_bugs(
             target=response.target,
             revision=response.revision,
             result_payload=response.model_dump(mode="json"),
-            findings=[f.model_dump(mode="json") for f in ranked_findings],
-            findings_count=len(ranked_findings),
+            findings=[f.model_dump(mode="json") for f in response.findings],
+            findings_count=len(response.findings),
         )
 
     return response
@@ -664,7 +731,13 @@ async def detect_bugs(
 @router.post(
     "/repositories/{repository_id}/generate-tests",
     response_model=TestGenerationResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Generate framework-aware test files for a repository file or symbol",
+    description=(
+        "Detect the repository's configured test framework (`pytest`, `unittest`, or `jest`), "
+        "propose a safe convention-matching test file path, generate complete previewable test code "
+        "covering normal, edge_case, and failure_path scenarios, and validate syntax without executing code."
+    ),
 )
 async def generate_tests(
     repository_id: UUID,
@@ -731,6 +804,7 @@ async def generate_tests(
             )
         raise
     except Exception as exc:
+        safe_err = redact(str(exc))
         if payload.options.persist_run:
             record_analysis_run(
                 request.app.state,
@@ -742,9 +816,14 @@ async def generate_tests(
                 status="FAILED",
                 target=resolved.target,
                 revision=resolved.revision,
-                error_message=str(exc),
+                error_message=safe_err,
             )
-        raise
+        raise APIError(
+            500,
+            ErrorCode.ANALYSIS_FAILED,
+            "Test generation failed during execution.",
+            retryable=False,
+        ) from exc
 
     status_val = "COMPLETED"
     revision = resolved.revision
@@ -828,10 +907,11 @@ async def generate_tests(
         revision=revision,
         result=sanitized_result,
     )
+    response = TestGenerationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         payload_dict = response.model_dump(mode="json")
-        payload_dict["test_content"] = sanitized_result.test_content
+        payload_dict["test_content"] = response.result.test_content
         record_analysis_run(
             request.app.state,
             db,
@@ -843,8 +923,8 @@ async def generate_tests(
             target=response.target,
             revision=response.revision,
             result_payload=payload_dict,
-            test_output=sanitized_result.test_content,
-            findings_count=len(sanitized_result.covered_scenarios),
+            test_output=response.result.test_content,
+            findings_count=len(response.result.covered_scenarios),
         )
 
     return response
@@ -857,7 +937,13 @@ async def generate_tests(
 @router.post(
     "/repositories/{repository_id}/review",
     response_model=ReviewReportResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Run a standalone AI and static code review on a file, commit, PR, or diff",
+    description=(
+        "Execute a standalone code review across `correctness`, `security`, `performance`, "
+        "`reliability`, and `maintainability` for a single file, commit SHA, GitHub Pull Request, "
+        "or unified diff without starting an autonomous coding task."
+    ),
 )
 async def review_code(
     repository_id: UUID,
@@ -916,6 +1002,21 @@ async def review_code(
                 target=history_target,
                 revision=resolved.revision,
                 error_message=exc.message,
+            )
+        raise
+    except Exception as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=history_target,
+                revision=resolved.revision,
+                error_message=str(exc),
             )
         raise
 
@@ -1031,13 +1132,29 @@ async def review_code(
         explicit_risk_level=raw_report.risk_level,
     )
 
+    # Security (W2 Day 5–6): Never echo raw untrusted diff text back in response.target.diff
+    sanitized_target = resolved.target.model_copy(
+        update={
+            "diff": None,
+            "path": resolved.target.path
+            or (
+                resolved.modified_files[0].file_path
+                if len(resolved.modified_files) == 1
+                else None
+            ),
+            "base_revision": resolved.base_revision,
+            "head_revision": resolved.head_revision,
+        }
+    )
+
     response = ReviewReportResponse(
         run_id=run_id,
         repository_id=str(repository_id),
         status=status_val,
-        target=resolved.target,
+        target=sanitized_target,
         report=grounded_report,
     )
+    response = ReviewReportResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
@@ -1051,8 +1168,8 @@ async def review_code(
             target=history_target,
             revision=resolved.revision,
             result_payload=response.model_dump(mode="json"),
-            findings=[f.model_dump(mode="json") for f in merged_findings],
-            findings_count=len(merged_findings),
+            findings=[f.model_dump(mode="json") for f in response.report.findings],
+            findings_count=len(response.report.findings),
         )
 
     return response
@@ -1065,7 +1182,13 @@ async def review_code(
 @router.get(
     "/repositories/{repository_id}/analysis-runs",
     response_model=PaginatedAnalysisRunResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="List historical analysis runs for an authorized repository",
+    description=(
+        "Retrieve paginated historical analysis runs (`explain`, `detect_bugs`, `generate_tests`, `review`) "
+        "for a repository owned by the authenticated user. Supports filtering by `feature_type` "
+        "(including aliases `bugs` and `tests`), `status`, `target_path`, and `source_revision`."
+    ),
 )
 async def list_analysis_runs(
     repository_id: UUID,
@@ -1082,12 +1205,7 @@ async def list_analysis_runs(
     _owned_repository(repository_id, request, db)
     offset = (page - 1) * page_size
 
-    # Normalize feature_type aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests')
-    normalized_feature_type = feature_type
-    if feature_type == "bugs":
-        normalized_feature_type = "detect_bugs"
-    elif feature_type == "tests":
-        normalized_feature_type = "generate_tests"
+    normalized_feature_type = normalize_analysis_feature_type(feature_type)
 
     run_service = getattr(request.app.state, "analysis_run_service", None)
     if run_service is not None and hasattr(run_service, "list_runs"):
@@ -1103,15 +1221,18 @@ async def list_analysis_runs(
             kwargs["source_revision"] = source_revision
 
         try:
-            res = run_service.list_runs(repository_id, **kwargs)
+            res = run_service.list_runs(repository_id, db=db, **kwargs)
         except TypeError:
-            res = run_service.list_runs(
-                repository_id,
-                feature_type=normalized_feature_type,
-                status=status,
-                offset=offset,
-                limit=page_size,
-            )
+            try:
+                res = run_service.list_runs(repository_id, **kwargs)
+            except TypeError:
+                res = run_service.list_runs(
+                    repository_id,
+                    feature_type=normalized_feature_type,
+                    status=status,
+                    offset=offset,
+                    limit=page_size,
+                )
 
         if inspect.isawaitable(res):
             res = await res
@@ -1152,7 +1273,10 @@ async def list_analysis_runs(
         r
         for r in history_store.values()
         if str(r.get("repository_id")) == str(repository_id)
-        and (normalized_feature_type is None or r.get("feature_type") == normalized_feature_type)
+        and (
+            normalized_feature_type is None
+            or normalize_analysis_feature_type(r.get("feature_type")) == normalized_feature_type
+        )
         and (status is None or r.get("status") == status)
         and (target_path is None or r.get("target_path") == target_path)
         and (source_revision is None or r.get("source_revision") == source_revision)
@@ -1175,7 +1299,12 @@ async def list_analysis_runs(
 @router.get(
     "/analysis-runs/{run_id}",
     response_model=AnalysisRunDetailResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Get a specific analysis run and its structured findings",
+    description=(
+        "Reopen a persisted analysis run (`explain`, `detect_bugs`, `generate_tests`, or `review`) "
+        "by UUID after verifying that the authenticated user owns the associated repository."
+    ),
 )
 async def get_analysis_run(
     run_id: UUID,
@@ -1188,7 +1317,10 @@ async def get_analysis_run(
     run_record: Any = None
     run_service = getattr(request.app.state, "analysis_run_service", None)
     if run_service is not None and hasattr(run_service, "get_run"):
-        res = run_service.get_run(run_id)
+        try:
+            res = run_service.get_run(run_id, db=db)
+        except TypeError:
+            res = run_service.get_run(run_id)
         if inspect.isawaitable(res):
             res = await res
         run_record = res
@@ -1222,9 +1354,14 @@ async def get_analysis_run(
     _owned_repository(repo_uuid, request, db)
 
     if isinstance(run_record, AnalysisRunDetailResponse):
-        return run_record
+        return AnalysisRunDetailResponse.model_validate(redact_obj(run_record.model_dump(mode="json")))
     if isinstance(run_record, dict):
-        return AnalysisRunDetailResponse.model_validate(run_record)
+        normalized_dict = dict(redact_obj(run_record))
+        if normalized_dict.get("feature_type"):
+            normalized_dict["feature_type"] = normalize_analysis_feature_type(
+                normalized_dict.get("feature_type")
+            )
+        return AnalysisRunDetailResponse.model_validate(normalized_dict)
 
     status_val = getattr(run_record, "status", "COMPLETED")
     if hasattr(status_val, "value"):
@@ -1232,8 +1369,13 @@ async def get_analysis_run(
     feature_val = getattr(run_record, "feature_type", "explain")
     if hasattr(feature_val, "value"):
         feature_val = feature_val.value
+    feature_val = normalize_analysis_feature_type(feature_val) or "explain"
 
-    return AnalysisRunDetailResponse(
+    raw_findings = [
+        f.to_dict() if hasattr(f, "to_dict") else f
+        for f in (getattr(run_record, "findings", []) or [])
+    ]
+    detail = AnalysisRunDetailResponse(
         id=str(getattr(run_record, "id", run_id)),
         repository_id=str(repo_uuid),
         user_id=str(getattr(run_record, "user_id", "")) or None,
@@ -1244,24 +1386,27 @@ async def get_analysis_run(
         start_line=getattr(run_record, "start_line", None),
         end_line=getattr(run_record, "end_line", None),
         source_revision=getattr(run_record, "source_revision", None),
-        findings_count=getattr(run_record, "findings_count", 0) or 0,
-        result_payload=getattr(run_record, "result_payload", None),
-        test_output=getattr(run_record, "test_output", None),
-        findings=[
-            f.to_dict() if hasattr(f, "to_dict") else f
-            for f in (getattr(run_record, "findings", []) or [])
-        ],
-        error_message=getattr(run_record, "error_message", None),
+        findings_count=getattr(run_record, "findings_count", 0) or len(raw_findings),
+        result_payload=redact_obj(getattr(run_record, "result_payload", None)),
+        test_output=redact(getattr(run_record, "test_output", None)) if getattr(run_record, "test_output", None) else None,
+        findings=redact_obj(raw_findings),
+        error_message=redact(getattr(run_record, "error_message", None)) if getattr(run_record, "error_message", None) else None,
         created_at=getattr(run_record, "created_at", datetime.now(timezone.utc)),
         completed_at=getattr(run_record, "completed_at", None),
     )
+    return detail
 
 
 def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
     if isinstance(item, AnalysisRunSummary):
         return item
     if isinstance(item, dict):
-        return AnalysisRunSummary.model_validate(item)
+        normalized = dict(redact_obj(item))
+        if normalized.get("feature_type"):
+            normalized["feature_type"] = normalize_analysis_feature_type(
+                normalized.get("feature_type")
+            )
+        return AnalysisRunSummary.model_validate(normalized)
 
     status_val = getattr(item, "status", "COMPLETED")
     if hasattr(status_val, "value"):
@@ -1269,7 +1414,9 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
     feature_val = getattr(item, "feature_type", "explain")
     if hasattr(feature_val, "value"):
         feature_val = feature_val.value
+    feature_val = normalize_analysis_feature_type(feature_val) or "explain"
 
+    raw_err = getattr(item, "error_message", None)
     return AnalysisRunSummary(
         id=str(getattr(item, "id")),
         repository_id=str(getattr(item, "repository_id", repository_id)),
@@ -1282,7 +1429,7 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
         end_line=getattr(item, "end_line", None),
         source_revision=getattr(item, "source_revision", None),
         findings_count=getattr(item, "findings_count", 0) or 0,
-        error_message=getattr(item, "error_message", None),
+        error_message=redact(raw_err) if raw_err else None,
         created_at=getattr(item, "created_at", datetime.now(timezone.utc)),
         completed_at=getattr(item, "completed_at", None),
     )

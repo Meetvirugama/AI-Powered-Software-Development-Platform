@@ -497,17 +497,39 @@ def record_analysis_run(
             )
         )
 
+    target_path = getattr(target, "path", None) if target is not None else None
+    target_symbol = getattr(target, "symbol", None) if target is not None else None
+    if not target_symbol and target is not None:
+        pr_num = getattr(target, "pr_number", None)
+        commit_sha = getattr(target, "commit_sha", None)
+        if pr_num is not None:
+            target_symbol = f"PR #{pr_num}"
+        elif commit_sha:
+            target_symbol = f"Commit {commit_sha[:8]}"
+
+    start_line = getattr(target, "start_line", None) if target is not None else None
+    end_line = getattr(target, "end_line", None) if target is not None else None
+    resolved_rev = revision
+    if not resolved_rev and target is not None:
+        resolved_rev = (
+            getattr(target, "head_revision", None)
+            or getattr(target, "commit_sha", None)
+            or (f"pr/{target.pr_number}" if getattr(target, "pr_number", None) is not None else None)
+            or getattr(target, "base_revision", None)
+            or getattr(target, "revision", None)
+        )
+
     record = {
         "id": str(run_id),
         "repository_id": str(repository_id),
         "user_id": str(user_id),
         "feature_type": feature_type,
         "status": status,
-        "target_path": target.path,
-        "target_symbol": target.symbol,
-        "start_line": target.start_line,
-        "end_line": target.end_line,
-        "source_revision": revision,
+        "target_path": target_path,
+        "target_symbol": target_symbol,
+        "start_line": start_line,
+        "end_line": end_line,
+        "source_revision": resolved_rev,
         "findings_count": findings_count,
         "result_payload": result_payload,
         "test_output": resolved_test_output,
@@ -531,6 +553,10 @@ def record_analysis_run(
         svc = getattr(app_state, "explanation_history_service", None)
         if svc is not None:
             candidate_services.append(svc)
+    elif feature_type in ("review", "code_review"):
+        svc = getattr(app_state, "review_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
 
     general_run_svc = getattr(app_state, "analysis_run_service", None)
     if general_run_svc is not None and general_run_svc not in candidate_services:
@@ -544,19 +570,23 @@ def record_analysis_run(
             fn = getattr(target_service, method_name, None)
             if callable(fn):
                 try:
-                    try:
-                        import inspect
-                        sig = inspect.signature(fn)
-                        if "db" in sig.parameters and db is not None:
-                            fn(record, db=db)
-                        else:
-                            fn(record)
-                    except (TypeError, ValueError):
+                    import inspect
+                    sig = inspect.signature(fn)
+                    if "db" in sig.parameters and db is not None:
+                        fn(record, db=db)
+                    else:
                         fn(record)
-                    saved = True
-                    break
+                except (TypeError, ValueError):
+                    try:
+                        fn(record)
+                    except Exception as inner_exc:
+                        logger.debug("analysis_run_service_save_fallback_failed", extra={"error": str(inner_exc)})
+                        continue
                 except Exception as exc:
                     logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
+                    continue
+                saved = True
+                break
 
     # 2. Try Om's AnalysisRunRepository if available in app.repositories
     if not saved and hasattr(db, "query"):
