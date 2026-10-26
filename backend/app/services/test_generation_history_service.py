@@ -75,6 +75,7 @@ class TestGenerationHistoryService:
         *,
         test_output: Optional[str] = None,
         status: str = AnalysisRunStatus.COMPLETED.value,
+        framework: Optional[str] = None,
         detected_framework: Optional[str] = None,
         proposed_test_path: Optional[str] = None,
         covered_scenarios: Optional[Sequence[Any]] = None,
@@ -96,6 +97,7 @@ class TestGenerationHistoryService:
         db: Optional[Session] = None,
     ) -> AnalysisRun:
         """Store a completed or failed test generation run with rich metadata (Week 2 — Day 4)."""
+        actual_framework = detected_framework or framework
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.save_test_generation_run(
@@ -104,7 +106,7 @@ class TestGenerationHistoryService:
                 test_result=test_result,
                 test_output=test_output,
                 status=status,
-                detected_framework=detected_framework,
+                detected_framework=actual_framework,
                 proposed_test_path=proposed_test_path,
                 covered_scenarios=covered_scenarios,
                 assumptions_and_warnings=assumptions_and_warnings,
@@ -168,6 +170,7 @@ class TestGenerationHistoryService:
         target_symbol: Optional[str] = None,
         framework: Optional[str] = None,
         source_revision: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
         page: int = 1,
         page_size: int = 20,
         db: Optional[Session] = None,
@@ -178,6 +181,7 @@ class TestGenerationHistoryService:
             repo = AnalysisRunRepository(session)
             return repo.list_test_generation_runs(
                 repository_id,
+                user_id=user_id,
                 status=status,
                 target_path=target_path,
                 target_symbol=target_symbol,
@@ -208,6 +212,8 @@ class TestGenerationHistoryService:
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.reopen_test_generation(run_id, repository_id=repository_id)
+
+    reopen_test_generation = reopen_run
 
     def get_latest(
         self,

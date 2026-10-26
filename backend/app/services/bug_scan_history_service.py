@@ -113,6 +113,9 @@ class BugScanHistoryService:
                 completed_at=completed_at,
             )
 
+    # Alias matching Day 7 acceptance convention
+    save_scan = save_bug_scan
+
     def record_failure(
         self,
         repository_id: uuid.UUID | str,
@@ -158,6 +161,7 @@ class BugScanHistoryService:
         source_revision: Optional[str] = None,
         min_severity: Optional[str] = None,
         category: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
         page: int = 1,
         page_size: int = 20,
         db: Optional[Session] = None,
@@ -168,6 +172,7 @@ class BugScanHistoryService:
             repo = AnalysisRunRepository(session)
             return repo.list_bug_scan_runs(
                 repository_id=repository_id,
+                user_id=user_id,
                 status=status,
                 target_path=target_path,
                 target_symbol=target_symbol,
@@ -199,6 +204,9 @@ class BugScanHistoryService:
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.reopen_bug_scan(run_id, repository_id=repository_id)
+
+    reopen_bug_scan = reopen
+    reopen_scan = reopen
 
     def get_latest_scan(
         self,

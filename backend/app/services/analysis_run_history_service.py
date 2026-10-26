@@ -90,6 +90,7 @@ class AnalysisRunHistoryService:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         feature_type: Optional[str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
@@ -101,6 +102,7 @@ class AnalysisRunHistoryService:
         """List historical analysis runs scoped to a repository with filtering and pagination.
 
         Normalizes feature type aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests', 'review' -> 'code_review').
+        Supports user-level scoping via user_id.
         """
         normalized_feature = feature_type
         if feature_type == "bugs":
@@ -114,6 +116,7 @@ class AnalysisRunHistoryService:
             repo = AnalysisRunRepository(session)
             return repo.list_by_repository(
                 repository_id,
+                user_id=user_id,
                 feature_type=normalized_feature,
                 status=status,
                 target_path=target_path,
@@ -254,3 +257,63 @@ class AnalysisRunHistoryService:
                     limit=1,
                 )
                 return runs[0] if runs else None
+
+    # -----------------------------------------------------------------------
+    # 6. Data Retention & Sensitive-Data Handling (Week 2 — Day 7)
+    # -----------------------------------------------------------------------
+
+    def purge_expired_runs(
+        self,
+        *,
+        repository_id: Optional[uuid.UUID | str] = None,
+        retention_days: int = 30,
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+        db: Optional[Session] = None,
+    ) -> int:
+        """Purge historical analysis runs and cascading findings older than retention_days (Day 7)."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.purge_expired_runs(
+                repository_id=repository_id,
+                retention_days=retention_days,
+                feature_type=feature_type,
+                status=status,
+            )
+
+    def prune_uncompleted_stale_runs(
+        self,
+        *,
+        older_than_hours: int = 24,
+        mark_as_failed: bool = True,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> int:
+        """Prune or time-out stuck PENDING or RUNNING runs older than specified hours (Day 7)."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.prune_uncompleted_stale_runs(
+                older_than_hours=older_than_hours,
+                mark_as_failed=mark_as_failed,
+                repository_id=repository_id,
+            )
+
+    def get_retention_metrics(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> dict[str, Any]:
+        """Aggregate data retention metrics across all runs or scoped to a repository (Day 7)."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.get_retention_metrics(repository_id=repository_id)
+
+    def sanitize_sensitive_data_in_history(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> int:
+        """Audit and scrub any raw credentials or sensitive tokens from persisted history (Day 7)."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.sanitize_sensitive_data_in_history(repository_id=repository_id)

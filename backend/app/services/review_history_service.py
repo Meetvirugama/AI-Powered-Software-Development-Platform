@@ -76,6 +76,7 @@ class ReviewHistoryService:
         report: Optional[Any] = None,
         *,
         findings: Optional[Sequence[Any]] = None,
+        review_report: Optional[Any] = None,
         status: str = AnalysisRunStatus.COMPLETED.value,
         review_target: Optional[Any] = None,
         target: Optional[Any] = None,
@@ -101,13 +102,21 @@ class ReviewHistoryService:
         **extra_kwargs: Any,
     ) -> AnalysisRun:
         """Store a completed or failed code review with rich structured findings (Week 2 — Day 5)."""
+        actual_report = report if report is not None else review_report
+        actual_findings = findings
+        if actual_findings is None and actual_report is not None:
+            if hasattr(actual_report, "findings"):
+                actual_findings = getattr(actual_report, "findings", None)
+            elif isinstance(actual_report, dict) and "findings" in actual_report:
+                actual_findings = actual_report.get("findings")
+
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.save_review_run(
                 repository_id=repository_id,
                 review_target=review_target or target,
-                report=report,
-                findings=findings,
+                report=actual_report,
+                findings=actual_findings,
                 status=status,
                 target_path=target_path,
                 target_symbol=target_symbol,
@@ -198,6 +207,7 @@ class ReviewHistoryService:
         source_revision: Optional[str] = None,
         commit_sha: Optional[str] = None,
         pr_number: Optional[int] = None,
+        user_id: Optional[uuid.UUID | str] = None,
         offset: int = 0,
         limit: int = 50,
         db: Optional[Session] = None,
@@ -207,6 +217,7 @@ class ReviewHistoryService:
             repo = AnalysisRunRepository(session)
             return repo.list_review_runs(
                 repository_id=repository_id,
+                user_id=user_id,
                 status=status,
                 target_path=target_path,
                 source_revision=source_revision,
