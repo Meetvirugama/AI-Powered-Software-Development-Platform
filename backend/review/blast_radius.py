@@ -3,7 +3,10 @@
 from collections import deque
 from typing import Mapping, Sequence
 
-from backend.scanner.import_tracker import FileImportMap
+try:
+    from scanner.import_tracker import FileImportMap
+except ImportError:
+    from backend.scanner.import_tracker import FileImportMap
 
 
 class BlastRadiusEngine:

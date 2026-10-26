@@ -51,7 +51,7 @@ class SymbolExtractor:
             return ""
 
         def get_text(node: Any) -> str:
-            return node.text.decode("utf-8")
+            return node.text.decode("utf-8", errors="replace")
 
         def walk(node: Any, parent_id: Optional[UUID] = None):
             t = node.type
@@ -96,13 +96,18 @@ class SymbolExtractor:
                     walk(c, sym_id)
                 return
 
-            if t in ("function_definition", "function_declaration"):
+            if t in (
+                "function_definition",
+                "function_declaration",
+                "method_definition",
+                "method_declaration",
+            ):
                 name = ""
                 for c in node.children:
-                    if c.type in ("identifier", "property_identifier"):
+                    if c.type in ("identifier", "property_identifier", "field_identifier"):
                         name = get_text(c)
                         break
-                kind = "method" if parent_id else "function"
+                kind = "method" if (parent_id or t in ("method_definition", "method_declaration")) else "function"
                 sig = get_sig(node)
                 symbols.append(
                     Symbol(
@@ -293,4 +298,3 @@ class SymbolExtractor:
                 continue
 
         return symbols
-

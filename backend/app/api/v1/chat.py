@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ai.schemas.output import RepositoryAnswer
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact_obj
 from app.models.repository import Repository
 from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.repository import ChatHistoryMessage, RepositoryChatRequest
@@ -57,8 +58,9 @@ async def chat_with_repository(
     _owned_repository(repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
     answer = await pipeline.chat(payload.question, repository_id, payload.history)
-    # Validate third-party pipeline implementations at the HTTP boundary too.
-    return RepositoryAnswer.model_validate(answer)
+    # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.
+    validated = RepositoryAnswer.model_validate(answer)
+    return RepositoryAnswer.model_validate(redact_obj(validated.model_dump(mode="json")))
 
 
 def _request_user_id(request: Request) -> UUID:

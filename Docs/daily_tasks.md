@@ -515,7 +515,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Person | Publish | Status |
 |--------|---------|--------|
 | Meet | Shared `IntelligenceContext` interface & token budget rules | ✅ Done |
-| Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ⬜ Todo |
+| Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ✅ Done |
 | Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ⬜ Todo |
 | Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
 | Om | `analysis_runs` and `code_findings` database models & Alembic migration | ✅ Done |
@@ -523,37 +523,39 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Prit | AST symbol range resolution & import mapping | ✅ Done |
 | Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
 | Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ⬜ Todo |
-| Keval | Baseline defect fixtures & Week 2 regression test plan | ⬜ Todo |
+| Keval | Baseline defect fixtures & Week 2 regression test plan | ✅ Done |
 
 ## WEEK 2 — Day 2 Feature 1: Code Explanation
 
 - ✅ Prit: `TargetSelector` & symbol resolution connecting AST utilities to Code Explanation targets
-- ⬜ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
+- ✅ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
 - ✅ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
 - ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
 - ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
-- ⬜ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations
+- ✅ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations (`test_keval_w2_day2_explanation_qa.py`)
 
 
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
 
 - ✅ Prit: `ASTBugAnalyzer` with 10 structural defect rules, exact line range preservation, target scoping, and Devu `StaticFinding` adapter
-- ⬜ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
+- ✅ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
 - ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
 - ✅ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
 - ⬜ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings
 - ⬜ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights
 - ✅ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
+- ✅ Keval: Bug Detection QA suite verifying ASTBugAnalyzer, BuiltinStaticBugScanner, merging/deduplication, and secret scrubbing (`test_keval_w2_day3_bug_detection_qa.py`)
 
 ## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
 - ✅ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout, fixture extraction, and test path proposal (`FrameworkDetector`)
 - ✅ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
-- ⬜ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
+- ✅ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
 - ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions
 - ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
 - ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
 - ✅ Om: Persisting generated-test runs and relevant metadata (`test_output`, scenarios, framework, revision)
+- ✅ Keval: Test Generation QA suite verifying framework detection (pytest/jest), test syntax validation, and scenario coverage (`test_keval_w2_day4_test_generation_qa.py`)
 
 ## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 
@@ -564,16 +566,18 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Meet: Multi-file review context — caller impact, imported type changes, and dependency blast radius
 - ⬜ Yug: `POST /api/v1/repositories/{id}/review` supporting single file, commit SHA, and PR diff
 - ⬜ Dhramraj: Unified/split diff review UI with inline findings, risk level indicator, and severity badges
+- ✅ Keval: Standalone Code Review QA suite verifying unified diff parsing, SQL injection defect detection, and zero-defect reports (`test_keval_w2_day5_review_qa.py`)
 
 ## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
 
 - ✅ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
+- ✅ Prit: AST and framework reliability & Day 7 acceptance — multi-fixture source-range validation, class/method extraction, framework detector hardening, zero-crash parser failure handling, tiered language limitation matrix, and published acceptance report (143/143 tests passing) (`Docs/scanner_languages.md`, `Docs/week2_day7_ast_acceptance_report.md`)
 - ⬜ Dev: Schema validation error handling and self-healing repair loops across all 4 services
 - ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
 - ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
 - ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`), acceptance & regression suite (87/87 tests passing)
 - ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
-- ⬜ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates)
+- ✅ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates) & published QA acceptance report (`test_keval_w2_day6_integration_qa.py`, `test_keval_w2_day7_acceptance_scenarios.py`, `Docs/week2_qa_acceptance_report.md`)
 
 ---
 

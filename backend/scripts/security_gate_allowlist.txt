@@ -6,3 +6,9 @@ fcf730b6d9  # Docs/week3.md documentation example
 8bcac7908e  # backend/README.md documentation example
 9915af1fc1  # backend/tests/test_static_reviewer.py mock test value
 654dcaa1e6  # backend/tests/test_static_reviewer.py mock test value
+1681f37b10  # backend/tests/test_backend_audit_fixes.py synthetic test secret
+570945b67f  # backend/tests/test_code_review_day5.py & test_generate_tests_day4.py synthetic test key
+4da9cecef5  # backend/tests/test_code_review_day5.py & test_generate_tests_day4.py synthetic test token
+3021d90eb9  # backend/app/core/secret_redaction.py regex docstring example
+6224936938  # backend/tests/test_security_week2_baseline.py synthetic redaction test fixture
+8ed45e8e43  # backend/tests/test_security_week2_baseline.py synthetic redaction test fixture

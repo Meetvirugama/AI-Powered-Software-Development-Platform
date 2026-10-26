@@ -1,0 +1,10 @@
+diff --git a/backend/app/repositories/user_search.py b/backend/app/repositories/user_search.py
+index 1111111..2222222 100644
+--- a/backend/app/repositories/user_search.py
++++ b/backend/app/repositories/user_search.py
+@@ -10,7 +10,10 @@ def search_users(db_session, query_term: str):
+     """Search users by name prefix."""
+-    return db_session.query(User).filter(User.username.startswith(query_term)).all()
++    # Raw query construction introduces SQL injection defect
++    sql = f"SELECT * FROM users WHERE username LIKE '{query_term}%'"
++    return db_session.execute(sql).fetchall()

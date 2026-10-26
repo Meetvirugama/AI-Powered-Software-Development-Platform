@@ -1,6 +1,7 @@
-"""Developer Intelligence Suite API endpoints (Week 2 — Day 1, Day 2 & Day 3).
+"""Developer Intelligence Suite API endpoints (Week 2 — Days 1 through 6).
 
-Owner: Yug — W2, Day 1–3 (API Foundation, Code Explanation & Dedicated Bug Detection)
+Owner: Yug — W2, Day 1–6 (API Foundation, Code Explanation, Bug Detection, Test Generation,
+       Standalone AI Code Review, Run History & OpenAPI Integration)
 
 Endpoints registered:
 - POST /api/v1/repositories/{repository_id}/explain
@@ -20,7 +21,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Query, Request
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.llm.schemas import (
@@ -33,6 +34,7 @@ from ai.llm.schemas import (
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
+from app.core.secret_redaction import redact, redact_obj
 from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.repositories.repository_repository import RepositoryRepository
@@ -53,6 +55,7 @@ from app.schemas.analysis import (
     TestGenerationRequest,
     TestGenerationResponse,
     TestGenerationResult,
+    normalize_analysis_feature_type,
 )
 from app.services.bug_detection_orchestrator import (
     BuiltinStaticBugScanner,
@@ -60,11 +63,23 @@ from app.services.bug_detection_orchestrator import (
     merge_and_deduplicate_findings,
     normalize_and_ground_findings,
 )
+from app.services.code_review_orchestrator import (
+    build_grounded_review_report,
+    merge_and_rank_review_findings,
+    normalize_and_ground_review_findings,
+    resolve_review_target_and_build_context,
+    run_static_review_on_changes,
+)
 from app.services.explanation_orchestrator import (
     MAX_ANALYZABLE_FILE_BYTES,
     ground_explanation_sources,
     record_analysis_run,
     resolve_target_and_build_context,
+)
+from app.services.test_generation_orchestrator import (
+    build_repository_test_context,
+    detect_repository_test_framework,
+    validate_and_sanitize_generated_tests,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,55 +88,73 @@ router = APIRouter(tags=["analysis"])
 
 
 # ---------------------------------------------------------------------------
+# OpenAPI Error Schemas & Standard Responses (Docs/week2.md §4.6 & §10)
+# ---------------------------------------------------------------------------
+
+class ErrorDetailSchema(BaseModel):
+    """Machine-readable error payload returned on all failure responses."""
+
+    code: str = Field(..., description="Machine-readable error code (e.g. UNAUTHORIZED, REPOSITORY_NOT_FOUND).")
+    message: str = Field(..., description="Human-readable, secret-redacted error description.")
+    retryable: bool = Field(default=False, description="True when the client may safely retry the request.")
+
+
+class ErrorResponseEnvelope(BaseModel):
+    """Standardized error envelope across all Developer Intelligence APIs."""
+
+    error: ErrorDetailSchema
+
+
+ANALYSIS_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
+    400: {
+        "model": ErrorResponseEnvelope,
+        "description": "Invalid request parameters, unsafe path traversal, out-of-bounds line range, or unsupported target/framework.",
+    },
+    401: {
+        "model": ErrorResponseEnvelope,
+        "description": "Missing, expired, or revoked authentication token.",
+    },
+    404: {
+        "model": ErrorResponseEnvelope,
+        "description": "Repository, target file, symbol, commit/PR, or analysis run not found or not owned by caller.",
+    },
+    413: {
+        "model": ErrorResponseEnvelope,
+        "description": "Target file exceeds the 1 MB analyzable size limit.",
+    },
+    422: {
+        "model": ErrorResponseEnvelope,
+        "description": "Request body or query parameter schema validation failed.",
+    },
+    429: {
+        "model": ErrorResponseEnvelope,
+        "description": "Per-user rate limit exceeded (20 requests/minute).",
+    },
+    500: {
+        "model": ErrorResponseEnvelope,
+        "description": "Analysis execution or structured AI output validation failed after bounded repair attempts.",
+    },
+    503: {
+        "model": ErrorResponseEnvelope,
+        "description": "AI analysis provider or required service is temporarily unavailable.",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # Service Protocols (Published Day 1 Interfaces for Dev, Meet, Devu, Om)
 # ---------------------------------------------------------------------------
 
-class CodeExplanationServiceProtocol(Protocol):
-    """Protocol implemented by Dev's CodeExplanationService (Day 2)."""
-
-    async def explain(
-        self,
-        repository_id: UUID,
-        payload: ExplainCodeRequest,
-        **kwargs: Any,
-    ) -> CodeExplanationResponse | CodeExplanation | dict[str, Any]: ...
-
-
-class BugDetectionServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Devu's BugDetectionEngine (Day 3)."""
-
-    async def detect_bugs(
-        self,
-        repository_id: UUID,
-        payload: BugDetectionRequest,
-        **kwargs: Any,
-    ) -> BugDetectionResponse | dict[str, Any]: ...
-
-
-class TestGenerationServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Prit's TestGenerationService (Day 4)."""
-
-    async def generate_tests(
-        self,
-        repository_id: UUID,
-        payload: TestGenerationRequest,
-        **kwargs: Any,
-    ) -> TestGenerationResponse | TestGenerationResult | dict[str, Any]: ...
-
-
-class CodeReviewServiceProtocol(Protocol):
-    """Protocol implemented by Dev & Parth's AICodeReviewEngine (Day 5)."""
-
-    async def review(
-        self,
-        repository_id: UUID,
-        payload: CodeReviewRequest,
-        **kwargs: Any,
-    ) -> ReviewReportResponse | ReviewReport | dict[str, Any]: ...
+from ai.interfaces import (
+    BugDetectionServiceProtocol,
+    CodeExplanationServiceProtocol,
+    CodeReviewServiceProtocol,
+    TestGenerationServiceProtocol,
+)
 
 
 class AnalysisRunPersistenceProtocol(Protocol):
-    """Protocol implemented by Om's AnalysisRunRepository / service (Day 1–5)."""
+    """Protocol implemented by Om's AnalysisRunRepository / service (Day 1–6)."""
 
     def list_runs(
         self,
@@ -306,7 +339,13 @@ async def _invoke_service_method(
 @router.post(
     "/repositories/{repository_id}/explain",
     response_model=CodeExplanationResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Explain a file, symbol, or line range using repository context",
+    description=(
+        "Generate a structured, source-grounded explanation (`purpose`, `logic_flow`, `key_symbols`, "
+        "`inputs_and_outputs`, `dependencies`, `assumptions_and_limitations`, `sources`) for a file, "
+        "symbol, or 1-indexed inclusive line range in an authorized repository."
+    ),
 )
 async def explain_code(
     repository_id: UUID,
@@ -431,6 +470,7 @@ async def explain_code(
         revision=revision,
         explanation=grounded_explanation,
     )
+    response = CodeExplanationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
@@ -457,7 +497,13 @@ async def explain_code(
 @router.post(
     "/repositories/{repository_id}/detect-bugs",
     response_model=BugDetectionResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Detect potential bugs using static analysis and AI reasoning",
+    description=(
+        "Scan an authorized repository file, symbol, or line range using deterministic AST/static rules "
+        "and AI defect reasoning. Merges overlapping findings into `COMBINED`, redacts secret values, "
+        "and ranks findings by severity."
+    ),
 )
 async def detect_bugs(
     repository_id: UUID,
@@ -657,6 +703,7 @@ async def detect_bugs(
         ai_findings_count=ai_count,
         missing_context=merged_missing,
     )
+    response = BugDetectionResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
@@ -670,8 +717,8 @@ async def detect_bugs(
             target=response.target,
             revision=response.revision,
             result_payload=response.model_dump(mode="json"),
-            findings=[f.model_dump(mode="json") for f in ranked_findings],
-            findings_count=len(ranked_findings),
+            findings=[f.model_dump(mode="json") for f in response.findings],
+            findings_count=len(response.findings),
         )
 
     return response
@@ -684,7 +731,13 @@ async def detect_bugs(
 @router.post(
     "/repositories/{repository_id}/generate-tests",
     response_model=TestGenerationResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Generate framework-aware test files for a repository file or symbol",
+    description=(
+        "Detect the repository's configured test framework (`pytest`, `unittest`, or `jest`), "
+        "propose a safe convention-matching test file path, generate complete previewable test code "
+        "covering normal, edge_case, and failure_path scenarios, and validate syntax without executing code."
+    ),
 )
 async def generate_tests(
     repository_id: UUID,
@@ -692,16 +745,32 @@ async def generate_tests(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TestGenerationResponse:
-    """Generate a previewable test file following the repository's test conventions."""
+    """Execute the Week 2 Day 4 Framework-Aware Test Generation pipeline."""
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    file_record = _validate_and_normalize_code_target(repository_id, payload.target, db)
-    run_id = str(uuid4())
-    revision = payload.target.revision or getattr(repo, "default_branch", "main")
+    explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
+    resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+    payload.target = resolved.target
+
+    detection, manifest_contents, all_repo_files = detect_repository_test_framework(
+        repository_id=repository_id,
+        target_path=resolved.target.path,
+        requested_framework=payload.framework,
+        db=db,
+    )
+    test_context, proposed_test_path = build_repository_test_context(
+        repository_id=repository_id,
+        resolved=resolved,
+        detection=detection,
+        manifest_contents=manifest_contents,
+        all_repo_files=all_repo_files,
+        token_budget=payload.options.max_context_tokens,
+    )
 
     service = _get_service(request, "test_generation_service", "Test generation")
     method = service.generate_tests if hasattr(service, "generate_tests") else service
 
+    run_id = str(uuid4())
     try:
         raw_result = await _invoke_service_method(
             method,
@@ -709,7 +778,15 @@ async def generate_tests(
             payload,
             user_id=user_id,
             db=db,
-            file_record=file_record,
+            file_record=resolved.file_record,
+            extra_kwargs={
+                "context": test_context,
+                "code_content": resolved.code_content,
+                "detected_framework": detection.framework or "pytest",
+                "proposed_test_path": proposed_test_path,
+                "fixtures": list(detection.fixtures),
+                "revision": resolved.revision,
+            },
         )
     except APIError as exc:
         if payload.options.persist_run:
@@ -721,12 +798,13 @@ async def generate_tests(
                 user_id=user_id,
                 feature_type="generate_tests",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
+                target=resolved.target,
+                revision=resolved.revision,
                 error_message=exc.message,
             )
         raise
     except Exception as exc:
+        safe_err = redact(str(exc))
         if payload.options.persist_run:
             record_analysis_run(
                 request.app.state,
@@ -736,46 +814,41 @@ async def generate_tests(
                 user_id=user_id,
                 feature_type="generate_tests",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
-                error_message=str(exc),
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=safe_err,
             )
-        raise
+        raise APIError(
+            500,
+            ErrorCode.ANALYSIS_FAILED,
+            "Test generation failed during execution.",
+            retryable=False,
+        ) from exc
 
+    status_val = "COMPLETED"
+    revision = resolved.revision
     try:
         if isinstance(raw_result, TestGenerationResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            revision = raw_result.revision or resolved.revision
+            test_result = raw_result.result
         elif isinstance(raw_result, TestGenerationResult):
-            response = TestGenerationResponse(
-                run_id=run_id,
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                result=raw_result,
-            )
+            test_result = raw_result
         elif isinstance(raw_result, dict) and "result" in raw_result:
-            response = TestGenerationResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or run_id),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "revision": raw_result.get("revision") or revision,
-                    "result": raw_result["result"],
-                }
-            )
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            revision = raw_result.get("revision") or resolved.revision
+            test_result = TestGenerationResult.model_validate(raw_result["result"])
         else:
-            test_result = TestGenerationResult.model_validate(raw_result)
-            response = TestGenerationResponse(
-                run_id=run_id,
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                revision=revision,
-                result=test_result,
-            )
-    except ValidationError as exc:
+            if isinstance(raw_result, dict):
+                raw_copy = dict(raw_result)
+                raw_copy.setdefault("detected_framework", detection.framework or "pytest")
+                raw_copy.setdefault("proposed_test_path", proposed_test_path)
+                test_result = TestGenerationResult.model_validate(raw_copy)
+            else:
+                test_result = TestGenerationResult.model_validate(raw_result)
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.error("generate_tests_output_schema_invalid", extra={"error": str(exc)})
         if payload.options.persist_run:
             record_analysis_run(
@@ -786,7 +859,7 @@ async def generate_tests(
                 user_id=user_id,
                 feature_type="generate_tests",
                 status="FAILED",
-                target=payload.target,
+                target=resolved.target,
                 revision=revision,
                 error_message="Test generation service returned an invalid output schema.",
             )
@@ -797,18 +870,18 @@ async def generate_tests(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
+    if status_val == "FAILED":
         if payload.options.persist_run:
             record_analysis_run(
                 request.app.state,
                 db,
-                run_id=response.run_id or run_id,
+                run_id=run_id,
                 repository_id=repository_id,
                 user_id=user_id,
                 feature_type="generate_tests",
                 status="FAILED",
-                target=response.target,
-                revision=response.revision or revision,
+                target=resolved.target,
+                revision=revision,
                 error_message="Test generation failed during execution.",
             )
         raise APIError(
@@ -818,7 +891,27 @@ async def generate_tests(
             retryable=True,
         )
 
+    sanitized_result = validate_and_sanitize_generated_tests(
+        test_result,
+        repository_id=repository_id,
+        resolved=resolved,
+        detection=detection,
+        default_proposed_path=proposed_test_path,
+    )
+
+    response = TestGenerationResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=resolved.target,
+        revision=revision,
+        result=sanitized_result,
+    )
+    response = TestGenerationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
+
     if payload.options.persist_run:
+        payload_dict = response.model_dump(mode="json")
+        payload_dict["test_content"] = response.result.test_content
         record_analysis_run(
             request.app.state,
             db,
@@ -829,9 +922,9 @@ async def generate_tests(
             status=response.status,
             target=response.target,
             revision=response.revision,
-            result_payload=response.model_dump(mode="json"),
+            result_payload=payload_dict,
             test_output=response.result.test_content,
-            findings_count=0,
+            findings_count=len(response.result.covered_scenarios),
         )
 
     return response
@@ -844,7 +937,13 @@ async def generate_tests(
 @router.post(
     "/repositories/{repository_id}/review",
     response_model=ReviewReportResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Run a standalone AI and static code review on a file, commit, PR, or diff",
+    description=(
+        "Execute a standalone code review across `correctness`, `security`, `performance`, "
+        "`reliability`, and `maintainability` for a single file, commit SHA, GitHub Pull Request, "
+        "or unified diff without starting an autonomous coding task."
+    ),
 )
 async def review_code(
     repository_id: UUID,
@@ -852,24 +951,30 @@ async def review_code(
     request: Request,
     db: Session = Depends(get_db),
 ) -> ReviewReportResponse:
-    """Review a file, commit SHA, PR diff, or unified diff without starting an autonomous task."""
+    """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    run_id = str(uuid4())
-    revision = (
-        payload.target.head_revision
-        or payload.target.commit_sha
-        or (f"pr/{payload.target.pr_number}" if payload.target.pr_number is not None else None)
-        or payload.target.base_revision
-        or getattr(repo, "default_branch", "main")
-    )
 
-    if payload.target.path is not None:
-        payload.target.path = require_safe_repo_path(payload.target.path)
+    resolved = await resolve_review_target_and_build_context(
+        repository_id=repository_id,
+        repo=repo,
+        payload=payload,
+        user_id=user_id,
+        db=db,
+        app_state=request.app.state,
+    )
+    payload.target = resolved.target
+
+    history_target = AnalysisTarget(
+        type="file",
+        path=resolved.target_path_summary or "diff",
+        revision=resolved.revision,
+    )
 
     service = _get_service(request, "code_review_service", "AI code review")
     method = service.review if hasattr(service, "review") else service
 
+    run_id = str(uuid4())
     try:
         raw_result = await _invoke_service_method(
             method,
@@ -877,6 +982,12 @@ async def review_code(
             payload,
             user_id=user_id,
             db=db,
+            extra_kwargs={
+                "context": resolved.intelligence_context,
+                "modified_files": resolved.modified_files,
+                "source_map": resolved.source_map,
+                "revision": resolved.revision,
+            },
         )
     except APIError as exc:
         if payload.options.persist_run:
@@ -888,8 +999,8 @@ async def review_code(
                 user_id=user_id,
                 feature_type="review",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
+                target=history_target,
+                revision=resolved.revision,
                 error_message=exc.message,
             )
         raise
@@ -903,43 +1014,55 @@ async def review_code(
                 user_id=user_id,
                 feature_type="review",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
+                target=history_target,
+                revision=resolved.revision,
                 error_message=str(exc),
             )
         raise
 
+    extra_static_raw: list[Any] = []
+    scanner_warnings: list[str] = []
+    if payload.include_static:
+        ext_reviewer = getattr(request.app.state, "static_reviewer", None)
+        if ext_reviewer is not None:
+            rev_fn = getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer))
+            if callable(rev_fn):
+                try:
+                    mod_paths = [mf.file_path for mf in resolved.modified_files]
+                    ext_res = rev_fn(mod_paths)
+                    if inspect.isawaitable(ext_res):
+                        ext_res = await ext_res
+                    if isinstance(ext_res, dict):
+                        extra_static_raw.extend(ext_res.get("findings", []))
+                    elif isinstance(ext_res, list):
+                        extra_static_raw.extend(ext_res)
+                except Exception as exc:
+                    logger.warning("external_static_reviewer_error", extra={"error": str(exc)})
+                    scanner_warnings.append("External static reviewer encountered an error.")
+
+        builtin_static, builtin_warns = run_static_review_on_changes(
+            repository_id=repository_id,
+            resolved=resolved,
+            app_state=request.app.state,
+        )
+        extra_static_raw.extend(builtin_static)
+        scanner_warnings.extend(builtin_warns)
+
+    status_val = "COMPLETED"
     try:
         if isinstance(raw_result, ReviewReportResponse):
-            response = raw_result
+            run_id = raw_result.run_id or run_id
+            status_val = raw_result.status
+            raw_report = raw_result.report
         elif isinstance(raw_result, ReviewReport):
-            response = ReviewReportResponse(
-                run_id=run_id,
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                report=raw_result,
-            )
+            raw_report = raw_result
         elif isinstance(raw_result, dict) and "report" in raw_result:
-            response = ReviewReportResponse.model_validate(
-                {
-                    "run_id": str(raw_result.get("run_id") or run_id),
-                    "repository_id": str(raw_result.get("repository_id") or repository_id),
-                    "status": raw_result.get("status", "COMPLETED"),
-                    "target": raw_result.get("target") or payload.target,
-                    "report": raw_result["report"],
-                }
-            )
+            run_id = str(raw_result.get("run_id") or run_id)
+            status_val = raw_result.get("status", "COMPLETED")
+            raw_report = ReviewReport.model_validate(raw_result["report"])
         else:
-            report = ReviewReport.model_validate(raw_result)
-            response = ReviewReportResponse(
-                run_id=run_id,
-                repository_id=str(repository_id),
-                status="COMPLETED",
-                target=payload.target,
-                report=report,
-            )
-    except ValidationError as exc:
+            raw_report = ReviewReport.model_validate(raw_result)
+    except (ValidationError, ValueError, TypeError) as exc:
         logger.error("review_output_schema_invalid", extra={"error": str(exc)})
         if payload.options.persist_run:
             record_analysis_run(
@@ -950,8 +1073,8 @@ async def review_code(
                 user_id=user_id,
                 feature_type="review",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
+                target=history_target,
+                revision=resolved.revision,
                 error_message="AI code review service returned an invalid output schema.",
             )
         raise APIError(
@@ -961,18 +1084,18 @@ async def review_code(
             retryable=False,
         ) from exc
 
-    if response.status == "FAILED":
+    if status_val == "FAILED":
         if payload.options.persist_run:
             record_analysis_run(
                 request.app.state,
                 db,
-                run_id=response.run_id,
+                run_id=run_id,
                 repository_id=repository_id,
                 user_id=user_id,
                 feature_type="review",
                 status="FAILED",
-                target=payload.target,
-                revision=revision,
+                target=history_target,
+                revision=resolved.revision,
                 error_message="Code review execution failed.",
             )
         raise APIError(
@@ -981,6 +1104,57 @@ async def review_code(
             "Code review execution failed.",
             retryable=True,
         )
+
+    grounded_ai = normalize_and_ground_review_findings(
+        list(raw_report.findings),
+        repository_id=repository_id,
+        resolved=resolved,
+    )
+    grounded_static = normalize_and_ground_review_findings(
+        extra_static_raw,
+        repository_id=repository_id,
+        resolved=resolved,
+        default_source_type="STATIC",
+    )
+
+    merged_findings = merge_and_rank_review_findings(
+        [*grounded_static, *grounded_ai],
+        include_static=payload.include_static,
+    )
+    merged_missing = list(
+        dict.fromkeys([*resolved.missing_context, *scanner_warnings, *raw_report.missing_context])
+    )
+
+    grounded_report = build_grounded_review_report(
+        summary=raw_report.summary,
+        findings=merged_findings,
+        missing_context=merged_missing,
+        explicit_risk_level=raw_report.risk_level,
+    )
+
+    # Security (W2 Day 5–6): Never echo raw untrusted diff text back in response.target.diff
+    sanitized_target = resolved.target.model_copy(
+        update={
+            "diff": None,
+            "path": resolved.target.path
+            or (
+                resolved.modified_files[0].file_path
+                if len(resolved.modified_files) == 1
+                else None
+            ),
+            "base_revision": resolved.base_revision,
+            "head_revision": resolved.head_revision,
+        }
+    )
+
+    response = ReviewReportResponse(
+        run_id=run_id,
+        repository_id=str(repository_id),
+        status=status_val,
+        target=sanitized_target,
+        report=grounded_report,
+    )
+    response = ReviewReportResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
         record_analysis_run(
@@ -991,8 +1165,8 @@ async def review_code(
             user_id=user_id,
             feature_type="review",
             status=response.status,
-            target=response.target,
-            revision=revision,
+            target=history_target,
+            revision=resolved.revision,
             result_payload=response.model_dump(mode="json"),
             findings=[f.model_dump(mode="json") for f in response.report.findings],
             findings_count=len(response.report.findings),
@@ -1008,7 +1182,13 @@ async def review_code(
 @router.get(
     "/repositories/{repository_id}/analysis-runs",
     response_model=PaginatedAnalysisRunResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="List historical analysis runs for an authorized repository",
+    description=(
+        "Retrieve paginated historical analysis runs (`explain`, `detect_bugs`, `generate_tests`, `review`) "
+        "for a repository owned by the authenticated user. Supports filtering by `feature_type` "
+        "(including aliases `bugs` and `tests`), `status`, `target_path`, and `source_revision`."
+    ),
 )
 async def list_analysis_runs(
     repository_id: UUID,
@@ -1025,12 +1205,7 @@ async def list_analysis_runs(
     _owned_repository(repository_id, request, db)
     offset = (page - 1) * page_size
 
-    # Normalize feature_type aliases ('bugs' -> 'detect_bugs', 'tests' -> 'generate_tests')
-    normalized_feature_type = feature_type
-    if feature_type == "bugs":
-        normalized_feature_type = "detect_bugs"
-    elif feature_type == "tests":
-        normalized_feature_type = "generate_tests"
+    normalized_feature_type = normalize_analysis_feature_type(feature_type)
 
     run_service = getattr(request.app.state, "analysis_run_service", None)
     if run_service is not None and hasattr(run_service, "list_runs"):
@@ -1098,7 +1273,10 @@ async def list_analysis_runs(
         r
         for r in history_store.values()
         if str(r.get("repository_id")) == str(repository_id)
-        and (normalized_feature_type is None or r.get("feature_type") == normalized_feature_type)
+        and (
+            normalized_feature_type is None
+            or normalize_analysis_feature_type(r.get("feature_type")) == normalized_feature_type
+        )
         and (status is None or r.get("status") == status)
         and (target_path is None or r.get("target_path") == target_path)
         and (source_revision is None or r.get("source_revision") == source_revision)
@@ -1121,7 +1299,12 @@ async def list_analysis_runs(
 @router.get(
     "/analysis-runs/{run_id}",
     response_model=AnalysisRunDetailResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
     summary="Get a specific analysis run and its structured findings",
+    description=(
+        "Reopen a persisted analysis run (`explain`, `detect_bugs`, `generate_tests`, or `review`) "
+        "by UUID after verifying that the authenticated user owns the associated repository."
+    ),
 )
 async def get_analysis_run(
     run_id: UUID,
@@ -1171,9 +1354,14 @@ async def get_analysis_run(
     _owned_repository(repo_uuid, request, db)
 
     if isinstance(run_record, AnalysisRunDetailResponse):
-        return run_record
+        return AnalysisRunDetailResponse.model_validate(redact_obj(run_record.model_dump(mode="json")))
     if isinstance(run_record, dict):
-        return AnalysisRunDetailResponse.model_validate(run_record)
+        normalized_dict = dict(redact_obj(run_record))
+        if normalized_dict.get("feature_type"):
+            normalized_dict["feature_type"] = normalize_analysis_feature_type(
+                normalized_dict.get("feature_type")
+            )
+        return AnalysisRunDetailResponse.model_validate(normalized_dict)
 
     status_val = getattr(run_record, "status", "COMPLETED")
     if hasattr(status_val, "value"):
@@ -1181,8 +1369,13 @@ async def get_analysis_run(
     feature_val = getattr(run_record, "feature_type", "explain")
     if hasattr(feature_val, "value"):
         feature_val = feature_val.value
+    feature_val = normalize_analysis_feature_type(feature_val) or "explain"
 
-    return AnalysisRunDetailResponse(
+    raw_findings = [
+        f.to_dict() if hasattr(f, "to_dict") else f
+        for f in (getattr(run_record, "findings", []) or [])
+    ]
+    detail = AnalysisRunDetailResponse(
         id=str(getattr(run_record, "id", run_id)),
         repository_id=str(repo_uuid),
         user_id=str(getattr(run_record, "user_id", "")) or None,
@@ -1193,24 +1386,27 @@ async def get_analysis_run(
         start_line=getattr(run_record, "start_line", None),
         end_line=getattr(run_record, "end_line", None),
         source_revision=getattr(run_record, "source_revision", None),
-        findings_count=getattr(run_record, "findings_count", 0) or 0,
-        result_payload=getattr(run_record, "result_payload", None),
-        test_output=getattr(run_record, "test_output", None),
-        findings=[
-            f.to_dict() if hasattr(f, "to_dict") else f
-            for f in (getattr(run_record, "findings", []) or [])
-        ],
-        error_message=getattr(run_record, "error_message", None),
+        findings_count=getattr(run_record, "findings_count", 0) or len(raw_findings),
+        result_payload=redact_obj(getattr(run_record, "result_payload", None)),
+        test_output=redact(getattr(run_record, "test_output", None)) if getattr(run_record, "test_output", None) else None,
+        findings=redact_obj(raw_findings),
+        error_message=redact(getattr(run_record, "error_message", None)) if getattr(run_record, "error_message", None) else None,
         created_at=getattr(run_record, "created_at", datetime.now(timezone.utc)),
         completed_at=getattr(run_record, "completed_at", None),
     )
+    return detail
 
 
 def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
     if isinstance(item, AnalysisRunSummary):
         return item
     if isinstance(item, dict):
-        return AnalysisRunSummary.model_validate(item)
+        normalized = dict(redact_obj(item))
+        if normalized.get("feature_type"):
+            normalized["feature_type"] = normalize_analysis_feature_type(
+                normalized.get("feature_type")
+            )
+        return AnalysisRunSummary.model_validate(normalized)
 
     status_val = getattr(item, "status", "COMPLETED")
     if hasattr(status_val, "value"):
@@ -1218,7 +1414,9 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
     feature_val = getattr(item, "feature_type", "explain")
     if hasattr(feature_val, "value"):
         feature_val = feature_val.value
+    feature_val = normalize_analysis_feature_type(feature_val) or "explain"
 
+    raw_err = getattr(item, "error_message", None)
     return AnalysisRunSummary(
         id=str(getattr(item, "id")),
         repository_id=str(getattr(item, "repository_id", repository_id)),
@@ -1231,7 +1429,7 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
         end_line=getattr(item, "end_line", None),
         source_revision=getattr(item, "source_revision", None),
         findings_count=getattr(item, "findings_count", 0) or 0,
-        error_message=getattr(item, "error_message", None),
+        error_message=redact(raw_err) if raw_err else None,
         created_at=getattr(item, "created_at", datetime.now(timezone.utc)),
         completed_at=getattr(item, "completed_at", None),
     )
