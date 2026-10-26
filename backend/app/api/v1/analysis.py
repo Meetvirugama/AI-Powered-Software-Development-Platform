@@ -1040,6 +1040,21 @@ async def review_code(
                 error_message=exc.message,
             )
         raise
+    except Exception as exc:
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="review",
+                status="FAILED",
+                target=history_target,
+                revision=resolved.revision,
+                error_message=str(exc),
+            )
+        raise
 
     extra_static_raw: list[Any] = []
     scanner_warnings: list[str] = []

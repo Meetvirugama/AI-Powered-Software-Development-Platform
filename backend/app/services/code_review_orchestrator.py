@@ -784,7 +784,7 @@ def normalize_and_ground_review_findings(
             continue
 
         # 2. Ground against allowed_paths / indexed_paths when repository has indexed files
-        if resolved.allowed_paths and clean_path not in resolved.allowed_paths:
+        if resolved.indexed_paths and clean_path not in resolved.allowed_paths:
             continue
 
         # Security (W2 Day 5, Sukun): bound line references for EVERY target type
@@ -939,17 +939,8 @@ def build_grounded_review_report(
     for f in findings:
         cat_counts[f.category] = cat_counts.get(f.category, 0) + 1
 
-    computed_risk = compute_review_risk_level(findings)
     if explicit_risk_level in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"):
-        risk_order = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
-        if not findings:
-            final_risk = "NONE"
-        else:
-            final_risk = (
-                explicit_risk_level
-                if risk_order.get(explicit_risk_level, 0) >= risk_order.get(computed_risk, 0)
-                else computed_risk
-            )
+        final_risk = explicit_risk_level
     else:
         final_risk = computed_risk
 

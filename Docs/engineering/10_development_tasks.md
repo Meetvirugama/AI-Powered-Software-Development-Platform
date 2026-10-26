@@ -55,7 +55,7 @@ Provide four standalone, production-ready developer intelligence capabilities in
 | W2-02 | Pydantic output schemas (`CodeExplanation`, `BugFinding`, `TestGen`, `ReviewReport`) | Dev | P0 | IN PROGRESS | `backend/ai/schemas/` models & validation tests |
 | W2-03 | Repository Explorer & Drawer UI foundations | Dhramraj | P0 | IN PROGRESS | Source viewer with line numbers & feature action buttons |
 | W2-04 | Analysis API routing (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) | Yug | P0 | IN PROGRESS | Validated request/response schemas & repository auth |
-| W2-05 | Analysis run persistence (`analysis_runs`, `code_findings`) | Om | P0 | IN PROGRESS | SQLAlchemy models, Alembic migration & history query |
+| W2-05 | Analysis run persistence (`analysis_runs`, `code_findings`) | Om | P0 | DONE | SQLAlchemy models, Alembic migration, `AnalysisRunRepository`, & History Services (Day 1–5: Explain, Bugs, Tests, Review) |
 | W2-06 | GitHub source service (files, commits, PR diffs) | Parth | P0 | IN PROGRESS | Authorized diff provider, revision integrity |
 | W2-07 | AST symbol range resolution, target selector & rule integration | Prit | P0 | DONE | Exact line mapping, `TargetSelector`, and `ASTBugAnalyzer` with 10 structural rules |
 | W2-08 | Static scanner adapter (Ruff, Bandit, secret scanner) | Devu | P0 | IN PROGRESS | Normalized static finding schemas & deduplication |
@@ -99,7 +99,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | **Dev** | Output Schemas & AI Engine Services | Pydantic models for Explanation, Bugs, Tests, and Review |
 | **Dhramraj** | Workbench UI & Feature Drawers | Code intelligence panels in fixed-viewport React 19 layout |
 | **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
-| **Om** | Analysis Persistence & Models | `analysis_runs`, `code_findings` models and migrations |
+| **Om** | Analysis Persistence & History Services | `analysis_runs`, `code_findings` models, Alembic migration, `AnalysisRunRepository`, Day 1–5 History Services (Explanation, Bug Scan, Test Gen, Review) |
 | **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
 | **Prit** | AST Symbol, Scanner & Review Source Mapper | `ReviewSourceMapper`, `FrameworkDetector`, `ASTBugAnalyzer`, `TargetSelector` |
 | **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |

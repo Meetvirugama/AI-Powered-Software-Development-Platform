@@ -1,19 +1,21 @@
-"""Standalone Code Review History Service for Week 2 Day 5–6 (Developer Intelligence Suite).
+"""Standalone AI Code Review History Service for Week 2 Day 5–6 (Developer Intelligence Suite).
 
-Owner: Om (Database & Persistence) & Yug (API Integration)
+Owner: Om — Database & Persistence.
 
 Provides business-logic and session-managed orchestration for:
-1. Persisting completed code review runs (`feature_type="review"`) with structured `ReviewReport`
-   and categorized `ReviewFinding` rows across `correctness`, `security`, `performance`,
-   `reliability`, and `maintainability`.
-2. Persisting failed code review runs (`status="FAILED"`, `error_message`) separately from
-   successful zero-finding review reports (`status="COMPLETED"`, `total_findings=0`, `risk_level="NONE"`).
-3. Ensuring a review of a newer revision does not silently overwrite previous revision results
-   (`Docs/week2.md` §9 & §10).
-4. History retrieval with pagination, ordering (newest first), and multi-criteria filtering
-   (by status, target_path, source_revision).
-5. Reopening past code review runs from history with full fidelity (Scenario D Step 7).
-6. Multi-tenant repository isolation: strictly enforcing repository boundary checks on all queries.
+1. Persisting completed standalone AI code reviews with categorized findings (correctness, security,
+   performance, reliability, maintainability), source locations, and revision metadata.
+2. Persisting failed review runs separately with descriptive error messages,
+   strictly preventing execution failures from masquerading as clean reviews with zero findings.
+3. Preserving repository_id, target coordinates (file, commit SHA, PR diff, unified diff),
+   and source revisions (git commit SHA, PR number, base/head revisions).
+4. Ensuring reviews of newer revisions never overwrite historical results across commits.
+5. History retrieval with pagination, ordering (newest first), and multi-criteria filtering
+   (by status, target_path, source_revision, commit_sha, pr_number).
+6. Reopening past review runs from persistent history with full fidelity matching ReviewReportResponse
+   (Scenario D Step 7).
+7. Multi-tenant repository isolation: strictly enforcing repository boundary checks on all operations.
+8. Protocol compatibility for `app.state.review_history_service` and route handlers.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Generator, List, Optional, Sequence, Tuple
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 class ReviewHistoryService:
     """Service managing persistent history for Standalone AI Code Review runs and findings."""
+
+    __test__ = False
 
     def __init__(
         self,
@@ -62,7 +66,7 @@ class ReviewHistoryService:
         raise RuntimeError("No database session or session_factory configured for ReviewHistoryService.")
 
     # -----------------------------------------------------------------------
-    # 1. Save Completed & Failed Review Runs
+    # 1. Save Completed & Failed Reviews
     # -----------------------------------------------------------------------
 
     def save_review(
@@ -73,33 +77,59 @@ class ReviewHistoryService:
         *,
         findings: Optional[Sequence[Any]] = None,
         status: str = AnalysisRunStatus.COMPLETED.value,
+        review_target: Optional[Any] = None,
+        target: Optional[Any] = None,
+        commit_sha: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        diff: Optional[str] = None,
+        base_revision: Optional[str] = None,
+        head_revision: Optional[str] = None,
         source_revision: Optional[str] = None,
+        target_symbol: Optional[str] = None,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
         user_id: Optional[uuid.UUID | str] = None,
         error_message: Optional[str] = None,
         run_id: Optional[uuid.UUID | str] = None,
-        target: Optional[Any] = None,
         result_payload: Optional[dict[str, Any]] = None,
+        missing_context: Optional[Sequence[str]] = None,
+        deduplicate_findings: bool = True,
+        deduplicate_run: bool = False,
         created_at: Optional[datetime | str] = None,
         completed_at: Optional[datetime | str] = None,
         db: Optional[Session] = None,
+        **extra_kwargs: Any,
     ) -> AnalysisRun:
-        """Store a completed or failed standalone code review run with structured findings."""
+        """Store a completed or failed code review with rich structured findings (Week 2 — Day 5)."""
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.save_review_run(
                 repository_id=repository_id,
-                target_path=target_path,
+                review_target=review_target or target,
                 report=report,
                 findings=findings,
                 status=status,
+                target_path=target_path,
+                target_symbol=target_symbol,
+                start_line=start_line,
+                end_line=end_line,
                 source_revision=source_revision,
+                commit_sha=commit_sha,
+                pr_number=pr_number,
+                diff=diff,
+                base_revision=base_revision,
+                head_revision=head_revision,
                 user_id=user_id,
                 error_message=error_message,
                 run_id=run_id,
-                target=target,
+                target=target or review_target,
                 result_payload=result_payload,
+                missing_context=missing_context,
+                deduplicate_findings=deduplicate_findings,
+                deduplicate_run=deduplicate_run,
                 created_at=created_at,
                 completed_at=completed_at,
+                **extra_kwargs,
             )
 
     def record_failure(
@@ -108,28 +138,89 @@ class ReviewHistoryService:
         error_message: str = "Code review execution failed.",
         *,
         target_path: Optional[str] = None,
+        review_target: Optional[Any] = None,
+        target: Optional[Any] = None,
         source_revision: Optional[str] = None,
+        commit_sha: Optional[str] = None,
+        pr_number: Optional[int] = None,
         user_id: Optional[uuid.UUID | str] = None,
         run_id: Optional[uuid.UUID | str] = None,
-        target: Optional[Any] = None,
+        created_at: Optional[datetime | str] = None,
         db: Optional[Session] = None,
+        **extra_kwargs: Any,
     ) -> AnalysisRun:
-        """Store a failed review run separately from successful zero-finding review reports."""
+        """Explicitly record a failed code review run in persistence."""
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.record_review_failure(
                 repository_id=repository_id,
-                target_path=target_path,
                 error_message=error_message,
+                target_path=target_path,
+                review_target=review_target or target,
+                target=target or review_target,
                 source_revision=source_revision,
+                commit_sha=commit_sha,
+                pr_number=pr_number,
                 user_id=user_id,
                 run_id=run_id,
-                target=target,
+                created_at=created_at,
+                **extra_kwargs,
             )
 
     # -----------------------------------------------------------------------
-    # 2. History Retrieval, Reopening & Filtering
+    # 2. History Retrieval, Reopening & Queries
     # -----------------------------------------------------------------------
+
+    def get_review(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> Optional[AnalysisRun]:
+        """Fetch a specific review run with eager-loaded findings."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.get_review_run(run_id, repository_id=repository_id)
+
+    get_review_by_id = get_review
+
+    def reopen_review(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Reopen and reconstitute a past review run matching ReviewReportResponse (Scenario D Step 7)."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.reopen_review(run_id, repository_id=repository_id)
+
+    def list_reviews(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        status: Optional[str] = None,
+        target_path: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        commit_sha: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        offset: int = 0,
+        limit: int = 50,
+        db: Optional[Session] = None,
+    ) -> Tuple[List[AnalysisRun], int]:
+        """List paginated review runs for an authorized repository, newest first."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.list_review_runs(
+                repository_id=repository_id,
+                status=status,
+                target_path=target_path,
+                source_revision=source_revision,
+                commit_sha=commit_sha,
+                pr_number=pr_number,
+                offset=offset,
+                limit=limit,
+            )
 
     def list_history(
         self,
@@ -142,59 +233,106 @@ class ReviewHistoryService:
         page_size: int = 20,
         db: Optional[Session] = None,
     ) -> Tuple[List[AnalysisRun], int]:
-        """List paginated code review runs for an authorized repository, newest first."""
+        """List paginated code review runs using 1-based page index (compatible with integration tests)."""
         offset = max(0, (page - 1) * page_size)
-        with self._get_session(db) as session:
-            repo = AnalysisRunRepository(session)
-            return repo.list_review_runs(
-                repository_id=repository_id,
-                status=status,
-                target_path=target_path,
-                source_revision=source_revision,
-                offset=offset,
-                limit=page_size,
-            )
+        return self.list_reviews(
+            repository_id=repository_id,
+            status=status,
+            target_path=target_path,
+            source_revision=source_revision,
+            offset=offset,
+            limit=page_size,
+            db=db,
+        )
 
-    def get_review_by_id(
-        self,
-        run_id: uuid.UUID | str,
-        repository_id: Optional[uuid.UUID | str] = None,
-        db: Optional[Session] = None,
-    ) -> Optional[AnalysisRun]:
-        """Fetch a specific review run with repository isolation check."""
-        with self._get_session(db) as session:
-            repo = AnalysisRunRepository(session)
-            return repo.get_review_run(run_id, repository_id=repository_id)
-
-    def reopen_review(
-        self,
-        run_id: uuid.UUID | str,
-        repository_id: Optional[uuid.UUID | str] = None,
-        db: Optional[Session] = None,
-    ) -> Optional[dict[str, Any]]:
-        """Reopen a code review run from history matching ReviewReportResponse (Scenario D Step 7)."""
-        with self._get_session(db) as session:
-            repo = AnalysisRunRepository(session)
-            return repo.reopen_review(run_id, repository_id=repository_id)
-
-    def get_latest(
+    def get_latest_review(
         self,
         repository_id: uuid.UUID | str,
         target_path: Optional[str] = None,
         *,
         source_revision: Optional[str] = None,
+        commit_sha: Optional[str] = None,
+        pr_number: Optional[int] = None,
         status: str = AnalysisRunStatus.COMPLETED.value,
         db: Optional[Session] = None,
     ) -> Optional[AnalysisRun]:
-        """Get the most recent completed review run matching target and revision."""
+        """Fetch the latest review run matching given target criteria."""
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.get_latest_review(
                 repository_id=repository_id,
                 target_path=target_path,
                 source_revision=source_revision,
+                commit_sha=commit_sha,
+                pr_number=pr_number,
                 status=status,
             )
+
+    get_latest = get_latest_review
+
+    def find_duplicate_review(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        target_path: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        commit_sha: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        status: str = AnalysisRunStatus.COMPLETED.value,
+        db: Optional[Session] = None,
+    ) -> Optional[AnalysisRun]:
+        """Check for duplicate completed review runs."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.find_duplicate_review(
+                repository_id=repository_id,
+                target_path=target_path,
+                source_revision=source_revision,
+                commit_sha=commit_sha,
+                pr_number=pr_number,
+                status=status,
+            )
+
+    def delete_review(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> bool:
+        """Delete a review run with repository boundary check."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.delete_review_run(run_id, repository_id=repository_id)
+
+    def get_review_summary(
+        self,
+        repository_id: uuid.UUID | str,
+        db: Optional[Session] = None,
+    ) -> dict[str, Any]:
+        """Compute aggregate review statistics for a repository."""
+        runs, total_runs = self.list_reviews(repository_id, limit=500, db=db)
+        total_findings = sum(r.findings_count for r in runs)
+        completed_runs = sum(1 for r in runs if r.status == AnalysisRunStatus.COMPLETED.value)
+        failed_runs = sum(1 for r in runs if r.status == AnalysisRunStatus.FAILED.value)
+
+        categories: dict[str, int] = {}
+        severities: dict[str, int] = {}
+
+        for run in runs:
+            for f in run.findings:
+                cat = str(f.category).lower()
+                categories[cat] = categories.get(cat, 0) + 1
+                sev = str(f.severity).upper()
+                severities[sev] = severities.get(sev, 0) + 1
+
+        return {
+            "total_runs": total_runs,
+            "completed_runs": completed_runs,
+            "failed_runs": failed_runs,
+            "total_findings": total_findings,
+            "category_counts": categories,
+            "severity_counts": severities,
+        }
 
     # -----------------------------------------------------------------------
     # 3. Router & Orchestrator Protocol Compatibility
@@ -220,6 +358,7 @@ class ReviewHistoryService:
         offset: int = 0,
         limit: int = 20,
         db: Optional[Session] = None,
+        **extra_kwargs: Any,
     ) -> Tuple[List[AnalysisRun], int]:
         """Compatible with GET /repositories/{id}/analysis-runs."""
         with self._get_session(db) as session:
