@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useRepository,
   useRepositoryFiles,
@@ -66,13 +66,75 @@ import type {
 
 const SYNC_POLL_INTERVAL_MS = 3000;
 
+/**
+ * Normalize a repository file path for consistent matching across platforms:
+ * - Trims leading and trailing whitespace
+ * - Converts backslashes to forward slashes
+ * - Strips leading relative prefixes ('./' or '/')
+ * - Normalizes to lowercase for case-insensitive lookup
+ */
+function normalizeFilePath(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .toLowerCase();
+}
+
+/**
+ * Find a repository file matching the requested path.
+ * Searches for an exact normalized path match first, and falls back to
+ * a suffix match at path boundaries only if no exact match is found.
+ *
+ * @param files Array of loaded repository files
+ * @param requestedPath Path requested via query parameter or cited source reference
+ * @returns The matching RepositoryFile or undefined
+ */
+function findMatchingRepositoryFile(
+  files: RepositoryFile[],
+  requestedPath: string | null | undefined,
+): RepositoryFile | undefined {
+  if (!requestedPath || !files || files.length === 0) return undefined;
+  const targetNorm = normalizeFilePath(requestedPath);
+  if (!targetNorm) return undefined;
+
+  // 1. Exact normalized path match has strict priority
+  const exact = files.find((f) => normalizeFilePath(f.path) === targetNorm);
+  if (exact) return exact;
+
+  // 2. Suffix match at path segment boundary only if no exact match exists
+  return files.find((f) => {
+    const fileNorm = normalizeFilePath(f.path);
+    return fileNorm.endsWith('/' + targetNorm) || targetNorm.endsWith('/' + fileNorm);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Repository Detail Page (Code Intelligence Workbench)
 // ---------------------------------------------------------------------------
 
+/**
+ * Render the route's repository explorer and analysis workbench.
+ * The `file` query parameter selects a matching path among the first 100 fetched
+ * files unless the user has selected a file. Matching ignores case, normalizes
+ * separators and a leading `/` or `./`, and accepts suffixes at path boundaries.
+ * Without a user selection, an unmatched citation shows an unavailable-file
+ * message after files load; no `file` defaults to README.md or the first file.
+ *
+ * With a matching file, `start` supplies a positive, 1-based line number parsed
+ * as an integer; `end` is inclusive and defaults to start if absent, invalid, or
+ * earlier. `symbol` optionally labels the citation. Explicit highlight selection
+ * or clearing takes precedence over this query-derived highlight.
+ */
 export function RepositoryDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const fileParam = searchParams.get('file');
+  const startParam = searchParams.get('start');
+  const endParam = searchParams.get('end');
+  const symbolParam = searchParams.get('symbol');
 
   const [userSelectedFile, setUserSelectedFile] = useState<RepositoryFile | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
@@ -96,7 +158,7 @@ export function RepositoryDetail() {
   });
   const [selectedFrameworkOverride, setSelectedFrameworkOverride] = useState<SupportedTestFramework | null>(null);
   const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
-  const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
+  const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null | undefined>(undefined);
 
   // ------------------------------------------------------------------
   // Mutations
@@ -195,13 +257,56 @@ export function RepositoryDetail() {
     isError: depsError,
   } = useRepositoryDependencies(id, { enabled: isReady });
 
-  // Auto-select initial file (prefer README.md, or first file) once files load
+  // Check if cited file from query parameters is unavailable in indexed files.
+  // A file is only reported unavailable when the loaded file list is complete.
+  const citedFileUnavailable = useMemo(() => {
+    if (!fileParam || !filesData?.items || filesLoading) return null;
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (matching) return null;
+
+    // Only report unavailable if the loaded file list is known to be complete
+    const isListComplete = (filesData.total ?? filesData.items.length) <= filesData.items.length;
+    return isListComplete ? fileParam : null;
+  }, [fileParam, filesData, filesLoading]);
+
+  // Deep-linked cited source reference computed declaratively from searchParams
+  const deepLinkedHighlight = useMemo<SourceReference | null>(() => {
+    if (!fileParam || !startParam || !filesData?.items) return null;
+    const start = parseInt(startParam, 10);
+    if (isNaN(start) || start <= 0) return null;
+    const end = endParam ? parseInt(endParam, 10) : start;
+    const validEnd = !isNaN(end) && end >= start ? end : start;
+
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (!matching) return null;
+
+    return {
+      file_path: matching.path,
+      start_line: start,
+      end_line: validEnd,
+      symbol: symbolParam || undefined,
+    };
+  }, [fileParam, startParam, endParam, symbolParam, filesData]);
+
+  // Active highlighted source: uses explicit user interaction if set, otherwise deep-linked citation
+  const highlightedSource =
+    userHighlightedSource !== undefined ? userHighlightedSource : deepLinkedHighlight;
+
+  // Auto-select initial file (prefer user-selected, query param file, README.md, or first file) once files load
   const selectedFile = useMemo(() => {
     if (userSelectedFile) return userSelectedFile;
+    if (fileParam && filesData?.items) {
+      const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+      if (matching) return matching;
+      // If a cited file was requested but not found in the loaded files, do not select an unrelated file
+      return null;
+    }
+    // If a deep-linked file was cited but is unavailable, DO NOT select an unrelated file as though it matched
+    if (citedFileUnavailable) return null;
     if (!filesData?.items || filesData.items.length === 0) return null;
     const readme = filesData.items.find((f) => f.path.toLowerCase().endsWith('readme.md'));
     return readme ?? filesData.items[0];
-  }, [userSelectedFile, filesData]);
+  }, [userSelectedFile, fileParam, citedFileUnavailable, filesData]);
 
   // Derived active target: defaults to full file unless user targeted a symbol/range on current file
   const activeTarget: AnalysisTarget = useMemo(() => {
@@ -396,18 +501,22 @@ export function RepositoryDetail() {
     }
   }
 
+  /**
+   * Highlight a citation in the selected file or switch to the first matching
+   * loaded file, storing its actual path. Missing or unmatched paths clear the
+   * highlight without changing the selected file or restoring the URL highlight.
+   */
   function handleSelectSourceReference(source: SourceReference) {
     if (!source.file_path) {
-      setHighlightedSource(null);
+      setUserHighlightedSource(null);
       return;
     }
 
-    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    const targetNorm = normalize(source.file_path);
+    const targetNorm = normalizeFilePath(source.file_path);
 
     // If currently selected file matches
-    if (selectedFile && normalize(selectedFile.path) === targetNorm) {
-      setHighlightedSource({
+    if (selectedFile && normalizeFilePath(selectedFile.path) === targetNorm) {
+      setUserHighlightedSource({
         ...source,
         file_path: selectedFile.path,
       });
@@ -416,15 +525,10 @@ export function RepositoryDetail() {
 
     // If cited reference points to a different file in the repository, navigate to it
     if (filesData?.items) {
-      const matchingFile = filesData.items.find(
-        (f) =>
-          normalize(f.path) === targetNorm ||
-          normalize(f.path).endsWith('/' + targetNorm) ||
-          targetNorm.endsWith('/' + normalize(f.path))
-      );
+      const matchingFile = findMatchingRepositoryFile(filesData.items, source.file_path);
       if (matchingFile) {
         setUserSelectedFile(matchingFile);
-        setHighlightedSource({
+        setUserHighlightedSource({
           ...source,
           file_path: matchingFile.path,
         });
@@ -433,7 +537,7 @@ export function RepositoryDetail() {
     }
 
     // Target file is unavailable in the file tree; do not highlight unrelated lines in current file
-    setHighlightedSource(null);
+    setUserHighlightedSource(null);
   }
 
   function handleReopenReview(data: ReviewReportResponse) {
@@ -922,7 +1026,7 @@ export function RepositoryDetail() {
                     selectedFile={selectedFile}
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
-                      setHighlightedSource(null);
+                      setUserHighlightedSource(null);
                       setExplanationResult(null);
                       setBugResult(null);
                       setTestResult(null);
@@ -945,13 +1049,39 @@ export function RepositoryDetail() {
                       activeTarget={activeTarget}
                       onTargetChange={setCustomTarget}
                       highlightedSource={highlightedSource}
-                      onClearHighlightedSource={() => setHighlightedSource(null)}
+                      onClearHighlightedSource={() => setUserHighlightedSource(null)}
                       isAnalyzing={isAnalysisPending}
                       onTriggerExplain={() => {
                         setActiveFeature('explain');
                         handleRunAnalysis('explain', activeTarget);
                       }}
                     />
+                  ) : citedFileUnavailable ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 max-w-md">
+                        <FileCode className="h-8 w-8 mb-2 mx-auto text-amber-500" />
+                        <h4 className="text-sm font-semibold text-foreground">Cited File Unavailable</h4>
+                        <p className="text-xs text-muted-foreground mt-1 break-all">
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{citedFileUnavailable}</code> was not found in the indexed repository files.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          Please select an available file from the explorer tree on the left.
+                        </p>
+                      </div>
+                    </div>
+                  ) : fileParam && !filesLoading ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-6 max-w-md">
+                        <FileCode className="h-8 w-8 mb-2 mx-auto text-blue-400" />
+                        <h4 className="text-sm font-semibold text-foreground">Cited File Not in Loaded Preview</h4>
+                        <p className="text-xs text-muted-foreground mt-1 break-all">
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{fileParam}</code> was not found in the first {filesData?.items?.length ?? 0} loaded files (total: {filesData?.total ?? 'unknown'}).
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          Please select an available file from the explorer tree on the left.
+                        </p>
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
                       <Code className="h-8 w-8 mb-2 opacity-40 text-primary" />

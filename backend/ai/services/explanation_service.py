@@ -88,6 +88,9 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                 retryable=True,
             )
 
+        from app.services.explanation_orchestrator import enforce_gateway_provider_policy
+        enforce_gateway_provider_policy(self._llm)
+
         rendered_context = (
             ContextBuilder().render_intelligence_data(context)
             if context is not None
