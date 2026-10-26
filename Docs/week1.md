@@ -1,5 +1,11 @@
 # Week 1 — Repository Intelligence Foundation
 
+> **Status: 100% COMPLETE ✅**  
+> **Test Suite:** 369 passed, 1 skipped, 0 failed  
+> **Code Coverage:** 71.31% (passes `--cov-fail-under=70` requirement)  
+> **Verified Providers:** Google Gemini (`gemini-flash-lite-latest`) & Groq (`llama-3.3-70b-versatile`)  
+> **Authoritative Next Phase:** Week 2 — Developer Intelligence Suite (`Docs/week2.md`)
+
 Week 1 builds the **entire knowledge layer** the agent will depend on from Week 2 onward. Every component — database, GitHub integration, code parser, indexer, and RAG pipeline — must be production-ready before autonomous agent execution begins.
 
 ---
@@ -1571,53 +1577,53 @@ flowchart TD
 ---
 
 # Week 1 Acceptance Checklist
-
+ 
 ## Infrastructure
-- [ ] Backend starts and passes health check
-- [ ] Frontend starts and loads login page
-- [ ] PostgreSQL with pgvector extension running
-- [ ] Redis running for job queue and token cache
-- [ ] Alembic migrations run cleanly
-- [ ] CI pipeline runs all tests
-
+- [x] Backend starts and passes health check (`GET /api/v1/health`)
+- [x] Frontend starts and loads login page (`/login`)
+- [x] PostgreSQL with pgvector extension running
+- [x] Redis running for job queue and token cache
+- [x] Alembic migrations run cleanly (5 migrations up to `e7b8c9d0f1a2`)
+- [x] CI pipeline runs all tests (369 passed, 71.31% coverage)
+ 
 ## GitHub Integration
-- [ ] GitHub App installed in organization
-- [ ] Installation ID stored in database
-- [ ] Installation token manager caches and refreshes tokens
-- [ ] Repository list API returns user's accessible repos
-- [ ] Authenticated shallow clone works on a private repository
-
+- [x] GitHub App installed in organization
+- [x] Installation ID stored in database (`github_installations`)
+- [x] Installation token manager caches and refreshes tokens via Redis
+- [x] Repository list API returns user's accessible repos (`GET /api/v1/repositories`)
+- [x] Authenticated shallow clone works on a private repository
+ 
 ## Repository Engine
-- [ ] FileWalker skips .git, node_modules, binaries, files > 1MB
-- [ ] Language detection works for Python, JS, TS, Java, Go
-- [ ] tree-sitter parses all supported languages without crashing
-- [ ] Function and class symbols extracted with correct line numbers
-- [ ] Import edges recorded in symbol_edges table
-- [ ] Dependency graph queryable by symbol
-
+- [x] FileWalker skips .git, node_modules, binaries, files > 1MB
+- [x] Language detection works for Python, JS, TS, Java, Go, Rust, C, C++
+- [x] tree-sitter parses all supported languages without crashing
+- [x] Function and class symbols extracted with correct line numbers
+- [x] Import edges recorded in symbol_edges table
+- [x] Dependency graph queryable by symbol
+ 
 ## RAG Pipeline
-- [ ] Chunks generated at symbol boundaries (not arbitrary character windows)
-- [ ] Content hashes stored for incremental indexing
-- [ ] Embeddings stored in pgvector
-- [ ] Lexical search returns results for keyword queries
-- [ ] Vector search returns results for semantic queries
-- [ ] RRF fusion produces better results than either alone
-- [ ] Reranker selects top-8 most relevant chunks
-- [ ] Context builder assembles code + memory + metadata correctly
-
+- [x] Chunks generated at symbol boundaries (not arbitrary character windows)
+- [x] Content hashes stored for incremental indexing
+- [x] Embeddings stored in pgvector (`code_chunks.embedding`)
+- [x] Lexical search returns results for keyword queries (`LexicalRetriever`)
+- [x] Vector search returns results for semantic queries (`VectorRetriever`)
+- [x] RRF fusion produces better results than either alone (`RRFFusion`)
+- [x] Reranker selects top-8 most relevant chunks (`CrossEncoderReranker`)
+- [x] Context builder assembles code + memory + metadata correctly (`ContextBuilder`)
+ 
 ## Chat
-- [ ] Chat endpoint accepts a question and repository ID
-- [ ] Response includes answer text
-- [ ] Response includes file + line number sources
-- [ ] All cited sources actually exist in the repository (grounding check)
-
+- [x] Chat endpoint accepts a question and repository ID (`POST /api/v1/repositories/:id/chat`)
+- [x] Response includes answer text
+- [x] Response includes file + line number sources
+- [x] All cited sources actually exist in the repository (grounding check)
+ 
 ## Security
-- [ ] No secrets committed to git
-- [ ] No secrets stored in code_chunks or memory_entries
-- [ ] User A cannot access User B's repository through any API
-- [ ] Path traversal rejected in file access
-- [ ] Prompt injection in README does not affect LLM behavior
-
+- [x] No secrets committed to git
+- [x] No secrets stored in code_chunks or memory_entries
+- [x] User A cannot access User B's repository through any API (`test_repository_isolation.py`)
+- [x] Path traversal rejected in file access (`input_security.py`)
+- [x] Prompt injection in README does not affect LLM behavior (`test_security_day5.py`)
+ 
 ---
 
 # Week 1 Definition of Done

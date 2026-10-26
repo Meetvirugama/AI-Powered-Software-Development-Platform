@@ -1,204 +1,107 @@
 # 10. Development Tasks — Master Task Board
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15
 
 > [!NOTE]
-> Task data is derived from `Docs/daily_tasks.md`, `Docs/week1.md`, and current source code state.
+> Task data is synchronized with `Docs/daily_tasks.md`, `Docs/week1.md`, `Docs/week2.md`, and `Docs/week3.md`.
 
 ---
 
 ## Status Legend
 
 ```
-DONE        — Merged and working
-IN PROGRESS — Actively being developed
-STUB        — Interface defined, implementation pending
-BLOCKED     — Waiting on dependency
-TODO        — Not yet started
-BACKLOG     — Future sprint
+DONE        — Merged, tested, and verified
+IN PROGRESS — Actively being implemented
+TODO        — Planned and scheduled
+BLOCKED     — Waiting on dependency or review
 ```
 
 ---
 
-## Week 1 Task Board
+## WEEK 1 — Repository Intelligence Foundation (100% COMPLETE)
 
-### Week 1 Goal
-By Day 7: a user can connect a GitHub repository, the platform clones and scans it, extracts symbols, indexes code into pgvector, and answers repository-specific questions through the frontend with file + line sources.
+### Week 1 Milestone Goal
+A user connects a GitHub repository, the backend clones and scans it, extracts symbols and dependency edges, indexes chunks into pgvector, and answers grounded questions via the fixed-viewport React 19 Workbench with source citations.
 
----
-
-## Infrastructure & Foundation
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-01 | FastAPI project skeleton | Yug | P0 | DONE | — | `app/main.py`, config, logging, health endpoint |
-| W1-01a | `GET /api/v1/health` | Yug | P0 | DONE | W1-01 | Returns `{status:ok, version:1.0.0}` |
-| W1-01b | Docker Compose (PG + Redis) | Yug | P0 | DONE | — | `docker-compose.yml` |
-| W1-01c | `.env.example` | Yug | P0 | DONE | — | All required keys, no values |
-| W1-01d | `RequestIdMiddleware` + structured logging | Yug | P0 | DONE | W1-01 | `app/core/logging.py` |
-| W1-02 | DB foundation + pgvector | Om | P0 | STUB | W1-01 | `create_engine`, `Base`, `get_db()` done; models pending |
-| W1-02a | `TimestampedModel` mixin | Om | P0 | TODO | W1-02 | UUID PK, created_at, updated_at |
-| W1-02b | `CREATE EXTENSION vector` migration | Om | P0 | TODO | W1-02a | Alembic migration |
-| W1-19 | Security baseline + pre-commit hooks | Sukun | P0 | TODO | W1-01 | detect-secrets, `.pre-commit-config.yaml` |
-
----
-
-## Authentication
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-03 | GitHub App setup | Parth | P0 | TODO | — | App registered, env vars documented |
-| W1-04a | `GET /auth/github/login` | Yug | P0 | STUB | W1-03 | OAuth redirect |
-| W1-04b | `GET /auth/github/callback` | Yug | P0 | STUB | W1-03, W1-02b | Exchange code → JWT |
-| W1-04c | `GET /auth/me` | Yug | P0 | STUB | W1-04b | Return user from JWT |
-| W1-04d | `POST /auth/logout` | Yug | P0 | TODO | W1-04b | Redis JWT blocklist |
-| W1-04e | `JWTMiddleware` | Yug | P0 | TODO | W1-04b | Auth on all non-auth routes |
-| W1-04f | Standard error handler | Yug | P0 | TODO | W1-01 | `{error:{code, message, retryable}}` |
+| Task ID | Task | Owner | Priority | Status | Verification / Artifacts |
+|---|---|---|---|---|---|
+| W1-01 | FastAPI project skeleton + config + logging | Yug | P0 | DONE | `app/main.py`, `app/core/logging.py`, health API |
+| W1-02 | Database foundation + pgvector + migrations | Om | P0 | DONE | Alembic migrations, `code_chunks`, `memory_entries` |
+| W1-03 | GitHub App integration + OAuth flow | Parth / Yug | P0 | DONE | `app/integrations/github/`, JWT cookie auth |
+| W1-04 | Repository Sync Service & Redis queue | Yug / Parth | P0 | DONE | `app/services/repository_sync.py`, worker loop |
+| W1-05 | tree-sitter AST parser & language detector | Prit | P0 | DONE | `backend/scanner/`, 8 languages detected |
+| W1-06 | Symbol & edge extractor | Prit | P0 | DONE | `symbols.py`, `graph.py`, symbol tables |
+| W1-07 | Symbol chunker & tiktoken token counter | Devu | P0 | DONE | `backend/indexer/chunker.py` |
+| W1-08 | LLM Gateway (Gemini + Groq) | Meet | P0 | DONE | `backend/ai/llm/client.py`, schemas & retries |
+| W1-09 | Embedding service & pgvector storage | Meet | P0 | DONE | `backend/ai/embeddings/service.py` |
+| W1-10 | Hybrid retrieval (Vector + Lexical FTS + RRF) | Meet | P0 | DONE | `vector.py`, `lexical.py`, `fusion.py`, `reranker.py` |
+| W1-11 | ContextBuilder with token budget & truncation | Meet | P0 | DONE | `backend/ai/context/builder.py` |
+| W1-12 | Prompt builder & output/grounding validator | Dev | P0 | DONE | `prompt_builder.py`, `validator.py`, `grounding.py` |
+| W1-13 | End-to-end RAG pipeline | Meet / Dev | P0 | DONE | `backend/ai/pipeline.py` |
+| W1-14 | Repository chat & search APIs | Yug | P0 | DONE | `POST /chat`, `POST /search` |
+| W1-15 | React 19 Workbench UI (Fixed Viewport + Panels) | Dhramraj | P0 | DONE | `frontend/src/pages/RepositoryChat.tsx` |
+| W1-16 | Security baseline, secret scrubbing & isolation | Sukun | P0 | DONE | `SecretScanner`, multi-tenant isolation tests |
+| W1-17 | Comprehensive regression test suite | Keval | P0 | DONE | 369 passed tests, 71.31% code coverage |
 
 ---
 
-## Database Models
+## WEEK 2 — Developer Intelligence Suite (ACTIVE)
 
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-OM-01 | `User` SQLAlchemy model | Om | P0 | TODO | W1-02b | `github_id`, `login`, `email`, `avatar_url` |
-| W1-OM-02 | `GitHubInstallation` model | Om | P0 | TODO | W1-OM-01 | |
-| W1-OM-03 | `Repository` model + `SyncStatus` enum | Om | P0 | TODO | W1-OM-02 | |
-| W1-OM-04 | Alembic migration for users/repos/installs | Om | P0 | TODO | W1-OM-03 | |
-| W1-OM-05 | `UserRepository` query layer | Om | P0 | TODO | W1-OM-04 | `create_user`, `get_by_github_id`, `get_by_id` |
-| W1-OM-06 | `RepositoryRepository` query layer | Om | P0 | TODO | W1-OM-04 | `create`, `get_by_id`, `list_by_user`, `update_sync_status` |
-| W1-OM-07 | `repository_files` model + migration | Om | P0 | TODO | W1-OM-04 | Needed by GroundingValidator Day 4 |
-| W1-OM-08 | `symbols` + `symbol_edges` models | Om | P0 | TODO | W1-OM-07 | |
-| W1-OM-09 | `code_chunks` model + HNSW index migration | Om | P0 | TODO | W1-OM-07 | Critical for vector retrieval |
+### Week 2 Milestone Goal
+Provide four standalone, production-ready developer intelligence capabilities in the Workbench: Code Explanation, Bug Detection, Test Generation, and Standalone AI Code Review.
 
----
-
-## GitHub Integration
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-06a | `POST /auth/github/installation` | Parth | P0 | TODO | W1-03, W1-OM-02 | Store installation in DB |
-| W1-06b | `InstallationTokenManager` | Parth | P0 | TODO | W1-03 | Redis cache, 55 min TTL |
-| W1-06c | `GitHubService` skeleton | Parth | P0 | TODO | W1-06b | `list_repositories`, `clone_repository`, etc. |
-
----
-
-## Repository Scanner
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-07a | `FileWalker.walk()` | Prit | P0 | DONE | — | Skip dirs, .gitignore, binary, size limit |
-| W1-07b | `LanguageDetector.detect()` | Prit | P0 | STUB | W1-07a | Extension + shebang heuristics |
-| W1-08a | tree-sitter parser integration | Prit | P0 | TODO | W1-07b | Python, TS, JS, Java, Go, Rust, C/C++ |
-| W1-08b | Symbol extraction | Prit | P0 | TODO | W1-08a | Classes, functions, methods, imports, constants |
-| W1-08c | Store symbols in DB | Prit | P0 | TODO | W1-08b, W1-OM-08 | Via Om's repository layer |
-| W1-09 | Dependency graph builder | Prit | P0 | STUB | W1-08b | `graph.py` — calls, imports, extends, implements |
+| Task ID | Task | Owner | Priority | Status | Deliverables |
+|---|---|---|---|---|---|
+| W2-01 | Shared `IntelligenceContext` interface & token bounding | Meet | P0 | DONE | `build_intelligence_context()`, `TargetSnippet`, caller graph |
+| W2-02 | Pydantic output schemas (`CodeExplanation`, `BugFinding`, `TestGen`, `ReviewReport`) | Dev | P0 | IN PROGRESS | `backend/ai/schemas/` models & validation tests |
+| W2-03 | Repository Explorer & Drawer UI foundations | Dhramraj | P0 | IN PROGRESS | Source viewer with line numbers & feature action buttons |
+| W2-04 | Analysis API routing (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) | Yug | P0 | IN PROGRESS | Validated request/response schemas & repository auth |
+| W2-05 | Analysis run persistence (`analysis_runs`, `code_findings`) | Om | P0 | DONE | SQLAlchemy models, Alembic migration, `AnalysisRunRepository`, & History Services (Day 1–5: Explain, Bugs, Tests, Review) |
+| W2-06 | GitHub source service (files, commits, PR diffs) | Parth | P0 | IN PROGRESS | Authorized diff provider, revision integrity |
+| W2-07 | AST symbol range resolution, target selector & rule integration | Prit | P0 | DONE | Exact line mapping, `TargetSelector`, and `ASTBugAnalyzer` with 10 structural rules |
+| W2-08 | Static scanner adapter (Ruff, Bandit, secret scanner) | Devu | P0 | IN PROGRESS | Normalized static finding schemas & deduplication |
+| W2-09 | Prompt-injection boundaries & secret redaction | Sukun | P0 | IN PROGRESS | Untrusted code boundaries & security test suite |
+| W2-10 | QA defect fixtures & acceptance test matrix | Keval | P0 | IN PROGRESS | Fixture repository with known bugs, QA evaluation suite |
+| W2-11 | Feature 1: `CodeExplanationService` & pipeline | Dev / Meet | P0 | IN PROGRESS | Purpose, logic flow, key symbols, data flow, limitations (Meet context enrichment done) |
+| W2-12 | Feature 2: `BugDetectionEngine` (Static + AI) | Dev / Devu | P0 | TODO | Off-by-one, null safety, resource leak, exception analysis |
+| W2-13 | Feature 3: `TestGenerationService` & `FrameworkDetector` | Dev / Prit | P0 | IN PROGRESS | `FrameworkDetector` (DONE - Prit), test file generation (Dev) |
+| W2-14 | Feature 4: `AICodeReviewEngine` & `ReviewSourceMapper` | Dev / Parth / Prit | P0 | IN PROGRESS | `ReviewSourceMapper` (DONE - Prit), diff review engine (Dev/Parth) |
+| W2-15 | Week 2 Integration, Hardening & Acceptance Gate | All | P0 | IN PROGRESS | Scenarios A–E, zero mock in production, docs update (Meet: Shared context verification DONE; Prit: AST & framework reliability, Day 7 acceptance suite & language limitations DONE) |
 
 ---
 
-## Indexer
+## WEEK 3 — Workflow Automation, GitHub Ecosystem & PR (UPCOMING)
 
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-10a | `SymbolChunker.chunk_symbols()` | Divu | P0 | DONE | — | function/class/module chunk types |
-| W1-10b | Embedding queue skeleton | Divu | P0 | TODO | W1-10a | `EmbeddingQueue.enqueue()` + `process_batch()` |
-| W1-10c | `ChunkStatus` enum | Divu | P0 | TODO | — | PENDING, PROCESSING, INDEXED, FAILED |
-| W1-11 | Store chunks + embeddings in DB | Om/Divu | P0 | TODO | W1-OM-09, W1-12 | Write to `code_chunks` table |
+### Week 3 Milestone Goal
+Convert verified developer intelligence into a controlled development workflow: Issue intake -> Task planning -> Human Approval Gate -> Isolated workspace -> Bounded test repair -> Verification -> GitHub Draft PR.
 
----
-
-## AI / ML Pipeline
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-12a | `LLMGateway` | Meet | P0 | DONE | — | Retry, logging, structured output |
-| W1-12b | `OpenAIProvider` | Meet | P0 | DONE | W1-12a | Chat completions, JSON mode, 3 retries |
-| W1-12c | `EmbeddingService` | Meet | P0 | DONE | — | Single + batch, dimension validation |
-| W1-12d | `OpenAIEmbeddingProvider` | Meet | P0 | DONE | W1-12c | text-embedding-3-small |
-| W1-13a | `VectorRetriever` | Meet | P0 | DONE | W1-OM-09 | pgvector cosine search, repository_id scoping |
-| W1-13b | `LexicalRetriever` | Meet | P0 | STUB | W1-OM-09 | PostgreSQL FTS ts_rank |
-| W1-13c | `RRFFusion` | Meet | P0 | STUB | W1-13a, W1-13b | k=60, Day 5 |
-| W1-13d | `CrossEncoderReranker` | Meet | P0 | STUB | W1-13c | ms-marco-MiniLM-L-6-v2, Day 5 |
-| W1-14 | `ContextBuilder.build()` | Meet | P0 | STUB | W1-13d | Day 6: dedup, token count, truncation |
-| W1-15a | `PromptBuilder` | Dev | P0 | DONE | — | `build_chat_prompt`, `build_summary_prompt` |
-| W1-15b | `OutputValidator.validate()` + `.repair()` | Dev | P0 | DONE | W1-12a | 2-retry repair loop |
-| W1-15c | `GroundingValidator.validate_sources()` | Dev | P0 | STUB | W1-OM-07 | DB query stub until Day 4 |
-| W1-15d | AI output schemas | Dev | P0 | DONE | — | `RepositoryAnswer`, `SourceReference`, `ErrorResponse` |
+| Task ID | Task | Owner | Priority | Status | Deliverables |
+|---|---|---|---|---|---|
+| W3-01 | GitHub Issue Intake & Finding-to-Issue Converter (F31) | Parth / Yug | P0 | TODO | Issue import API, issue creation from findings |
+| W3-02 | Task Planner & Structured Plan Schema (F32) | Meet / Dev | P0 | TODO | `TaskPlanner`, step dependencies, verification strategy |
+| W3-03 | Mandatory Human Approval Gate (F32) | Meet / Dhramraj | P0 | TODO | Server-enforced approval, invalidation on plan revision |
+| W3-04 | Isolated Workspace & Task Branch Manager (F33) | Prit / Parth | P0 | TODO | `.workspaces/task-<id>`, `agent/task-<id>` branch |
+| W3-05 | Tool Router & Allowed Command Policy Engine (F34) | Devu / Sukun | P0 | TODO | Command allowlist, sandboxed tool dispatch, audit logging |
+| W3-06 | Restricted Test Runner & Execution Loop (F35) | Prit / Devu | P0 | TODO | Command execution with timeouts and output bounds |
+| W3-07 | Bounded Self-Repair Loop (Max 3 attempts) (F35) | Meet / Dev | P0 | TODO | Failure diagnosis, targeted patch, task-level budget ceiling |
+| W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval | P0 | TODO | Separate verification check, static scan, AI code review |
+| W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug | P0 | TODO | Human push authorization, GitHub Draft PR with summary |
+| W3-10 | Task Dashboard, Progress & Timeline UI (F38) | Dhramraj | P0 | TODO | Live task progress, timeline events, side-by-side diff |
+| W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug | P0 | TODO | Task state recovery, idempotent operations, audit trails |
+| W3-12 | Security Attack Matrix & Release Sign-off (F40) | Sukun / Keval | P0 | TODO | Prompt-injection attacks, path traversal, full E2E demo |
 
 ---
 
-## Chat API & Frontend
+## Current Team Assignments
 
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-16 | `POST /api/v1/chat` | Yug | P0 | STUB | W1-15 | Full RAG pipeline wired to API |
-| W1-17a | Repository Chat page | Dhramraj | P1 | STUB | W1-16 | Chat UI with sources display |
-| W1-05a | Frontend project skeleton | Dhramraj | P0 | DONE | — | Vite + React + TypeScript + Zustand |
-| W1-05b | Auth store + Protected route | Dhramraj | P0 | DONE | — | `useAuthStore`, `ProtectedRoute` |
-| W1-05c | Repository store | Dhramraj | P0 | DONE | — | `useRepositoryStore` |
-| W1-05d | Login page | Dhramraj | P0 | STUB | W1-04a | GitHub OAuth button |
-| W1-05e | Dashboard page | Dhramraj | P0 | STUB | W1-16 | Repo sync status, recent activity |
-| W1-05f | Repositories page | Dhramraj | P0 | STUB | W1-04 | List + sync status |
-| W1-05g | Repository Detail page | Dhramraj | P0 | STUB | W1-05f | File count, symbols, status |
-
----
-
-## Testing
-
-| Task ID | Task | Owner | Priority | Status | Dependencies | Notes |
-|---|---|---|---|---|---|---|
-| W1-18a | Test infrastructure setup | Keval | P0 | DONE | W1-01 | pytest, pytest-asyncio, httpx, coverage |
-| W1-18b | `test_health.py` | Keval | P0 | DONE | W1-01a | Health endpoint returns 200 |
-| W1-18c | `test_llm_gateway.py` | Keval | P0 | DONE | W1-12a | LLM gateway tests |
-| W1-18d | `test_embedding_service.py` | Keval | P0 | DONE | W1-12c | Embedding service tests |
-| W1-18e | `test_vector_retrieval.py` | Keval | P0 | DONE | W1-13a | Vector retriever tests |
-| W1-18f | `test_walker.py` | Keval | P0 | DONE | W1-07a | FileWalker tests |
-| W1-18g | Auth API tests | Keval | P0 | TODO | W1-04 | |
-| W1-18h | Repository API tests | Keval | P0 | TODO | W1-OM-06 | |
-| W1-18i | Chat API integration test | Keval | P0 | TODO | W1-16 | End-to-end RAG test |
-
----
-
-## Week 1 Dependency Graph
-
-```mermaid
-graph TD
-    W1_01[W1-01 Backend Skeleton] --> W1_02[W1-02 DB Foundation]
-    W1_01 --> W1_03[W1-03 GitHub App]
-    W1_02 --> W1_04[W1-04 Auth API]
-    W1_03 --> W1_04
-    W1_01 --> W1_05[W1-05 Frontend]
-    W1_03 --> W1_06[W1-06 Repo Sync]
-    W1_04 --> W1_06
-    W1_06 --> W1_07[W1-07 Scanner]
-    W1_07 --> W1_08[W1-08 AST + Symbols]
-    W1_08 --> W1_09[W1-09 Dep Graph]
-    W1_08 --> W1_10[W1-10 Chunks]
-    W1_02 --> W1_11[W1-11 Vector Storage]
-    W1_10 --> W1_11
-    W1_10 --> W1_12[W1-12 Embeddings]
-    W1_11 --> W1_13[W1-13 Retrieval]
-    W1_12 --> W1_13
-    W1_02 --> W1_14[W1-14 Memory]
-    W1_13 --> W1_14
-    W1_13 --> W1_15[W1-15 RAG]
-    W1_14 --> W1_15
-    W1_15 --> W1_16[W1-16 Chat API]
-    W1_16 --> W1_17[W1-17 Chat UI]
-```
-
----
-
-## Team Assignment Summary
-
-| Member | Active Tasks | Completed |
+| Member | Current Focus | Deliverables |
 |---|---|---|
-| **Meet** | W1-13b, W1-13c, W1-13d, W1-14 | W1-12a, W1-12b, W1-12c, W1-12d, W1-13a |
-| **Yug** | W1-04a–f, W1-16 | W1-01, W1-01a–d |
-| **Om** | W1-02a–b, W1-OM-01–09, W1-11 | W1-02 (base) |
-| **Parth** | W1-03, W1-06a–c | — |
-| **Dhramraj** | W1-05d–g, W1-17a | W1-05a–c |
-| **Prit** | W1-07b, W1-08a–c, W1-09 | W1-07a |
-| **Divu** | W1-10b–c | W1-10a |
-| **Dev** | W1-15c | W1-15a, W1-15b, W1-15d |
-| **Keval** | W1-18g–i | W1-18a–f |
-| **Sukun** | W1-19 | — |
+| **Meet** | `IntelligenceContext` & Context Enrichment | Shared context builder, caller resolution, token budgeting |
+| **Dev** | Output Schemas & AI Engine Services | Pydantic models for Explanation, Bugs, Tests, and Review |
+| **Dhramraj** | Workbench UI & Feature Drawers | Code intelligence panels in fixed-viewport React 19 layout |
+| **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
+| **Om** | Analysis Persistence & History Services | `analysis_runs`, `code_findings` models, Alembic migration, `AnalysisRunRepository`, Day 1–5 History Services (Explanation, Bug Scan, Test Gen, Review) |
+| **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
+| **Prit** | AST Symbol, Scanner & Review Source Mapper | `ReviewSourceMapper`, `FrameworkDetector`, `ASTBugAnalyzer`, `TargetSelector` |
+| **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |
+| **Sukun** | Prompt-Injection Defenses & Scrubbing | Untrusted data boundary markers, secret scrubbers |
+| **Keval** | Quality Fixtures & Regression Testing | Acceptance test suites, fixture codebases with defects |

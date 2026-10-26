@@ -106,3 +106,64 @@ async def test_hallucinated_line_range_is_removed_from_sources(mock_get_file, re
     # Assert
     assert len(result.sources) == 0  # The fake citation was deleted!
     assert result.confidence == "low"
+
+
+@pytest.mark.asyncio
+@patch("app.repositories.repository_files.get_file_by_path")
+async def test_database_error_fails_closed_and_downgrades(mock_get_file, repo_id, db_session):
+    """
+    Critical requirement: When database access fails with an exception,
+    the citation must NOT be accepted as verified. It must fail closed and downgrade to low.
+    """
+    mock_get_file.side_effect = RuntimeError("Database connection pool exhausted")
+    validator = GroundingValidator(db_session=db_session)
+    source = _source("src/auth/service.py", start=1, end=10)
+    answer = _answer([source], confidence="high")
+
+    result = await validator.validate_sources(answer, repo_id)
+
+    assert len(result.sources) == 0, "Unverified citation must be removed when DB access fails"
+    assert result.confidence == "low", "Confidence must be downgraded to low on DB failure"
+
+
+@pytest.mark.asyncio
+async def test_no_db_session_fails_closed_and_downgrades(repo_id):
+    """
+    When GroundingValidator is constructed with no DB session, citations cannot
+    be verified and must be rejected rather than passed through as verified.
+    """
+    validator = GroundingValidator(db_session=None)
+    source = _source("src/auth/service.py", start=1, end=10)
+    answer = _answer([source], confidence="high")
+
+    result = await validator.validate_sources(answer, repo_id)
+
+    assert len(result.sources) == 0, "Citations must not pass through without DB verification"
+    assert result.confidence == "low"
+
+
+@pytest.mark.asyncio
+async def test_path_traversal_citation_rejected(repo_id, db_session):
+    """Citations containing path traversal ('..') or absolute paths are rejected."""
+    validator = GroundingValidator(db_session=db_session)
+    source = _source("../../etc/passwd", start=1, end=5)
+    answer = _answer([source], confidence="high")
+
+    result = await validator.validate_sources(answer, repo_id)
+
+    assert len(result.sources) == 0
+    assert result.confidence == "low"
+
+
+@pytest.mark.asyncio
+async def test_inverted_line_range_citation_rejected(repo_id, db_session):
+    """Citations with start_line > end_line are rejected."""
+    validator = GroundingValidator(db_session=db_session)
+    source = _source("src/auth/service.py", start=25, end=10)
+    answer = _answer([source], confidence="high")
+
+    result = await validator.validate_sources(answer, repo_id)
+
+    assert len(result.sources) == 0
+    assert result.confidence == "low"
+

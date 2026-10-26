@@ -1,10 +1,15 @@
-# ai/llm — LLM Gateway + provider implementations
-# Public API surface for the rest of the codebase.
+"""
+LLM Subsystem — Gateway, Providers, and Domain Schemas.
+
+Single entry point for all language model inference across the platform.
+"""
 
 from .client import LLMGateway
-from .openai_provider import OpenAIProvider
+from .gemini_provider import GeminiProvider
+from .groq_provider import GroqProvider
 from .provider import LLMProvider
 from .schemas import (
+    LLMAuthenticationError,
     LLMError,
     LLMRateLimitError,
     LLMRequest,
@@ -16,14 +21,16 @@ from .schemas import (
 )
 
 __all__ = [
+    "GeminiProvider",
+    "GroqProvider",
+    "LLMAuthenticationError",
+    "LLMError",
     "LLMGateway",
-    "OpenAIProvider",
     "LLMProvider",
+    "LLMRateLimitError",
     "LLMRequest",
     "LLMResponse",
-    "LLMError",
     "LLMTimeoutError",
-    "LLMRateLimitError",
     "LLMUnavailableError",
     "LLMValidationError",
     "Message",

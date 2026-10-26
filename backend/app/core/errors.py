@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.secret_redaction import redact
+
 
 class ErrorCode:
     """Machine-readable error codes exposed by the public API."""
@@ -16,12 +18,21 @@ class ErrorCode:
     UNAUTHORIZED = "UNAUTHORIZED"
     FORBIDDEN = "FORBIDDEN"
     NOT_FOUND = "NOT_FOUND"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
     REPOSITORY_NOT_FOUND = "REPOSITORY_NOT_FOUND"
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    ANALYSIS_RUN_NOT_FOUND = "ANALYSIS_RUN_NOT_FOUND"
     INVALID_REQUEST = "INVALID_REQUEST"
+    UNSUPPORTED_TARGET = "UNSUPPORTED_TARGET"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+    CONFLICT = "CONFLICT"
+    BAD_REQUEST = "BAD_REQUEST"
     OAUTH_CONFIGURATION_ERROR = "OAUTH_CONFIGURATION_ERROR"
     OAUTH_STATE_INVALID = "OAUTH_STATE_INVALID"
     OAUTH_EXCHANGE_FAILED = "OAUTH_EXCHANGE_FAILED"
     GITHUB_PROFILE_FAILED = "GITHUB_PROFILE_FAILED"
+    GITHUB_API_ERROR = "GITHUB_API_ERROR"
+    ANALYSIS_FAILED = "ANALYSIS_FAILED"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
 
@@ -39,14 +50,15 @@ class APIError(Exception):
     ) -> None:
         self.status_code = status_code
         self.code = code
-        self.message = message
+        self.message = redact(message)
         self.retryable = retryable
 
 
 def error_response(status_code: int, code: str, message: str, *, retryable: bool = False) -> JSONResponse:
+    safe_message = redact(message)
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message, "retryable": retryable}},
+        content={"error": {"code": code, "message": safe_message, "retryable": retryable}},
     )
 
 

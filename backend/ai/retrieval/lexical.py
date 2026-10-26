@@ -177,6 +177,11 @@ class LexicalRetriever(Retriever):
         Raises:
             SQLAlchemyError: If the database is unreachable.
         """
+        if not query or not query.strip() or top_k <= 0:
+            return []
+
+        repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
+
         # Step 1 — sanitize to a valid tsquery expression
         try:
             tsquery = _sanitize_query(query)
@@ -184,28 +189,31 @@ class LexicalRetriever(Retriever):
             logger.warning(
                 "lexical_retrieval_skipped",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "reason": str(exc),
                 },
             )
             return []
 
         # Step 2 — execute FTS query against the GIN index
-        result = await self._db.execute(
-            _LEXICAL_SEARCH_SQL,
-            {
-                "tsquery": tsquery,
-                "repository_id": str(repository_id),
-                "top_k": top_k,
-            },
-        )
-        rows = result.fetchall()
+        params = {
+            "tsquery": tsquery,
+            "repository_id": str(repo_uuid),
+            "top_k": top_k,
+        }
+        if hasattr(self._db, "execute"):
+            result = await self._db.execute(_LEXICAL_SEARCH_SQL, params)
+            rows = result.fetchall()
+        else:
+            async with self._db() as session:
+                result = await session.execute(_LEXICAL_SEARCH_SQL, params)
+                rows = result.fetchall()
 
         if not rows:
             logger.debug(
                 "lexical_retrieval_empty",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "query_preview": query[:80],
                     "tsquery": tsquery,
                 },
@@ -214,14 +222,14 @@ class LexicalRetriever(Retriever):
 
         # Step 3 — map rows to CodeChunk using the normalised rank as score
         chunks: list[CodeChunk] = [
-            _row_to_chunk(row, float(row.normalised_rank))  # type: ignore[attr-defined]
+            _row_to_chunk(row, max(0.0, min(1.0, float(row.normalised_rank))))  # type: ignore[attr-defined]
             for row in rows
         ]
 
         logger.info(
             "lexical_retrieval_complete",
             extra={
-                "repository_id": str(repository_id),
+                "repository_id": str(repo_uuid),
                 "query_preview": query[:80],
                 "tsquery": tsquery,
                 "top_k": top_k,
@@ -231,3 +239,4 @@ class LexicalRetriever(Retriever):
         )
 
         return chunks
+

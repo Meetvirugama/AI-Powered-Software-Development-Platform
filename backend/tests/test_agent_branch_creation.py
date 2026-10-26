@@ -168,3 +168,61 @@ class TestAgentBranchCreation:
             await service.on_task_executing(uuid4(), "task123")
         assert exc_info.value.status_code == 404
         assert exc_info.value.code == ErrorCode.REPOSITORY_NOT_FOUND
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Agent Branch Endpoint Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAgentBranchRoutes:
+    """Contract tests for POST /api/v1/repositories/{id}/source/agent-branch."""
+
+    def _setup_auth(self, monkeypatch):
+        from app.core.config import get_settings
+
+        monkeypatch.setenv("JWT_SECRET", "test-secret")
+        get_settings.cache_clear()
+
+        class FakeRedis:
+            def exists(self, key: str) -> int:
+                return 0
+            def setex(self, *args) -> None:
+                pass
+            def rpush(self, *args) -> int:
+                return 1
+
+        fake_redis = FakeRedis()
+        monkeypatch.setattr("app.core.auth.get_redis", lambda: fake_redis)
+
+    def test_unauthenticated_agent_branch_returns_401(self, monkeypatch):
+        """Unauthenticated requests must be rejected with 401."""
+        self._setup_auth(monkeypatch)
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        client = TestClient(app, raise_server_exceptions=False)
+        repo_id = str(uuid4())
+        response = client.post(
+            f"/api/v1/repositories/{repo_id}/source/agent-branch",
+            json={"task_id": "task-123"},
+        )
+        assert response.status_code == 401
+
+    def test_missing_task_id_returns_422(self, monkeypatch):
+        """Missing task_id in both body and query params returns 422."""
+        self._setup_auth(monkeypatch)
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.core.security import create_access_token
+
+        token, _ = create_access_token(str(uuid4()))
+        client = TestClient(app, raise_server_exceptions=False)
+        repo_id = str(uuid4())
+        response = client.post(
+            f"/api/v1/repositories/{repo_id}/source/agent-branch",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+        assert response.status_code == 422
+
+

@@ -19,7 +19,7 @@ def create_access_token(user_id: str) -> tuple[str, int]:
 
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
     token = jwt.encode(
-        {"sub": user_id, "jti": str(uuid4()), "exp": expires_at, "iat": datetime.now(timezone.utc)},
+        {"sub": str(user_id), "jti": str(uuid4()), "exp": expires_at, "iat": datetime.now(timezone.utc)},
         settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
     )

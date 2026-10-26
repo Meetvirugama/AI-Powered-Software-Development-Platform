@@ -68,13 +68,29 @@ All prompt templates use these standard placeholder names:
 
 ---
 
-## Prompt Files
+## Prompt Files Inventory
+ 
+Located in `backend/ai/prompts/`:
 
-| File | Purpose | Used by |
-|------|---------|---------|
-| `repository_chat.txt` | Main Q&A template | PromptBuilder.build_chat_prompt() |
-| `context_summary.txt` | Summarise large code sections | ContextBuilder (when truncating) |
-| `source_grounding.txt` | Verify LLM citations against known files | GroundingValidator |
+| File | Purpose | Template Placeholders | Used By |
+|------|---------|-----------------------|---------|
+| `chat_system.txt` | Core system instructions for repository Q&A | None (fixed system prompt) | `PromptBuilder.build_chat_prompt()` |
+| `repository_chat.txt` | Formats repository context chunks and user question | `{context}`, `{question}` | `PromptBuilder.build_chat_prompt()` |
+| `context_summary.txt` | Summarises large code chunks when truncating | `{code_content}` | `ContextBuilder` |
+| `summary_system.txt` | System prompt for chunk summarization | None (fixed system prompt) | `ContextBuilder` |
+| `grounding_system.txt` | Strict citation verification prompt | None (fixed system prompt) | `GroundingValidator` |
+| `source_grounding.txt` | Grounding audit for LLM outputs | `{answer}`, `{sources}`, `{files}` | `GroundingValidator` |
+| `repair_system.txt` | System instructions for repairing malformed JSON | None (fixed system prompt) | `OutputValidator.repair()` |
+
+---
+
+## Prompt Engine & Caching (`backend/ai/prompts/__init__.py`)
+
+The prompt subsystem includes:
+1. **Thread-Safe LRU Cache (`@lru_cache(maxsize=64)`):** Templates are loaded once from disk and cached in memory.
+2. **Path Traversal Protection:** Sanitizes template names and verifies `target_path.relative_to(PROMPTS_DIR)`.
+3. **Template Rendering:** `render_prompt(name, **kwargs)` performs safe keyword interpolation and raises typed `PromptRenderError` on missing placeholders.
+4. **Cache Invalidation:** `clear_prompt_cache()` allows reloading templates dynamically during testing or hot-reload.
 
 ---
 
@@ -91,8 +107,8 @@ class PromptBuilder:
 ```
 
 The returned list always has:
-1. `Message(role="system", content=<system instructions only>)`
-2. `Message(role="user", content=<REPOSITORY DATA + question>)`
+1. `Message(role="system", content=<chat_system.txt instructions>)`
+2. `Message(role="user", content=<repository_chat.txt rendered with context and question>)`
 
 Repository content **never** appears in the system message.
 
@@ -104,3 +120,4 @@ Every change to a prompt template must:
 1. Include a test demonstrating the output did not regress
 2. Be reviewed by Dev before merging
 3. Be documented in this file with the change rationale
+

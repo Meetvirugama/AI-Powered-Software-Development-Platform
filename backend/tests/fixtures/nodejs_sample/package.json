@@ -1,0 +1,16 @@
+{
+  "name": "nodejs-sample",
+  "version": "1.0.0",
+  "description": "Sample Node.js repository for testing scanner and language detector",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["node", "sample"],
+  "author": "Platform Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

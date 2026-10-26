@@ -1,5 +1,5 @@
 # 06. UML Diagrams
-> **Version:** 1.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-24
+> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
 
 ---
 
@@ -7,16 +7,15 @@
 
 | Diagram | Type | Status | Last Updated |
 |---|---|---|---|
-| Use Case Diagram | Use Case | ✓ Current | 2026-09-24 |
-| Activity: RAG Pipeline | Activity | ✓ Current | 2026-09-24 |
+| Use Case Diagram | Use Case | ✓ Current | 2026-09-28 |
+| Activity: RAG Pipeline | Activity | ✓ Current (full implementation) | 2026-09-28 |
 | Activity: Agentic Loop | Activity | ✓ Based on design | 2026-09-24 |
-| Class Diagram (AI Layer) | Class | ✓ Current | 2026-09-24 |
-| Class Diagram (App Layer) | Class | Partial (stubs) | 2026-09-24 |
-| Sequence: LLM Gateway Call | Sequence | ✓ Current | 2026-09-24 |
-| Sequence: Repository Chat | Sequence | ✓ Current | 2026-09-24 |
+| Class Diagram (AI Layer) | Class | ✓ Current | 2026-09-28 |
+| Class Diagram (Scanner/Indexer) | Class | ✓ Current | 2026-09-28 |
+| Sequence: LLM Gateway Call | Sequence | ✓ Current | 2026-09-28 |
 | State: Agent Execution | State | Based on design | 2026-09-24 |
-| State: Repository Sync | State | Based on design | 2026-09-24 |
-| Component Diagram | Component | ✓ Current | 2026-09-24 |
+| State: Repository Sync | State | ✓ Current (SyncStatus enum implemented) | 2026-09-28 |
+| Component Diagram | Component | ✓ Current | 2026-09-28 |
 
 ---
 
@@ -164,15 +163,26 @@ classDiagram
         +generate(request: LLMRequest) LLMResponse
     }
 
+    class GoogleGeminiProvider {
+        -_api_key: str
+        -_timeout: float
+        +provider_name() str
+        +generate(request: LLMRequest) LLMResponse
+    }
+
+    class GroqProvider {
+        -_api_key: str
+        -_timeout: float
+        +provider_name() str
+        +generate(request: LLMRequest) LLMResponse
+    }
+
     class OpenAIProvider {
         -_api_key: str
         -_timeout: float
         -_chat_url: str
         +provider_name() str
         +generate(request: LLMRequest) LLMResponse
-        -_build_payload(request) dict
-        -_parse_response(data, latency_ms, request) LLMResponse
-        -_validate_structured_output(content, schema)
     }
 
     class LLMGateway {
@@ -265,6 +275,8 @@ classDiagram
     class ContextBuilder {
         -_max_tokens: int
         +build(chunks, memory, history, related_files) AgentContext
+        +build_intelligence_context(...) IntelligenceContext
+        +render_intelligence_data(...) str
     }
 
     class AgentContext {
@@ -275,10 +287,37 @@ classDiagram
         +total_tokens: int
     }
 
+    class TargetSnippet {
+        +file_path: str
+        +start_line: int | None
+        +end_line: int | None
+        +code: str
+    }
+
+    class SymbolContext {
+        +name: str
+        +kind: str
+        +file_path: str
+        +start_line: int
+        +end_line: int
+        +signature: str | None
+        +callers: list~str~
+    }
+
+    class IntelligenceContext {
+        +repository_id: str
+        +target: TargetSnippet
+        +symbols: list~SymbolContext~
+        +supporting_chunks: list~CodeChunk~
+        +caller_references: list~str~
+        +token_count: int
+    }
+
     class PromptBuilder {
         +build_chat_prompt(context, question) list~Message~
         +build_summary_prompt(file_path, start_line, end_line, code_content) list~Message~
     }
+
 
     class OutputValidator {
         -_gateway: LLMGateway | None

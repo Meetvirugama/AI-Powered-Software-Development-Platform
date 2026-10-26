@@ -14,9 +14,12 @@ import type { ApiError } from '../types/api';
  * inject from JS (e.g. X-Request-ID). Bearer token injection is intentionally
  * NOT implemented here because the project contract uses httpOnly cookies.
  */
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+
 export const apiClient = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+  baseURL: API_BASE_URL,
   withCredentials: true, // sends httpOnly auth cookie automatically
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -38,6 +41,14 @@ apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     const normalised = normaliseError(error);
+    if (
+      error.response?.status === 401 &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login') &&
+      !window.location.pathname.startsWith('/auth')
+    ) {
+      window.location.href = '/login';
+    }
     return Promise.reject(normalised);
   }
 );
