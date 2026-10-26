@@ -1,15 +1,21 @@
-"""Database query-layer package owned by Om."""
+"""Database query-layer package."""
 
-from .chunk_repository import ChunkRepository
-from .memory_repository import MemoryRepository
-from .code_symbol_repository import CodeSymbolRepository
-from .symbol_edge_repository import SymbolEdgeRepository
-from .analysis_run_repository import AnalysisRunRepository
+from app.repositories.analysis_run_repository import AnalysisRunRepository
+from app.repositories.chunk_repository import ChunkRepository
+from app.repositories.code_symbol_repository import CodeSymbolRepository
+from app.repositories.memory_repository import MemoryRepository
+from app.repositories.pull_request_repository import PullRequestRepository
+from app.repositories.repository_repository import RepositoryRepository
+from app.repositories.symbol_edge_repository import SymbolEdgeRepository
+from app.repositories.user_repository import UserRepository
 
 __all__ = [
-    "ChunkRepository",
-    "MemoryRepository",
-    "CodeSymbolRepository",
-    "SymbolEdgeRepository",
     "AnalysisRunRepository",
+    "ChunkRepository",
+    "CodeSymbolRepository",
+    "MemoryRepository",
+    "PullRequestRepository",
+    "RepositoryRepository",
+    "SymbolEdgeRepository",
+    "UserRepository",
 ]
