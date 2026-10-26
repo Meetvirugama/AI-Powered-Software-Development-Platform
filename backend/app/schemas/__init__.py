@@ -34,6 +34,21 @@ from app.schemas.analysis import (
     TestGenerationResult,
     TestScenario,
 )
+from app.schemas.task import (
+    TaskApprovalRequest,
+    TaskApprovalResponse,
+    TaskCheckpointResponse,
+    TaskCreateRequest,
+    TaskEventResponse,
+    TaskListResponse,
+    TaskPlanCreateRequest,
+    TaskPlanResponse,
+    TaskPlanStep,
+    TaskPullRequestResponse,
+    TaskResponse,
+    TaskSourceReference,
+    VerificationResultResponse,
+)
 
 __all__ = [
     "AnalysisFeatureType",
@@ -68,4 +83,17 @@ __all__ = [
     "TestGenerationResponse",
     "TestGenerationResult",
     "TestScenario",
+    "TaskSourceReference",
+    "TaskCreateRequest",
+    "TaskResponse",
+    "TaskListResponse",
+    "TaskPlanStep",
+    "TaskPlanCreateRequest",
+    "TaskPlanResponse",
+    "TaskApprovalRequest",
+    "TaskApprovalResponse",
+    "TaskCheckpointResponse",
+    "TaskEventResponse",
+    "VerificationResultResponse",
+    "TaskPullRequestResponse",
 ]

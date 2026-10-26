@@ -5,6 +5,12 @@ from .memory_repository import MemoryRepository
 from .code_symbol_repository import CodeSymbolRepository
 from .symbol_edge_repository import SymbolEdgeRepository
 from .analysis_run_repository import AnalysisRunRepository
+from .task_repository import (
+    InvalidStateTransitionError,
+    PlanNotFoundError,
+    TaskNotFoundError,
+    TaskRepository,
+)
 
 __all__ = [
     "ChunkRepository",
@@ -12,4 +18,8 @@ __all__ = [
     "CodeSymbolRepository",
     "SymbolEdgeRepository",
     "AnalysisRunRepository",
+    "TaskRepository",
+    "InvalidStateTransitionError",
+    "TaskNotFoundError",
+    "PlanNotFoundError",
 ]
