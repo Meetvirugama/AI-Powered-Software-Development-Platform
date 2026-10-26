@@ -9,8 +9,10 @@ Exports:
 
 from __future__ import annotations
 
+from .bug_detection_engine import BugDetectionEngine
 from .explanation_service import CodeExplanationService
 
 __all__ = [
+    "BugDetectionEngine",
     "CodeExplanationService",
 ]

@@ -88,8 +88,16 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                 retryable=True,
             )
 
-        from app.services.explanation_orchestrator import enforce_gateway_provider_policy
-        enforce_gateway_provider_policy(self._llm)
+        provider = getattr(self._llm, "provider", None)
+        provider_name = getattr(provider, "provider_name", None) or getattr(provider, "name", None)
+        if isinstance(provider_name, str):
+            normalized = provider_name.strip().lower()
+            if normalized not in ("gemini", "groq", "mock", "test"):
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    f"Provider '{provider_name}' is not permitted by policy. Only Gemini and Groq are allowed.",
+                )
 
         rendered_context = (
             ContextBuilder().render_intelligence_data(context)
