@@ -217,6 +217,11 @@ async def test_explain_prompt_keeps_injection_inside_data_boundary(fixture, monk
             return f"--- {fixture.name} (lines 1–{content.count(chr(10)) + 1}) ---\n{content}"
 
     monkeypatch.setattr(orchestrator, "ContextBuilder", StubContextBuilder)
+    try:
+        import ai.services.explanation_service as exp_svc_mod
+        monkeypatch.setattr(exp_svc_mod, "ContextBuilder", StubContextBuilder)
+    except (ImportError, AttributeError):
+        pass
     gateway = _CapturingGateway()
     service = orchestrator.LLMCodeExplanationService(gateway)
     payload = ExplainCodeRequest.model_validate({"target": {"type": "file", "path": fixture.name}})
