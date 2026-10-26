@@ -549,7 +549,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ✅ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout, fixture extraction, and test path proposal (`FrameworkDetector`)
 - ✅ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
-- ⬜ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
+- ✅ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
 - ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions
 - ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
 - ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
