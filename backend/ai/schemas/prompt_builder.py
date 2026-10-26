@@ -68,9 +68,16 @@ def _fence(untrusted: str) -> str:
     ``----------------`` can be copied into a README to "close" the data
     section and append a fake ``USER QUESTION:``. A random token cannot be
     guessed ahead of time, so repository text can never end the data block.
+    Secrets (API keys, tokens, passwords) are replaced with [REDACTED] so they
+    are never sent to the LLM provider.
     """
+    # Security (W2 Day 6 audit): every prompt that carries repository data goes
+    # through this function, so redact secrets here too. This covers repository
+    # chat, summaries and the verifier, not only the four Week 2 features.
+    from app.core.secret_redaction import redact
+
     token = secrets.token_hex(8)
-    return f"<<<REPO_DATA_{token}>>>\n{untrusted}\n<<<END_REPO_DATA_{token}>>>"
+    return f"<<<REPO_DATA_{token}>>>\n{redact(untrusted)}\n<<<END_REPO_DATA_{token}>>>"
 
 
 class PromptBuilder:
