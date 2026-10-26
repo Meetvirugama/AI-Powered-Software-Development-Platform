@@ -452,6 +452,8 @@ class BugDetectionResponse(BaseModel):
 class TestGenerationRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/generate-tests`."""
 
+    __test__ = False
+
     target: AnalysisTarget
     options: AnalysisOptions = Field(default_factory=AnalysisOptions)
     framework: SupportedTestFramework | None = Field(
@@ -468,6 +470,8 @@ class TestGenerationRequest(BaseModel):
 class TestScenario(BaseModel):
     """Summary of a single test scenario included in the generated test file."""
 
+    __test__ = False
+
     name: str = Field(..., min_length=1, max_length=256)
     category: Literal["normal", "edge_case", "failure_path"] = Field(default="normal")
     description: str = Field(..., min_length=1)
@@ -475,6 +479,8 @@ class TestScenario(BaseModel):
 
 class TestGenerationResult(BaseModel):
     """Structured test generation output (Docs/week2.md §8)."""
+
+    __test__ = False
 
     detected_framework: SupportedTestFramework = Field(
         ...,

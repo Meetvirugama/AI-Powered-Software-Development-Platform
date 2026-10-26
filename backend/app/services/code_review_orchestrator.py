@@ -112,7 +112,10 @@ _BUG_TO_REVIEW_CATEGORY: dict[str, ReviewCategory] = {
     "resource_leak": "reliability",
     "race_condition": "reliability",
     "security": "security",
+    "sql_injection": "security",
+    "hardcoded_secret": "security",
     "performance": "performance",
+    "slow_query": "performance",
     "maintainability": "maintainability",
     "correctness": "correctness",
     "reliability": "reliability",
@@ -942,7 +945,7 @@ def build_grounded_review_report(
     if explicit_risk_level in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"):
         final_risk = explicit_risk_level
     else:
-        final_risk = computed_risk
+        final_risk = compute_review_risk_level(findings)
 
     clean_summary = redact_secrets_in_text(summary.strip()) or (
         "Standalone code review completed with zero findings."

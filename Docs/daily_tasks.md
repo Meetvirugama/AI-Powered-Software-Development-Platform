@@ -523,7 +523,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Prit | AST symbol range resolution & import mapping | ✅ Done |
 | Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
 | Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ⬜ Todo |
-| Keval | Baseline defect fixtures & Week 2 regression test plan | ⬜ Todo |
+| Keval | Baseline defect fixtures & Week 2 regression test plan | ✅ Done |
 
 ## WEEK 2 — Day 2 Feature 1: Code Explanation
 
@@ -532,7 +532,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
 - ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
 - ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
-- ⬜ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations
+- ✅ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations (`test_keval_w2_day2_explanation_qa.py`)
 
 
 ## WEEK 2 — Day 3 Feature 2: Dedicated Bug Detection
@@ -544,6 +544,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings
 - ⬜ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights
 - ✅ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
+- ✅ Keval: Bug Detection QA suite verifying ASTBugAnalyzer, BuiltinStaticBugScanner, merging/deduplication, and secret scrubbing (`test_keval_w2_day3_bug_detection_qa.py`)
 
 ## WEEK 2 — Day 4 Feature 3: Framework-Aware Test Generation
 
@@ -554,6 +555,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
 - ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
 - ✅ Om: Persisting generated-test runs and relevant metadata (`test_output`, scenarios, framework, revision)
+- ✅ Keval: Test Generation QA suite verifying framework detection (pytest/jest), test syntax validation, and scenario coverage (`test_keval_w2_day4_test_generation_qa.py`)
 
 ## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 
@@ -564,6 +566,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Meet: Multi-file review context — caller impact, imported type changes, and dependency blast radius
 - ⬜ Yug: `POST /api/v1/repositories/{id}/review` supporting single file, commit SHA, and PR diff
 - ⬜ Dhramraj: Unified/split diff review UI with inline findings, risk level indicator, and severity badges
+- ✅ Keval: Standalone Code Review QA suite verifying unified diff parsing, SQL injection defect detection, and zero-defect reports (`test_keval_w2_day5_review_qa.py`)
 
 ## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
 
@@ -574,7 +577,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
 - ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`)
 - ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
-- ⬜ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates)
+- ✅ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates) & published QA acceptance report (`test_keval_w2_day6_integration_qa.py`, `test_keval_w2_day7_acceptance_scenarios.py`, `Docs/week2_qa_acceptance_report.md`)
 
 ---
 
