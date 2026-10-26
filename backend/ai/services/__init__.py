@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from .bug_detection_engine import BugDetectionEngine
 from .explanation_service import CodeExplanationService
+from .test_generation_service import TestGenerationService
 
 __all__ = [
     "BugDetectionEngine",
     "CodeExplanationService",
+    "TestGenerationService",
 ]
