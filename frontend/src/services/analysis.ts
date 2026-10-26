@@ -88,7 +88,6 @@ export async function generateTests(
  *
  * Calls POST /api/v1/repositories/{repository_id}/review
  *
- * @param repositoryId The UUID of the authorized repository.
  * @param payload Review target (file, commit, pr, or diff) and options.
  * @returns The structured review report response envelope.
  */
@@ -199,6 +198,10 @@ export async function reopenTestGeneration(
 
 /**
  * List historical standalone code review runs for an authorized repository (Scenario D Step 7).
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering and pagination options.
+ * @returns Paginated list of analysis run summaries.
  */
 export async function getCodeReviewHistory(
   repositoryId: string,
@@ -218,6 +221,9 @@ export async function getCodeReviewHistory(
 
 /**
  * Reopen a specific standalone code review run from persistent history (Scenario D Step 7).
+ *
+ * @param runId The UUID of the code review analysis run.
+ * @returns Detailed record with findings and structured result payload.
  */
 export async function reopenCodeReview(
   runId: string

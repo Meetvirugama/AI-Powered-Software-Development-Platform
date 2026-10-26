@@ -1521,4 +1521,543 @@ async def test_${fileStem}_upstream_service_timeout(mock_db_session):
       created_at: new Date().toISOString(),
     });
   }),
+
+  // -------------------------------------------------------------------------
+  // Feature 4: Standalone AI Code Review (Week 2 Day 5)
+  //
+  // POST /api/v1/repositories/:id/review
+  //
+  // Matches real backend contract in backend/app/schemas/analysis.py
+  // -------------------------------------------------------------------------
+  http.post(`${BASE}/repositories/:id/review`, async ({ params, request }) => {
+    const { id } = params as { id: string };
+    let body: any = null;
+    try {
+      body = (await request.json()) as any;
+    } catch {
+      // Malformed body
+    }
+
+    const target = body?.target || {
+      type: 'file',
+      path: body?.path || 'backend/app/services/auth.py',
+    };
+
+    const targetType = target.type || 'file';
+    const filePath = target.path || 'backend/app/services/auth.py';
+    const commitSha = target.commit_sha || '';
+    const prNumber = target.pr_number;
+    const diffText = target.diff || '';
+
+    // Validation checks matching backend _validate_review_target
+    if (targetType === 'file' && (!target.path || !target.path.trim())) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: "target.path is required when review target.type is 'file'.",
+            retryable: false,
+          },
+        },
+        { status: 400 }
+      );
+    }
+    if (targetType === 'commit' && (!commitSha || !/^[0-9a-fA-F]{7,64}$/.test(commitSha.trim()))) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: "target.commit_sha must be a valid 7-to-64 character hexadecimal SHA when type='commit'.",
+            retryable: false,
+          },
+        },
+        { status: 400 }
+      );
+    }
+    if (targetType === 'pr' && (prNumber === undefined || prNumber === null || typeof prNumber !== 'number' || prNumber < 1)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: "target.pr_number must be a valid positive integer when review target.type is 'pr'.",
+            retryable: false,
+          },
+        },
+        { status: 400 }
+      );
+    }
+    if (targetType === 'diff' && (!diffText || !diffText.trim())) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: "target.diff must be a non-empty unified diff when type='diff'.",
+            retryable: false,
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    // Error simulation 1: Service unavailable (503)
+    const combinedInput = `${filePath} ${commitSha} ${diffText}`;
+    if (combinedInput.includes('503') || combinedInput.includes('unavailable') || combinedInput.includes('timeout')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'AI code review is not available because `code_review_service` is not configured or timed out.',
+            retryable: true,
+          },
+        },
+        { status: 503 }
+      );
+    }
+
+    // Error simulation 2: Analysis failed (500)
+    if (combinedInput.includes('500') || combinedInput.includes('fail') || prNumber === 999) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'ANALYSIS_FAILED',
+            message: 'Code review execution failed: Upstream model reasoning returned an unrecoverable failure.',
+            retryable: true,
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    // Scenario 2: Clean review with 0 findings and risk_level NONE
+    const isCleanReview =
+      combinedInput.includes('clean') ||
+      commitSha === '0000000' ||
+      prNumber === 100 ||
+      filePath.includes('clean');
+
+    if (isCleanReview) {
+      const runId = 'mock-review-run-' + Date.now();
+      const responsePayload = {
+        run_id: runId,
+        repository_id: id,
+        status: 'COMPLETED' as const,
+        target,
+        report: {
+          summary: 'Clean code review. All evaluated changes satisfy platform reliability, security, and correctness guidelines with zero defects detected.',
+          risk_level: 'NONE' as const,
+          findings: [],
+          total_findings: 0,
+          category_counts: {
+            correctness: 0,
+            security: 0,
+            performance: 0,
+            reliability: 0,
+            maintainability: 0,
+          },
+          missing_context: [],
+        },
+        created_at: new Date().toISOString(),
+      };
+
+      // Record in mock history
+      mockAnalysisRuns.unshift({
+        id: runId,
+        repository_id: id,
+        user_id: 'mock-user-id',
+        feature_type: 'review',
+        status: 'COMPLETED',
+        target_path: target.path || target.commit_sha || (target.pr_number ? `PR #${target.pr_number}` : 'Custom Diff'),
+        target_symbol: null,
+        start_line: null,
+        end_line: null,
+        source_revision: target.head_revision || target.commit_sha || 'main',
+        findings_count: 0,
+        result_payload: responsePayload,
+        test_output: null,
+        findings: [],
+        error_message: null,
+        created_at: responsePayload.created_at,
+        completed_at: responsePayload.created_at,
+      });
+
+      return HttpResponse.json(responsePayload);
+    }
+
+    // Scenario 1, 3, 4, 5: Comprehensive review with findings across all 5 categories
+    const primaryFile = targetType === 'file' ? filePath : 'backend/app/services/auth.py';
+
+    const findings = [
+      {
+        id: 'rev-find-1',
+        category: 'security',
+        severity: 'CRITICAL',
+        title: 'Hardcoded JWT signing secret fallback vulnerability',
+        description: 'The secret key defaults to a predictable static string in production when environment variables are omitted.',
+        source_reference: {
+          repository_id: id,
+          file_path: primaryFile,
+          start_line: 14,
+          end_line: 18,
+          revision: target.head_revision ?? 'main',
+          symbol_name: 'get_jwt_secret',
+        },
+        evidence: 'SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-default-key-12345")',
+        suggested_fix: 'SECRET_KEY = os.environ["JWT_SECRET"]  # Fail-closed in production if unconfigured',
+        confidence: 'high',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'COMBINED',
+        rule_id: 'SEC-JWT-001',
+      },
+      {
+        id: 'rev-find-2',
+        category: 'correctness',
+        severity: 'HIGH',
+        title: 'Potential off-by-one boundary truncation in token expiration check',
+        description: 'Using strict inequality (<) instead of (<=) allows tokens precisely matching expiration second to pass validation.',
+        source_reference: {
+          repository_id: id,
+          file_path: primaryFile,
+          start_line: 32,
+          end_line: 36,
+          revision: target.head_revision ?? 'main',
+          symbol_name: 'is_token_expired',
+        },
+        evidence: 'if current_timestamp < exp_timestamp:\n    return True',
+        suggested_fix: 'if current_timestamp <= exp_timestamp:\n    return True',
+        confidence: 'high',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'AI',
+        rule_id: null,
+      },
+      {
+        id: 'rev-find-3',
+        category: 'reliability',
+        severity: 'HIGH',
+        title: 'Uncaught connection error during redis token revocation check',
+        description: 'Redis client call is unhandled and can raise redis.ConnectionError, terminating caller request cycle with 500.',
+        source_reference: {
+          repository_id: id,
+          file_path: primaryFile,
+          start_line: 52,
+          end_line: 58,
+          revision: target.head_revision ?? 'main',
+          symbol_name: 'check_revocation_list',
+        },
+        evidence: 'is_blacklisted = await redis_client.get(f"revoked:{token_jti}")',
+        suggested_fix: 'try:\n    is_blacklisted = await redis_client.get(f"revoked:{token_jti}")\nexcept RedisError as exc:\n    logger.error("revocation_check_failed", extra={"err": str(exc)})\n    raise ServiceUnavailableError("Revocation backend offline")',
+        confidence: 'medium',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'STATIC',
+        rule_id: 'REL-REDIS-002',
+      },
+      {
+        id: 'rev-find-4',
+        category: 'performance',
+        severity: 'MEDIUM',
+        title: 'N+1 synchronous database query loop inside user permission resolution',
+        description: 'Iterating over repository roles and querying permissions individually introduces unnecessary latency.',
+        source_reference: {
+          repository_id: id,
+          file_path: primaryFile,
+          start_line: 78,
+          end_line: 85,
+          revision: target.head_revision ?? 'main',
+          symbol_name: 'resolve_user_permissions',
+        },
+        evidence: 'for role in user.roles:\n    perms = db.query(Permission).filter(Permission.role_id == role.id).all()',
+        suggested_fix: 'role_ids = [r.id for r in user.roles]\nperms = db.query(Permission).filter(Permission.role_id.in_(role_ids)).all()',
+        confidence: 'high',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'AI',
+        rule_id: null,
+      },
+      {
+        id: 'rev-find-5',
+        category: 'maintainability',
+        severity: 'LOW',
+        title: 'Global scope configuration drift without explicit module documentation',
+        description: 'Module imports dynamic environment settings without schema type annotations or documentation on supported key overrides.',
+        source_reference: {
+          repository_id: id,
+          file_path: primaryFile,
+          start_line: null,
+          end_line: null,
+          revision: target.head_revision ?? 'main',
+          symbol_name: null,
+        },
+        evidence: 'config = load_dynamic_settings()',
+        suggested_fix: 'from app.core.config import Settings\nconfig: Settings = get_settings()',
+        confidence: 'low',
+        is_uncertain: true,
+        is_new_in_change: false,
+        source_type: 'AI',
+        rule_id: null,
+      },
+    ];
+
+    const runId = 'mock-review-run-' + Date.now();
+    const responsePayload = {
+      run_id: runId,
+      repository_id: id,
+      status: 'COMPLETED' as const,
+      target,
+      report: {
+        summary: 'Review identified 5 findings across Security, Correctness, Reliability, Performance, and Maintainability dimensions. 1 critical vulnerability requires immediate remediation prior to merging.',
+        risk_level: 'CRITICAL' as const,
+        findings,
+        total_findings: findings.length,
+        category_counts: {
+          security: 1,
+          correctness: 1,
+          reliability: 1,
+          performance: 1,
+          maintainability: 1,
+        },
+        missing_context: [
+          'Downstream caller graph outside the target package was truncated due to context budget limits.',
+        ],
+      },
+      created_at: new Date().toISOString(),
+    };
+
+    // Record in mock history
+    mockAnalysisRuns.unshift({
+      id: runId,
+      repository_id: id,
+      user_id: 'mock-user-id',
+      feature_type: 'review',
+      status: 'COMPLETED',
+      target_path: target.path || target.commit_sha || (target.pr_number ? `PR #${target.pr_number}` : 'Custom Diff'),
+      target_symbol: null,
+      start_line: 14,
+      end_line: 85,
+      source_revision: target.head_revision || target.commit_sha || 'main',
+      findings_count: findings.length,
+      result_payload: responsePayload,
+      test_output: null,
+      findings,
+      error_message: null,
+      created_at: responsePayload.created_at,
+      completed_at: responsePayload.created_at,
+    });
+
+    return HttpResponse.json(responsePayload);
+  }),
+
+  // -------------------------------------------------------------------------
+  // Feature 5: Analysis Run History & Retrieval (Week 2 Day 3–5 Contract)
+  //
+  // GET /api/v1/repositories/:id/analysis-runs
+  // GET /api/v1/analysis-runs/:runId
+  // -------------------------------------------------------------------------
+  http.get(`${BASE}/repositories/:id/analysis-runs`, ({ params, request }) => {
+    const { id } = params as { id: string };
+    const url = new URL(request.url);
+    const featureType = url.searchParams.get('feature_type');
+    const status = url.searchParams.get('status');
+    const page = parseInt(url.searchParams.get('page') || '1', 10);
+    const pageSize = parseInt(url.searchParams.get('page_size') || '10', 10);
+
+    const matching = mockAnalysisRuns.filter((r) => {
+      if (r.repository_id !== id && id !== '11111111-1111-1111-1111-111111111111') return true;
+      if (featureType && r.feature_type !== featureType) return false;
+      if (status && r.status !== status) return false;
+      return true;
+    });
+
+    const total = matching.length;
+    const offset = (page - 1) * pageSize;
+    const items = matching.slice(offset, offset + pageSize).map((r) => ({
+      id: r.id,
+      repository_id: r.repository_id,
+      feature_type: r.feature_type,
+      status: r.status,
+      target_path: r.target_path,
+      target_symbol: r.target_symbol,
+      start_line: r.start_line,
+      end_line: r.end_line,
+      source_revision: r.source_revision,
+      findings_count: r.findings_count,
+      error_message: r.error_message,
+      created_at: r.created_at,
+      completed_at: r.completed_at,
+    }));
+
+    return HttpResponse.json({
+      page,
+      page_size: pageSize,
+      total,
+      items,
+    });
+  }),
+
+  http.get(`${BASE}/analysis-runs/:runId`, ({ params }) => {
+    const { runId } = params as { runId: string };
+    const run = mockAnalysisRuns.find((r) => r.id === runId);
+    if (!run) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'NOT_FOUND',
+            message: `Analysis run ${runId} not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(run);
+  }),
+];
+
+const mockAnalysisRuns: Array<{
+  id: string;
+  repository_id: string;
+  user_id: string | null;
+  feature_type: string;
+  status: string;
+  target_path: string | null;
+  target_symbol: string | null;
+  start_line: number | null;
+  end_line: number | null;
+  source_revision: string | null;
+  findings_count: number;
+  result_payload: any;
+  test_output: string | null;
+  findings: any[];
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}> = [
+  {
+    id: 'mock-hist-review-01',
+    repository_id: '11111111-1111-1111-1111-111111111111',
+    user_id: 'mock-user-id',
+    feature_type: 'review',
+    status: 'COMPLETED',
+    target_path: 'backend/app/services/auth.py',
+    target_symbol: null,
+    start_line: 14,
+    end_line: 18,
+    source_revision: 'aadeed7',
+    findings_count: 2,
+    result_payload: {
+      target: {
+        type: 'file',
+        path: 'backend/app/services/auth.py',
+        head_revision: 'aadeed7',
+      },
+      report: {
+        summary: 'Historical code review for auth module. 2 findings identified (1 Security, 1 Correctness).',
+        risk_level: 'HIGH',
+        findings: [
+          {
+            id: 'hist-find-1',
+            category: 'security',
+            severity: 'HIGH',
+            title: 'Hardcoded secret token in auth config',
+            description: 'Fallback secret key defaults to static string in development configuration.',
+            source_reference: {
+              repository_id: '11111111-1111-1111-1111-111111111111',
+              file_path: 'backend/app/services/auth.py',
+              start_line: 14,
+              end_line: 18,
+              revision: 'aadeed7',
+              symbol_name: 'get_jwt_secret',
+            },
+            evidence: 'SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-default-key-12345")',
+            suggested_fix: 'SECRET_KEY = os.environ["JWT_SECRET"]',
+            confidence: 'high',
+            is_uncertain: false,
+            is_new_in_change: true,
+            source_type: 'STATIC',
+            rule_id: 'SEC-JWT-001',
+          },
+          {
+            id: 'hist-find-2',
+            category: 'correctness',
+            severity: 'MEDIUM',
+            title: 'Strict inequality allows token expiration boundary bypass',
+            description: 'Comparison operator allows token on boundary second to remain valid.',
+            source_reference: {
+              repository_id: '11111111-1111-1111-1111-111111111111',
+              file_path: 'backend/app/services/auth.py',
+              start_line: 32,
+              end_line: 36,
+              revision: 'aadeed7',
+              symbol_name: 'is_token_expired',
+            },
+            evidence: 'if current_timestamp < exp_timestamp:\n    return True',
+            suggested_fix: 'if current_timestamp <= exp_timestamp:\n    return True',
+            confidence: 'high',
+            is_uncertain: false,
+            is_new_in_change: true,
+            source_type: 'AI',
+            rule_id: null,
+          },
+        ],
+        total_findings: 2,
+        category_counts: {
+          security: 1,
+          correctness: 1,
+        },
+        missing_context: [],
+      },
+    },
+    test_output: null,
+    findings: [
+      {
+        id: 'hist-find-1',
+        category: 'security',
+        severity: 'HIGH',
+        title: 'Hardcoded secret token in auth config',
+        description: 'Fallback secret key defaults to static string in development configuration.',
+        source_reference: {
+          repository_id: '11111111-1111-1111-1111-111111111111',
+          file_path: 'backend/app/services/auth.py',
+          start_line: 14,
+          end_line: 18,
+          revision: 'aadeed7',
+          symbol_name: 'get_jwt_secret',
+        },
+        evidence: 'SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-default-key-12345")',
+        suggested_fix: 'SECRET_KEY = os.environ["JWT_SECRET"]',
+        confidence: 'high',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'STATIC',
+        rule_id: 'SEC-JWT-001',
+      },
+      {
+        id: 'hist-find-2',
+        category: 'correctness',
+        severity: 'MEDIUM',
+        title: 'Strict inequality allows token expiration boundary bypass',
+        description: 'Comparison operator allows token on boundary second to remain valid.',
+        source_reference: {
+          repository_id: '11111111-1111-1111-1111-111111111111',
+          file_path: 'backend/app/services/auth.py',
+          start_line: 32,
+          end_line: 36,
+          revision: 'aadeed7',
+          symbol_name: 'is_token_expired',
+        },
+        evidence: 'if current_timestamp < exp_timestamp:\n    return True',
+        suggested_fix: 'if current_timestamp <= exp_timestamp:\n    return True',
+        confidence: 'high',
+        is_uncertain: false,
+        is_new_in_change: true,
+        source_type: 'AI',
+        rule_id: null,
+      },
+    ],
+    error_message: null,
+    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
+    completed_at: new Date(Date.now() - 3600000 * 2 + 5000).toISOString(),
+  },
 ];

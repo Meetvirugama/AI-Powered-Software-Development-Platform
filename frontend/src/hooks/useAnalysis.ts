@@ -3,7 +3,7 @@
  */
 
 import { useMutation, type UseMutationOptions } from '@tanstack/react-query';
-import { explainCode, detectBugs, generateTests } from '../services/analysis';
+import { explainCode, detectBugs, generateTests, reviewCode } from '../services/analysis';
 import type {
   ExplainCodeRequest,
   CodeExplanationResponse,
@@ -11,6 +11,8 @@ import type {
   BugDetectionResponse,
   TestGenerationRequest,
   TestGenerationResponse,
+  CodeReviewRequest,
+  ReviewReportResponse,
 } from '../types/analysis';
 import type { ApiError } from '../types/api';
 
@@ -61,6 +63,23 @@ export function useGenerateTests(
   return useMutation<TestGenerationResponse, ApiError, TestGenerationRequest>({
     mutationKey: ['generate-tests', repositoryId],
     mutationFn: (payload: TestGenerationRequest) => generateTests(repositoryId, payload),
+    ...options,
+  });
+}
+
+/**
+ * Hook to run a standalone AI and static code review on a file, commit, PR, or diff (Week 2 — Day 5).
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param options Optional React Query mutation options (e.g. onSuccess, onError).
+ */
+export function useReviewCode(
+  repositoryId: string,
+  options?: UseMutationOptions<ReviewReportResponse, ApiError, CodeReviewRequest>
+) {
+  return useMutation<ReviewReportResponse, ApiError, CodeReviewRequest>({
+    mutationKey: ['review-code', repositoryId],
+    mutationFn: (payload: CodeReviewRequest) => reviewCode(repositoryId, payload),
     ...options,
   });
 }

@@ -258,6 +258,7 @@ export interface ReviewReportResponse {
   completed_at?: string | null;
 }
 
+/** Backward-compatible alias for legacy CodeReviewResult */
 export interface CodeReviewResult {
   summary: string;
   findings: (BugFinding | ReviewFinding)[];
@@ -272,7 +273,7 @@ export type AnalysisResult =
   | { type: 'explain'; data: CodeExplanation }
   | { type: 'bugs'; data: BugDetectionResponse }
   | { type: 'tests'; data: TestGenerationResponse }
-  | { type: 'review'; data: CodeReviewResult };
+  | { type: 'review'; data: ReviewReportResponse };
 
 export interface AnalysisRunSummary {
   id: string;
