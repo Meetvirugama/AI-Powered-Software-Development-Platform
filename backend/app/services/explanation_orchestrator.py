@@ -615,6 +615,22 @@ def record_analysis_run(
     history_store[str(run_id)] = record
 
 
+def enforce_gateway_provider_policy(gateway: Any) -> None:
+    """Enforce Docs/week2.md §4.5: Only Gemini and Groq are allowed; disallow other providers (e.g. openai)."""
+    if gateway is None:
+        return
+    provider = getattr(gateway, "provider", None)
+    provider_name = getattr(provider, "provider_name", None) or getattr(provider, "name", None)
+    if isinstance(provider_name, str):
+        normalized = provider_name.strip().lower()
+        if normalized not in ("gemini", "groq", "mock", "test"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Provider '{provider_name}' is not permitted by policy. Only Gemini and Groq are allowed.",
+            )
+
+
 from ai.services.explanation_service import CodeExplanationService
 
 # Maintain backward compatibility with existing tests and routes
