@@ -71,6 +71,21 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                 "Respond with ONLY a valid JSON object matching the CodeExplanation schema."
             )
 
+    @staticmethod
+    def _enforce_provider_policy(gateway: Any) -> None:
+        if gateway is None:
+            return
+        provider = getattr(gateway, "provider", None)
+        provider_name = getattr(provider, "provider_name", None) or getattr(provider, "name", None)
+        if isinstance(provider_name, str):
+            normalized = provider_name.strip().lower()
+            if normalized not in ("gemini", "groq", "mock", "test"):
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    f"Provider '{provider_name}' is not permitted by policy. Only Gemini and Groq are allowed.",
+                )
+
     async def explain(
         self,
         repository_id: UUID,
@@ -88,16 +103,7 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                 retryable=True,
             )
 
-        provider = getattr(self._llm, "provider", None)
-        provider_name = getattr(provider, "provider_name", None) or getattr(provider, "name", None)
-        if isinstance(provider_name, str):
-            normalized = provider_name.strip().lower()
-            if normalized not in ("gemini", "groq", "mock", "test"):
-                raise APIError(
-                    400,
-                    ErrorCode.INVALID_REQUEST,
-                    f"Provider '{provider_name}' is not permitted by policy. Only Gemini and Groq are allowed.",
-                )
+        self._enforce_provider_policy(self._llm)
 
         rendered_context = (
             ContextBuilder().render_intelligence_data(context)
