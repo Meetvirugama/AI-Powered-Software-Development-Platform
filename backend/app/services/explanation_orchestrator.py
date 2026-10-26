@@ -615,6 +615,7 @@ def record_analysis_run(
     history_store[str(run_id)] = record
 
 
+
 def enforce_gateway_provider_policy(llm_gateway: Any) -> None:
     """Enforce Week 2 §4.5 & §10 provider policy: only Gemini and Groq are permitted."""
     from ai.context.service import RepositoryContextService
@@ -636,6 +637,7 @@ def enforce_gateway_provider_policy(llm_gateway: Any) -> None:
                     ErrorCode.INVALID_REQUEST,
                     str(exc),
                 ) from exc
+
 
 
 class LLMCodeExplanationService:
@@ -744,3 +746,9 @@ class LLMCodeExplanationService:
         if match:
             return match.group(1).strip()
         return text.strip()
+
+
+from ai.services.explanation_service import CodeExplanationService
+
+# Maintain backward compatibility
+CodeExplanationService = LLMCodeExplanationService

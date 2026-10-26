@@ -1,7 +1,15 @@
-# AI output schemas — Dev, W1
-# Day 1: SourceReference, RepositoryAnswer, ErrorResponse + LLMError hierarchy + OutputValidator skeleton
-# Day 2: OutputValidator (full), PromptBuilder
-# Day 3: GroundingValidator
+# AI output schemas — Dev
+# Week 1: SourceReference, RepositoryAnswer, ErrorResponse, LLMError hierarchy, OutputValidator, PromptBuilder, GroundingValidator
+# Week 2: AnalysisSourceReference, CodeExplanation, BugFinding, TestGenerationResult, ReviewFinding, ReviewReport
+
+from app.schemas.analysis import (
+    AnalysisSourceReference,
+    BugFinding,
+    CodeExplanation,
+    ReviewFinding,
+    ReviewReport,
+    TestGenerationResult,
+)
 
 from .errors import (
     LLMError,
@@ -16,6 +24,9 @@ from .prompt_builder import PromptBuilder
 from .validator import OutputValidator
 
 __all__ = [
+    "AnalysisSourceReference",
+    "BugFinding",
+    "CodeExplanation",
     "ErrorResponse",
     "GroundingResult",
     "GroundingValidator",
@@ -27,5 +38,8 @@ __all__ = [
     "OutputValidator",
     "PromptBuilder",
     "RepositoryAnswer",
+    "ReviewFinding",
+    "ReviewReport",
     "SourceReference",
+    "TestGenerationResult",
 ]

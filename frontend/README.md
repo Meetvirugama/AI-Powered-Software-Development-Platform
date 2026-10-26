@@ -80,15 +80,3 @@ npm run build
 npm run lint
 # Runs Oxlint across all TypeScript and React files
 ```
-
----
-
-## 5. Mock Service Worker (MSW)
-
-MSW is configured in `src/mocks/` for local UI development and testing independent of backend availability. To enable browser mocking:
-```typescript
-import { worker } from './mocks/browser';
-if (import.meta.env.DEV && import.meta.env.VITE_USE_MSW === 'true') {
-  worker.start();
-}
-```

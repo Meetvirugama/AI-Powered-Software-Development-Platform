@@ -56,6 +56,21 @@ class OutputValidator:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def clean_json_text(text: str) -> str:
+        """Strip markdown code fences (```json ... ```) or surrounding whitespace."""
+        if not text:
+            return ""
+        s = text.strip()
+        if s.startswith("```"):
+            lines = s.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            s = "\n".join(lines).strip()
+        return s
+
     def validate(
         self,
         raw: str,
@@ -63,6 +78,8 @@ class OutputValidator:
     ) -> tuple[BaseModel | None, bool]:
         """
         Parse ``raw`` as JSON and validate against ``schema``.
+
+        Automatically strips markdown code fences if present.
 
         Args:
             raw:    Raw string from the LLM (should be valid JSON).
@@ -75,8 +92,9 @@ class OutputValidator:
         Note:
             This method never raises. Callers always check the bool flag.
         """
+        cleaned = self.clean_json_text(raw)
         try:
-            parsed: Any = json.loads(raw)
+            parsed: Any = json.loads(cleaned)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.debug(
                 "output_validation_failed",
@@ -97,6 +115,24 @@ class OutputValidator:
                 extra={"reason": "schema_validation_error", "schema": schema.__name__, "detail": str(exc)},
             )
             return None, False
+
+    def validate_or_raise(
+        self,
+        raw: str,
+        schema: type[BaseModel],
+    ) -> BaseModel:
+        """Parse and validate against ``schema``, raising LLMValidationError on failure.
+
+        Guarantees that invalid AI output never silently becomes a successful empty result.
+        """
+        from ai.llm.schemas import LLMValidationError
+
+        instance, ok = self.validate(raw, schema)
+        if not ok or instance is None:
+            raise LLMValidationError(
+                f"LLM output failed validation against schema '{schema.__name__}'."
+            )
+        return instance
 
     async def repair(
         self,
