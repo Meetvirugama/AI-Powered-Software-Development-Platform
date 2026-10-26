@@ -229,5 +229,7 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
 
         return {
             "findings": combined_findings,
+            "total_findings": len(combined_findings),
             "missing_context": missing_context,
         }
+
