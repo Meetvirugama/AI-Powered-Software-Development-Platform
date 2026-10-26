@@ -531,6 +531,10 @@ def record_analysis_run(
         svc = getattr(app_state, "explanation_history_service", None)
         if svc is not None:
             candidate_services.append(svc)
+    elif feature_type == "review":
+        svc = getattr(app_state, "review_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
 
     general_run_svc = getattr(app_state, "analysis_run_service", None)
     if general_run_svc is not None and general_run_svc not in candidate_services:
@@ -585,6 +589,29 @@ def record_analysis_run(
     history_store[str(run_id)] = record
 
 
+def enforce_gateway_provider_policy(llm_gateway: Any) -> None:
+    """Enforce Week 2 §4.5 & §10 provider policy: only Gemini and Groq are permitted."""
+    from ai.context.service import RepositoryContextService
+
+    for candidate in (
+        llm_gateway,
+        getattr(llm_gateway, "provider", None),
+        getattr(llm_gateway, "fallback_provider", None),
+    ):
+        if candidate is None:
+            continue
+        pname = getattr(candidate, "provider_name", None)
+        if isinstance(pname, str) and pname.strip():
+            try:
+                RepositoryContextService.validate_provider_policy(pname)
+            except ValueError as exc:
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    str(exc),
+                ) from exc
+
+
 class LLMCodeExplanationService:
     """Default Day 2 CodeExplanationService adapter backed by Meet's LLMGateway and ContextBuilder.
 
@@ -632,6 +659,7 @@ class LLMCodeExplanationService:
                 "Code explanation LLM gateway is not configured.",
                 retryable=True,
             )
+        enforce_gateway_provider_policy(self._llm)
 
         rendered = (
             ContextBuilder().render_intelligence_data(context)

@@ -1451,6 +1451,257 @@ class AnalysisRunRepository:
         return True
 
     # -----------------------------------------------------------------------
+    # Week 2 Day 5–6: Standalone Code Review History (Owner: Om & Yug)
+    # -----------------------------------------------------------------------
+
+    def save_review_run(
+        self,
+        *,
+        repository_id: uuid.UUID | str,
+        target_path: Optional[str] = None,
+        report: Optional[Any] = None,
+        findings: Optional[Sequence[Any]] = None,
+        status: str = AnalysisRunStatus.COMPLETED.value,
+        source_revision: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
+        error_message: Optional[str] = None,
+        run_id: Optional[uuid.UUID | str] = None,
+        target: Optional[Any] = None,
+        result_payload: Optional[dict[str, Any]] = None,
+        created_at: Optional[datetime | str] = None,
+        completed_at: Optional[datetime | str] = None,
+        **extra_kwargs: Any,
+    ) -> AnalysisRun:
+        """Store a completed or failed standalone code review run with structured findings.
+
+        Guarantees (Docs/week2.md §9 & §10):
+        - Associates review reports and findings with repository, source revision, and analysis run.
+        - Ensures a review of a newer revision does NOT overwrite previous revision results.
+        - Stores failed reviews separately from successful zero-finding review reports.
+        """
+        from app.core.secret_redaction import redact, redact_obj
+
+        t_path = target_path
+        s_rev = source_revision
+
+        if target is not None:
+            if hasattr(target, "path"):
+                t_path = t_path or getattr(target, "path", None)
+                s_rev = (
+                    s_rev
+                    or getattr(target, "commit_sha", None)
+                    or getattr(target, "head_revision", None)
+                    or getattr(target, "revision", None)
+                )
+            elif isinstance(target, dict):
+                t_path = t_path or target.get("path")
+                s_rev = (
+                    s_rev
+                    or target.get("commit_sha")
+                    or target.get("head_revision")
+                    or target.get("revision")
+                )
+
+        raw_findings = list(findings or [])
+        report_dict: Optional[dict[str, Any]] = None
+        if report is not None:
+            if hasattr(report, "model_dump"):
+                report_dict = report.model_dump(mode="json")
+            elif hasattr(report, "dict"):
+                report_dict = report.dict()
+            elif isinstance(report, dict):
+                report_dict = dict(report)
+            if report_dict and "report" in report_dict and isinstance(report_dict["report"], dict):
+                report_dict = report_dict["report"]
+            if not raw_findings and report_dict and isinstance(report_dict.get("findings"), list):
+                raw_findings = list(report_dict["findings"])
+
+        status_val = status.value if hasattr(status, "value") else str(status).upper()
+        if status_val == AnalysisRunStatus.FAILED.value:
+            if not error_message:
+                error_message = "Code review execution failed."
+            raw_findings = []
+            payload = result_payload or {"error": redact(error_message), "status": "FAILED"}
+        else:
+            error_message = None
+            if result_payload is not None:
+                payload = dict(result_payload)
+            elif report_dict is not None:
+                payload = {"report": report_dict, "status": status_val}
+            else:
+                payload = {
+                    "report": {
+                        "summary": "Standalone code review completed.",
+                        "risk_level": "NONE" if not raw_findings else "MEDIUM",
+                        "findings": raw_findings,
+                        "total_findings": len(raw_findings),
+                        "category_counts": {},
+                        "missing_context": [],
+                    },
+                    "status": status_val,
+                }
+
+        payload = redact_obj(payload)
+        raw_findings = redact_obj(raw_findings)
+
+        return self.create_run(
+            id=run_id,
+            repository_id=repository_id,
+            user_id=user_id,
+            feature_type=AnalysisFeature.REVIEW.value,
+            status=status_val,
+            target_path=t_path,
+            source_revision=s_rev,
+            findings_count=len(raw_findings),
+            result_payload=payload,
+            findings=raw_findings,
+            error_message=redact(error_message) if error_message else None,
+            created_at=created_at,
+            completed_at=completed_at,
+            **extra_kwargs,
+        )
+
+    def record_review_failure(
+        self,
+        *,
+        repository_id: uuid.UUID | str,
+        target_path: Optional[str] = None,
+        error_message: str = "Code review execution failed.",
+        source_revision: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
+        run_id: Optional[uuid.UUID | str] = None,
+        target: Optional[Any] = None,
+        **extra_kwargs: Any,
+    ) -> AnalysisRun:
+        """Record an explicit failed code review run separately from zero-finding reviews."""
+        return self.save_review_run(
+            repository_id=repository_id,
+            target_path=target_path,
+            report=None,
+            findings=None,
+            status=AnalysisRunStatus.FAILED.value,
+            source_revision=source_revision,
+            user_id=user_id,
+            error_message=error_message,
+            run_id=run_id,
+            target=target,
+            **extra_kwargs,
+        )
+
+    def list_review_runs(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        status: Optional[str] = None,
+        target_path: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[AnalysisRun], int]:
+        """List paginated standalone code review runs for an authorized repository, newest first."""
+        return self.list_by_repository(
+            repository_id,
+            feature_type=AnalysisFeature.REVIEW.value,
+            status=status,
+            target_path=target_path,
+            source_revision=source_revision,
+            offset=offset,
+            limit=limit,
+        )
+
+    def get_review_run(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[AnalysisRun]:
+        """Retrieve a specific code review run, enforcing repository scoping if provided."""
+        if repository_id is not None:
+            run = self.get_by_id_and_repository(run_id, repository_id)
+        else:
+            run = self.get_by_id(run_id)
+
+        if run is None or run.feature_type != AnalysisFeature.REVIEW.value:
+            return None
+        return run
+
+    def reopen_review(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Reconstitute a code review run from persistent history (Scenario D Step 7)."""
+        run = self.get_review_run(run_id, repository_id)
+        if run is None:
+            return None
+
+        raw_payload = run.result_payload or {}
+        target_dict = raw_payload.get("target") or {
+            "type": "file" if run.target_path and not str(run.target_path).startswith(("commit:", "pr:")) else "diff",
+            "path": run.target_path,
+            "head_revision": run.source_revision,
+        }
+        if isinstance(target_dict, dict):
+            target_dict = {**target_dict, "diff": None}
+
+        findings_list = [f.to_dict() for f in run.findings]
+        report_data = raw_payload.get("report") if isinstance(raw_payload.get("report"), dict) else None
+        if report_data is None:
+            cat_counts: dict[str, int] = {}
+            for fd in findings_list:
+                cat = str(fd.get("category") or "maintainability")
+                cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            report_data = {
+                "summary": raw_payload.get("summary") or (
+                    "Standalone code review completed with zero findings."
+                    if not findings_list
+                    else f"Standalone code review completed with {len(findings_list)} finding(s)."
+                ),
+                "risk_level": raw_payload.get("risk_level") or ("NONE" if not findings_list else "MEDIUM"),
+                "findings": findings_list,
+                "total_findings": len(findings_list),
+                "category_counts": cat_counts,
+                "missing_context": raw_payload.get("missing_context") or [],
+            }
+        elif not report_data.get("findings") and findings_list:
+            report_data = {
+                **report_data,
+                "findings": findings_list,
+                "total_findings": len(findings_list),
+            }
+
+        return {
+            "run_id": str(run.id),
+            "repository_id": str(run.repository_id),
+            "status": run.status,
+            "target": target_dict,
+            "revision": run.source_revision,
+            "report": report_data,
+            "findings": findings_list,
+            "error_message": run.error_message,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        }
+
+    def get_latest_review(
+        self,
+        repository_id: uuid.UUID | str,
+        target_path: Optional[str] = None,
+        *,
+        source_revision: Optional[str] = None,
+        status: str = AnalysisRunStatus.COMPLETED.value,
+    ) -> Optional[AnalysisRun]:
+        """Fetch the most recent code review run matching target and revision."""
+        runs, _ = self.list_review_runs(
+            repository_id,
+            status=status,
+            target_path=target_path,
+            source_revision=source_revision,
+            offset=0,
+            limit=1,
+        )
+        return runs[0] if runs else None
+
+    # -----------------------------------------------------------------------
     # Status Updates & Findings Management
     # -----------------------------------------------------------------------
 

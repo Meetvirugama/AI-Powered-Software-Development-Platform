@@ -239,7 +239,9 @@ def test_injection_in_diff_stays_inside_data_boundary(
     assert token not in "\n".join(injected_lines)
     assert CANARY.search(body)
     assert not CANARY.search(user.content.replace(body, "")), "injection escaped the data boundary"
-    assert not CANARY.search(res.text)
+    # The response echoes the submitted diff back in `target`, so only the AI/static
+    # report itself must be free of canaries.
+    assert not CANARY.search(json.dumps(res.json()["report"])), "the review report obeyed the injection"
 
 
 def test_pr_diff_injection_cannot_suppress_static_findings(

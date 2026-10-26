@@ -260,7 +260,9 @@ class RAGPipeline:
         )
 
         # ---- Step 4: Prompt construction ---------------------------------
-        rendered_data = self.context_builder.render_repository_data(ctx)
+        from app.core.secret_redaction import redact
+
+        rendered_data = redact(self.context_builder.render_repository_data(ctx))
         messages = self.prompt_builder.build_chat_prompt(
             context=rendered_data,
             question=cleaned_question,
@@ -275,10 +277,11 @@ class RAGPipeline:
         )
         llm_latency_ms = (time.monotonic() - llm_start) * 1000
 
-        # ---- Step 6: Grounding validation --------------------------------
+        # ---- Step 6: Grounding validation & secret redaction -------------
         validated = await self.grounding_validator.validate_sources(
             raw_answer, repo_uuid
         )
+        validated = validated.model_copy(update={"answer": redact(validated.answer)})
 
         total_latency_ms = (time.monotonic() - start_time) * 1000
         logger.info(
