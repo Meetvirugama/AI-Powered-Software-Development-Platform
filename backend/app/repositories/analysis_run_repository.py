@@ -7,8 +7,9 @@ analysis runs and structured findings, strictly enforcing multi-tenant repositor
 
 from __future__ import annotations
 
+import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 
 from sqlalchemy import delete, func, select
@@ -16,6 +17,74 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.analysis_finding import AnalysisFinding
 from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
+
+
+# ---------------------------------------------------------------------------
+# Sensitive Data Sanitization Patterns (Aligned with Sukun's security gate)
+# ---------------------------------------------------------------------------
+
+_SECRET_REDACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("openai_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}")),
+    ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("jwt_token", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
+    ("db_connection_uri", re.compile(r"(?i)\b(postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/([^:\s]+):([^@\s]+)@")),
+    (
+        "private_key_block",
+        re.compile(
+            r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )?PRIVATE KEY-----"
+        ),
+    ),
+    (
+        "private_key_header",
+        re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"),
+    ),
+    (
+        "credential_assignment",
+        re.compile(
+            r"(?i)(\b\w*(?:api_?key|secret|password|passwd|private_?key|access_?token|auth_?token|token)\w*[\x22\x27]?\s*[:=]\s*[\x22\x27])([^\x22\x27\s]{8,})([\x22\x27])"
+        ),
+    ),
+)
+
+_PLACEHOLDER_HINTS = re.compile(
+    r"(?i)(\[REDACTED\]|<[^>]*>|\.\.\.|x{4,}|example|placeholder|changeme|your[_-]|dummy|fake|mock|"
+    r"test|sample|os\.environ|getenv|settings\.|process\.env|\$\{|none|null|true|false)"
+)
+
+
+def scrub_sensitive_text(text: Optional[str]) -> Optional[str]:
+    """Redact raw secrets, tokens, credentials, and connection strings from text before persistence."""
+    if not text or not isinstance(text, str):
+        return text
+    redacted = text
+    for name, pattern in _SECRET_REDACTION_PATTERNS:
+        if name == "credential_assignment":
+            def _repl_assign(match: re.Match[str]) -> str:
+                prefix, val, suffix = match.group(1), match.group(2), match.group(3)
+                if _PLACEHOLDER_HINTS.search(val):
+                    return match.group(0)
+                return f"{prefix}[REDACTED]{suffix}"
+
+            redacted = pattern.sub(_repl_assign, redacted)
+        elif name == "db_connection_uri":
+            redacted = pattern.sub(r"\1://\2:[REDACTED]@", redacted)
+        else:
+            redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def scrub_sensitive_data(val: Any) -> Any:
+    """Recursively scrub sensitive credential strings in text, dicts, or lists."""
+    if isinstance(val, str):
+        return scrub_sensitive_text(val)
+    elif isinstance(val, dict):
+        return {k: scrub_sensitive_data(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [scrub_sensitive_data(item) for item in val]
+    elif isinstance(val, tuple):
+        return tuple(scrub_sensitive_data(item) for item in val)
+    return val
 
 
 def _ensure_uuid(val: Any) -> Optional[uuid.UUID]:
@@ -122,6 +191,12 @@ class AnalysisRunRepository:
                     or result_payload["result"].get("test_output")
                 )
 
+        # Scrub credentials and sensitive tokens from persisted fields (Week 2 — Day 7)
+        error_message = scrub_sensitive_text(error_message)
+        test_output = scrub_sensitive_text(test_output)
+        if result_payload is not None:
+            result_payload = scrub_sensitive_data(result_payload)
+
         # Normalize feature_type and status strings
         feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
         status_val = status.value if hasattr(status, "value") else str(status)
@@ -183,10 +258,17 @@ class AnalysisRunRepository:
     save = create_run
 
     def _attach_finding_to_run(self, run: AnalysisRun, item: Any) -> AnalysisFinding:
-        """Helper to coerce a dict or Pydantic finding into an AnalysisFinding model."""
+        """Helper to coerce a dict or Pydantic finding into an AnalysisFinding model with secret scrubbing."""
         if isinstance(item, AnalysisFinding):
             item.analysis_run_id = run.id
             item.repository_id = run.repository_id
+            item.title = scrub_sensitive_text(item.title) or "Finding"
+            item.description = scrub_sensitive_text(item.description) or ""
+            item.evidence = scrub_sensitive_text(item.evidence) or ""
+            if item.suggested_fix:
+                item.suggested_fix = scrub_sensitive_text(item.suggested_fix)
+            if item.finding_metadata:
+                item.finding_metadata = scrub_sensitive_data(item.finding_metadata)
             self.session.add(item)
             return item
 
@@ -214,27 +296,29 @@ class AnalysisRunRepository:
         rev = raw.get("source_revision") or source_ref.get("revision") or run.source_revision
         sym = raw.get("symbol_name") or source_ref.get("symbol_name") or run.target_symbol
 
+        raw_meta = raw.get("metadata") or raw.get("finding_metadata")
+
         finding = AnalysisFinding(
             id=finding_uuid,
             analysis_run_id=run.id,
             repository_id=run.repository_id,
             category=str(raw.get("category", "general")),
             severity=str(raw.get("severity", "MEDIUM")).upper(),
-            title=str(raw.get("title", "Finding")),
-            description=str(raw.get("description", "")),
+            title=scrub_sensitive_text(str(raw.get("title", "Finding"))) or "Finding",
+            description=scrub_sensitive_text(str(raw.get("description", ""))) or "",
             file_path=file_path,
             start_line=start_line,
             end_line=end_line,
             source_revision=rev,
             symbol_name=sym,
-            evidence=str(raw.get("evidence", "")),
-            suggested_fix=raw.get("suggested_fix"),
+            evidence=scrub_sensitive_text(str(raw.get("evidence", ""))) or "",
+            suggested_fix=scrub_sensitive_text(raw.get("suggested_fix")) if raw.get("suggested_fix") else None,
             confidence=str(raw.get("confidence", "medium")),
             is_uncertain=bool(raw.get("is_uncertain", False)),
             is_new_in_change=bool(raw.get("is_new_in_change", True)),
             source_type=str(raw.get("source_type", "AI")),
             rule_id=raw.get("rule_id"),
-            finding_metadata=raw.get("metadata") or raw.get("finding_metadata"),
+            finding_metadata=scrub_sensitive_data(raw_meta) if raw_meta else None,
         )
         self.session.add(finding)
         return finding
@@ -284,6 +368,7 @@ class AnalysisRunRepository:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         feature_type: Optional[str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
@@ -301,6 +386,11 @@ class AnalysisRunRepository:
             return [], 0
 
         stmt = select(AnalysisRun).where(AnalysisRun.repository_id == repo_uuid)
+
+        if user_id:
+            u_uuid = _ensure_uuid(user_id)
+            if u_uuid:
+                stmt = stmt.where(AnalysisRun.user_id == u_uuid)
 
         if feature_type:
             feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
@@ -473,6 +563,7 @@ class AnalysisRunRepository:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
         target_symbol: Optional[str] = None,
@@ -483,6 +574,7 @@ class AnalysisRunRepository:
         """List paginated explanation runs for an authorized repository, newest first."""
         return self.list_by_repository(
             repository_id,
+            user_id=user_id,
             feature_type=AnalysisFeature.EXPLAIN.value,
             status=status,
             target_path=target_path,
@@ -870,6 +962,7 @@ class AnalysisRunRepository:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
         target_symbol: Optional[str] = None,
@@ -888,6 +981,11 @@ class AnalysisRunRepository:
             AnalysisRun.repository_id == repo_uuid,
             AnalysisRun.feature_type == AnalysisFeature.DETECT_BUGS.value,
         )
+
+        if user_id:
+            u_uuid = _ensure_uuid(user_id)
+            if u_uuid:
+                stmt = stmt.where(AnalysisRun.user_id == u_uuid)
 
         if status:
             status_val = status.value if hasattr(status, "value") else str(status)
@@ -1169,17 +1267,17 @@ class AnalysisRunRepository:
                 d = {}
 
             framework_val = framework_val or d.get("detected_framework") or d.get("framework")
-            prop_path_val = prop_path_val or d.get("proposed_test_path") or d.get("test_file_path")
+            prop_path_val = prop_path_val or d.get("proposed_test_path") or d.get("test_file_path") or d.get("test_path")
             extracted_content = extracted_content or d.get("test_content") or d.get("code")
-            if scenarios_val is None and "covered_scenarios" in d:
-                scenarios_val = d.get("covered_scenarios") or d.get("scenarios_covered")
-            if warnings_val is None and "assumptions_and_warnings" in d:
+            if scenarios_val is None:
+                scenarios_val = d.get("covered_scenarios") or d.get("scenarios_covered") or d.get("scenarios")
+            if warnings_val is None:
                 warnings_val = d.get("assumptions_and_warnings") or d.get("assumptions")
             if "syntax_valid" in d:
                 syntax_valid_val = bool(d.get("syntax_valid", True))
-            if validation_errors_val is None and "validation_errors" in d:
+            if validation_errors_val is None:
                 validation_errors_val = d.get("validation_errors") or d.get("validation_warnings")
-            if sources_val is None and "sources" in d:
+            if sources_val is None:
                 sources_val = d.get("sources")
 
         status_val = status.value if hasattr(status, "value") else str(status).upper()
@@ -1195,10 +1293,13 @@ class AnalysisRunRepository:
                 payload = dict(result_payload)
             else:
                 payload = {
+                    "framework": framework_val,
                     "detected_framework": framework_val,
                     "proposed_test_path": prop_path_val,
+                    "test_path": prop_path_val,
                     "test_content": final_test_output,
                     "covered_scenarios": scenarios_val or [],
+                    "scenarios": scenarios_val or [],
                     "assumptions_and_warnings": warnings_val or [],
                     "syntax_valid": syntax_valid_val,
                     "validation_errors": validation_errors_val or [],
@@ -1262,6 +1363,7 @@ class AnalysisRunRepository:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
         target_symbol: Optional[str] = None,
@@ -1279,6 +1381,11 @@ class AnalysisRunRepository:
             AnalysisRun.repository_id == repo_uuid,
             AnalysisRun.feature_type == AnalysisFeature.GENERATE_TESTS.value,
         )
+
+        if user_id:
+            u_uuid = _ensure_uuid(user_id)
+            if u_uuid:
+                stmt = stmt.where(AnalysisRun.user_id == u_uuid)
 
         if status:
             status_val = status.value if hasattr(status, "value") else str(status)
@@ -1375,13 +1482,21 @@ class AnalysisRunRepository:
 
         test_content = run.test_output or inner_res.get("test_content") or inner_res.get("code") or ""
         framework = inner_res.get("detected_framework") or inner_res.get("framework") or "pytest"
-        proposed_path = inner_res.get("proposed_test_path") or inner_res.get("test_file_path") or ""
+        proposed_path = (
+            inner_res.get("proposed_test_path")
+            or inner_res.get("test_file_path")
+            or inner_res.get("test_path")
+            or ""
+        )
 
         result_dict = {
+            "framework": framework,
             "detected_framework": framework,
             "proposed_test_path": proposed_path,
+            "test_path": proposed_path,
             "test_content": test_content,
-            "covered_scenarios": inner_res.get("covered_scenarios") or inner_res.get("scenarios_covered") or [],
+            "covered_scenarios": inner_res.get("covered_scenarios") or inner_res.get("scenarios") or inner_res.get("scenarios_covered") or [],
+            "scenarios": inner_res.get("scenarios") or inner_res.get("covered_scenarios") or [],
             "assumptions_and_warnings": inner_res.get("assumptions_and_warnings") or inner_res.get("assumptions") or [],
             "syntax_valid": inner_res.get("syntax_valid", True),
             "validation_errors": inner_res.get("validation_errors") or inner_res.get("validation_warnings") or [],
@@ -1395,6 +1510,9 @@ class AnalysisRunRepository:
             "target": target_dict,
             "revision": run.source_revision,
             "result": result_dict,
+            "framework": framework,
+            "test_content": run.test_output or test_content,
+            "scenarios": result_dict.get("covered_scenarios") or inner_res.get("scenarios") or [],
             "test_output": run.test_output or test_content,
             "error_message": run.error_message,
             "created_at": run.created_at.isoformat() if run.created_at else None,
@@ -1598,14 +1716,15 @@ class AnalysisRunRepository:
                 return existing_run
 
         # Findings extraction
+        effective_report = report if report is not None else extra_kwargs.get("review_report")
         raw_findings: list[Any] = []
         if findings is not None:
             raw_findings = list(findings)
-        elif report is not None:
-            if hasattr(report, "findings"):
-                raw_findings = list(getattr(report, "findings", []))
-            elif isinstance(report, dict) and "findings" in report:
-                raw_findings = list(report.get("findings", []))
+        elif effective_report is not None:
+            if hasattr(effective_report, "findings"):
+                raw_findings = list(getattr(effective_report, "findings", []))
+            elif isinstance(effective_report, dict) and "findings" in effective_report:
+                raw_findings = list(effective_report.get("findings", []))
 
         if deduplicate_findings and raw_findings:
             raw_findings = self._deduplicate_findings_data(raw_findings)
@@ -1635,22 +1754,22 @@ class AnalysisRunRepository:
             # Extract or compute report metadata
             summary = "AI code review completed."
             risk_level = None
-            if report is not None:
-                if hasattr(report, "summary"):
-                    summary = getattr(report, "summary", summary)
-                elif isinstance(report, dict) and "summary" in report:
-                    summary = report.get("summary", summary)
+            if effective_report is not None:
+                if hasattr(effective_report, "summary"):
+                    summary = getattr(effective_report, "summary", summary)
+                elif isinstance(effective_report, dict) and "summary" in effective_report:
+                    summary = effective_report.get("summary", summary)
 
-                if hasattr(report, "risk_level"):
-                    risk_level = getattr(report, "risk_level", None)
-                elif isinstance(report, dict) and "risk_level" in report:
-                    risk_level = report.get("risk_level")
+                if hasattr(effective_report, "risk_level"):
+                    risk_level = getattr(effective_report, "risk_level", None)
+                elif isinstance(effective_report, dict) and "risk_level" in effective_report:
+                    risk_level = effective_report.get("risk_level")
 
                 if missing_context is None:
-                    if hasattr(report, "missing_context"):
-                        missing_context = getattr(report, "missing_context", None)
-                    elif isinstance(report, dict) and "missing_context" in report:
-                        missing_context = report.get("missing_context")
+                    if hasattr(effective_report, "missing_context"):
+                        missing_context = getattr(effective_report, "missing_context", None)
+                    elif isinstance(effective_report, dict) and "missing_context" in effective_report:
+                        missing_context = effective_report.get("missing_context")
 
             if not risk_level:
                 severities = [
@@ -1783,6 +1902,7 @@ class AnalysisRunRepository:
         self,
         repository_id: uuid.UUID | str,
         *,
+        user_id: Optional[uuid.UUID | str] = None,
         status: Optional[str] = None,
         target_path: Optional[str] = None,
         source_revision: Optional[str] = None,
@@ -1800,6 +1920,11 @@ class AnalysisRunRepository:
             AnalysisRun.repository_id == repo_uuid,
             AnalysisRun.feature_type == AnalysisFeature.REVIEW.value,
         )
+
+        if user_id:
+            u_uuid = _ensure_uuid(user_id)
+            if u_uuid:
+                stmt = stmt.where(AnalysisRun.user_id == u_uuid)
 
         if status:
             s_val = status.value if hasattr(status, "value") else str(status).upper()
@@ -1902,7 +2027,9 @@ class AnalysisRunRepository:
             "target": target_dict,
             "revision": run.source_revision,
             "report": report_dict,
+            "summary": summary,
             "findings": findings_list,
+            "risk_level": risk_level,
             "error_message": run.error_message,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
@@ -2058,6 +2185,8 @@ class AnalysisRunRepository:
         )
         self.session.commit()
         return len(run_ids)
+
+    delete_repository_runs = delete_by_repository
 
     def delete_run(
         self,
@@ -2236,4 +2365,209 @@ class AnalysisRunRepository:
             "issues_count": len(issues),
             "issues": issues,
         }
+
+    # -----------------------------------------------------------------------
+    # Data Retention & Sensitive-Data Handling (Week 2 — Day 7)
+    # -----------------------------------------------------------------------
+
+    def purge_expired_runs(
+        self,
+        *,
+        repository_id: Optional[uuid.UUID | str] = None,
+        retention_days: int = 30,
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> int:
+        """Purge analysis runs and cascading findings older than retention_days (Day 7).
+
+        Default retention is 30 days. Cascading deletes automatically remove associated findings.
+        Returns the count of purged runs.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        stmt = select(AnalysisRun).where(AnalysisRun.created_at < cutoff)
+
+        if repository_id is not None:
+            repo_uuid = _ensure_uuid(repository_id)
+            if repo_uuid:
+                stmt = stmt.where(AnalysisRun.repository_id == repo_uuid)
+
+        if feature_type:
+            feat_val = feature_type.value if hasattr(feature_type, "value") else str(feature_type)
+            stmt = stmt.where(AnalysisRun.feature_type == feat_val)
+
+        if status:
+            status_val = status.value if hasattr(status, "value") else str(status)
+            stmt = stmt.where(AnalysisRun.status == status_val)
+
+        runs_to_delete = list(self.session.scalars(stmt).all())
+        count = len(runs_to_delete)
+        for run in runs_to_delete:
+            self.session.delete(run)
+
+        if count > 0:
+            self.session.commit()
+        return count
+
+    def prune_uncompleted_stale_runs(
+        self,
+        *,
+        older_than_hours: int = 24,
+        mark_as_failed: bool = True,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> int:
+        """Prune or time-out stuck PENDING or RUNNING runs older than specified hours (Day 7).
+
+        If mark_as_failed is True, transitions run status to FAILED with a timeout message.
+        Otherwise, purges the runs completely.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+        stmt = select(AnalysisRun).where(
+            AnalysisRun.status.in_([AnalysisRunStatus.PENDING.value, AnalysisRunStatus.RUNNING.value]),
+            AnalysisRun.created_at < cutoff,
+        )
+
+        if repository_id is not None:
+            repo_uuid = _ensure_uuid(repository_id)
+            if repo_uuid:
+                stmt = stmt.where(AnalysisRun.repository_id == repo_uuid)
+
+        stale_runs = list(self.session.scalars(stmt).all())
+        count = len(stale_runs)
+        now = datetime.now(timezone.utc)
+
+        for run in stale_runs:
+            if mark_as_failed:
+                run.status = AnalysisRunStatus.FAILED.value
+                run.error_message = f"Analysis run timed out after {older_than_hours} hours without completion."
+                run.completed_at = now
+            else:
+                self.session.delete(run)
+
+        if count > 0:
+            self.session.commit()
+        return count
+
+    def get_retention_metrics(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> dict[str, Any]:
+        """Calculate data retention statistics across analysis runs and findings (Day 7)."""
+        repo_uuid = _ensure_uuid(repository_id) if repository_id else None
+        base_stmt = select(AnalysisRun)
+        if repo_uuid:
+            base_stmt = base_stmt.where(AnalysisRun.repository_id == repo_uuid)
+
+        total_runs = self.session.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
+        now = datetime.now(timezone.utc)
+
+        runs_older_30d = self.session.scalar(
+            select(func.count()).select_from(
+                base_stmt.where(AnalysisRun.created_at < (now - timedelta(days=30))).subquery()
+            )
+        ) or 0
+        runs_older_60d = self.session.scalar(
+            select(func.count()).select_from(
+                base_stmt.where(AnalysisRun.created_at < (now - timedelta(days=60))).subquery()
+            )
+        ) or 0
+        runs_older_90d = self.session.scalar(
+            select(func.count()).select_from(
+                base_stmt.where(AnalysisRun.created_at < (now - timedelta(days=90))).subquery()
+            )
+        ) or 0
+
+        subq = base_stmt.subquery()
+        oldest_dt = self.session.scalar(select(func.min(subq.c.created_at)))
+        newest_dt = self.session.scalar(select(func.max(subq.c.created_at)))
+
+        findings_stmt = select(func.count()).select_from(AnalysisFinding)
+        if repo_uuid:
+            findings_stmt = findings_stmt.where(AnalysisFinding.repository_id == repo_uuid)
+        total_findings = self.session.scalar(findings_stmt) or 0
+
+        return {
+            "repository_id": str(repo_uuid) if repo_uuid else None,
+            "total_runs": total_runs,
+            "total_findings": total_findings,
+            "runs_older_30d": runs_older_30d,
+            "runs_older_60d": runs_older_60d,
+            "runs_older_90d": runs_older_90d,
+            "oldest_run_at": oldest_dt.isoformat() if oldest_dt else None,
+            "newest_run_at": newest_dt.isoformat() if newest_dt else None,
+        }
+
+    def sanitize_sensitive_data_in_history(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> int:
+        """Scan existing persisted runs and findings, redacting any raw credentials or secrets (Day 7).
+
+        Returns count of records sanitized.
+        """
+        repo_uuid = _ensure_uuid(repository_id) if repository_id else None
+        updated_count = 0
+
+        # 1. Audit and sanitize runs
+        run_stmt = select(AnalysisRun)
+        if repo_uuid:
+            run_stmt = run_stmt.where(AnalysisRun.repository_id == repo_uuid)
+        runs = list(self.session.scalars(run_stmt).all())
+        for run in runs:
+            dirty = False
+            if run.error_message:
+                scrubbed = scrub_sensitive_text(run.error_message)
+                if scrubbed != run.error_message:
+                    run.error_message = scrubbed
+                    dirty = True
+            if run.test_output:
+                scrubbed = scrub_sensitive_text(run.test_output)
+                if scrubbed != run.test_output:
+                    run.test_output = scrubbed
+                    dirty = True
+            if run.result_payload:
+                scrubbed = scrub_sensitive_data(run.result_payload)
+                if scrubbed != run.result_payload:
+                    run.result_payload = scrubbed
+                    dirty = True
+            if dirty:
+                updated_count += 1
+
+        # 2. Audit and sanitize findings
+        finding_stmt = select(AnalysisFinding)
+        if repo_uuid:
+            finding_stmt = finding_stmt.where(AnalysisFinding.repository_id == repo_uuid)
+        findings = list(self.session.scalars(finding_stmt).all())
+        for f in findings:
+            dirty = False
+            if f.title:
+                s = scrub_sensitive_text(f.title)
+                if s != f.title:
+                    f.title = s
+                    dirty = True
+            if f.description:
+                s = scrub_sensitive_text(f.description)
+                if s != f.description:
+                    f.description = s
+                    dirty = True
+            if f.evidence:
+                s = scrub_sensitive_text(f.evidence)
+                if s != f.evidence:
+                    f.evidence = s
+                    dirty = True
+            if f.suggested_fix:
+                s = scrub_sensitive_text(f.suggested_fix)
+                if s != f.suggested_fix:
+                    f.suggested_fix = s
+                    dirty = True
+            if f.finding_metadata:
+                s = scrub_sensitive_data(f.finding_metadata)
+                if s != f.finding_metadata:
+                    f.finding_metadata = s
+                    dirty = True
+            if dirty:
+                updated_count += 1
+
+        if updated_count > 0:
+            self.session.commit()
+        return updated_count
 

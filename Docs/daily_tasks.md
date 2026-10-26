@@ -518,7 +518,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 | Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ✅ Done |
 | Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ⬜ Todo |
 | Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
-| Om | `analysis_runs` and `code_findings` database models & Alembic migration | ⬜ Todo |
+| Om | `analysis_runs` and `code_findings` database models & Alembic migration | ✅ Done |
 | Parth | Authorized file & commit diff retrieval service in `GitHubService` | ⬜ Todo |
 | Prit | AST symbol range resolution & import mapping | ✅ Done |
 | Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
@@ -575,7 +575,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dev: Schema validation error handling and self-healing repair loops across all 4 services
 - ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
 - ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
-- ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`)
+- ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`), acceptance & regression suite (87/87 tests passing)
 - ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
 - ✅ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates) & published QA acceptance report (`test_keval_w2_day6_integration_qa.py`, `test_keval_w2_day7_acceptance_scenarios.py`, `Docs/week2_qa_acceptance_report.md`)
 
