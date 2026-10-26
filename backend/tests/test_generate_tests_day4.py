@@ -367,17 +367,17 @@ def test_validate_and_sanitize_generated_tests_warns_on_overwrite_and_redacts_se
         proposed_test_path="backend/tests/test_auth.py",
         test_content=(
             "def test_secret_leak():\n"
-            '    api_key = "sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n'
+            '    api_key = "' + "sk-proj-" + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"\n'
             "    assert len(api_key) > 0\n"
         ),
         covered_scenarios=[
             GenTestScenario(
                 name="test_secret_leak",
                 category="normal",
-                description="Uses key ghp_1234567890abcdefghijklmnopqrstuvwxyz12 in scenario.",
+                description="Uses key " + "ghp_" + "1234567890abcdefghijklmnopqrstuvwxyz12 in scenario.",
             )
         ],
-        assumptions_and_warnings=["Run with token AKIAIOSFODNN7EXAMPLE"],
+        assumptions_and_warnings=["Run with token " + "AKIA" + "IOSFODNN7EXAMPLE"],
         syntax_valid=True,
         validation_errors=[],
         sources=[

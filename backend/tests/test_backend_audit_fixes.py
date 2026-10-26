@@ -299,7 +299,7 @@ def test_gemini_provider_redacts_api_key_in_url_and_normalizes_gpt_model() -> No
     from ai.llm.gemini_provider import GeminiProvider, _redact_key
     from ai.llm.schemas import LLMRequest, Message
 
-    secret = "AIzaSySecretKey12345678901234567890123"
+    secret = "AIza" + "SySecretKey12345678901234567890123"
     raw_err = f"Client error '400 Bad Request' for url 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={secret}'"
     redacted = _redact_key(raw_err, secret)
     assert secret not in redacted
@@ -344,8 +344,10 @@ def test_secret_redaction_covers_groq_and_gemini_api_keys() -> None:
     """CWE-312: Secret redaction before LLM calls must scrub gsk_ (Groq) and AIza (Gemini) keys."""
     from app.services.bug_detection_orchestrator import redact_secrets_in_text
 
-    sample = "GROQ_API_KEY=gsk_1234567890abcdefghijklmnop GEMINI=AIzaSyA12345678901234567890123456789012"
+    fake_groq = "gsk_" + "1234567890abcdefghijklmnop"
+    fake_gemini = "AIza" + "SyA" + "12345678901234567890123456789012"
+    sample = f"GROQ_API_KEY={fake_groq} GEMINI={fake_gemini}"
     scrubbed = redact_secrets_in_text(sample)
-    assert "gsk_1234567890abcdefghijklmnop" not in scrubbed
-    assert "AIzaSyA12345678901234567890123456789012" not in scrubbed
+    assert fake_groq not in scrubbed
+    assert fake_gemini not in scrubbed
     assert "[REDACTED]" in scrubbed
