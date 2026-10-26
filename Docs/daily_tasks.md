@@ -572,7 +572,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ✅ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
 - ✅ Prit: AST and framework reliability & Day 7 acceptance — multi-fixture source-range validation, class/method extraction, framework detector hardening, zero-crash parser failure handling, tiered language limitation matrix, and published acceptance report (143/143 tests passing) (`Docs/scanner_languages.md`, `Docs/week2_day7_ast_acceptance_report.md`)
-- ⬜ Dev: Schema validation error handling and self-healing repair loops across all 4 services
+- ✅ Dev: Schema validation error handling and self-healing repair loops across all 4 services, milestone acceptance suite & published AI acceptance report (105/105 tests passing) (`test_dev_w2_day7_ai_acceptance.py`, `Docs/week2_day7_ai_acceptance_report.md`)
 - ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
 - ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
 - ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`), acceptance & regression suite (87/87 tests passing)
