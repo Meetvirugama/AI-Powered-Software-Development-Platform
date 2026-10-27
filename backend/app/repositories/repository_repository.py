@@ -55,10 +55,24 @@ class RepositoryRepository:
             self.session.refresh(repo)
         return repo
 
-    def list_files(self, repo_id: uuid.UUID, offset: int, limit: int) -> tuple[list[RepositoryFile], int]:
-        statement = select(RepositoryFile).where(RepositoryFile.repository_id == repo_id).order_by(RepositoryFile.path)
+    def list_files(
+        self, repo_id: uuid.UUID, offset: int, limit: int, path: Optional[str] = None
+    ) -> tuple[list[RepositoryFile], int]:
+        statement = select(RepositoryFile).where(RepositoryFile.repository_id == repo_id)
+        if path:
+            clean_path = path.strip().lstrip("./")
+            statement = statement.where(RepositoryFile.path.ilike(f"%{clean_path}%"))
+        statement = statement.order_by(RepositoryFile.path)
         total = self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0
         return list(self.session.scalars(statement.offset(offset).limit(limit)).all()), total
+
+    def get_file_by_path(self, repo_id: uuid.UUID, path: str) -> Optional[RepositoryFile]:
+        clean_path = path.strip().lstrip("./")
+        statement = select(RepositoryFile).where(
+            RepositoryFile.repository_id == repo_id,
+            RepositoryFile.path == clean_path,
+        )
+        return self.session.scalars(statement).first()
 
     def list_symbols(self, repo_id: uuid.UUID, offset: int, limit: int) -> tuple[list[CodeSymbol], int]:
         statement = select(CodeSymbol).where(CodeSymbol.repository_id == repo_id).order_by(CodeSymbol.name, CodeSymbol.start_line)

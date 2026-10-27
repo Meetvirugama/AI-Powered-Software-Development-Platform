@@ -18,7 +18,15 @@ export function AuthCallback() {
     if (isLoading) return;
 
     if (isAuthenticated) {
-      navigate('/app/dashboard', { replace: true });
+      let targetPath = '/app/dashboard';
+      if (typeof sessionStorage !== 'undefined') {
+        const savedRedirect = sessionStorage.getItem('auth_redirect');
+        if (savedRedirect && savedRedirect.startsWith('/')) {
+          targetPath = savedRedirect;
+          sessionStorage.removeItem('auth_redirect');
+        }
+      }
+      navigate(targetPath, { replace: true });
     }
   }, [isAuthenticated, isLoading, errorParam, navigate]);
 

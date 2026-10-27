@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Optional, Protocol
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -199,11 +199,32 @@ def list_files(
     request: Request,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=1000),
+    path: Optional[str] = Query(default=None, description="Optional path pattern to filter files"),
     db: Session = Depends(get_db),
 ) -> PaginatedResponse:
     _owned_repository(repository_id, request, db)
-    files, total = RepositoryRepository(db).list_files(repository_id, (page - 1) * page_size, page_size)
+    files, total = RepositoryRepository(db).list_files(
+        repository_id, (page - 1) * page_size, page_size, path=path
+    )
     return PaginatedResponse(page=page, page_size=page_size, total=total, items=[_file_response(item) for item in files])
+
+
+@router.get(
+    "/{repository_id}/files/by-path",
+    response_model=RepositoryFileResponse,
+    summary="Look up an indexed repository file by exact path",
+)
+def get_file_by_path(
+    repository_id: UUID,
+    path: str = Query(..., description="Repository-relative file path"),
+    request: Request = None,
+    db: Session = Depends(get_db),
+) -> RepositoryFileResponse:
+    _owned_repository(repository_id, request, db)
+    file_record = RepositoryRepository(db).get_file_by_path(repository_id, path)
+    if not file_record:
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, f"File '{path}' not found in repository.")
+    return _file_response(file_record)
 
 
 @router.get(

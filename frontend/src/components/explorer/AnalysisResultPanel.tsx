@@ -10,12 +10,15 @@ import {
   Target,
   Info,
   CheckCircle2,
+  History,
+  Clock,
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { ExplanationResultView } from './ExplanationResultView';
 import { BugScannerView } from './BugScannerView';
 import { TestGenerationView } from './TestGenerationView';
 import { CodeReviewView, ReviewTargetSelector } from './CodeReviewView';
+import { classifyAnalysisError } from '../../lib/classifyAnalysisError';
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
@@ -36,12 +39,14 @@ export interface AnalysisResultPanelProps {
   target: AnalysisTarget;
   status: AnalysisStatus;
   error?: string | null;
+  errorCode?: string | null;
   explanation?: CodeExplanation | null;
   bugResult?: BugDetectionResponse | null;
   testResult?: TestGenerationResponse | null;
   reviewResult?: ReviewReportResponse | null;
   reviewTarget?: ReviewTarget;
   repositoryId?: string;
+  onOpenHistory?: () => void;
   onReopenReview?: (result: ReviewReportResponse) => void;
   proposedPathStatus?: 'EXISTS' | 'NEW' | 'UNKNOWN';
   proposedPathExists?: boolean;
@@ -134,12 +139,14 @@ export function AnalysisResultPanel({
   target,
   status,
   error,
+  errorCode,
   explanation,
   bugResult,
   testResult,
   reviewResult,
   reviewTarget,
   repositoryId,
+  onOpenHistory,
   onReopenReview,
   proposedPathStatus,
   proposedPathExists = false,
@@ -164,14 +171,7 @@ export function AnalysisResultPanel({
     target.path && STATIC_EXTENSIONS.some((ext) => target.path.toLowerCase().endsWith(ext))
   );
 
-  const isUnsupportedTargetError = Boolean(
-    error &&
-      (error.toLowerCase().includes('static') ||
-        error.toLowerCase().includes('not a testable') ||
-        error.toLowerCase().includes('could not determine target language') ||
-        error.toLowerCase().includes('unsupported target') ||
-        error.toLowerCase().includes('unsupported test framework'))
-  );
+  const classified = classifyAnalysisError(errorCode, error, feature, isStaticNonCodeFile);
 
   const targetDescription =
     target.type === 'symbol' && target.symbol
@@ -210,7 +210,18 @@ export function AnalysisResultPanel({
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onOpenHistory && (
+            <button
+              type="button"
+              onClick={onOpenHistory}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border/80 bg-background/60 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shadow-xs"
+              title="Open Analysis History & Past Runs"
+            >
+              <History className="h-3 w-3 text-primary" />
+              <span className="hidden sm:inline">History</span>
+            </button>
+          )}
           {onClose && (
             <button
               type="button"
@@ -411,18 +422,26 @@ export function AnalysisResultPanel({
           </div>
         )}
 
-        {/* State 4: FAILED (with working retry callback, duplicate guarded) */}
+        {/* State 4: FAILED (with structured error UI, history check on timeout, and retry) */}
         {status === 'FAILED' && (
           <div
             className={cn(
               'rounded-xl border p-4 space-y-3 animate-in fade-in duration-200',
-              isUnsupportedTargetError || (feature === 'tests' && isStaticNonCodeFile)
+              classified.isUnsupportedTarget
+                ? 'border-amber-500/30 bg-amber-500/10'
+                : classified.isTimeout
+                ? 'border-orange-500/30 bg-orange-500/10'
+                : classified.isProviderUnavailable
                 ? 'border-amber-500/30 bg-amber-500/10'
                 : 'border-destructive/30 bg-destructive/10'
             )}
           >
             <div className="flex items-start gap-2.5">
-              {isUnsupportedTargetError || (feature === 'tests' && isStaticNonCodeFile) ? (
+              {classified.isUnsupportedTarget ? (
+                <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+              ) : classified.isTimeout ? (
+                <Clock className="h-4 w-4 text-orange-400 shrink-0 mt-0.5" />
+              ) : classified.isProviderUnavailable ? (
                 <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
               ) : (
                 <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
@@ -431,23 +450,29 @@ export function AnalysisResultPanel({
                 <h4
                   className={cn(
                     'text-xs font-semibold',
-                    isUnsupportedTargetError || (feature === 'tests' && isStaticNonCodeFile)
+                    classified.isUnsupportedTarget
+                      ? 'text-amber-300'
+                      : classified.isTimeout
+                      ? 'text-orange-300'
+                      : classified.isProviderUnavailable
                       ? 'text-amber-300'
                       : 'text-destructive'
                   )}
                 >
-                  {isUnsupportedTargetError || (feature === 'tests' && isStaticNonCodeFile)
-                    ? 'Target Not Supported for Unit Tests'
-                    : 'Analysis Failed'}
+                  {classified.title}
                 </h4>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  {error ||
-                    'Unable to complete analysis. The backend service endpoint may be temporarily unavailable or the provider call timed out.'}
+                  {error || classified.userGuidance}
                 </p>
+                {classified.userGuidance && error && error !== classified.userGuidance && (
+                  <p className="text-[11px] text-muted-foreground/80 mt-1 italic">
+                    {classified.userGuidance}
+                  </p>
+                )}
               </div>
             </div>
 
-            {isUnsupportedTargetError || (feature === 'tests' && isStaticNonCodeFile) ? (
+            {classified.isUnsupportedTarget ? (
               <div className="flex justify-end pt-2 border-t border-amber-500/20">
                 <button
                   type="button"
@@ -457,6 +482,30 @@ export function AnalysisResultPanel({
                   <BookOpen className="h-3.5 w-3.5 text-amber-400" />
                   <span>Explain This File Instead</span>
                 </button>
+              </div>
+            ) : classified.isTimeout ? (
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-orange-500/20">
+                {onOpenHistory && (
+                  <button
+                    type="button"
+                    onClick={onOpenHistory}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-500/30 bg-background text-xs font-medium text-orange-300 hover:bg-orange-500/10 transition-colors shadow-xs"
+                  >
+                    <History className="h-3.5 w-3.5 text-orange-400" />
+                    <span>Check Analysis History</span>
+                  </button>
+                )}
+                {onRetry && (
+                  <button
+                    type="button"
+                    disabled={isRunning}
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-medium text-foreground hover:bg-accent transition-colors shadow-xs disabled:opacity-50 disabled:pointer-events-none"
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5 text-primary', isRunning && 'animate-spin')} />
+                    <span>{isRunning ? 'Retrying…' : 'Retry Analysis'}</span>
+                  </button>
+                )}
               </div>
             ) : onRetry ? (
               <div className="flex justify-end pt-2 border-t border-destructive/20">

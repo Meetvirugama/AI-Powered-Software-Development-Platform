@@ -23,12 +23,18 @@
  *   { "error": { "code": "...", "message": "...", "retryable": false } }
  */
 export interface ApiError {
-  /** Machine-readable error code, e.g. "UNAUTHORIZED", "NOT_FOUND". */
+  /** Machine-readable error code, e.g. "UNAUTHORIZED", "NOT_FOUND", "UNSUPPORTED_TARGET", "REQUEST_TIMEOUT", "REQUEST_CANCELLED". */
   code: string;
   /** Human-readable error message. */
   message: string;
   /** Whether retrying the same request might succeed. */
   retryable: boolean;
+  /** HTTP status code (e.g. 400, 401, 404, 408, 422, 429, 500, 503). */
+  status?: number;
+  /** Request ID if returned by backend or headers (e.g. X-Request-ID). */
+  requestId?: string;
+  /** Structured validation or error details from backend. */
+  details?: Record<string, unknown> | unknown[];
 }
 
 // ---------------------------------------------------------------------------

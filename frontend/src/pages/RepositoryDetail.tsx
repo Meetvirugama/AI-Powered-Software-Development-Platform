@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useRepository,
@@ -9,12 +9,15 @@ import {
   useRepositoryFileContent,
   syncProgressFromStatus,
 } from '../hooks/useRepositories';
+import { getRepositoryFiles, lookupRepositoryFileByPath } from '../services/repositories';
+import { checkProposedTestPath } from '../lib/testPath';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { FileTree } from '../components/explorer/FileTree';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { AnalysisActionBar } from '../components/explorer/AnalysisActionBar';
 import { AnalysisResultPanel } from '../components/explorer/AnalysisResultPanel';
+import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { cn } from '../lib/utils';
 import {
   MessageSquare,
@@ -23,6 +26,7 @@ import {
   RefreshCw,
   XCircle,
   Clock,
+  History,
   FileText,
   FileCode,
   Box,
@@ -45,11 +49,11 @@ import {
   useGenerateTests,
   useReviewCode,
 } from '../hooks/useAnalysis';
+import { useAnalysisState } from '../hooks/useAnalysisState';
 import type { SyncStage, RepositoryFile } from '../types/api';
 import type {
   AnalysisFeatureType,
   AnalysisTarget,
-  AnalysisStatus,
   SourceReference,
   CodeExplanation,
   BugDetectionResponse,
@@ -142,16 +146,25 @@ export function RepositoryDetail() {
   const [dependencyFilter, setDependencyFilter] = useState('');
 
   // ------------------------------------------------------------------
-  // Week 2 Developer Intelligence State
   // ------------------------------------------------------------------
-  const [activeFeature, setActiveFeature] = useState<AnalysisFeatureType | null>(null);
-  const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>('IDLE');
+  // Week 2 Developer Intelligence State (F-03, F-05)
+  // ------------------------------------------------------------------
+  const {
+    activeFeature,
+    setActiveFeature,
+    states: analysisStates,
+    currentStatus: analysisStatus,
+    currentError: analysisError,
+    isAnyAnalysisPending,
+    startAnalysis,
+    completeAnalysis,
+    failAnalysis,
+    resetFileFeatures,
+    reopenFeature,
+  } = useAnalysisState(null);
+
+  const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
-  const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
-  const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
-  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
   const [reviewTarget, setReviewTarget] = useState<ReviewTarget>({
     type: 'file',
     path: '',
@@ -161,69 +174,85 @@ export function RepositoryDetail() {
   const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null | undefined>(undefined);
 
   // ------------------------------------------------------------------
-  // Mutations
+  // Mutations with per-feature state isolation & stale response protection
   // ------------------------------------------------------------------
   const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
   const { mutate: deleteRepo, isPending: isDeletePending } = useDeleteRepository();
+
   const { mutate: triggerExplain, isPending: isExplainPending } = useExplainCode(id || '', {
-    onSuccess: (data) => {
-      setAnalysisStatus('COMPLETED');
-      setExplanationResult(data.explanation);
-      setAnalysisError(null);
+    onSuccess: (data, variables) => {
+      completeAnalysis('explain', data.explanation, variables.target, data.run_id);
     },
-    onError: (err) => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        err.message ||
-          'Unable to complete code explanation. The AI analysis provider may be temporarily unavailable.'
+    onError: (err, variables) => {
+      failAnalysis(
+        'explain',
+        err,
+        variables.target
       );
     },
   });
 
   const { mutate: triggerDetectBugs, isPending: isDetectBugsPending } = useDetectBugs(id || '', {
-    onSuccess: (data) => {
-      setAnalysisStatus('COMPLETED');
-      setBugResult(data);
-      setAnalysisError(null);
+    onSuccess: (data, variables) => {
+      completeAnalysis('bugs', data, variables.target, data.run_id);
     },
-    onError: (err) => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        err.message ||
-          'Unable to complete bug scan. The backend service endpoint may be temporarily unavailable.'
+    onError: (err, variables) => {
+      failAnalysis(
+        'bugs',
+        err,
+        variables.target
       );
     },
   });
 
   const { mutate: triggerGenerateTests, isPending: isGenerateTestsPending } = useGenerateTests(id || '', {
-    onSuccess: (data) => {
-      setAnalysisStatus(data.status || 'COMPLETED');
-      setTestResult(data);
-      setAnalysisError(null);
+    onSuccess: (data, variables) => {
+      completeAnalysis('tests', data, variables.target, data.run_id);
     },
-    onError: (err) => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        err.message ||
-          'Failed to generate tests. The backend service endpoint may be temporarily unavailable.'
+    onError: (err, variables) => {
+      failAnalysis(
+        'tests',
+        err,
+        variables.target
       );
     },
   });
 
   const { mutate: triggerReview, isPending: isReviewPending } = useReviewCode(id || '', {
-    onSuccess: (data) => {
-      setAnalysisStatus(data.status || 'COMPLETED');
-      setReviewResult(data);
-      setAnalysisError(null);
+    onSuccess: (data, variables) => {
+      completeAnalysis('review', data, variables.target, data.run_id);
     },
-    onError: (err) => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        err.message ||
-          'Failed to run code review. The backend review service may be temporarily unavailable.'
+    onError: (err, variables) => {
+      failAnalysis(
+        'review',
+        err,
+        variables.target
       );
     },
   });
+
+  // Reopen callbacks for universal history drawer (F-03)
+  function handleReopenExplain(explanation: CodeExplanation, target: AnalysisTarget, runId: string) {
+    reopenFeature('explain', explanation, target, runId);
+    setCustomTarget(target);
+  }
+
+  function handleReopenBugs(result: BugDetectionResponse, target: AnalysisTarget, runId: string) {
+    reopenFeature('bugs', result, target, runId);
+    setCustomTarget(target);
+  }
+
+  function handleReopenTests(result: TestGenerationResponse, target: AnalysisTarget, runId: string) {
+    reopenFeature('tests', result, target, runId);
+    setCustomTarget(target);
+  }
+
+  function handleReopenReview(result: ReviewReportResponse) {
+    reopenFeature('review', result, result.target, result.run_id);
+    if (result.target) {
+      setReviewTarget(result.target);
+    }
+  }
 
 
   // ------------------------------------------------------------------
@@ -244,6 +273,12 @@ export function RepositoryDetail() {
   const progress = repo ? syncProgressFromStatus(repo.sync_status) : null;
   const isReady = progress?.isComplete ?? false;
 
+  // Loaded files state supporting server-side pagination and load-more (F-02)
+  const [extraLoadedFiles, setExtraLoadedFiles] = useState<RepositoryFile[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [lookupAttemptedPath, setLookupAttemptedPath] = useState<string | null>(null);
+
   // Only fetch files and dependencies if the repository is successfully synced
   const {
     data: filesData,
@@ -251,33 +286,114 @@ export function RepositoryDetail() {
     isError: filesError,
   } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
+  // Reset extra pages when repository ID changes (render-phase state adjustment per React guidelines)
+  const [prevId, setPrevId] = useState(id);
+  if (prevId !== id) {
+    setPrevId(id);
+    setExtraLoadedFiles([]);
+    setCurrentPage(1);
+    setLookupAttemptedPath(null);
+  }
+
+  // Merge page 1 items with extraLoadedFiles (deduplicated by id)
+  const loadedFiles = useMemo(() => {
+    const base = filesData?.items ?? [];
+    if (extraLoadedFiles.length === 0) return base;
+    const map = new Map(base.map((f) => [f.id, f]));
+    for (const f of extraLoadedFiles) {
+      map.set(f.id, f);
+    }
+    return Array.from(map.values());
+  }, [filesData?.items, extraLoadedFiles]);
+
+  async function handleLoadMoreFiles() {
+    if (!id || isLoadingMore) return;
+    const nextPage = currentPage + 1;
+    setIsLoadingMore(true);
+    try {
+      const res = await getRepositoryFiles(id, { page: nextPage, pageSize: 500 });
+      if (res.items.length > 0) {
+        setExtraLoadedFiles((prev) => {
+          const map = new Map(prev.map((f) => [f.id, f]));
+          for (const item of res.items) {
+            map.set(item.id, item);
+          }
+          return Array.from(map.values());
+        });
+        setCurrentPage(nextPage);
+      }
+    } catch (err) {
+      console.error('Failed to load more repository files', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }
+
+  // Derive whether an active async lookup is underway
+  const isLookingUpPath = useMemo(() => {
+    if (!id || !fileParam || !isReady || filesLoading) return false;
+    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, fileParam);
+    if (alreadyLoaded) return false;
+    return lookupAttemptedPath !== fileParam;
+  }, [id, fileParam, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
+
+  // Check if cited file from query parameters is already loaded or needs direct backend path lookup (F-02)
+  useEffect(() => {
+    if (!id || !fileParam || !isReady || filesLoading) return;
+    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, fileParam);
+    if (alreadyLoaded) return;
+    if (lookupAttemptedPath === fileParam) return;
+
+    let cancelled = false;
+    lookupRepositoryFileByPath(id, fileParam)
+      .then((file) => {
+        if (!cancelled) {
+          setLookupAttemptedPath(fileParam);
+          if (file) {
+            setExtraLoadedFiles((prev) => {
+              if (prev.some((f) => f.id === file.id)) return prev;
+              return [...prev, file];
+            });
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setLookupAttemptedPath(fileParam);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, fileParam, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
+
   const {
     data: dependencies,
     isLoading: depsLoading,
     isError: depsError,
   } = useRepositoryDependencies(id, { enabled: isReady });
 
-  // Check if cited file from query parameters is unavailable in indexed files.
-  // A file is only reported unavailable when the loaded file list is complete.
+  // Check if cited file from query parameters is unavailable in indexed files (F-02)
   const citedFileUnavailable = useMemo(() => {
-    if (!fileParam || !filesData?.items || filesLoading) return null;
-    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (!fileParam || filesLoading || isLookingUpPath) return null;
+    const matching = findMatchingRepositoryFile(loadedFiles, fileParam);
     if (matching) return null;
 
-    // Only report unavailable if the loaded file list is known to be complete
-    const isListComplete = (filesData.total ?? filesData.items.length) <= filesData.items.length;
-    return isListComplete ? fileParam : null;
-  }, [fileParam, filesData, filesLoading]);
+    const isListComplete = (filesData?.total ?? loadedFiles.length) <= loadedFiles.length;
+    if (lookupAttemptedPath === fileParam || isListComplete) {
+      return fileParam;
+    }
+    return null;
+  }, [fileParam, loadedFiles, filesLoading, isLookingUpPath, lookupAttemptedPath, filesData]);
 
   // Deep-linked cited source reference computed declaratively from searchParams
   const deepLinkedHighlight = useMemo<SourceReference | null>(() => {
-    if (!fileParam || !startParam || !filesData?.items) return null;
+    if (!fileParam || !startParam || loadedFiles.length === 0) return null;
     const start = parseInt(startParam, 10);
     if (isNaN(start) || start <= 0) return null;
     const end = endParam ? parseInt(endParam, 10) : start;
     const validEnd = !isNaN(end) && end >= start ? end : start;
 
-    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    const matching = findMatchingRepositoryFile(loadedFiles, fileParam);
     if (!matching) return null;
 
     return {
@@ -287,7 +403,7 @@ export function RepositoryDetail() {
       symbol_name: symbolParam || undefined,
       symbol: symbolParam || undefined,
     };
-  }, [fileParam, startParam, endParam, symbolParam, filesData]);
+  }, [fileParam, startParam, endParam, symbolParam, loadedFiles]);
 
   // Active highlighted source: uses explicit user interaction if set, otherwise deep-linked citation
   const highlightedSource =
@@ -296,18 +412,17 @@ export function RepositoryDetail() {
   // Auto-select initial file (prefer user-selected, query param file, README.md, or first file) once files load
   const selectedFile = useMemo(() => {
     if (userSelectedFile) return userSelectedFile;
-    if (fileParam && filesData?.items) {
-      const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (fileParam && loadedFiles.length > 0) {
+      const matching = findMatchingRepositoryFile(loadedFiles, fileParam);
       if (matching) return matching;
-      // If a cited file was requested but not found in the loaded files, do not select an unrelated file
+      if (isLookingUpPath) return null;
       return null;
     }
-    // If a deep-linked file was cited but is unavailable, DO NOT select an unrelated file as though it matched
     if (citedFileUnavailable) return null;
-    if (!filesData?.items || filesData.items.length === 0) return null;
-    const readme = filesData.items.find((f) => f.path.toLowerCase().endsWith('readme.md'));
-    return readme ?? filesData.items[0];
-  }, [userSelectedFile, fileParam, citedFileUnavailable, filesData]);
+    if (loadedFiles.length === 0) return null;
+    const readme = loadedFiles.find((f) => f.path.toLowerCase().endsWith('readme.md'));
+    return readme ?? loadedFiles[0];
+  }, [userSelectedFile, fileParam, citedFileUnavailable, loadedFiles, isLookingUpPath]);
 
   // Derived active target: defaults to full file unless user targeted a symbol/range on current file
   const activeTarget: AnalysisTarget = useMemo(() => {
@@ -344,21 +459,55 @@ export function RepositoryDetail() {
     );
   }, [dependencies, dependencyFilter]);
 
-  // Detect whether proposed test path collides with an existing file in the repository or is unverified
+  // Detect whether proposed test path collides with an existing file in the repository or is unverified (F-02)
+  const isListComplete = (filesData?.total ?? loadedFiles.length) <= loadedFiles.length;
+  const [asyncPathCollision, setAsyncPathCollision] = useState<Record<string, 'EXISTS' | 'NEW'>>({});
+
+  useEffect(() => {
+    const proposed = analysisStates.tests.result?.result?.proposed_test_path;
+    if (!proposed || !id || isListComplete) return;
+
+    // If already known from loaded files, no need for async lookup
+    const localStatus = checkProposedTestPath(proposed, loadedFiles, false, false, false);
+    if (localStatus === 'EXISTS') return;
+
+    // List is incomplete and not in loadedFiles: perform backend lookup
+    let cancelled = false;
+    lookupRepositoryFileByPath(id, proposed)
+      .then((file) => {
+        if (!cancelled) {
+          setAsyncPathCollision((prev) => ({
+            ...prev,
+            [proposed]: file ? 'EXISTS' : 'NEW',
+          }));
+        }
+      })
+      .catch(() => {
+        // Leave as UNKNOWN if network fails
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [analysisStates.tests.result?.result?.proposed_test_path, id, isListComplete, loadedFiles]);
+
   const proposedTestPathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
-    if (!testResult?.result?.proposed_test_path) return 'UNKNOWN';
-    if (filesLoading || filesError || !filesData?.items) return 'UNKNOWN';
-    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
-    const normalizedProposed = normalize(testResult.result.proposed_test_path);
-    const exists = filesData.items.some((f) => normalize(f.path) === normalizedProposed);
-    return exists ? 'EXISTS' : 'NEW';
-  }, [testResult, filesData, filesLoading, filesError]);
+    const proposed = analysisStates.tests.result?.result?.proposed_test_path;
+    if (!proposed) return 'UNKNOWN';
+    if (asyncPathCollision[proposed]) return asyncPathCollision[proposed];
+    return checkProposedTestPath(
+      proposed,
+      loadedFiles,
+      filesLoading,
+      filesError,
+      isListComplete
+    );
+  }, [analysisStates.tests.result, loadedFiles, filesLoading, filesError, isListComplete, asyncPathCollision]);
 
   const proposedTestPathExists = proposedTestPathStatus === 'EXISTS';
 
   const isAnalysisPending =
-    analysisStatus === 'RUNNING' ||
-    analysisStatus === 'PENDING' ||
+    isAnyAnalysisPending ||
     isExplainPending ||
     isDetectBugsPending ||
     isGenerateTestsPending ||
@@ -375,13 +524,14 @@ export function RepositoryDetail() {
     }
 
     if (!target.path && feature !== 'review') {
-      setAnalysisError('Please select a source file from the explorer before requesting an analysis.');
-      setAnalysisStatus('FAILED');
+      failAnalysis(feature, 'Please select a source file from the explorer before requesting an analysis.');
       return;
     }
 
-    setAnalysisStatus('RUNNING');
-    setAnalysisError(null);
+    startAnalysis(feature, target);
+
+    // Stable revision resolution (F-06): use stable file content_hash or branch ref
+    const targetRevision = selectedFile?.content_hash || repo?.default_branch || 'main';
 
     if (feature === 'explain') {
       setExplainedFile(selectedFile);
@@ -392,7 +542,7 @@ export function RepositoryDetail() {
           start_line: target.start_line,
           end_line: target.end_line,
           symbol: target.symbol,
-          revision: repo?.default_branch || 'main',
+          revision: targetRevision,
         },
         options: {
           include_context: true,
@@ -411,7 +561,7 @@ export function RepositoryDetail() {
           start_line: target.start_line,
           end_line: target.end_line,
           symbol: target.symbol,
-          revision: repo?.default_branch || 'main',
+          revision: targetRevision,
         },
         options: {
           include_context: true,
@@ -435,7 +585,7 @@ export function RepositoryDetail() {
           start_line: target.start_line,
           end_line: target.end_line,
           symbol: target.symbol,
-          revision: repo?.default_branch || 'main',
+          revision: targetRevision,
         },
         options: {
           include_context: true,
@@ -472,8 +622,7 @@ export function RepositoryDetail() {
   function handleRunReviewTarget(t: ReviewTarget) {
     if (isAnalysisPending) return;
     setReviewTarget(t);
-    setAnalysisStatus('RUNNING');
-    setAnalysisError(null);
+    startAnalysis('review', t);
     triggerReview({
       target: t,
       options: {
@@ -487,7 +636,7 @@ export function RepositoryDetail() {
 
   function handleFrameworkChange(framework: SupportedTestFramework | null) {
     setSelectedFrameworkOverride(framework);
-    if (activeFeature === 'tests' && activeTarget.path && testResult) {
+    if (activeFeature === 'tests' && activeTarget.path && analysisStates.tests.result) {
       handleRunAnalysis('tests', activeTarget, framework);
     }
   }
@@ -539,13 +688,6 @@ export function RepositoryDetail() {
 
     // Target file is unavailable in the file tree; do not highlight unrelated lines in current file
     setUserHighlightedSource(null);
-  }
-
-  function handleReopenReview(data: ReviewReportResponse) {
-    setReviewResult(data);
-    setReviewTarget(data.target);
-    setAnalysisStatus(data.status || 'COMPLETED');
-    setAnalysisError(null);
   }
 
   function handleSelectSymbolFromExplanation(sym: SymbolSummary) {
@@ -956,8 +1098,6 @@ export function RepositoryDetail() {
                         type="button"
                         onClick={() => {
                           setActiveFeature((prev) => (prev ? null : 'explain'));
-                          setAnalysisStatus('IDLE');
-                          setAnalysisError(null);
                         }}
                         className={cn(
                           'inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
@@ -971,6 +1111,17 @@ export function RepositoryDetail() {
                         <span className="hidden sm:inline">
                           {activeFeature ? 'Hide Analysis' : 'Analysis Panel'}
                         </span>
+                      </button>
+
+                      {/* Universal Analysis History Trigger (F-03) */}
+                      <button
+                        type="button"
+                        onClick={() => setIsHistoryDrawerOpen(true)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                        title="View Analysis History & Reopen Past Runs"
+                      >
+                        <History className="h-3 w-3 text-primary" />
+                        <span className="hidden sm:inline">History</span>
                       </button>
 
                       <Link
@@ -995,23 +1146,15 @@ export function RepositoryDetail() {
                 </div>
               </div>
 
-              {/* Developer Intelligence Action Bar */}
+              {/* Developer Intelligence Action Bar (F-03, F-05) */}
               {selectedFile && (
                 <AnalysisActionBar
                   activeFeature={activeFeature}
                   activeTarget={activeTarget}
                   disabled={isAnalysisPending}
+                  onOpenHistory={() => setIsHistoryDrawerOpen(true)}
                   onSelectFeature={(feat) => {
-                    setActiveFeature((prev) => {
-                      if (prev === feat) return null;
-                      if (feat === 'explain' && explanationResult) setAnalysisStatus('COMPLETED');
-                      else if (feat === 'bugs' && bugResult) setAnalysisStatus('COMPLETED');
-                      else if (feat === 'tests' && testResult) setAnalysisStatus('COMPLETED');
-                      else if (feat === 'review' && reviewResult) setAnalysisStatus('COMPLETED');
-                      else setAnalysisStatus('IDLE');
-                      return feat;
-                    });
-                    setAnalysisError(null);
+                    setActiveFeature((prev) => (prev === feat ? null : feat));
                   }}
                 />
               )}
@@ -1021,23 +1164,22 @@ export function RepositoryDetail() {
                 {/* Sub-pane 1: Interactive File Tree (Scrollable) */}
                 <div className="w-full sm:w-56 lg:w-64 border-b sm:border-b-0 sm:border-r border-border flex flex-col shrink-0 min-h-0 bg-muted/10">
                   <FileTree
-                    files={filesData?.items ?? []}
-                    isLoading={filesLoading}
-                    isError={filesError}
+                    files={loadedFiles}
+                    totalFiles={filesData?.total}
+                    hasMore={Boolean(filesData?.total && loadedFiles.length < filesData.total)}
+                    isLoadingMore={isLoadingMore}
+                    onLoadMore={handleLoadMoreFiles}
+                    isLoading={filesLoading && loadedFiles.length === 0}
+                    isError={filesError && loadedFiles.length === 0}
                     selectedFile={selectedFile}
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
                       setUserHighlightedSource(null);
-                      setExplanationResult(null);
-                      setBugResult(null);
-                      setTestResult(null);
-                      setReviewResult(null);
+                      resetFileFeatures(file.path);
                       setReviewTarget((prev) =>
                         prev.type === 'file' ? { type: 'file', path: file.path } : prev
                       );
                       setExplainedFile(null);
-                      setAnalysisStatus('IDLE');
-                      setAnalysisError(null);
                     }}
                   />
                 </div>
@@ -1059,6 +1201,10 @@ export function RepositoryDetail() {
                         handleRunAnalysis('explain', activeTarget);
                       }}
                     />
+                  ) : isLookingUpPath ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <LoadingSpinner size="md" label={`Locating cited file "${fileParam}" in repository...`} />
+                    </div>
                   ) : citedFileUnavailable ? (
                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
                       <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 max-w-md">
@@ -1070,6 +1216,15 @@ export function RepositoryDetail() {
                         <p className="text-[11px] text-muted-foreground mt-2">
                           Please select an available file from the explorer tree on the left.
                         </p>
+                        {filesData?.total && loadedFiles.length < filesData.total && (
+                          <button
+                            onClick={handleLoadMoreFiles}
+                            disabled={isLoadingMore}
+                            className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 transition-colors"
+                          >
+                            {isLoadingMore ? 'Loading files...' : `Load more files (${loadedFiles.length}/${filesData.total})`}
+                          </button>
+                        )}
                       </div>
                     </div>
                   ) : fileParam && !filesLoading ? (
@@ -1078,11 +1233,19 @@ export function RepositoryDetail() {
                         <FileCode className="h-8 w-8 mb-2 mx-auto text-blue-400" />
                         <h4 className="text-sm font-semibold text-foreground">Cited File Not in Loaded Preview</h4>
                         <p className="text-xs text-muted-foreground mt-1 break-all">
-                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{fileParam}</code> was not found in the first {filesData?.items?.length ?? 0} loaded files (total: {filesData?.total ?? 'unknown'}).
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{fileParam}</code> was not found in the first {loadedFiles.length} loaded files (total: {filesData?.total ?? 'unknown'}).
                         </p>
-                        <p className="text-[11px] text-muted-foreground mt-2">
-                          Please select an available file from the explorer tree on the left.
-                        </p>
+                        <div className="mt-3 flex items-center justify-center gap-2">
+                          {filesData?.total && loadedFiles.length < filesData.total && (
+                            <button
+                              onClick={handleLoadMoreFiles}
+                              disabled={isLoadingMore}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                            >
+                              {isLoadingMore ? 'Loading files...' : `Load next 500 files`}
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (
@@ -1104,22 +1267,24 @@ export function RepositoryDetail() {
                       target={activeTarget}
                       status={analysisStatus}
                       error={analysisError}
-                      explanation={activeFeature === 'explain' ? explanationResult : null}
-                      bugResult={activeFeature === 'bugs' ? bugResult : null}
-                      testResult={activeFeature === 'tests' ? testResult : null}
-                      reviewResult={activeFeature === 'review' ? reviewResult : null}
+                      errorCode={activeFeature ? analysisStates[activeFeature].errorCode : null}
+                      explanation={activeFeature === 'explain' ? analysisStates.explain.result : null}
+                      bugResult={activeFeature === 'bugs' ? analysisStates.bugs.result : null}
+                      testResult={activeFeature === 'tests' ? analysisStates.tests.result : null}
+                      reviewResult={activeFeature === 'review' ? analysisStates.review.result : null}
                       reviewTarget={reviewTarget}
                       repositoryId={id}
+                      onOpenHistory={() => setIsHistoryDrawerOpen(true)}
                       onReopenReview={handleReopenReview}
                       onRunReviewTarget={handleRunReviewTarget}
-                      activeFileTreePaths={filesData?.items?.map((f) => f.path) || []}
+                      activeFileTreePaths={loadedFiles.map((f) => f.path)}
                       proposedPathStatus={proposedTestPathStatus}
                       proposedPathExists={proposedTestPathExists}
                       sources={
                         activeFeature === 'explain'
-                          ? explanationResult?.sources || []
+                          ? analysisStates.explain.result?.sources || []
                           : activeFeature === 'tests'
-                          ? testResult?.result?.sources || []
+                          ? analysisStates.tests.result?.result?.sources || []
                           : []
                       }
                       activeSourceReference={highlightedSource}
@@ -1138,6 +1303,19 @@ export function RepositoryDetail() {
           </div>
         </div>
       )}
+
+      {/* Universal Analysis History & Reopen Drawer (F-03) */}
+      <AnalysisHistoryDrawer
+        isOpen={isHistoryDrawerOpen}
+        onClose={() => setIsHistoryDrawerOpen(false)}
+        repositoryId={id}
+        initialFeature={activeFeature || 'all'}
+        currentFilePath={selectedFile?.path}
+        onReopenExplain={handleReopenExplain}
+        onReopenBugs={handleReopenBugs}
+        onReopenTests={handleReopenTests}
+        onReopenReview={handleReopenReview}
+      />
 
       {/* Fullscreen Code Preview Modal */}
       {showModal && selectedFile && id && (

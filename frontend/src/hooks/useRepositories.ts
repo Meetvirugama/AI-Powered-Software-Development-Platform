@@ -28,8 +28,10 @@ import type {
  */
 export const repositoryKeys = {
   all: ['repositories'] as const,
+  lists: () => [...repositoryKeys.all, 'list'] as const,
   list: (page: number, pageSize: number) =>
     [...repositoryKeys.all, 'list', { page, pageSize }] as const,
+  details: () => [...repositoryKeys.all, 'detail'] as const,
   detail: (id: string) => [...repositoryKeys.all, 'detail', id] as const,
   files: (id: string, page: number, pageSize: number) =>
     [...repositoryKeys.detail(id), 'files', { page, pageSize }] as const,
