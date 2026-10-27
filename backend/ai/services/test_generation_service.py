@@ -51,6 +51,8 @@ _MAX_REPAIR_ATTEMPTS = 2
 class TestGenerationService(TestGenerationServiceProtocol):
     """Dedicated AI engine implementing the Week 2 Day 4 Test Generation workflow."""
 
+    __test__ = False
+
     def __init__(
         self,
         llm_gateway: Any = None,
@@ -157,11 +159,18 @@ class TestGenerationService(TestGenerationServiceProtocol):
         from app.services.test_generation_orchestrator import validate_generated_test_syntax
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
-            response = await self._llm.generate(req)
-            raw_text = (getattr(response, "content", "") or "").strip()
-            cleaned = self._validator.clean_json_text(raw_text)
-
+            raw_text = ""
             try:
+                try:
+                    response = await self._llm.generate(req)
+                    raw_text = (getattr(response, "content", "") or "").strip()
+                except LLMValidationError as val_exc:
+                    if val_exc.raw_response:
+                        raw_text = val_exc.raw_response.strip()
+                    else:
+                        raise val_exc
+
+                cleaned = self._validator.clean_json_text(raw_text)
                 parsed = json.loads(cleaned)
                 if isinstance(parsed, dict):
                     parsed.setdefault("detected_framework", detected_framework)
@@ -204,7 +213,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
                     }
                 )
 
-            except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
+            except (LLMValidationError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
                 logger.warning(
                     "test_generation_validation_failed",
                     extra={"attempt": attempt, "error": str(err)},
@@ -214,7 +223,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
                         f"Invalid TestGenerationResult JSON after {_MAX_REPAIR_ATTEMPTS} attempts: {err}"
                     ) from err
 
-                req.messages.append(Message(role="assistant", content=raw_text))
+                req.messages.append(Message(role="assistant", content=raw_text or str(err)))
                 req.messages.append(
                     Message(
                         role="user",

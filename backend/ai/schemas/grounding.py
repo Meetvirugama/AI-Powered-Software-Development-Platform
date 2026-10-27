@@ -333,15 +333,20 @@ class GroundingValidator:
                         break
 
                 if file_row is None:
-                    # Suffix match fallback: e.g. model cites "css/style.css" for "SchoolWeb/css/style.css"
+                    # Suffix match fallback at a strict path-segment boundary ('/' + suffix_p):
+                    # e.g. model cites "css/style.css" for "SchoolWeb/css/style.css",
+                    # but "init.py" must NOT match "src/__init__.py".
                     suffix_p = clean_file.lstrip("/")
-                    suffix_stmt = select(RepositoryFile).where(
-                        RepositoryFile.repository_id == repository_id,
-                        RepositoryFile.path.endswith(suffix_p),
-                    )
-                    file_row = await _run_query(suffix_stmt)
-                    if file_row is not None:
-                        source.file = file_row.path
+                    if suffix_p.startswith("./"):
+                        suffix_p = suffix_p[2:]
+                    if suffix_p:
+                        suffix_stmt = select(RepositoryFile).where(
+                            RepositoryFile.repository_id == repository_id,
+                            RepositoryFile.path.endswith("/" + suffix_p),
+                        )
+                        file_row = await _run_query(suffix_stmt)
+                        if file_row is not None:
+                            source.file = file_row.path
 
             if file_row is None:
                 return GroundingResult(source=source, grounded=False, reason="file_not_found")

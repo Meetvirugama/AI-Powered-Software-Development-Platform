@@ -70,6 +70,7 @@ export interface SourceReference {
   end_line?: number | null;
   revision?: string | null;
   symbol_name?: string | null;
+  symbol?: string | null;
 }
 
 export interface SymbolSummary {
@@ -319,4 +320,21 @@ export interface AnalysisRunDetailResponse {
   error_message?: string | null;
   created_at: string;
   completed_at?: string | null;
+}
+
+export interface AnalysisRunMetricsSummaryResponse {
+  repository_id: string;
+  total_runs: number;
+  by_feature: Record<string, number>;
+  by_status: Record<string, number>;
+  total_findings: number;
+  integrity_status: string;
+  integrity_issues_count: number;
+  retention?: Record<string, any>;
+  completed_runs?: number;
+  failed_runs?: number;
+  running_runs?: number;
+  feature_counts?: Record<string, number>;
+  severity_counts?: Record<string, number>;
+  latest_run_at?: string | null;
 }

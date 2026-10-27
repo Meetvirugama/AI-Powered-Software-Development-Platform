@@ -138,11 +138,18 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
         )
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
-            response = await self._llm.generate(req)
-            raw_text = (getattr(response, "content", "") or "").strip()
-            cleaned = self._validator.clean_json_text(raw_text)
-
+            raw_text = ""
             try:
+                try:
+                    response = await self._llm.generate(req)
+                    raw_text = (getattr(response, "content", "") or "").strip()
+                except LLMValidationError as val_exc:
+                    if val_exc.raw_response:
+                        raw_text = val_exc.raw_response.strip()
+                    else:
+                        raise val_exc
+
+                cleaned = self._validator.clean_json_text(raw_text)
                 parsed = json.loads(cleaned)
                 explanation = CodeExplanation.model_validate(parsed)
                 logger.info(
@@ -154,7 +161,7 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                     },
                 )
                 return explanation
-            except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
+            except (LLMValidationError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
                 logger.warning(
                     "code_explanation_validation_failed",
                     extra={"attempt": attempt, "error": str(err)},
@@ -165,7 +172,7 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
                     ) from err
 
                 # Add failed response and targeted repair instruction for next attempt
-                req.messages.append(Message(role="assistant", content=raw_text))
+                req.messages.append(Message(role="assistant", content=raw_text or str(err)))
                 req.messages.append(
                     Message(
                         role="user",

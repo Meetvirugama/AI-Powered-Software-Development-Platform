@@ -249,7 +249,7 @@ export function RepositoryDetail() {
     data: filesData,
     isLoading: filesLoading,
     isError: filesError,
-  } = useRepositoryFiles(id, 1, 100, { enabled: isReady });
+  } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
   const {
     data: dependencies,
@@ -284,6 +284,7 @@ export function RepositoryDetail() {
       file_path: matching.path,
       start_line: start,
       end_line: validEnd,
+      symbol_name: symbolParam || undefined,
       symbol: symbolParam || undefined,
     };
   }, [fileParam, startParam, endParam, symbolParam, filesData]);
@@ -1031,7 +1032,9 @@ export function RepositoryDetail() {
                       setBugResult(null);
                       setTestResult(null);
                       setReviewResult(null);
-                      setReviewTarget({ type: 'file', path: file.path });
+                      setReviewTarget((prev) =>
+                        prev.type === 'file' ? { type: 'file', path: file.path } : prev
+                      );
                       setExplainedFile(null);
                       setAnalysisStatus('IDLE');
                       setAnalysisError(null);

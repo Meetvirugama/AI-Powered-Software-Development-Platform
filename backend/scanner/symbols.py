@@ -11,7 +11,7 @@ class Symbol:
     start_line: int
     end_line: int
     signature: str
-    parent_id: Optional[UUID]
+    parent_id: Optional[UUID] = None
 
 @dataclass
 class SymbolEdge:
@@ -52,4 +52,3 @@ class ParseResult:
     is_supported: bool = True
     error_message: Optional[str] = None
     has_syntax_errors: bool = False
-

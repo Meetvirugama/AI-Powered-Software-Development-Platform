@@ -7,6 +7,7 @@ Responsibilities:
 - Automatic round-robin key rotation across free-tier API keys on rate-limits (HTTP 429).
 - Translates Google API errors into structured `EmbeddingError` hierarchy.
 - Connection pooling via shared or managed `httpx.AsyncClient`.
+- Security (W2-S8): Sends API key via `x-goog-api-key` request header instead of URL query string.
 """
 
 from __future__ import annotations
@@ -164,10 +165,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
         for attempt in range(1, max_attempts + 1):
             api_key = self._next_key()
-            url = f"{_GEMINI_API_BASE}/{self._model}:batchEmbedContents?key={api_key}"
+            url = f"{_GEMINI_API_BASE}/{self._model}:batchEmbedContents"
+            headers = {"x-goog-api-key": api_key}
 
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -230,8 +232,9 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                 # When mock side_effects are exhausted in tests
                 break
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                safe_err = _redact_key(str(exc), api_key)
                 last_error = ProviderUnavailableError(
-                    f"Gemini network or timeout error: {exc}",
+                    f"Gemini network or timeout error: {safe_err}",
                     provider=self.provider_name,
                 )
 

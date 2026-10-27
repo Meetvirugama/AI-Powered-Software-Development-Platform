@@ -285,3 +285,59 @@ class BugScanHistoryService:
                 source_revision=source_revision,
                 status=status,
             )
+
+
+    # -----------------------------------------------------------------------
+    # 3. Router & Orchestrator Protocol Compatibility
+    # -----------------------------------------------------------------------
+
+    def record_run(self, record: dict[str, Any], db: Optional[Session] = None) -> AnalysisRun:
+        """Compatible with explanation_orchestrator.record_analysis_run."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.create_run(**record)
+
+    save_run = record_run
+    create_run = record_run
+
+    def list_runs(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+        target_path: Optional[str] = None,
+        target_symbol: Optional[str] = None,
+        source_revision: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
+        offset: int = 0,
+        limit: int = 20,
+        db: Optional[Session] = None,
+    ) -> Tuple[List[AnalysisRun], int]:
+        """Compatible with GET /repositories/{id}/analysis-runs."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            return repo.list_by_repository(
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type=feature_type or AnalysisFeature.DETECT_BUGS.value,
+                status=status,
+                target_path=target_path,
+                target_symbol=target_symbol,
+                source_revision=source_revision,
+                offset=offset,
+                limit=limit,
+            )
+
+    def get_run(
+        self,
+        run_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        db: Optional[Session] = None,
+    ) -> Optional[AnalysisRun]:
+        """Compatible with GET /analysis-runs/{run_id}."""
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            if repository_id is not None:
+                return repo.get_by_id_and_repository(run_id, repository_id)
+            return repo.get_by_id(run_id)

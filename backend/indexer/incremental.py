@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -30,6 +31,7 @@ from app.core.secret_redaction import redact
 from indexer.chunker import SymbolChunker
 from scanner.detector import LanguageDetector
 from scanner.extractor import SymbolExtractor
+from scanner.graph import DependencyGraphBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -73,22 +75,41 @@ class IncrementalIndexer:
         self.detector = LanguageDetector()
         self.extractor = extractor or SymbolExtractor()
 
+    def _is_sqlite(self) -> bool:
+        bind = getattr(self._db, "bind", None)
+        dialect = getattr(bind, "dialect", None)
+        return getattr(dialect, "name", "") == "sqlite"
+
     async def _execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
         """Helper to run SQL across AsyncSession, sync Session, or sessionmaker."""
+        bound_params = dict(params or {})
+        if self._is_sqlite():
+            for k, v in list(bound_params.items()):
+                if isinstance(v, UUID):
+                    bound_params[k] = v.hex
+            sql_txt = str(stmt)
+            if "CAST(:embedding AS vector)" in sql_txt or "CAST(:metadata AS jsonb)" in sql_txt:
+                sql_txt = sql_txt.replace("CAST(:embedding AS vector)", ":embedding").replace(
+                    "CAST(:metadata AS jsonb)", ":metadata"
+                )
+                stmt = text(sql_txt)
+                if bound_params.get("embedding") is None:
+                    bound_params["embedding"] = json.dumps([0.0] * 768)
+
         if hasattr(self._db, "execute"):
-            if asyncio.iscoroutinefunction(self._db.execute):
-                return await self._db.execute(stmt, params or {})
-            return self._db.execute(stmt, params or {})
+            if inspect.iscoroutinefunction(self._db.execute):
+                return await self._db.execute(stmt, bound_params)
+            return self._db.execute(stmt, bound_params)
         else:
             async with self._db() as session:
-                res = await session.execute(stmt, params or {})
+                res = await session.execute(stmt, bound_params)
                 await session.commit()
                 return res
 
     async def _commit(self) -> None:
         """Helper to commit transactions."""
         if hasattr(self._db, "commit"):
-            if asyncio.iscoroutinefunction(self._db.commit):
+            if inspect.iscoroutinefunction(self._db.commit):
                 await self._db.commit()
             else:
                 self._db.commit()
@@ -121,11 +142,17 @@ class IncrementalIndexer:
         rows = result.fetchall() if hasattr(result, "fetchall") else []
 
         existing_files: dict[str, dict[str, Any]] = {
-            row.path: {"hash": row.content_hash, "file_id": row.id} for row in rows
+            row.path: {
+                "hash": row.content_hash,
+                "file_id": UUID(str(row.id)) if row.id and not isinstance(row.id, UUID) else row.id,
+            }
+            for row in rows
         }
 
         indexed_count = 0
         skipped_count = 0
+        all_extracted_symbols: list[Any] = []
+        file_contents_by_id: dict[UUID, str] = {}
 
         for file_info in scanned_files:
             raw_rel_path = getattr(file_info, "path", str(file_info))
@@ -169,6 +196,14 @@ class IncrementalIndexer:
                 # Delete old chunks and old symbols for this file before re-inserting
                 await self._execute(
                     text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
+                    {"repo_id": repository_id, "file_id": file_id},
+                )
+                await self._execute(
+                    text(
+                        "DELETE FROM symbol_edges WHERE repository_id = :repo_id "
+                        "AND (source_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id) "
+                        "OR target_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id))"
+                    ),
                     {"repo_id": repository_id, "file_id": file_id},
                 )
                 await self._execute(
@@ -257,6 +292,8 @@ class IncrementalIndexer:
                             },
                         )
                         persisted_symbol_ids.add(sym_uuid)
+                        all_extracted_symbols.append(sym)
+                        file_contents_by_id[file_id] = content
                     except Exception as sym_exc:
                         logger.debug("Symbol persistence skipped for %s in %s: %s", sym.name, file_rel_path, sym_exc)
 
@@ -340,6 +377,32 @@ class IncrementalIndexer:
 
             indexed_count += 1
             await asyncio.sleep(0.05)
+
+        if all_extracted_symbols:
+            try:
+                graph_edges = DependencyGraphBuilder(
+                    all_extracted_symbols,
+                    file_contents=file_contents_by_id,
+                ).build()
+                edge_insert_query = text(
+                    """
+                    INSERT INTO symbol_edges (id, repository_id, source_symbol_id, target_symbol_id, edge_type)
+                    VALUES (:id, :repo_id, :source_id, :target_id, :edge_type)
+                    """
+                )
+                for edge in graph_edges:
+                    await self._execute(
+                        edge_insert_query,
+                        {
+                            "id": uuid.uuid4(),
+                            "repo_id": repository_id,
+                            "source_id": edge.source_id,
+                            "target_id": edge.target_id,
+                            "edge_type": edge.edge_type,
+                        },
+                    )
+            except Exception as edge_exc:
+                logger.debug("Symbol edge persistence skipped for repo %s: %s", repository_id, edge_exc)
 
         await self._commit()
         logger.info(

@@ -1,14 +1,17 @@
 """Per-route rate limiting backed by Redis.
-Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2, Day 1
+Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2, Day 1–7
 
 Limits (Docs/week1.md, Day 6 & Docs/week2.md, Section 4.6):
-    /auth/github/callback                  10 req/min per IP
-    /repositories/:id/sync                  5 req/min per user
-    /repositories/:id/chat                 30 req/min per user
-    /repositories/:id/explain              20 req/min per user
-    /repositories/:id/detect-bugs          20 req/min per user
-    /repositories/:id/generate-tests       20 req/min per user
-    /repositories/:id/review               20 req/min per user
+    /auth/github/callback                      10 req/min per IP
+    /repositories/:id/sync                      5 req/min per user
+    /repositories/:id/chat                     30 req/min per user
+    /repositories/:id/explain                  20 req/min per user
+    /repositories/:id/detect-bugs              20 req/min per user
+    /repositories/:id/generate-tests           20 req/min per user
+    /repositories/:id/review                   20 req/min per user
+    /repositories/:id/source/agent-branch      20 req/min per user
+    /repositories/:id/source/commit            20 req/min per user
+    /repositories/:id/source/pr-metadata       20 req/min per user
 
 Algorithm: fixed one-minute window. Each request increments
 ``ratelimit:<rule>:<identity>:<window>`` in Redis; the key expires on its own
@@ -72,6 +75,12 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/generate-tests/?$"), 20, 60, "user"),
         RateLimitRule("repo_review", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/review/?$"), 20, 60, "user"),
+        RateLimitRule("repo_agent_branch", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/source/agent-branch/?$"), 20, 60, "user"),
+        RateLimitRule("repo_source_commit", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/source/commit/?$"), 20, 60, "user"),
+        RateLimitRule("repo_pr_metadata", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/source/pr-metadata/?$"), 20, 60, "user"),
     )
 
 

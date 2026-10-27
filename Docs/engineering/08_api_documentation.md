@@ -42,7 +42,8 @@
 | POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🟢 Done (API Contract) |
 | POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🟢 Done (API Contract) |
 | POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🟢 Done (API Contract) |
-| GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs | Yes | 🟢 Done (API Contract) |
+| GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs (with `user_id` filter) | Yes | 🟢 Done |
+| GET | `/api/v1/repositories/{id}/analysis-runs/summary` | Analysis Run Summary, DB Integrity & Retention Metrics | Yes | 🟢 Done |
 | GET | `/api/v1/analysis-runs/{run_id}` | Get Specific Analysis Run & Findings | Yes | 🟢 Done (API Contract) |
 
 ### Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)
@@ -818,6 +819,7 @@ Chat API → RAGPipeline.chat()
 | `feature_type` | string | `null` | Optional filter: `explain`, `detect_bugs`, `generate_tests`, `review` |
 | `status` | string | `null` | Optional filter: `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED` |
 | `page` | integer | `1` | 1-indexed page number |
+| `user_id` | UUID | `null` | Optional filter to scope history runs by author UUID |
 | `page_size` | integer | `20` | Items per page (max 100) |
 
 **Implementation:** `backend/app/api/v1/analysis.py` — `list_analysis_runs()`, `get_analysis_run()`

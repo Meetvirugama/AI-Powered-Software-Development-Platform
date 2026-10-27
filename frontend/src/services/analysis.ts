@@ -23,6 +23,7 @@ import type {
   PaginatedAnalysisRunResponse,
   AnalysisRunDetailResponse,
   AnalysisRunFeatureType,
+  AnalysisRunMetricsSummaryResponse,
 } from '../types/analysis';
 
 /**
@@ -117,6 +118,7 @@ export async function getAnalysisRuns(
     status?: string;
     target_path?: string;
     source_revision?: string;
+    user_id?: string;
     page?: number;
     page_size?: number;
   }
@@ -137,6 +139,7 @@ export async function getBugScanHistory(
     status?: string;
     target_path?: string;
     source_revision?: string;
+    user_id?: string;
     page?: number;
     page_size?: number;
   }
@@ -177,6 +180,7 @@ export async function getTestGenerationHistory(
     status?: string;
     target_path?: string;
     source_revision?: string;
+    user_id?: string;
     page?: number;
     page_size?: number;
   }
@@ -209,6 +213,7 @@ export async function getCodeReviewHistory(
     status?: string;
     target_path?: string;
     source_revision?: string;
+    user_id?: string;
     page?: number;
     page_size?: number;
   }
@@ -229,4 +234,20 @@ export async function reopenCodeReview(
   runId: string
 ): Promise<AnalysisRunDetailResponse> {
   return getAnalysisRun(runId);
+}
+
+
+/**
+ * Retrieve aggregate run and finding metrics across all 4 Developer Intelligence features
+ * for an authorized repository (Week 2 — Day 6/7).
+ *
+ * Calls GET /api/v1/repositories/{repository_id}/analysis-runs/summary
+ */
+export async function getAnalysisRunsSummary(
+  repositoryId: string
+): Promise<AnalysisRunMetricsSummaryResponse> {
+  const response = await apiClient.get<AnalysisRunMetricsSummaryResponse>(
+    `/repositories/${repositoryId}/analysis-runs/summary`
+  );
+  return response.data;
 }

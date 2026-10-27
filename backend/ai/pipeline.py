@@ -230,9 +230,13 @@ class RAGPipeline:
             )
 
         # ---- Step 1: Retrieval & Repo Metadata ---------------------------
+        import asyncio
+
         retrieval_start = time.monotonic()
-        chunks = await self._retrieve(cleaned_question, repo_uuid)
-        related_files = await self._get_repository_files(repo_uuid)
+        chunks, related_files = await asyncio.gather(
+            self._retrieve(cleaned_question, repo_uuid),
+            self._get_repository_files(repo_uuid),
+        )
         retrieval_latency_ms = (time.monotonic() - retrieval_start) * 1000
 
         # ---- Step 2: Graceful fallback for zero retrieval ------------------

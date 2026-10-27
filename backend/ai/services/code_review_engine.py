@@ -129,7 +129,6 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
         else:
             rendered = f"Review target: {payload.target.type} ({payload.target.path or payload.target.commit_sha or payload.target.pr_number})"
 
-
         # Lazy import grounding builder from orchestrator
         from app.services.code_review_orchestrator import build_grounded_review_report
 
@@ -158,11 +157,18 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
         )
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
-            response = await self._llm.generate(req)
-            raw_text = (getattr(response, "content", "") or "").strip()
-            cleaned = self._validator.clean_json_text(raw_text)
-
+            raw_text = ""
             try:
+                try:
+                    response = await self._llm.generate(req)
+                    raw_text = (getattr(response, "content", "") or "").strip()
+                except LLMValidationError as val_exc:
+                    if val_exc.raw_response:
+                        raw_text = val_exc.raw_response.strip()
+                    else:
+                        raise val_exc
+
+                cleaned = self._validator.clean_json_text(raw_text)
                 parsed = json.loads(cleaned)
                 envelope = _LLMReviewOutputEnvelope.model_validate(parsed)
                 report = build_grounded_review_report(
@@ -182,7 +188,7 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
                 )
                 return report
 
-            except (json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
+            except (LLMValidationError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:
                 logger.warning(
                     "code_review_validation_failed",
                     extra={"attempt": attempt, "error": str(err)},
@@ -192,7 +198,7 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
                         f"Invalid ReviewReport JSON after {_MAX_REPAIR_ATTEMPTS} attempts: {err}"
                     ) from err
 
-                req.messages.append(Message(role="assistant", content=raw_text))
+                req.messages.append(Message(role="assistant", content=raw_text or str(err)))
                 req.messages.append(
                     Message(
                         role="user",

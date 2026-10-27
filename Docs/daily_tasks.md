@@ -570,13 +570,25 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
 
+| Owner | Task | Deliverable | Status |
+|---|---|---|---|
+| **Yug** | End-to-End API Integration, OpenAPI Contract & Final Acceptance Verification | `backend/app/api/v1/analysis.py`, `backend/tests/test_yug_w2_day7_final_acceptance.py` | [x] |
+| **Dhramraj** | Frontend Analysis Workbench Integration, Review Target Sync & Citation Navigation | `frontend/src/pages/RepositoryDetail.tsx`, `backend/tests/test_dhramraj_w2_day7_frontend_acceptance.py` | [x] |
+| **Dev** | AI Services Prompt Isolation, Repair Loops & Acceptance Suite (`PR #134`) | `backend/ai/services/`, `backend/tests/test_dev_w2_day7_ai_acceptance.py` | [x] |
+| **Meet** | Context Assembly, Token Budgeting & Hybrid Retrieval Verification | `backend/ai/context/`, `backend/ai/retrieval/`, `backend/ai/pipeline.py` | [x] |
+| **Prit** | AST Rules, Dependency Graph Call Edges & Source Mapper Acceptance | `backend/scanner/graph.py`, `backend/scanner/ast_rules.py`, `backend/tests/test_prit_w2_day7_scanner_acceptance.py` | [x] |
+| **Parth** | GitHub Source Service Hardening, Git Branch Isolation & PR Metadata | `backend/app/integrations/github/source_service.py`, `backend/app/services/git_branch.py`, `backend/tests/test_day7_git_workspace_security.py` | [x] |
+| **Sukun** | Week 2 Security Gate (W2-S1..W2-S8), Secret Redaction & Path Confinement | `backend/app/core/secret_redaction.py`, `backend/tests/test_sukun_w2_day7_security_gate.py` | [x] |
+| **Om** | Analysis Run Persistence, Composite Indexes, Retention & Integrity Verification | `backend/app/repositories/analysis_run_repository.py`, `backend/migrations/versions/f1c2d3e4b5a6_add_analysis_composite_indexes.py`, `backend/tests/test_om_w2_d7_acceptance_regression.py` | [x] |
+| **Keval** | Scenarios A–E Full Acceptance Regression & Cross-Feature QA | `backend/tests/test_keval_w2_day7_acceptance_scenarios.py` | [x] |
+
 - ✅ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
 - ✅ Prit: AST and framework reliability & Day 7 acceptance — multi-fixture source-range validation, class/method extraction, framework detector hardening, zero-crash parser failure handling, tiered language limitation matrix, and published acceptance report (143/143 tests passing) (`Docs/scanner_languages.md`, `Docs/week2_day7_ast_acceptance_report.md`)
 - ✅ Dev: Schema validation error handling and self-healing repair loops across all 4 services, milestone acceptance suite & published AI acceptance report (105/105 tests passing) (`test_dev_w2_day7_ai_acceptance.py`, `Docs/week2_day7_ai_acceptance_report.md`)
-- ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
-- ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
+- ✅ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
+- ✅ Yug: Route registration, auth guards, OpenAPI documentation & Day 7 API acceptance suite (`test_yug_w2_day7_final_acceptance.py`, `Docs/week2_day7_api_acceptance_report.md`)
 - ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`), acceptance & regression suite (87/87 tests passing)
-- ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
+- ✅ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
 - ✅ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates) & published QA acceptance report (`test_keval_w2_day6_integration_qa.py`, `test_keval_w2_day7_acceptance_scenarios.py`, `Docs/week2_qa_acceptance_report.md`)
 
 ---

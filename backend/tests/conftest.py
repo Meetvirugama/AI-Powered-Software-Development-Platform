@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Generator
 import pytest
 from fastapi.testclient import TestClient
 import httpx
@@ -41,6 +41,7 @@ except (ImportError, ModuleNotFoundError):
 from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.main import app
+from app import models as _app_models  # noqa: F401 — ensure all ORM models (including PullRequest) are registered on Base.metadata
 
 # Determine test database URL
 TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
@@ -223,4 +224,3 @@ def auth_headers(test_user, monkeypatch) -> dict[str, str]:
 
     token, _ = create_access_token(user_id=str(test_user.id))
     return {"Authorization": f"Bearer {token}"}
-

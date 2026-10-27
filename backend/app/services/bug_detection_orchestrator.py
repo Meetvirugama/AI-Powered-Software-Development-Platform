@@ -315,6 +315,63 @@ class BuiltinStaticBugScanner:
                     f"AST parser error in '{file_path}' at line {err_line}: {exc.msg}."
                 )
 
+        # 3. Structural ASTBugAnalyzer integration (Prit's AST rules: AST-NULL-001, AST-ITER-001,
+        #    AST-LOGIC-001, AST-SHADOW-001, AST-UNREACH-001, AST-ASYNC-001, AST-COMP-001, & JS/TS rules)
+        try:
+            from scanner.ast_rules import ASTBugAnalyzer
+
+            ast_result = ASTBugAnalyzer().analyze_code(
+                content=code_content,
+                file_path=file_path,
+                language=language if language and language.lower() != "text" else None,
+            )
+            cat_map = {
+                "null_dereference": "null_safety",
+                "null_safety": "null_safety",
+                "off_by_one": "off_by_one",
+                "boundary_condition": "boundary_condition",
+                "unhandled_exception": "unhandled_exception",
+                "resource_leak": "resource_leak",
+                "race_condition": "race_condition",
+                "logic_error": "logic_error",
+                "security": "security",
+            }
+            skip_duplicate_rules = {"AST-RES-001", "AST-EXC-001", "AST-ARG-001", "AST-SEC-001", "AST-BOUND-001", "AST-SYNTAX-001"}
+            for idx, af in enumerate(ast_result.findings):
+                if af.rule_id in skip_duplicate_rules and file_path.endswith(".py"):
+                    continue
+                sev_upper = str(af.severity or "MEDIUM").upper()
+                if sev_upper not in SEVERITY_RANK:
+                    sev_upper = "MEDIUM"
+                mapped_cat = cat_map.get(str(af.category or "").lower(), "logic_error")
+                s_ln = base_start_line + max(0, int(af.line_number or 1) - 1)
+                e_ln = base_start_line + max(0, int(af.end_line or af.line_number or 1) - 1)
+                findings.append(
+                    BugFinding(
+                        id=f"static-{af.rule_id.lower()}-{s_ln}-{idx}",
+                        category=mapped_cat,
+                        severity=sev_upper,  # type: ignore[arg-type]
+                        title=redact_secrets_in_text(af.message.split(".")[0] or af.rule_id),
+                        description=redact_secrets_in_text(af.message),
+                        source_reference=AnalysisSourceReference(
+                            repository_id=repository_id,
+                            file_path=file_path,
+                            start_line=s_ln,
+                            end_line=e_ln,
+                            revision=revision,
+                            symbol_name=af.enclosing_symbol,
+                        ),
+                        evidence=redact_secrets_in_text(af.evidence or af.message),
+                        suggested_fix=redact_secrets_in_text(af.remediation) if af.remediation else None,
+                        confidence=af.confidence if af.confidence in ("high", "medium", "low") else "high",  # type: ignore[arg-type]
+                        is_uncertain=False,
+                        source_type="STATIC",
+                        rule_id=af.rule_id,
+                    )
+                )
+        except Exception as ast_exc:
+            logger.debug("ASTBugAnalyzer supplemental check skipped for %s: %s", file_path, ast_exc)
+
         return findings, warnings
 
     def _run_python_ast_checks(

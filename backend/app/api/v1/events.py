@@ -68,9 +68,14 @@ def _should_deliver_event(
         if str(event_user_id) != str(caller_user_id):
             return False
 
-    if isinstance(data_obj, dict) and "repository_id" in data_obj and owned_repo_ids is not None:
-        if str(data_obj["repository_id"]) not in owned_repo_ids:
+    if isinstance(data_obj, dict) and "repository_id" in data_obj:
+        if caller_user_id is None and owned_repo_ids is None:
             return False
+        if owned_repo_ids is not None:
+            if str(data_obj["repository_id"]) not in owned_repo_ids:
+                if event_user_id is not None and str(event_user_id) == str(caller_user_id):
+                    return True
+                return False
 
     return True
 
@@ -103,7 +108,10 @@ async def stream_events(
             owned_repo_ids = None
 
     async def event_generator():
-        yield f"data: {json.dumps({"type": "connected", "data": {"authenticated": caller_user_id is not None}})}\n\n"
+        connected_payload = json.dumps(
+            {"type": "connected", "data": {"authenticated": caller_user_id is not None}}
+        )
+        yield f"data: {connected_payload}\n\n"
 
         redis = None
         pubsub = None
