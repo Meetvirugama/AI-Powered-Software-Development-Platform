@@ -82,12 +82,6 @@ export interface Repository {
   /** ISO-8601 datetime string or null. */
   last_synced_at: string | null;
 
-  // -------------------------------------------------------------------------
-  // Day 5 Mock Additions
-  // The following fields are required by the Day 5 Repository Explorer UI
-  // but are not yet exposed by the backend `RepositoryResponse`.
-  // They are mocked on the frontend until the backend contract is updated.
-  // -------------------------------------------------------------------------
   description?: string | null;
   framework?: string | null;
   file_count?: number;
@@ -147,14 +141,11 @@ export interface RepositoryFileContent {
 }
 
 // ---------------------------------------------------------------------------
-// Dependencies — Day 5 Mock
+// Dependencies — Live endpoint GET /api/v1/repositories/:id/dependencies
 // ---------------------------------------------------------------------------
 
 /**
- * A top-level dependency for a repository.
- *
- * MOCKED: The backend does not yet expose dependencies via any endpoint.
- * This is a temporary frontend contract to support the Day 5 Explorer UI.
+ * A top-level dependency for a repository parsed from manifests by the backend.
  */
 export interface RepositoryDependency {
   name: string;
