@@ -113,6 +113,27 @@ class AnalysisSourceReference(BaseModel):
         description="Optional function, class, or method name at this location.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_source(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            m = re.match(r"^([^(\s:]+)(?:\s*(?:\(lines\s*|:)\s*(\d+)(?:[-–](\d+))?\s*\)?)?", data.strip())
+            if m:
+                path = m.group(1).strip()
+                start = int(m.group(2)) if m.group(2) else None
+                end = int(m.group(3)) if m.group(3) else start
+                return {"file_path": path, "start_line": start, "end_line": end}
+            return {"file_path": data.strip()}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "file_path" not in d:
+                for alt in ("path", "file", "filename", "source", "filepath"):
+                    if alt in d and d[alt]:
+                        d["file_path"] = str(d[alt]).strip()
+                        break
+            return d
+        return data
+
     @field_validator("file_path")
     @classmethod
     def _clean_file_path(cls, value: str) -> str:
@@ -282,9 +303,35 @@ class SymbolSummary(BaseModel):
         default="symbol",
         description="Symbol kind, e.g. 'function', 'class', 'method', 'variable', 'type'.",
     )
-    role: str = Field(..., min_length=1, description="How this symbol contributes to the code.")
+    role: str = Field(
+        default="Referenced in target code",
+        min_length=1,
+        description="How this symbol contributes to the code.",
+    )
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_symbol(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            clean = data.strip() or "symbol"
+            return {"name": clean, "kind": "symbol", "role": "Referenced in target code"}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "name" not in d or not str(d.get("name", "")).strip():
+                for alt in ("symbol", "identifier", "selector", "title", "label"):
+                    if alt in d and d[alt]:
+                        d["name"] = str(d[alt]).strip()
+                        break
+                if not d.get("name"):
+                    d["name"] = "symbol"
+            if not d.get("role"):
+                d["role"] = d.get("description") or "Referenced in target code"
+            if not d.get("kind"):
+                d["kind"] = "symbol"
+            return d
+        return data
 
 
 class CodeExplanation(BaseModel):
@@ -328,6 +375,79 @@ class CodeExplanation(BaseModel):
         default_factory=list,
         description="Explicit list of unavailable files, callers, or context items.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_explanation(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+
+        # 1. purpose
+        p = d.get("purpose")
+        if not p or not isinstance(p, str) or not p.strip():
+            d["purpose"] = "Explanation of requested code target based on repository context."
+        else:
+            d["purpose"] = p.strip()
+
+        # 2. logic_flow
+        lf = d.get("logic_flow")
+        if isinstance(lf, str):
+            lf_str = lf.strip()
+            parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", lf_str) if part.strip()]
+            d["logic_flow"] = parts if parts else [lf_str]
+        elif not isinstance(lf, list):
+            d["logic_flow"] = []
+
+        # 3. inputs_and_outputs
+        io = d.get("inputs_and_outputs")
+        if isinstance(io, dict):
+            parts = []
+            if "inputs" in io and io["inputs"]:
+                parts.append(f"Inputs: {io['inputs']}")
+            if "outputs" in io and io["outputs"]:
+                parts.append(f"Outputs: {io['outputs']}")
+            d["inputs_and_outputs"] = " | ".join(parts) if parts else "; ".join(f"{k}: {v}" for k, v in io.items())
+        elif not io or not isinstance(io, str) or not io.strip():
+            d["inputs_and_outputs"] = "No external inputs or outputs specified for target."
+        else:
+            d["inputs_and_outputs"] = io.strip()
+
+        # 4. dependencies
+        deps = d.get("dependencies")
+        if isinstance(deps, dict):
+            d["dependencies"] = [f"{k}: {v}" for k, v in deps.items()]
+        elif isinstance(deps, str):
+            d["dependencies"] = [deps.strip()] if deps.strip() else []
+        elif not isinstance(deps, list):
+            d["dependencies"] = []
+
+        # 5. assumptions_and_limitations
+        al = d.get("assumptions_and_limitations")
+        if isinstance(al, dict):
+            d["assumptions_and_limitations"] = [f"{k}: {v}" for k, v in al.items()]
+        elif isinstance(al, str):
+            d["assumptions_and_limitations"] = [al.strip()] if al.strip() else []
+        elif not isinstance(al, list):
+            d["assumptions_and_limitations"] = []
+
+        # 6. missing_context
+        mc = d.get("missing_context")
+        if isinstance(mc, str):
+            if mc.strip().lower() in ("none", "n/a", "no missing context", ""):
+                d["missing_context"] = []
+            else:
+                d["missing_context"] = [mc.strip()]
+        elif not isinstance(mc, list):
+            d["missing_context"] = []
+
+        # 7. confidence
+        conf = str(d.get("confidence", "medium")).lower().strip()
+        if conf not in ("high", "medium", "low"):
+            conf = "medium"
+        d["confidence"] = conf
+
+        return d
 
     @field_validator("purpose", "inputs_and_outputs")
     @classmethod

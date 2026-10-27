@@ -223,6 +223,18 @@ def detect_repository_test_framework(
     )
 
     ext = os.path.splitext(target_path)[1].lower()
+    static_extensions = {
+        ".html", ".htm", ".css", ".scss", ".sass", ".less",
+        ".md", ".markdown", ".txt", ".json", ".xml", ".yaml", ".yml",
+        ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"
+    }
+    if ext in static_extensions:
+        raise APIError(
+            400,
+            ErrorCode.UNSUPPORTED_TARGET,
+            f"File '{target_path}' ({ext}) is a static markup or document file, not a testable code module. Unit test generation is supported for Python (.py), TypeScript (.ts, .tsx), and JavaScript (.js, .jsx) files.",
+        )
+
     is_python_target = ext == ".py" or raw_detection.language == "Python"
     is_js_ts_target = ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs") or raw_detection.language in (
         "TypeScript",
