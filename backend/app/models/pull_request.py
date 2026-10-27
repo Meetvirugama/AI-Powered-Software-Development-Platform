@@ -20,7 +20,11 @@ class PullRequest(TimestampedModel, Base):
     __tablename__ = "pull_requests"
 
     task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True, nullable=False)
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True, nullable=False)
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
     branch: Mapped[str] = mapped_column(String(255), nullable=False)
     base_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="main")
     changed_files: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)

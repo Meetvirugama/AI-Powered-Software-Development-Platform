@@ -154,7 +154,13 @@ async def process_sync_job(
             redis = await get_redis_async()
             await redis.publish(
                 "platform_events",
-                json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}),
+                json.dumps(
+                    {
+                        "type": "repository.updated",
+                        "user_id": str(user_id),
+                        "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
+                    }
+                ),
             )
         except Exception as pub_exc:
             logger.debug("Failed to publish repository.updated event: %s", pub_exc)
@@ -183,7 +189,13 @@ async def process_sync_job(
             redis = await get_redis_async()
             await redis.publish(
                 "platform_events",
-                json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}),
+                json.dumps(
+                    {
+                        "type": "repository.updated",
+                        "user_id": str(user_id),
+                        "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
+                    }
+                ),
             )
         except Exception:
             pass

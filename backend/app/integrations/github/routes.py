@@ -6,16 +6,21 @@ require authentication and verify repository ownership.
 
 Endpoints
 ---------
-GET  /api/v1/repositories/{id}/source/tree        — File tree
-GET  /api/v1/repositories/{id}/source/file         — File content
-GET  /api/v1/repositories/{id}/source/commits      — Commit list
-GET  /api/v1/repositories/{id}/source/commits/{sha} — Commit detail
-GET  /api/v1/repositories/{id}/source/pulls        — Pull-request list
-GET  /api/v1/repositories/{id}/source/pulls/{pr}/diff — PR diff
+GET  /api/v1/repositories/{id}/source/tree               — File tree
+GET  /api/v1/repositories/{id}/source/file               — File content
+GET  /api/v1/repositories/{id}/source/commits            — Commit list
+GET  /api/v1/repositories/{id}/source/commits/{sha}      — Commit detail
+GET  /api/v1/repositories/{id}/source/pulls              — Pull-request list
+GET  /api/v1/repositories/{id}/source/pulls/{pr}/diff    — PR diff
+POST /api/v1/repositories/{id}/source/agent-branch       — Create isolated agent branch
+POST /api/v1/repositories/{id}/source/commit             — Stage & commit workspace changes
+POST /api/v1/repositories/{id}/source/pr-metadata        — Prepare & persist PR metadata
+GET  /api/v1/repositories/{id}/source/pr-metadata/{task} — Retrieve prepared PR metadata
 """
 
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -23,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact_obj
 from app.integrations.github.schemas import (
     AgentBranchRequest,
     AgentBranchResponse,
@@ -105,11 +111,12 @@ async def get_file_content(
         end_line=end_line,
     )
     service = GitHubSourceService(db)
-    return await service.get_file_content(
+    resp = await service.get_file_content(
         repository_id,
         _request_user_id(request),
         file_request,
     )
+    return FileContentResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +142,7 @@ async def list_commits(
 
     safe_path = require_safe_repo_path(path) if path is not None else None
     service = GitHubSourceService(db)
-    return await service.list_commits(
+    resp = await service.list_commits(
         repository_id,
         _request_user_id(request),
         ref=ref,
@@ -143,6 +150,7 @@ async def list_commits(
         per_page=per_page,
         page=page,
     )
+    return CommitListResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
 
 
 @router.get(
@@ -157,8 +165,6 @@ async def get_commit_detail(
     request: Request,
     db: Session = Depends(get_db),
 ) -> CommitDetail:
-    import re
-
     clean_sha = sha.strip()
     if not re.match(r"^[0-9a-fA-F]{7,64}$", clean_sha):
         raise APIError(
@@ -167,11 +173,12 @@ async def get_commit_detail(
             "Invalid commit SHA format; expected a 7-to-64 character hexadecimal SHA.",
         )
     service = GitHubSourceService(db)
-    return await service.get_commit_detail(
+    resp = await service.get_commit_detail(
         repository_id,
         _request_user_id(request),
         clean_sha,
     )
+    return CommitDetail.model_validate(redact_obj(resp.model_dump(mode="json")))
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +200,14 @@ async def list_pull_requests(
     db: Session = Depends(get_db),
 ) -> list[PullRequestInfo]:
     service = GitHubSourceService(db)
-    return await service.list_pull_requests(
+    items = await service.list_pull_requests(
         repository_id,
         _request_user_id(request),
         state=state,
         per_page=per_page,
         page=page,
     )
+    return [PullRequestInfo.model_validate(redact_obj(p.model_dump(mode="json"))) for p in items]
 
 
 @router.get(
@@ -221,11 +229,12 @@ async def get_pull_request_diff(
             "Pull request number must be a positive integer.",
         )
     service = GitHubSourceService(db)
-    return await service.get_pull_request_diff(
+    resp = await service.get_pull_request_diff(
         repository_id,
         _request_user_id(request),
         pr_number,
     )
+    return PullRequestDiffResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +293,7 @@ async def commit_workspace_changes_endpoint(
     request: Request,
     payload: CommitStagingRequest,
     db: Session = Depends(get_db),
-):
+) -> CommitStagingResponse:
     from app.services.git_branch import GitBranchService
 
     service = GitBranchService(db)
@@ -299,7 +308,7 @@ async def commit_workspace_changes_endpoint(
         author_email=payload.author_email,
         allow_empty=payload.allow_empty,
     )
-    return CommitStagingResponse(
+    resp = CommitStagingResponse(
         commit_sha=result.commit_sha,
         branch=result.branch,
         message=result.message,
@@ -308,6 +317,7 @@ async def commit_workspace_changes_endpoint(
         deletions=result.deletions,
         pushed=result.pushed,
     )
+    return CommitStagingResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
 
 
 # ---------------------------------------------------------------------------
@@ -325,11 +335,11 @@ def prepare_pr_metadata_endpoint(
     request: Request,
     payload: PRMetadata,
     db: Session = Depends(get_db),
-):
+) -> PRMetadata:
     from app.services.git_branch import GitBranchService
 
     service = GitBranchService(db)
-    return service.prepare_pr_metadata(
+    meta = service.prepare_pr_metadata(
         task_id=payload.task_id,
         repository_id=repository_id,
         branch=payload.branch,
@@ -341,25 +351,27 @@ def prepare_pr_metadata_endpoint(
         user_id=_request_user_id(request),
         status=payload.status,
     )
+    return PRMetadata.model_validate(redact_obj(meta.model_dump(mode="json")))
 
 
 @router.get(
     "/{repository_id}/source/pr-metadata/{task_id}",
     response_model=PRMetadata,
     summary="Retrieve prepared PR metadata",
-    description="Gets stored PR metadata for a specific agent task.",
+    description="Gets stored PR metadata for a specific agent task scoped to the authorized repository.",
 )
 def get_pr_metadata_endpoint(
     repository_id: UUID,
     task_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
-):
+) -> PRMetadata:
     from app.services.git_branch import GitBranchService
 
     service = GitBranchService(db)
-    return service.get_pr_metadata(
+    meta = service.get_pr_metadata(
         task_id=task_id,
         user_id=_request_user_id(request),
+        repository_id=repository_id,
     )
-
+    return PRMetadata.model_validate(redact_obj(meta.model_dump(mode="json")))

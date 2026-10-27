@@ -94,6 +94,8 @@ def _reconstruct_file_text(
     if file_record is None or not hasattr(db, "query"):
         return ""
     try:
+        from indexer.chunker import reconstruct_file_from_chunks
+
         chunks: list[CodeChunk] = (
             db.query(CodeChunk)
             .filter(
@@ -103,7 +105,7 @@ def _reconstruct_file_text(
             .order_by(CodeChunk.start_line)
             .all()
         )
-        return "\n".join(c.content for c in chunks if c.content)
+        return reconstruct_file_from_chunks(chunks)
     except Exception:
         return ""
 
@@ -113,13 +115,15 @@ def detect_repository_test_framework(
     target_path: str,
     requested_framework: SupportedTestFramework | None,
     db: Session | Any,
+    *,
+    preloaded_repo_files: list[RepositoryFile] | None = None,
 ) -> tuple[FrameworkDetectionResult, dict[str, str], list[RepositoryFile]]:
     """Detect the repository's test framework, fixtures, and conventions from indexed DB files.
 
     Returns `(detection_result, manifest_contents_by_path, all_repo_files)`.
     """
-    all_repo_files: list[RepositoryFile] = []
-    if hasattr(db, "query"):
+    all_repo_files: list[RepositoryFile] = list(preloaded_repo_files) if preloaded_repo_files is not None else []
+    if preloaded_repo_files is None and hasattr(db, "query"):
         try:
             all_repo_files = (
                 db.query(RepositoryFile)
@@ -150,19 +154,59 @@ def detect_repository_test_framework(
         "tsconfig.json",
         "conftest.py",
     }
-    test_file_samplesLoaded = 0
+    candidate_records: list[RepositoryFile] = []
+    test_file_samples_selected = 0
     for f_rec in all_repo_files:
         base_name = os.path.basename(f_rec.path)
         is_manifest = base_name in interesting_names
         is_py_test = base_name.endswith(".py") and (
             base_name.startswith("test_") or base_name.endswith("_test.py")
         )
-        if is_manifest or (is_py_test and test_file_samplesLoaded < 8):
-            text = _reconstruct_file_text(db, repository_id, f_rec)
-            if text:
-                manifest_contents[f_rec.path] = text
-                if is_py_test:
-                    test_file_samplesLoaded += 1
+        is_js_test = any(
+            base_name.endswith(s)
+            for s in (
+                ".test.ts",
+                ".spec.ts",
+                ".test.tsx",
+                ".spec.tsx",
+                ".test.js",
+                ".spec.js",
+                ".test.jsx",
+                ".spec.jsx",
+            )
+        )
+        if is_manifest or ((is_py_test or is_js_test) and test_file_samples_selected < 8):
+            candidate_records.append(f_rec)
+            if is_py_test or is_js_test:
+                test_file_samples_selected += 1
+
+    if candidate_records and hasattr(db, "query"):
+        try:
+            cand_ids = [r.id for r in candidate_records if getattr(r, "id", None) is not None]
+            batch_chunks: list[CodeChunk] = (
+                db.query(CodeChunk)
+                .filter(
+                    CodeChunk.repository_id == repository_id,
+                    CodeChunk.file_id.in_(cand_ids),
+                )
+                .order_by(CodeChunk.file_id, CodeChunk.start_line)
+                .all()
+            )
+            chunks_by_fid: dict[Any, list[str]] = {}
+            for ch in batch_chunks:
+                if ch.content:
+                    chunks_by_fid.setdefault(ch.file_id, []).append(ch.content)
+            for f_rec in candidate_records:
+                joined = "\n".join(chunks_by_fid.get(f_rec.id, []))
+                if not joined:
+                    joined = _reconstruct_file_text(db, repository_id, f_rec)
+                if joined:
+                    manifest_contents[f_rec.path] = joined
+        except Exception:
+            for f_rec in candidate_records:
+                text = _reconstruct_file_text(db, repository_id, f_rec)
+                if text:
+                    manifest_contents[f_rec.path] = text
 
     detector = FrameworkDetector(repo_root=None)
     # Monkeypatch _read_file on this detector instance to read from indexed DB chunks
@@ -740,7 +784,7 @@ def detect_test_framework_and_conventions(
         framework=fw,
         proposed_test_path=proposed_path,
         existing_test_files=existing_py_tests if fw in ("pytest", "unittest") else existing_js_tests,
-        fixture_files=list(detection.fixtures),
+        fixture_files=list(detection.fixture_files if hasattr(detection, "fixture_files") else detection.fixtures),
         naming_pattern=naming_pattern,
         path_already_exists=path_exists,
         warnings=warnings,

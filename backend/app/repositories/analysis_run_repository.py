@@ -25,6 +25,8 @@ from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunSta
 
 _SECRET_REDACTION_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("openai_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}")),
+    ("groq_key", re.compile(r"\bgsk_[A-Za-z0-9]{20,}")),
+    ("gemini_key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     ("github_token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})")),
     ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
     ("jwt_token", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
@@ -2329,7 +2331,21 @@ class AnalysisRunRepository:
 
         for run in all_runs:
             actual_findings_count = len(run.findings)
-            if run.findings_count != actual_findings_count:
+            valid_counts = {actual_findings_count}
+            if (
+                run.feature_type == AnalysisFeature.GENERATE_TESTS.value
+                and actual_findings_count == 0
+                and isinstance(run.result_payload, dict)
+            ):
+                inner_res = run.result_payload.get("result")
+                scenarios = (
+                    inner_res.get("covered_scenarios")
+                    if isinstance(inner_res, dict)
+                    else run.result_payload.get("covered_scenarios")
+                )
+                if isinstance(scenarios, list):
+                    valid_counts.add(len(scenarios))
+            if run.findings_count not in valid_counts:
                 desynchronized_count += 1
                 issues.append({
                     "type": "DESYNCHRONIZED_FINDINGS_COUNT",
@@ -2570,4 +2586,3 @@ class AnalysisRunRepository:
         if updated_count > 0:
             self.session.commit()
         return updated_count
-

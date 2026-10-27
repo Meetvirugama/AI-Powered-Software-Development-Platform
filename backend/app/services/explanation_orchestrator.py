@@ -72,6 +72,7 @@ from app.schemas.analysis import (
 logger = logging.getLogger(__name__)
 
 MAX_ANALYZABLE_FILE_BYTES = 1_048_576  # 1 MB ceiling
+MAX_IN_MEMORY_HISTORY_RUNS = 500       # Bounded FIFO capacity for _analysis_run_history
 
 
 @dataclass
@@ -86,6 +87,7 @@ class ResolvedExplanationTarget:
     intelligence_context: IntelligenceContext
     missing_context: list[str] = field(default_factory=list)
     indexed_paths: dict[str, int] = field(default_factory=dict)
+    repo_files: list[RepositoryFile] = field(default_factory=list)
 
 
 def resolve_target_and_build_context(
@@ -259,7 +261,13 @@ def resolve_target_and_build_context(
     if not selected_chunks and file_chunks:
         selected_chunks = file_chunks
 
-    code_content = "\n".join(c.content for c in selected_chunks if c.content)
+    from indexer.chunker import reconstruct_file_from_chunks
+
+    code_content = reconstruct_file_from_chunks(
+        selected_chunks,
+        start_line=eff_start,
+        end_line=eff_end,
+    )
     if not code_content:
         missing_context.append(f"No indexed code chunks found for '{safe_path}'.")
 
@@ -381,6 +389,7 @@ def resolve_target_and_build_context(
         intelligence_context=intelligence_ctx,
         missing_context=missing_context,
         indexed_paths=indexed_paths,
+        repo_files=all_repo_files,
     )
 
 
@@ -613,6 +622,9 @@ def record_analysis_run(
         except Exception:
             return
     history_store[str(run_id)] = record
+    while len(history_store) > MAX_IN_MEMORY_HISTORY_RUNS:
+        oldest_key = next(iter(history_store))
+        history_store.pop(oldest_key, None)
 
 
 def enforce_gateway_provider_policy(gateway: Any) -> None:

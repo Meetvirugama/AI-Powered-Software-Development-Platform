@@ -41,6 +41,7 @@ from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.analysis import (
     AnalysisFeatureType,
     AnalysisRunDetailResponse,
+    AnalysisRunMetricsSummaryResponse,
     AnalysisRunSummary,
     AnalysisTarget,
     BugDetectionRequest,
@@ -393,6 +394,27 @@ async def explain_code(
                 error_message=exc.message,
             )
         raise
+    except Exception as exc:
+        safe_err = redact(str(exc))
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="explain",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=safe_err,
+            )
+        raise APIError(
+            500,
+            ErrorCode.ANALYSIS_FAILED,
+            "Code explanation failed during execution.",
+            retryable=False,
+        ) from exc
 
     try:
         if isinstance(raw_result, CodeExplanationResponse):
@@ -535,6 +557,8 @@ async def detect_bugs(
                 "context": resolved.intelligence_context,
                 "code_content": resolved.code_content,
                 "revision": resolved.revision,
+                "skip_internal_static": True,
+                "_skip_engine_static": True,
             },
         )
     except APIError as exc:
@@ -552,6 +576,27 @@ async def detect_bugs(
                 error_message=exc.message,
             )
         raise
+    except Exception as exc:
+        safe_err = redact(str(exc))
+        if payload.options.persist_run:
+            record_analysis_run(
+                request.app.state,
+                db,
+                run_id=run_id,
+                repository_id=repository_id,
+                user_id=user_id,
+                feature_type="detect_bugs",
+                status="FAILED",
+                target=resolved.target,
+                revision=resolved.revision,
+                error_message=safe_err,
+            )
+        raise APIError(
+            500,
+            ErrorCode.ANALYSIS_FAILED,
+            "Bug detection failed during execution.",
+            retryable=False,
+        ) from exc
 
     extra_static_raw: list[Any] = []
     parser_warnings: list[str] = []
@@ -757,6 +802,7 @@ async def generate_tests(
         target_path=resolved.target.path,
         requested_framework=payload.framework,
         db=db,
+        preloaded_repo_files=resolved.repo_files if resolved.repo_files else None,
     )
     test_context, proposed_test_path = build_repository_test_context(
         repository_id=repository_id,
@@ -1005,6 +1051,7 @@ async def review_code(
             )
         raise
     except Exception as exc:
+        safe_err = redact(str(exc))
         if payload.options.persist_run:
             record_analysis_run(
                 request.app.state,
@@ -1016,9 +1063,14 @@ async def review_code(
                 status="FAILED",
                 target=history_target,
                 revision=resolved.revision,
-                error_message=str(exc),
+                error_message=safe_err,
             )
-        raise
+        raise APIError(
+            500,
+            ErrorCode.ANALYSIS_FAILED,
+            "Code review failed during execution.",
+            retryable=False,
+        ) from exc
 
     extra_static_raw: list[Any] = []
     scanner_warnings: list[str] = []
@@ -1187,7 +1239,7 @@ async def review_code(
     description=(
         "Retrieve paginated historical analysis runs (`explain`, `detect_bugs`, `generate_tests`, `review`) "
         "for a repository owned by the authenticated user. Supports filtering by `feature_type` "
-        "(including aliases `bugs` and `tests`), `status`, `target_path`, and `source_revision`."
+        "(including aliases `bugs` and `tests`), `status`, `target_path`, `source_revision`, and `user_id`."
     ),
 )
 async def list_analysis_runs(
@@ -1197,6 +1249,7 @@ async def list_analysis_runs(
     status: str | None = Query(default=None),
     target_path: str | None = Query(default=None),
     source_revision: str | None = Query(default=None),
+    user_id: UUID | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -1219,6 +1272,8 @@ async def list_analysis_runs(
             kwargs["target_path"] = target_path
         if source_revision:
             kwargs["source_revision"] = source_revision
+        if user_id is not None:
+            kwargs["user_id"] = user_id
 
         try:
             res = run_service.list_runs(repository_id, db=db, **kwargs)
@@ -1250,6 +1305,7 @@ async def list_analysis_runs(
         repo_layer = AnalysisRunRepository(db)
         items, total = repo_layer.list_by_repository(
             repository_id,
+            user_id=user_id,
             feature_type=normalized_feature_type,
             status=status,
             target_path=target_path,
@@ -1280,6 +1336,7 @@ async def list_analysis_runs(
         and (status is None or r.get("status") == status)
         and (target_path is None or r.get("target_path") == target_path)
         and (source_revision is None or r.get("source_revision") == source_revision)
+        and (user_id is None or str(r.get("user_id")) == str(user_id))
     ]
     matching.sort(key=lambda r: r.get("created_at", datetime.min), reverse=True)
     total = len(matching)
@@ -1289,6 +1346,85 @@ async def list_analysis_runs(
         page_size=page_size,
         total=total,
         items=[_coerce_run_summary(item, repository_id) for item in sliced],
+    )
+
+
+@router.get(
+    "/repositories/{repository_id}/analysis-runs/summary",
+    response_model=AnalysisRunMetricsSummaryResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
+    summary="Get analysis run summary, database integrity, and retention metrics",
+    description=(
+        "Aggregate run counts by feature and status, database referential integrity status, "
+        "and retention metrics for an authorized repository (Week 2 Day 7)."
+    ),
+)
+async def get_analysis_runs_summary(
+    repository_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> AnalysisRunMetricsSummaryResponse:
+    """Return aggregate run metrics, integrity status, and retention metrics for an owned repository."""
+    _owned_repository(repository_id, request, db)
+
+    if hasattr(db, "execute") or hasattr(db, "query"):
+        try:
+            from app.repositories.analysis_run_repository import AnalysisRunRepository
+
+            repo_layer = AnalysisRunRepository(db)
+            summary = repo_layer.get_run_summary(repository_id)
+            integrity = repo_layer.verify_integrity(repository_id=repository_id)
+            retention = repo_layer.get_retention_metrics(repository_id=repository_id)
+            if int(summary.get("total_runs", 0)) > 0:
+                return AnalysisRunMetricsSummaryResponse(
+                    repository_id=str(repository_id),
+                    total_runs=int(summary.get("total_runs", 0)),
+                    by_feature=dict(summary.get("by_feature", {})),
+                    by_status=dict(summary.get("by_status", {})),
+                    total_findings=int(summary.get("total_findings", 0)),
+                    integrity_status=str(integrity.get("status", "CLEAN")),
+                    integrity_issues_count=int(integrity.get("issues_count", 0)),
+                    retention=redact_obj(retention),
+                )
+        except Exception as exc:
+            logger.debug("analysis_runs_summary_db_fallback", extra={"error": str(exc)})
+
+    history_store: dict[str, dict[str, Any]] = (
+        getattr(request.app.state, "_analysis_run_history", None) or {}
+    )
+    repo_runs = [
+        r for r in history_store.values() if str(r.get("repository_id")) == str(repository_id)
+    ]
+    if repo_runs:
+        by_feat: dict[str, int] = {}
+        by_stat: dict[str, int] = {}
+        findings_sum = 0
+        for r in repo_runs:
+            ft = str(r.get("feature_type", "unknown"))
+            st = str(r.get("status", "COMPLETED"))
+            by_feat[ft] = by_feat.get(ft, 0) + 1
+            by_stat[st] = by_stat.get(st, 0) + 1
+            findings_sum += int(r.get("findings_count", 0) or 0)
+        return AnalysisRunMetricsSummaryResponse(
+            repository_id=str(repository_id),
+            total_runs=len(repo_runs),
+            by_feature=by_feat,
+            by_status=by_stat,
+            total_findings=findings_sum,
+            integrity_status="CLEAN",
+            integrity_issues_count=0,
+            retention={"default_retention_days": 90},
+        )
+
+    return AnalysisRunMetricsSummaryResponse(
+        repository_id=str(repository_id),
+        total_runs=0,
+        by_feature={},
+        by_status={},
+        total_findings=0,
+        integrity_status="CLEAN",
+        integrity_issues_count=0,
+        retention={"default_retention_days": 90},
     )
 
 

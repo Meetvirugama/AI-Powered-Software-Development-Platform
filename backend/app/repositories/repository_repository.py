@@ -92,6 +92,7 @@ class RepositoryRepository:
         from app.models.repository_file import RepositoryFile
         from app.models.sync_job import SyncJob
         from app.models.memory_entry import MemoryEntry
+        from app.models.pull_request import PullRequest
         from sqlalchemy import delete
 
         try:
@@ -99,6 +100,11 @@ class RepositoryRepository:
             from app.models.analysis_run import AnalysisRun
             self.session.execute(delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_id))
             self.session.execute(delete(AnalysisRun).where(AnalysisRun.repository_id == repo_id))
+        except Exception:
+            pass
+
+        try:
+            self.session.execute(delete(PullRequest).where(PullRequest.repository_id == repo_id))
         except Exception:
             pass
 

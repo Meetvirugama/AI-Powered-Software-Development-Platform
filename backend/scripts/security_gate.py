@@ -38,11 +38,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND = REPO_ROOT / "backend"
 
 # ---------------------------------------------------------------------------
-# Secret patterns (same list as the Day 4 spec)
+# Secret patterns (same list as the Day 4 spec + Week 2 Groq/Gemini keys)
 # ---------------------------------------------------------------------------
 
 SECRET_PATTERNS: dict[str, re.Pattern[str]] = {
     "openai_key": re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,}"),
+    "groq_key": re.compile(r"\bgsk_[A-Za-z0-9]{20,}"),
+    "gemini_key": re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
     "github_token": re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})"),
     "aws_access_key_id": re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),
     "private_key_block": re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"),
@@ -179,7 +181,7 @@ def check_git_history() -> CheckResult:
 
 # Coarse Postgres pre-filter; Python then applies the exact patterns per line.
 _SQL_PREFILTER = (
-    r"(sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}"
+    r"(sk-[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_\-]{35}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}"
     r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
     r"|(api_key|secret|password|passwd|private_key|token|auth)[a-z0-9_]*\s*[:=])"
 )

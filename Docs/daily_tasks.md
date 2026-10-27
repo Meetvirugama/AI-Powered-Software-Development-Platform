@@ -504,7 +504,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ---
 
-# WEEK 2 — Developer Intelligence Suite ⬜ NOT STARTED
+# WEEK 2 — Developer Intelligence Suite ✅ COMPLETE
 
 **Week 2 Goal:** Build four independent, integrated developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with unified Workbench integration, persistence, and automated quality gates.
 
@@ -516,13 +516,13 @@ This document breaks each day into specific, atomic tasks for every team member.
 |--------|---------|--------|
 | Meet | Shared `IntelligenceContext` interface & token budget rules | ✅ Done |
 | Dev | `CodeExplanation`, `BugFinding`, `TestGenerationResult`, `ReviewReport` schemas | ✅ Done |
-| Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ⬜ Todo |
-| Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ⬜ Todo |
+| Dhramraj | Code Intelligence Workbench action triggers & drawer shell | ✅ Done |
+| Yug | Analysis REST endpoints (`/explain`, `/detect-bugs`, `/generate-tests`, `/review`) in OpenAPI | ✅ Done |
 | Om | `analysis_runs` and `code_findings` database models & Alembic migration | ✅ Done |
-| Parth | Authorized file & commit diff retrieval service in `GitHubService` | ⬜ Todo |
+| Parth | Authorized file & commit diff retrieval service in `GitHubService` | ✅ Done |
 | Prit | AST symbol range resolution & import mapping | ✅ Done |
-| Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ⬜ Todo |
-| Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ⬜ Todo |
+| Devu | Static analysis adapter (Ruff/ESLint/Bandit) & secret scanner | ✅ Done |
+| Sukun | Prompt injection boundaries (`<<<REPO_DATA_...>>>`) & secret scrubbing utility | ✅ Done |
 | Keval | Baseline defect fixtures & Week 2 regression test plan | ✅ Done |
 
 ## WEEK 2 — Day 2 Feature 1: Code Explanation
@@ -530,8 +530,8 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Prit: `TargetSelector` & symbol resolution connecting AST utilities to Code Explanation targets
 - ✅ Dev: `CodeExplanationService` producing purpose, logic, symbols, data flow, dependencies, edge cases
 - ✅ Meet: Context enrichment — fetch caller functions, imported types, and repository inventory
-- ⬜ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation
-- ⬜ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls
+- ✅ Yug: `POST /api/v1/repositories/{id}/explain` with file path, symbol, and line-range validation (`backend/app/api/v1/analysis.py`)
+- ✅ Dhramraj: Code Explanation drawer in Workbench with syntax-highlighted ranges & copy controls (`ExplanationResultView.tsx`, `RepositoryDetail.tsx`)
 - ✅ Keval: Unit tests on Python and TypeScript fixtures verifying grounded, non-hallucinated explanations (`test_keval_w2_day2_explanation_qa.py`)
 
 
@@ -539,10 +539,10 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ✅ Prit: `ASTBugAnalyzer` with 10 structural defect rules, exact line range preservation, target scoping, and Devu `StaticFinding` adapter
 - ✅ Dev: `BugDetectionEngine` targeting off-by-one, null safety, resource leaks, and unhandled exceptions
-- ⬜ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings
+- ✅ Devu: `StaticBugScanner` running Ruff/Bandit and secret scanning with normalized findings (`backend/scanner/static_bug_scanner.py`)
 - ✅ Meet: Bug context extraction — caller sites, error handling blocks, and token bounding
-- ⬜ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings
-- ⬜ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights
+- ✅ Yug: `POST /api/v1/repositories/{id}/detect-bugs` merging, deduplicating, and ranking static + AI findings (`backend/app/api/v1/analysis.py`, `backend/app/services/bug_detection_orchestrator.py`)
+- ✅ Dhramraj: Bug Scanner UI with severity categories (Critical, High, Medium, Low) and in-code line highlights (`BugScannerView.tsx`, `RepositoryDetail.tsx`)
 - ✅ Om: Persisting bug scan runs and findings to `analysis_runs` and `code_findings`
 - ✅ Keval: Bug Detection QA suite verifying ASTBugAnalyzer, BuiltinStaticBugScanner, merging/deduplication, and secret scrubbing (`test_keval_w2_day3_bug_detection_qa.py`)
 
@@ -551,32 +551,44 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Prit: Framework detection (`pytest`, `unittest`, `jest`) from manifests and directory layout, fixture extraction, and test path proposal (`FrameworkDetector`)
 - ✅ Meet: Test context — target signatures, dependencies, mocked services, and project test conventions
 - ✅ Dev: `TestGenerationService` generating complete test files with positive, negative, and edge-case assertions
-- ⬜ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions
-- ⬜ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action
-- ⬜ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed
+- ✅ Yug: `POST /api/v1/repositories/{id}/generate-tests` returning test path, code, and scenario descriptions (`backend/app/api/v1/analysis.py`, `backend/app/services/test_generation_orchestrator.py`)
+- ✅ Dhramraj: Test Preview drawer with syntax highlighting, One-Click Copy, and Download action (`TestGenerationView.tsx`, `RepositoryDetail.tsx`)
+- ✅ Sukun: Validate output paths, reject unsafe filenames, and ensure generated code is not auto-executed (`backend/app/core/input_security.py`, `backend/tests/test_security_testgen.py`)
 - ✅ Om: Persisting generated-test runs and relevant metadata (`test_output`, scenarios, framework, revision)
 - ✅ Keval: Test Generation QA suite verifying framework detection (pytest/jest), test syntax validation, and scenario coverage (`test_keval_w2_day4_test_generation_qa.py`)
 
 ## WEEK 2 — Day 5 Feature 4: Standalone AI Code Review
 
 - ✅ Prit: Review source mapping — map changed lines & unified diff hunks to AST symbols, supply AST context, maintain file identity & 1-indexed line locations, report mapping limitations explicitly (`ReviewSourceMapper`)
-- ⬜ Parth: Retrieve authorized commit metadata and GitHub PR diffs via GitHub App
+- ✅ Parth: Retrieve authorized commit metadata and GitHub PR diffs via GitHub App (`backend/app/integrations/github/source_service.py`)
 - ✅ Dev: `AICodeReviewEngine` analyzing changes across Correctness, Security, Performance, Reliability, Maintainability
-- ⬜ Devu: `StaticReviewer` running linters on modified files and merging with AI suggestions
+- ✅ Devu: `StaticReviewer` running linters on modified files and merging with AI suggestions (`backend/review/static_reviewer.py`, `backend/app/services/code_review_orchestrator.py`)
 - ✅ Meet: Multi-file review context — caller impact, imported type changes, and dependency blast radius
-- ⬜ Yug: `POST /api/v1/repositories/{id}/review` supporting single file, commit SHA, and PR diff
-- ⬜ Dhramraj: Unified/split diff review UI with inline findings, risk level indicator, and severity badges
+- ✅ Yug: `POST /api/v1/repositories/{id}/review` supporting single file, commit SHA, and PR diff (`backend/app/api/v1/analysis.py`, `backend/app/services/code_review_orchestrator.py`)
+- ✅ Dhramraj: Unified/split diff review UI with inline findings, risk level indicator, and severity badges (`CodeReviewView.tsx`, `RepositoryDetail.tsx`)
 - ✅ Keval: Standalone Code Review QA suite verifying unified diff parsing, SQL injection defect detection, and zero-defect reports (`test_keval_w2_day5_review_qa.py`)
 
 ## WEEK 2 — Days 6–7 Integration, Security Gates & Release Verification
 
+| Owner | Task | Deliverable | Status |
+|---|---|---|---|
+| **Yug** | End-to-End API Integration, OpenAPI Contract & Final Acceptance Verification | `backend/app/api/v1/analysis.py`, `backend/tests/test_yug_w2_day7_final_acceptance.py` | [x] |
+| **Dhramraj** | Frontend Analysis Workbench Integration, Review Target Sync & Citation Navigation | `frontend/src/pages/RepositoryDetail.tsx`, `backend/tests/test_dhramraj_w2_day7_frontend_acceptance.py` | [x] |
+| **Dev** | AI Services Prompt Isolation, Repair Loops & Acceptance Suite (`PR #134`) | `backend/ai/services/`, `backend/tests/test_dev_w2_day7_ai_acceptance.py` | [x] |
+| **Meet** | Context Assembly, Token Budgeting & Hybrid Retrieval Verification | `backend/ai/context/`, `backend/ai/retrieval/`, `backend/ai/pipeline.py` | [x] |
+| **Prit** | AST Rules, Dependency Graph Call Edges & Source Mapper Acceptance | `backend/scanner/graph.py`, `backend/scanner/ast_rules.py`, `backend/tests/test_prit_w2_day7_scanner_acceptance.py` | [x] |
+| **Parth** | GitHub Source Service Hardening, Git Branch Isolation & PR Metadata | `backend/app/integrations/github/source_service.py`, `backend/app/services/git_branch.py`, `backend/tests/test_day7_git_workspace_security.py` | [x] |
+| **Sukun** | Week 2 Security Gate (W2-S1..W2-S8), Secret Redaction & Path Confinement | `backend/app/core/secret_redaction.py`, `backend/tests/test_sukun_w2_day7_security_gate.py` | [x] |
+| **Om** | Analysis Run Persistence, Composite Indexes, Retention & Integrity Verification | `backend/app/repositories/analysis_run_repository.py`, `backend/migrations/versions/f1c2d3e4b5a6_add_analysis_composite_indexes.py`, `backend/tests/test_om_w2_d7_acceptance_regression.py` | [x] |
+| **Keval** | Scenarios A–E Full Acceptance Regression & Cross-Feature QA | `backend/tests/test_keval_w2_day7_acceptance_scenarios.py` | [x] |
+
 - ✅ Meet: Cross-feature context optimization, token budget enforcement, and Gemini/Groq-only provider policy
 - ✅ Prit: AST and framework reliability & Day 7 acceptance — multi-fixture source-range validation, class/method extraction, framework detector hardening, zero-crash parser failure handling, tiered language limitation matrix, and published acceptance report (143/143 tests passing) (`Docs/scanner_languages.md`, `Docs/week2_day7_ast_acceptance_report.md`)
 - ✅ Dev: Schema validation error handling and self-healing repair loops across all 4 services, milestone acceptance suite & published AI acceptance report (105/105 tests passing) (`test_dev_w2_day7_ai_acceptance.py`, `Docs/week2_day7_ai_acceptance_report.md`)
-- ⬜ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
-- ⬜ Yug: Route registration, auth guards, and OpenAPI documentation
+- ✅ Dhramraj: End-to-end UI polish on all 4 drawers in Code Intelligence Workbench
+- ✅ Yug: Route registration, auth guards, OpenAPI documentation & Day 7 API acceptance suite (`test_yug_w2_day7_final_acceptance.py`, `Docs/week2_day7_api_acceptance_report.md`)
 - ✅ Om: Database migration verification, run history queries (`GET /repositories/{id}/analysis-runs`), acceptance & regression suite (87/87 tests passing)
-- ⬜ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
+- ✅ Sukun: Security audit — prompt injection defense, secret redaction, and multi-tenant isolation
 - ✅ Keval: End-to-end acceptance suite execution (100% test pass, coverage >= 70%, 7/7 security gates) & published QA acceptance report (`test_keval_w2_day6_integration_qa.py`, `test_keval_w2_day7_acceptance_scenarios.py`, `Docs/week2_qa_acceptance_report.md`)
 
 ---

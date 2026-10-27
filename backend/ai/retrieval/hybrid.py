@@ -31,29 +31,6 @@ logger = logging.getLogger(__name__)
 class HybridRetriever(Retriever):
     """
     Production hybrid retriever combining vector similarity and lexical full-text search.
-
-    Flow:
-        query, repository_id
-            │
-            ├─► VectorRetriever.retrieve()  ──┐ (concurrent via asyncio.gather)
-            └─► LexicalRetriever.retrieve() ──┘
-                        │
-                        ▼
-                  RRFFusion.fuse() (merges into top-30 deduplicated candidates)
-                        │
-                        ▼
-             CrossEncoderReranker.rerank() (optional, selects top-N reranked chunks)
-                        │
-                        ▼
-                 list[CodeChunk]
-
-    Args:
-        vector_retriever:  Vector search implementation.
-        lexical_retriever: Lexical full-text search implementation.
-        fusion:            RRFFusion instance (default: RRFFusion()).
-        reranker:          Optional CrossEncoderReranker instance.
-        vector_top_k:      Candidate count requested from vector retriever (default 30).
-        lexical_top_k:     Candidate count requested from lexical retriever (default 30).
     """
 
     _DEFAULT_CANDIDATE_TOP_K: int = 30
@@ -98,14 +75,6 @@ class HybridRetriever(Retriever):
     ) -> list[CodeChunk]:
         """
         Execute concurrent hybrid retrieval, RRF fusion, and optional reranking.
-
-        Args:
-            query: Natural language or code query string.
-            repository_id: Target repository UUID.
-            top_k: Number of final chunks to return (default 8).
-
-        Returns:
-            Ranked list of CodeChunk instances ready for ContextBuilder.
         """
         if not query or not query.strip() or top_k <= 0:
             return []
@@ -167,9 +136,14 @@ class HybridRetriever(Retriever):
         if not fused:
             return []
 
-        # Step 3: Optional Cross-Encoder Reranking
+        # Step 3: Optional Cross-Encoder Reranking (offloaded to worker thread to avoid blocking event loop)
         if self._reranker is not None:
-            return self._reranker.rerank(query=query, candidates=fused, top_n=top_k)
+            return await asyncio.to_thread(
+                self._reranker.rerank,
+                query=query,
+                candidates=fused,
+                top_n=top_k,
+            )
 
         return fused[:top_k]
 

@@ -409,11 +409,23 @@ async def resolve_review_target_and_build_context(
                             if (ln.startswith("+") and not ln.startswith("+++")) or ln.startswith(" ")
                         ]
                         file_contents[safe_fp] = "\n".join(added)
+                    mod_ranges: list[tuple[int, int]] = []
+                    if patch_txt:
+                        for hm in re.finditer(
+                            r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@",
+                            patch_txt,
+                            re.MULTILINE,
+                        ):
+                            h_start = int(hm.group(1))
+                            h_count = int(hm.group(2)) if hm.group(2) is not None else 1
+                            if h_count > 0:
+                                mod_ranges.append((h_start, h_start + h_count - 1))
                     modified_files.append(
                         ModifiedFile(
                             file_path=safe_fp,
                             change_type="deleted" if status_str == "removed" else status_str,
                             diff_hunks=[patch_txt] if patch_txt else [],
+                            modified_line_ranges=mod_ranges,
                             content=file_contents.get(safe_fp, ""),
                         )
                     )
@@ -455,11 +467,23 @@ async def resolve_review_target_and_build_context(
                             if (ln.startswith("+") and not ln.startswith("+++")) or ln.startswith(" ")
                         ]
                         file_contents[safe_fp] = "\n".join(added)
+                    mod_ranges: list[tuple[int, int]] = []
+                    if patch_txt:
+                        for hm in re.finditer(
+                            r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@",
+                            patch_txt,
+                            re.MULTILINE,
+                        ):
+                            h_start = int(hm.group(1))
+                            h_count = int(hm.group(2)) if hm.group(2) is not None else 1
+                            if h_count > 0:
+                                mod_ranges.append((h_start, h_start + h_count - 1))
                     modified_files.append(
                         ModifiedFile(
                             file_path=safe_fp,
                             change_type="deleted" if status_str == "removed" else status_str,
                             diff_hunks=[patch_txt] if patch_txt else [],
+                            modified_line_ranges=mod_ranges,
                             content=file_contents.get(safe_fp, ""),
                         )
                     )
@@ -500,19 +524,23 @@ async def resolve_review_target_and_build_context(
                         db.query(SymbolEdge)
                         .filter(
                             SymbolEdge.repository_id == repository_id,
-                            (SymbolEdge.source_symbol_id == target_sym_ids)
+                            (SymbolEdge.source_symbol_id.in_(target_sym_ids))
                             | (SymbolEdge.target_symbol_id.in_(target_sym_ids)),
                         )
                         .limit(20)
                         .all()
                     )
-                    caller_ids = {e.source_symbol_id for e in edges}
-                    if caller_ids:
+                    neighbor_ids = {
+                        e.source_symbol_id for e in edges
+                    } | {
+                        e.target_symbol_id for e in edges
+                    }
+                    if neighbor_ids:
                         caller_syms: list[CodeSymbol] = (
                             db.query(CodeSymbol)
                             .filter(
                                 CodeSymbol.repository_id == repository_id,
-                                CodeSymbol.id.in_(caller_ids),
+                                CodeSymbol.id.in_(neighbor_ids),
                             )
                             .all()
                         )

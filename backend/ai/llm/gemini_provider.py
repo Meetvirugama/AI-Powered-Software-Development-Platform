@@ -7,6 +7,7 @@ Features:
 - Round-robin key rotation across free-tier keys on rate-limits (HTTP 429).
 - Normalizes output to ``LLMResponse`` with latency, token usage, and finish reasons.
 - Translates API errors into structured ``LLMError`` hierarchy with API key redaction.
+- Security (W2-S8): Sends API key via `x-goog-api-key` request header instead of URL query string.
 """
 
 from __future__ import annotations
@@ -151,10 +152,11 @@ class GeminiProvider(LLMProvider):
 
         for attempt in range(self._max_retries):
             current_key = self._next_key()
-            url = f"{_GEMINI_API_BASE}/{model}:generateContent?key={current_key}"
+            url = f"{_GEMINI_API_BASE}/{model}:generateContent"
+            headers = {"x-goog-api-key": current_key}
 
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -181,14 +183,27 @@ class GeminiProvider(LLMProvider):
                         if raw.startswith("```"):
                             lines = raw.splitlines()
                             if len(lines) >= 2 and lines[0].startswith("```"):
-                                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-                        if "{" in raw and "}" in raw:
-                            start = raw.find("{")
-                            end = raw.rfind("}") + 1
-                            raw = raw[start:end]
+                                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+
+                        first_brace = raw.find("{")
+                        first_bracket = raw.find("[")
+                        if (
+                            first_bracket != -1
+                            and (first_brace == -1 or first_bracket < first_brace)
+                            and "]" in raw
+                        ):
+                            raw = raw[first_bracket : raw.rfind("]") + 1]
+                        elif first_brace != -1 and "}" in raw:
+                            raw = raw[first_brace : raw.rfind("}") + 1]
 
                         try:
                             parsed_json = json.loads(raw)
+                            if (
+                                isinstance(parsed_json, list)
+                                and hasattr(request.response_schema, "model_fields")
+                                and "findings" in getattr(request.response_schema, "model_fields", {})
+                            ):
+                                parsed_json = {"findings": parsed_json}
                             if hasattr(request.response_schema, "model_validate"):
                                 request.response_schema.model_validate(parsed_json)
                         except Exception as val_exc:

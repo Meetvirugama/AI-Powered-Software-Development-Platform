@@ -787,3 +787,16 @@ def normalize_analysis_feature_type(value: str | None) -> str | None:
     if raw in _FEATURE_TYPE_ALIASES:
         return _FEATURE_TYPE_ALIASES[raw]
     raise ValueError(f"Unsupported feature_type: {value}")
+
+
+class AnalysisRunMetricsSummaryResponse(BaseModel):
+    """Repository-scoped Day 7 summary, integrity, and retention metrics (`GET /repositories/{id}/analysis-runs/summary`)."""
+
+    repository_id: str
+    total_runs: int = 0
+    by_feature: dict[str, int] = Field(default_factory=dict)
+    by_status: dict[str, int] = Field(default_factory=dict)
+    total_findings: int = 0
+    integrity_status: str = "CLEAN"
+    integrity_issues_count: int = 0
+    retention: dict[str, Any] = Field(default_factory=dict)
