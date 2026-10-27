@@ -1,8 +1,8 @@
 """add pull_requests table
 
-Revision ID: a1b2c3d4e5f6
+Revision ID: b627460d74e0
 Revises: f1c2d3e4b5a6
-Create Date: 2026-04-06 10:00:00.000000
+Create Date: 2026-10-27 10:00:00.000000
 
 Owner: Om / Parth — Week 2 Day 5/7 Schema Migration for `pull_requests`.
 """
@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "a1b2c3d4e5f6"
+revision: str = "b627460d74e0"
 down_revision: Union[str, Sequence[str], None] = "f1c2d3e4b5a6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
