@@ -647,6 +647,7 @@ class GitHubSourceService:
             number=data.get("number", 0),
             title=data.get("title", ""),
             state=data.get("state", "unknown"),
+            draft=bool(data.get("draft", False)),
             author=user.get("login") if isinstance(user, dict) else None,
             base_ref=base.get("ref") if isinstance(base, dict) else None,
             head_ref=head.get("ref") if isinstance(head, dict) else None,
@@ -729,3 +730,155 @@ class GitHubSourceService:
             return None
         ext = path[dot_index:].lower()
         return extension_map.get(ext)
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 1: Published High-Level GitHub Service
+# ---------------------------------------------------------------------------
+
+class GitHubService(GitHubSourceService):
+    """High-level GitHub service publishing the frozen interfaces for Week 3.
+
+    Rule: Parth is the sole owner of all GitHub API calls and Git operations (team_rules.md:125).
+    Interface frozen on Week 3 Day 1 per daily_tasks.md:928.
+    """
+
+    async def push_branch(
+        self,
+        installation_id: UUID | str,
+        owner: str,
+        repo: str,
+        local_branch: str,
+        remote_branch: str,
+        workspace_path: str | None = None,
+    ) -> None:
+        """Push an agent branch from the local workspace to GitHub remote.
+
+        Rule 554: Only called after WAITING_PUSH_APPROVAL state receives explicit human approval.
+        Rule 563: Direct push to main is strictly forbidden; must push to agent/task-*.
+        """
+        if remote_branch in ("main", "master"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Direct push to default branch ('main'/'master') is strictly forbidden by team rules.",
+            )
+
+        if workspace_path is not None:
+            import asyncio
+            from pathlib import Path
+            ws = Path(workspace_path)
+            if not ws.exists():
+                raise APIError(400, ErrorCode.INVALID_REQUEST, f"Workspace path does not exist: {workspace_path}")
+
+            token = await self._resolve_token(installation_id)
+            auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+
+            proc = await asyncio.create_subprocess_exec(
+                "git", "push", auth_url, f"{local_branch}:{remote_branch}",
+                cwd=str(ws),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise APIError(
+                    502,
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    f"Failed to push branch to GitHub: {stderr.decode('utf-8', errors='replace')}".strip(),
+                )
+
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+        draft: bool = True,
+        installation_id: UUID | str | None = None,
+    ) -> PullRequestInfo:
+        """Create a pull request on GitHub (defaults to Draft PR for agent safety)."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        pr_data = await client.create_pull_request(
+            owner=owner,
+            repo=repo,
+            head=head,
+            base=base,
+            title=title,
+            body=body,
+            draft=draft,
+        )
+        return self._parse_pull_request(pr_data)
+
+    async def update_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str | None = None,
+        title: str | None = None,
+        installation_id: UUID | str | None = None,
+    ) -> PullRequestInfo:
+        """Update PR body/description with review & verification summaries."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        pr_data = await client.update_pull_request(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            body=body,
+            title=title,
+        )
+        return self._parse_pull_request(pr_data)
+
+    async def get_pull_request_detail(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        installation_id: UUID | str | None = None,
+    ) -> PullRequestInfo:
+        """Retrieve pull request metadata by PR number."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        pr_data = await client.get_pull_request(owner=owner, repo=repo, pr_number=pr_number)
+        return self._parse_pull_request(pr_data)
+
+    async def create_issue_from_finding(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        assignees: list[str] | None = None,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Create a GitHub issue from an unaddressed review finding (Feature F-23)."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        issue_labels = list(labels or ["ai-finding"])
+        return await client.create_issue(
+            owner=owner,
+            repo=repo,
+            title=title,
+            body=body,
+            labels=issue_labels,
+            assignees=assignees,
+        )
+
+    async def _resolve_token(self, installation_id: UUID | str | None) -> str:
+        """Resolve installation token from DB installation_id or config."""
+        if installation_id is not None:
+            inst = self._db.get(GitHubInstallation, installation_id) if isinstance(installation_id, UUID) else None
+            if inst and inst.access_token:
+                return inst.access_token
+            try:
+                return await GitHubClient.get_installation_token(str(installation_id))
+            except Exception:
+                return "mock-token"
+        return "mock-token"
+

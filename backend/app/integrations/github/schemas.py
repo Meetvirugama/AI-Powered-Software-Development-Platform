@@ -236,6 +236,7 @@ class PullRequestInfo(BaseModel):
     number: int
     title: str
     state: str
+    draft: bool = False
     author: Optional[str] = None
     base_ref: Optional[str] = None
     head_ref: Optional[str] = None
