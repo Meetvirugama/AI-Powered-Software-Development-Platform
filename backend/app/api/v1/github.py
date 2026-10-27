@@ -10,8 +10,10 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
@@ -181,7 +183,15 @@ async def connect_repository(
             "This repository is already connected to the platform.",
         )
 
-    # Get user's installation
+    if not github_repo_id or not github_repo_id.strip().isdigit():
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            f"Invalid GitHub repository ID '{github_repo_id}'. Must be a numeric identifier.",
+        )
+    numeric_repo_id = int(github_repo_id.strip())
+
+    # Get user's installations
     installation_repo = GitHubInstallationRepository(db)
     installations = installation_repo.list_by_user(user_id)
     if not installations:
@@ -190,29 +200,37 @@ async def connect_repository(
             ErrorCode.BAD_REQUEST,
             "No GitHub App installation found. Please install the GitHub App first.",
         )
-    installation = installations[0]
 
-    # Fetch repo details from GitHub
+    # Fetch repo details from GitHub across all user installations
     github_service = getattr(request.app.state, "github_service", None)
     owner, name, default_branch, language = "", "", "main", None
+    installation = installations[0]
 
     if github_service:
-        try:
-            gh_repo = await github_service.get_repository(
-                int(installation.installation_id), int(github_repo_id)
-            )
-            owner = gh_repo.owner
-            name = gh_repo.name
-            default_branch = gh_repo.default_branch
-            language = gh_repo.language
-        except Exception as exc:
-            logger.warning("github_get_repo_error", extra={"error": str(exc)})
+        last_exc: Exception | None = None
+        gh_repo = None
+        for candidate_inst in installations:
+            try:
+                gh_repo = await github_service.get_repository(
+                    int(candidate_inst.installation_id), numeric_repo_id
+                )
+                installation = candidate_inst
+                break
+            except Exception as exc:
+                last_exc = exc
+                continue
+        if gh_repo is None:
+            logger.warning("github_get_repo_error", extra={"error": str(last_exc)})
             raise APIError(
                 502,
                 ErrorCode.GITHUB_API_ERROR,
                 "Failed to fetch repository details from GitHub.",
                 retryable=True,
-            ) from exc
+            ) from last_exc
+        owner = gh_repo.owner
+        name = gh_repo.name
+        default_branch = gh_repo.default_branch
+        language = gh_repo.language
     else:
         raise APIError(
             503,
@@ -294,18 +312,25 @@ async def github_webhook(
     settings = get_settings()
     body_bytes = await request.body()
 
-    # Verify signature if secret configured
-    if settings.github_webhook_secret:
-        signature_header = request.headers.get("X-Hub-Signature-256")
-        if not signature_header:
-            raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing GitHub webhook signature.")
-        expected_sig = "sha256=" + hmac.new(
-            settings.github_webhook_secret.encode("utf-8"),
-            body_bytes,
-            hashlib.sha256,
-        ).hexdigest()
-        if not hmac.compare_digest(signature_header, expected_sig):
-            raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
+    # Security Fix: Fail closed if webhook secret is not configured
+    if not settings.github_webhook_secret:
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "GitHub webhook secret is not configured.",
+            retryable=False,
+        )
+
+    signature_header = request.headers.get("X-Hub-Signature-256")
+    if not signature_header:
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing GitHub webhook signature.")
+    expected_sig = "sha256=" + hmac.new(
+        settings.github_webhook_secret.encode("utf-8"),
+        body_bytes,
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(signature_header, expected_sig):
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
 
     event = request.headers.get("X-GitHub-Event", "ping")
     if event == "ping":

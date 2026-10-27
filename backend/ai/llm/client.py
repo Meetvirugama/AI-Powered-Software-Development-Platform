@@ -17,6 +17,7 @@ from typing import Self
 
 from .provider import LLMProvider
 from .schemas import (
+    LLMAuthenticationError,
     LLMError,
     LLMRateLimitError,
     LLMRequest,
@@ -88,6 +89,7 @@ class LLMGateway:
         - Returns a validated, typed ``LLMResponse``.
         - Emits structured logging metrics on both success and failure.
         - Translates transient outages to optional fallback provider if configured.
+        - Resource lifecycle management.
 
         Args:
             request: Fully constructed LLMRequest.
@@ -116,7 +118,12 @@ class LLMGateway:
         try:
             try:
                 response = await self._provider.generate(request)
-            except (LLMUnavailableError, LLMTimeoutError, LLMRateLimitError) as exc:
+            except (
+                LLMUnavailableError,
+                LLMTimeoutError,
+                LLMRateLimitError,
+                LLMAuthenticationError,
+            ) as exc:
                 if self._fallback_provider is not None:
                     logger.warning(
                         "llm_gateway_primary_failed_trying_fallback",
@@ -130,7 +137,18 @@ class LLMGateway:
                     fallback_request = request
                     # If request model was provider-specific or default, adjust for fallback
                     primary_default = getattr(self._provider, "default_model", None)
-                    if not request.model or request.model == "default" or request.model == primary_default:
+                    req_model = (request.model or "").strip().lower()
+                    fb_name = (self._fallback_provider.provider_name or "").lower()
+                    is_cross_vendor_model = (
+                        (fb_name == "groq" and req_model.startswith("gemini"))
+                        or (fb_name == "gemini" and (req_model.startswith("openai/") or req_model.startswith("llama") or req_model.startswith("qwen")))
+                    )
+                    if (
+                        not request.model
+                        or request.model == "default"
+                        or request.model == primary_default
+                        or is_cross_vendor_model
+                    ):
                         fallback_request = LLMRequest(
                             messages=request.messages,
                             model=self._fallback_provider.default_model,

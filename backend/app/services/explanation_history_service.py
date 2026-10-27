@@ -233,6 +233,7 @@ class ExplanationHistoryService:
         target_path: Optional[str] = None,
         target_symbol: Optional[str] = None,
         source_revision: Optional[str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
         offset: int = 0,
         limit: int = 20,
         db: Optional[Session] = None,
@@ -242,6 +243,7 @@ class ExplanationHistoryService:
             repo = AnalysisRunRepository(session)
             return repo.list_by_repository(
                 repository_id=repository_id,
+                user_id=user_id,
                 feature_type=feature_type,
                 status=status,
                 target_path=target_path,

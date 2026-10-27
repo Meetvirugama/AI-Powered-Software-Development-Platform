@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, List, Optional
 from uuid import UUID, uuid4
 
@@ -7,7 +8,7 @@ try:
 except ImportError:
     tree_sitter = None
 
-from .parser import Parser
+from .parser import Parser, _sanitize_source_text
 from .symbols import FileInfo, Symbol
 
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class SymbolExtractor:
     """Extracts code symbols (classes, functions, methods, imports, constants, interfaces)
 
-    from tree-sitter concrete syntax trees.
+    from tree-sitter concrete syntax trees or resilient AST/regex fallbacks.
     """
 
     def __init__(self, parser: Optional[Parser] = None):
@@ -33,16 +34,21 @@ class SymbolExtractor:
         if file_info.is_binary:
             return []
 
+        safe_content = _sanitize_source_text(content or "")
+        if not safe_content.strip():
+            return []
+
         file_id = file_id or uuid4()
-        tree = self.parser.parse(file_info, content)
+        tree = self.parser.parse(file_info, safe_content)
         if tree is None:
             if file_info.language == "Python":
-                return self._extract_python_ast(content, file_id)
+                return self._extract_python_ast(safe_content, file_id)
+            if file_info.language in ("JavaScript", "TypeScript"):
+                return self._extract_js_ts_fallback(safe_content, file_id)
             return []
 
         symbols: List[Symbol] = []
-        lines = content.splitlines()
-
+        lines = safe_content.splitlines()
 
         def get_sig(node: Any) -> str:
             start_row = node.start_point[0]
@@ -51,7 +57,7 @@ class SymbolExtractor:
             return ""
 
         def get_text(node: Any) -> str:
-            return node.text.decode("utf-8")
+            return node.text.decode("utf-8", errors="replace")
 
         def walk(node: Any, parent_id: Optional[UUID] = None):
             t = node.type
@@ -96,13 +102,18 @@ class SymbolExtractor:
                     walk(c, sym_id)
                 return
 
-            if t in ("function_definition", "function_declaration"):
+            if t in (
+                "function_definition",
+                "function_declaration",
+                "method_definition",
+                "method_declaration",
+            ):
                 name = ""
                 for c in node.children:
-                    if c.type in ("identifier", "property_identifier"):
+                    if c.type in ("identifier", "property_identifier", "field_identifier"):
                         name = get_text(c)
                         break
-                kind = "method" if parent_id else "function"
+                kind = "method" if (parent_id or t in ("method_definition", "method_declaration")) else "function"
                 sig = get_sig(node)
                 symbols.append(
                     Symbol(
@@ -195,16 +206,28 @@ class SymbolExtractor:
         return symbols
 
     def _extract_python_ast(self, content: str, file_id: UUID) -> List[Symbol]:
-        """Fallback Python AST extractor using python's built-in ast module."""
+        """Fallback Python AST extractor with partial syntax-error recovery."""
         import ast
 
         symbols: List[Symbol] = []
         lines = content.splitlines()
+        tree = None
         try:
             tree = ast.parse(content)
+        except SyntaxError as syn_err:
+            # Attempt partial recovery by masking broken lines or parsing prefix before syntax error
+            err_line = getattr(syn_err, "lineno", None)
+            if err_line and err_line > 1:
+                prefix = "\n".join(lines[: err_line - 1])
+                try:
+                    tree = ast.parse(prefix)
+                except Exception:
+                    tree = None
+            if tree is None:
+                return self._extract_python_regex_fallback(content, file_id)
         except Exception as e:
             logger.warning(f"Python fallback AST parse error: {e}")
-            return []
+            return self._extract_python_regex_fallback(content, file_id)
 
         def get_sig(lineno: int) -> str:
             if 1 <= lineno <= len(lines):
@@ -292,5 +315,146 @@ class SymbolExtractor:
                 logger.warning(f"Error extracting symbol node via fallback: {e}")
                 continue
 
+        # If a syntax error truncated AST parsing midway through the file, recover remaining top-level defs
+        if symbols:
+            max_parsed_line = max(s.end_line for s in symbols)
+            if max_parsed_line < len(lines):
+                tail_syms = self._extract_python_regex_fallback(
+                    content, file_id, min_line=max_parsed_line + 1
+                )
+                symbols.extend(tail_syms)
+
         return symbols
 
+    def _extract_python_regex_fallback(
+        self,
+        content: str,
+        file_id: UUID,
+        min_line: int = 1,
+    ) -> List[Symbol]:
+        """Line-by-line Python symbol recovery when syntax errors prevent full AST compilation."""
+        symbols: List[Symbol] = []
+        lines = content.splitlines()
+        current_class_id: Optional[UUID] = None
+        current_class_indent: int = 0
+
+        for idx, raw_line in enumerate(lines):
+            lineno = idx + 1
+            if lineno < min_line:
+                continue
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(raw_line) - len(raw_line.lstrip(" \t"))
+            if indent <= current_class_indent and not stripped.startswith("@"):
+                current_class_id = None
+
+            m_cls = re.match(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)\b.*:", stripped)
+            if m_cls:
+                cls_id = uuid4()
+                current_class_id = cls_id
+                current_class_indent = indent
+                symbols.append(
+                    Symbol(
+                        id=cls_id,
+                        name=m_cls.group(1),
+                        kind="class",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=None,
+                    )
+                )
+                continue
+
+            m_fn = re.match(r"^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(.*\)\s*(?:->.*)?:", stripped)
+            if m_fn:
+                is_method = current_class_id is not None and indent > current_class_indent
+                symbols.append(
+                    Symbol(
+                        id=uuid4(),
+                        name=m_fn.group(1),
+                        kind="method" if is_method else "function",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=current_class_id if is_method else None,
+                    )
+                )
+
+        return symbols
+
+    def _extract_js_ts_fallback(self, content: str, file_id: UUID) -> List[Symbol]:
+        """Regex/structural symbol extractor for JS/TS when tree-sitter grammar is unavailable."""
+        symbols: List[Symbol] = []
+        lines = content.splitlines()
+        for idx, raw_line in enumerate(lines):
+            lineno = idx + 1
+            stripped = raw_line.strip()
+            if not stripped or stripped.startswith("//"):
+                continue
+            m_imp = re.match(r"^import\s+.*", stripped)
+            if m_imp:
+                symbols.append(
+                    Symbol(
+                        id=uuid4(),
+                        name=stripped,
+                        kind="import",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=None,
+                    )
+                )
+                continue
+            m_cls = re.match(r"^(?:export\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)", stripped)
+            if m_cls:
+                symbols.append(
+                    Symbol(
+                        id=uuid4(),
+                        name=m_cls.group(1),
+                        kind="class",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=None,
+                    )
+                )
+                continue
+            m_iface = re.match(r"^(?:export\s+)?interface\s+([A-Za-z_$][A-Za-z0-9_$]*)", stripped)
+            if m_iface:
+                symbols.append(
+                    Symbol(
+                        id=uuid4(),
+                        name=m_iface.group(1),
+                        kind="interface",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=None,
+                    )
+                )
+                continue
+            m_fn = re.match(
+                r"^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(",
+                stripped,
+            )
+            if m_fn:
+                symbols.append(
+                    Symbol(
+                        id=uuid4(),
+                        name=m_fn.group(1),
+                        kind="function",
+                        file_id=file_id,
+                        start_line=lineno,
+                        end_line=lineno,
+                        signature=stripped,
+                        parent_id=None,
+                    )
+                )
+        return symbols

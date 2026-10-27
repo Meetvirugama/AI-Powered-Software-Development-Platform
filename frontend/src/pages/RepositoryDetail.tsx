@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   useRepository,
   useRepositoryFiles,
@@ -39,7 +39,12 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { useExplainCode } from '../hooks/useAnalysis';
+import {
+  useExplainCode,
+  useDetectBugs,
+  useGenerateTests,
+  useReviewCode,
+} from '../hooks/useAnalysis';
 import type { SyncStage, RepositoryFile } from '../types/api';
 import type {
   AnalysisFeatureType,
@@ -47,6 +52,11 @@ import type {
   AnalysisStatus,
   SourceReference,
   CodeExplanation,
+  BugDetectionResponse,
+  TestGenerationResponse,
+  ReviewReportResponse,
+  ReviewTarget,
+  SupportedTestFramework,
   SymbolSummary,
 } from '../types/analysis';
 
@@ -56,13 +66,75 @@ import type {
 
 const SYNC_POLL_INTERVAL_MS = 3000;
 
+/**
+ * Normalize a repository file path for consistent matching across platforms:
+ * - Trims leading and trailing whitespace
+ * - Converts backslashes to forward slashes
+ * - Strips leading relative prefixes ('./' or '/')
+ * - Normalizes to lowercase for case-insensitive lookup
+ */
+function normalizeFilePath(p: string): string {
+  return p
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.?\//, '')
+    .toLowerCase();
+}
+
+/**
+ * Find a repository file matching the requested path.
+ * Searches for an exact normalized path match first, and falls back to
+ * a suffix match at path boundaries only if no exact match is found.
+ *
+ * @param files Array of loaded repository files
+ * @param requestedPath Path requested via query parameter or cited source reference
+ * @returns The matching RepositoryFile or undefined
+ */
+function findMatchingRepositoryFile(
+  files: RepositoryFile[],
+  requestedPath: string | null | undefined,
+): RepositoryFile | undefined {
+  if (!requestedPath || !files || files.length === 0) return undefined;
+  const targetNorm = normalizeFilePath(requestedPath);
+  if (!targetNorm) return undefined;
+
+  // 1. Exact normalized path match has strict priority
+  const exact = files.find((f) => normalizeFilePath(f.path) === targetNorm);
+  if (exact) return exact;
+
+  // 2. Suffix match at path segment boundary only if no exact match exists
+  return files.find((f) => {
+    const fileNorm = normalizeFilePath(f.path);
+    return fileNorm.endsWith('/' + targetNorm) || targetNorm.endsWith('/' + fileNorm);
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Repository Detail Page (Code Intelligence Workbench)
 // ---------------------------------------------------------------------------
 
+/**
+ * Render the route's repository explorer and analysis workbench.
+ * The `file` query parameter selects a matching path among the first 100 fetched
+ * files unless the user has selected a file. Matching ignores case, normalizes
+ * separators and a leading `/` or `./`, and accepts suffixes at path boundaries.
+ * Without a user selection, an unmatched citation shows an unavailable-file
+ * message after files load; no `file` defaults to README.md or the first file.
+ *
+ * With a matching file, `start` supplies a positive, 1-based line number parsed
+ * as an integer; `end` is inclusive and defaults to start if absent, invalid, or
+ * earlier. `symbol` optionally labels the citation. Explicit highlight selection
+ * or clearing takes precedence over this query-derived highlight.
+ */
 export function RepositoryDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  const fileParam = searchParams.get('file');
+  const startParam = searchParams.get('start');
+  const endParam = searchParams.get('end');
+  const symbolParam = searchParams.get('symbol');
 
   const [userSelectedFile, setUserSelectedFile] = useState<RepositoryFile | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
@@ -77,8 +149,16 @@ export function RepositoryDetail() {
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
+  const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
+  const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+  const [reviewTarget, setReviewTarget] = useState<ReviewTarget>({
+    type: 'file',
+    path: '',
+  });
+  const [selectedFrameworkOverride, setSelectedFrameworkOverride] = useState<SupportedTestFramework | null>(null);
   const [explainedFile, setExplainedFile] = useState<RepositoryFile | null>(null);
-  const [highlightedSource, setHighlightedSource] = useState<SourceReference | null>(null);
+  const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null | undefined>(undefined);
 
   // ------------------------------------------------------------------
   // Mutations
@@ -99,6 +179,52 @@ export function RepositoryDetail() {
       );
     },
   });
+
+  const { mutate: triggerDetectBugs, isPending: isDetectBugsPending } = useDetectBugs(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus('COMPLETED');
+      setBugResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Unable to complete bug scan. The backend service endpoint may be temporarily unavailable.'
+      );
+    },
+  });
+
+  const { mutate: triggerGenerateTests, isPending: isGenerateTestsPending } = useGenerateTests(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus(data.status || 'COMPLETED');
+      setTestResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Failed to generate tests. The backend service endpoint may be temporarily unavailable.'
+      );
+    },
+  });
+
+  const { mutate: triggerReview, isPending: isReviewPending } = useReviewCode(id || '', {
+    onSuccess: (data) => {
+      setAnalysisStatus(data.status || 'COMPLETED');
+      setReviewResult(data);
+      setAnalysisError(null);
+    },
+    onError: (err) => {
+      setAnalysisStatus('FAILED');
+      setAnalysisError(
+        err.message ||
+          'Failed to run code review. The backend review service may be temporarily unavailable.'
+      );
+    },
+  });
+
 
   // ------------------------------------------------------------------
   // Data Fetching
@@ -123,7 +249,7 @@ export function RepositoryDetail() {
     data: filesData,
     isLoading: filesLoading,
     isError: filesError,
-  } = useRepositoryFiles(id, 1, 100, { enabled: isReady });
+  } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
   const {
     data: dependencies,
@@ -131,13 +257,57 @@ export function RepositoryDetail() {
     isError: depsError,
   } = useRepositoryDependencies(id, { enabled: isReady });
 
-  // Auto-select initial file (prefer README.md, or first file) once files load
+  // Check if cited file from query parameters is unavailable in indexed files.
+  // A file is only reported unavailable when the loaded file list is complete.
+  const citedFileUnavailable = useMemo(() => {
+    if (!fileParam || !filesData?.items || filesLoading) return null;
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (matching) return null;
+
+    // Only report unavailable if the loaded file list is known to be complete
+    const isListComplete = (filesData.total ?? filesData.items.length) <= filesData.items.length;
+    return isListComplete ? fileParam : null;
+  }, [fileParam, filesData, filesLoading]);
+
+  // Deep-linked cited source reference computed declaratively from searchParams
+  const deepLinkedHighlight = useMemo<SourceReference | null>(() => {
+    if (!fileParam || !startParam || !filesData?.items) return null;
+    const start = parseInt(startParam, 10);
+    if (isNaN(start) || start <= 0) return null;
+    const end = endParam ? parseInt(endParam, 10) : start;
+    const validEnd = !isNaN(end) && end >= start ? end : start;
+
+    const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+    if (!matching) return null;
+
+    return {
+      file_path: matching.path,
+      start_line: start,
+      end_line: validEnd,
+      symbol_name: symbolParam || undefined,
+      symbol: symbolParam || undefined,
+    };
+  }, [fileParam, startParam, endParam, symbolParam, filesData]);
+
+  // Active highlighted source: uses explicit user interaction if set, otherwise deep-linked citation
+  const highlightedSource =
+    userHighlightedSource !== undefined ? userHighlightedSource : deepLinkedHighlight;
+
+  // Auto-select initial file (prefer user-selected, query param file, README.md, or first file) once files load
   const selectedFile = useMemo(() => {
     if (userSelectedFile) return userSelectedFile;
+    if (fileParam && filesData?.items) {
+      const matching = findMatchingRepositoryFile(filesData.items, fileParam);
+      if (matching) return matching;
+      // If a cited file was requested but not found in the loaded files, do not select an unrelated file
+      return null;
+    }
+    // If a deep-linked file was cited but is unavailable, DO NOT select an unrelated file as though it matched
+    if (citedFileUnavailable) return null;
     if (!filesData?.items || filesData.items.length === 0) return null;
     const readme = filesData.items.find((f) => f.path.toLowerCase().endsWith('readme.md'));
     return readme ?? filesData.items[0];
-  }, [userSelectedFile, filesData]);
+  }, [userSelectedFile, fileParam, citedFileUnavailable, filesData]);
 
   // Derived active target: defaults to full file unless user targeted a symbol/range on current file
   const activeTarget: AnalysisTarget = useMemo(() => {
@@ -174,13 +344,37 @@ export function RepositoryDetail() {
     );
   }, [dependencies, dependencyFilter]);
 
-  function handleRunAnalysis(feature: AnalysisFeatureType, target: AnalysisTarget) {
-    if (analysisStatus === 'RUNNING' || analysisStatus === 'PENDING' || isExplainPending) {
+  // Detect whether proposed test path collides with an existing file in the repository or is unverified
+  const proposedTestPathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
+    if (!testResult?.result?.proposed_test_path) return 'UNKNOWN';
+    if (filesLoading || filesError || !filesData?.items) return 'UNKNOWN';
+    const normalize = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+    const normalizedProposed = normalize(testResult.result.proposed_test_path);
+    const exists = filesData.items.some((f) => normalize(f.path) === normalizedProposed);
+    return exists ? 'EXISTS' : 'NEW';
+  }, [testResult, filesData, filesLoading, filesError]);
+
+  const proposedTestPathExists = proposedTestPathStatus === 'EXISTS';
+
+  const isAnalysisPending =
+    analysisStatus === 'RUNNING' ||
+    analysisStatus === 'PENDING' ||
+    isExplainPending ||
+    isDetectBugsPending ||
+    isGenerateTestsPending ||
+    isReviewPending;
+
+  function handleRunAnalysis(
+    feature: AnalysisFeatureType,
+    target: AnalysisTarget,
+    frameworkOverride?: SupportedTestFramework | null
+  ) {
+    if (isAnalysisPending) {
       // Guard against duplicate simultaneous requests
       return;
     }
 
-    if (!target.path) {
+    if (!target.path && feature !== 'review') {
       setAnalysisError('Please select a source file from the explorer before requesting an analysis.');
       setAnalysisStatus('FAILED');
       return;
@@ -209,43 +403,149 @@ export function RepositoryDetail() {
       return;
     }
 
-    // Other three feature entry points remain intact as placeholders for Days 3–5
-    const targetDesc =
-      target.type === 'symbol' && target.symbol
-        ? `${target.path} (${target.symbol})`
-        : target.start_line
-        ? `${target.path}:L${target.start_line}-${target.end_line}`
-        : target.path;
+    if (feature === 'bugs') {
+      triggerDetectBugs({
+        target: {
+          type: target.type,
+          path: target.path,
+          start_line: target.start_line,
+          end_line: target.end_line,
+          symbol: target.symbol,
+          revision: repo?.default_branch || 'main',
+        },
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        include_static: true,
+        include_ai: true,
+        min_severity: 'LOW',
+      });
+      return;
+    }
 
-    setTimeout(() => {
-      setAnalysisStatus('FAILED');
-      setAnalysisError(
-        `The "${feature}" workflow for ${targetDesc} is scheduled for Days 3–5. Week 2 Day 2 activates the real Code Explanation API.`
-      );
-    }, 500);
+    if (feature === 'tests') {
+      const activeRunner =
+        frameworkOverride !== undefined ? frameworkOverride : selectedFrameworkOverride;
+      triggerGenerateTests({
+        target: {
+          type: target.type,
+          path: target.path,
+          start_line: target.start_line,
+          end_line: target.end_line,
+          symbol: target.symbol,
+          revision: repo?.default_branch || 'main',
+        },
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        framework: activeRunner || undefined,
+      });
+      return;
+    }
+
+    if (feature === 'review') {
+      const activeReviewTarget: ReviewTarget =
+        reviewTarget && (reviewTarget.path || reviewTarget.commit_sha || reviewTarget.pr_number || reviewTarget.diff)
+          ? reviewTarget
+          : {
+              type: 'file',
+              path: target.path,
+            };
+      setReviewTarget(activeReviewTarget);
+      triggerReview({
+        target: activeReviewTarget,
+        options: {
+          include_context: true,
+          max_context_tokens: 10000,
+          persist_run: true,
+        },
+        include_static: true,
+      });
+      return;
+    }
+  }
+
+  function handleRunReviewTarget(t: ReviewTarget) {
+    if (isAnalysisPending) return;
+    setReviewTarget(t);
+    setAnalysisStatus('RUNNING');
+    setAnalysisError(null);
+    triggerReview({
+      target: t,
+      options: {
+        include_context: true,
+        max_context_tokens: 10000,
+        persist_run: true,
+      },
+      include_static: true,
+    });
+  }
+
+  function handleFrameworkChange(framework: SupportedTestFramework | null) {
+    setSelectedFrameworkOverride(framework);
+    if (activeFeature === 'tests' && activeTarget.path && testResult) {
+      handleRunAnalysis('tests', activeTarget, framework);
+    }
   }
 
   function handleRetry() {
+    if (activeFeature === 'review') {
+      handleRunReviewTarget(reviewTarget);
+      return;
+    }
     if (activeFeature) {
-      handleRunAnalysis(activeFeature, activeTarget);
+      handleRunAnalysis(activeFeature, activeTarget, selectedFrameworkOverride || undefined);
     }
   }
 
+  /**
+   * Highlight a citation in the selected file or switch to the first matching
+   * loaded file, storing its actual path. Missing or unmatched paths clear the
+   * highlight without changing the selected file or restoring the URL highlight.
+   */
   function handleSelectSourceReference(source: SourceReference) {
-    setHighlightedSource(source);
+    if (!source.file_path) {
+      setUserHighlightedSource(null);
+      return;
+    }
+
+    const targetNorm = normalizeFilePath(source.file_path);
+
+    // If currently selected file matches
+    if (selectedFile && normalizeFilePath(selectedFile.path) === targetNorm) {
+      setUserHighlightedSource({
+        ...source,
+        file_path: selectedFile.path,
+      });
+      return;
+    }
 
     // If cited reference points to a different file in the repository, navigate to it
-    if (filesData?.items && (!selectedFile || source.file_path !== selectedFile.path)) {
-      const matchingFile = filesData.items.find(
-        (f) =>
-          f.path === source.file_path ||
-          f.path.endsWith('/' + source.file_path) ||
-          source.file_path.endsWith('/' + f.path)
-      );
+    if (filesData?.items) {
+      const matchingFile = findMatchingRepositoryFile(filesData.items, source.file_path);
       if (matchingFile) {
         setUserSelectedFile(matchingFile);
+        setUserHighlightedSource({
+          ...source,
+          file_path: matchingFile.path,
+        });
+        return;
       }
     }
+
+    // Target file is unavailable in the file tree; do not highlight unrelated lines in current file
+    setUserHighlightedSource(null);
+  }
+
+  function handleReopenReview(data: ReviewReportResponse) {
+    setReviewResult(data);
+    setReviewTarget(data.target);
+    setAnalysisStatus(data.status || 'COMPLETED');
+    setAnalysisError(null);
   }
 
   function handleSelectSymbolFromExplanation(sym: SymbolSummary) {
@@ -700,10 +1000,17 @@ export function RepositoryDetail() {
                 <AnalysisActionBar
                   activeFeature={activeFeature}
                   activeTarget={activeTarget}
-                  disabled={analysisStatus === 'RUNNING' || analysisStatus === 'PENDING'}
+                  disabled={isAnalysisPending}
                   onSelectFeature={(feat) => {
-                    setActiveFeature((prev) => (prev === feat ? null : feat));
-                    setAnalysisStatus('IDLE');
+                    setActiveFeature((prev) => {
+                      if (prev === feat) return null;
+                      if (feat === 'explain' && explanationResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'bugs' && bugResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'tests' && testResult) setAnalysisStatus('COMPLETED');
+                      else if (feat === 'review' && reviewResult) setAnalysisStatus('COMPLETED');
+                      else setAnalysisStatus('IDLE');
+                      return feat;
+                    });
                     setAnalysisError(null);
                   }}
                 />
@@ -720,8 +1027,14 @@ export function RepositoryDetail() {
                     selectedFile={selectedFile}
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
-                      setHighlightedSource(null);
+                      setUserHighlightedSource(null);
                       setExplanationResult(null);
+                      setBugResult(null);
+                      setTestResult(null);
+                      setReviewResult(null);
+                      setReviewTarget((prev) =>
+                        prev.type === 'file' ? { type: 'file', path: file.path } : prev
+                      );
                       setExplainedFile(null);
                       setAnalysisStatus('IDLE');
                       setAnalysisError(null);
@@ -739,17 +1052,39 @@ export function RepositoryDetail() {
                       activeTarget={activeTarget}
                       onTargetChange={setCustomTarget}
                       highlightedSource={highlightedSource}
-                      onClearHighlightedSource={() => setHighlightedSource(null)}
-                      isAnalyzing={
-                        analysisStatus === 'RUNNING' ||
-                        analysisStatus === 'PENDING' ||
-                        isExplainPending
-                      }
+                      onClearHighlightedSource={() => setUserHighlightedSource(null)}
+                      isAnalyzing={isAnalysisPending}
                       onTriggerExplain={() => {
                         setActiveFeature('explain');
                         handleRunAnalysis('explain', activeTarget);
                       }}
                     />
+                  ) : citedFileUnavailable ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-6 max-w-md">
+                        <FileCode className="h-8 w-8 mb-2 mx-auto text-amber-500" />
+                        <h4 className="text-sm font-semibold text-foreground">Cited File Unavailable</h4>
+                        <p className="text-xs text-muted-foreground mt-1 break-all">
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{citedFileUnavailable}</code> was not found in the indexed repository files.
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          Please select an available file from the explorer tree on the left.
+                        </p>
+                      </div>
+                    </div>
+                  ) : fileParam && !filesLoading ? (
+                    <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                      <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-6 max-w-md">
+                        <FileCode className="h-8 w-8 mb-2 mx-auto text-blue-400" />
+                        <h4 className="text-sm font-semibold text-foreground">Cited File Not in Loaded Preview</h4>
+                        <p className="text-xs text-muted-foreground mt-1 break-all">
+                          The cited file <code className="font-mono text-primary px-1 bg-muted/60 rounded">{fileParam}</code> was not found in the first {filesData?.items?.length ?? 0} loaded files (total: {filesData?.total ?? 'unknown'}).
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-2">
+                          Please select an available file from the explorer tree on the left.
+                        </p>
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
                       <Code className="h-8 w-8 mb-2 opacity-40 text-primary" />
@@ -762,7 +1097,7 @@ export function RepositoryDetail() {
                 </div>
 
                 {/* Sub-pane 3: Reusable Analysis Result Panel */}
-                {activeFeature && selectedFile && (
+                {activeFeature && (selectedFile || activeFeature === 'review') && (
                   <div className="w-full sm:w-80 lg:w-96 border-t sm:border-t-0 sm:border-l border-border flex flex-col shrink-0 min-h-0">
                     <AnalysisResultPanel
                       feature={activeFeature}
@@ -770,10 +1105,28 @@ export function RepositoryDetail() {
                       status={analysisStatus}
                       error={analysisError}
                       explanation={activeFeature === 'explain' ? explanationResult : null}
-                      sources={explanationResult?.sources || []}
+                      bugResult={activeFeature === 'bugs' ? bugResult : null}
+                      testResult={activeFeature === 'tests' ? testResult : null}
+                      reviewResult={activeFeature === 'review' ? reviewResult : null}
+                      reviewTarget={reviewTarget}
+                      repositoryId={id}
+                      onReopenReview={handleReopenReview}
+                      onRunReviewTarget={handleRunReviewTarget}
+                      activeFileTreePaths={filesData?.items?.map((f) => f.path) || []}
+                      proposedPathStatus={proposedTestPathStatus}
+                      proposedPathExists={proposedTestPathExists}
+                      sources={
+                        activeFeature === 'explain'
+                          ? explanationResult?.sources || []
+                          : activeFeature === 'tests'
+                          ? testResult?.result?.sources || []
+                          : []
+                      }
                       activeSourceReference={highlightedSource}
                       onSelectSourceReference={handleSelectSourceReference}
                       onSelectSymbol={handleSelectSymbolFromExplanation}
+                      onSelectFramework={handleFrameworkChange}
+                      selectedFrameworkOverride={selectedFrameworkOverride}
                       onClose={() => setActiveFeature(null)}
                       onRunAnalysis={handleRunAnalysis}
                       onRetry={handleRetry}

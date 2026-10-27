@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.secret_redaction import redact
+
 
 class ErrorCode:
     """Machine-readable error codes exposed by the public API."""
@@ -48,14 +50,15 @@ class APIError(Exception):
     ) -> None:
         self.status_code = status_code
         self.code = code
-        self.message = message
+        self.message = redact(message)
         self.retryable = retryable
 
 
 def error_response(status_code: int, code: str, message: str, *, retryable: bool = False) -> JSONResponse:
+    safe_message = redact(message)
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message, "retryable": retryable}},
+        content={"error": {"code": code, "message": safe_message, "retryable": retryable}},
     )
 
 

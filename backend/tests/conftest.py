@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Generator
 import pytest
 from fastapi.testclient import TestClient
 import httpx
-import responses
+try:
+    import responses
+except ImportError:
+    responses = None  # type: ignore
 from sqlalchemy import create_engine, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
@@ -28,13 +31,17 @@ except ImportError:
     Vector = None  # type: ignore
 
 try:
-    from tests.mocks.github import register_github_mocks
-except ImportError:
-    from backend.tests.mocks.github import register_github_mocks
+    try:
+        from tests.mocks.github import register_github_mocks
+    except ImportError:
+        from backend.tests.mocks.github import register_github_mocks
+except (ImportError, ModuleNotFoundError):
+    register_github_mocks = None  # type: ignore
 
 from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.main import app
+from app import models as _app_models  # noqa: F401 — ensure all ORM models (including PullRequest) are registered on Base.metadata
 
 # Determine test database URL
 TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
@@ -162,8 +169,10 @@ def fake_redis(monkeypatch) -> FakeRedis:
 
 
 @pytest.fixture
-def mock_github() -> Generator[responses.RequestsMock, None, None]:
+def mock_github() -> Generator[Any, None, None]:
     """Mock external GitHub API calls using the responses library."""
+    if responses is None:
+        pytest.skip("responses library not installed")
     with responses.RequestsMock(assert_all_requests_are_fired=False) as rsps:
         register_github_mocks(rsps)
         yield rsps
@@ -215,4 +224,3 @@ def auth_headers(test_user, monkeypatch) -> dict[str, str]:
 
     token, _ = create_access_token(user_id=str(test_user.id))
     return {"Authorization": f"Bearer {token}"}
-

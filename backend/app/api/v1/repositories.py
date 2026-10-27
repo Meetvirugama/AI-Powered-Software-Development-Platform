@@ -129,7 +129,16 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
     job = service.request_sync(repository_id, user_id)
     try:
-        get_redis().publish("platform_events", json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}))
+        get_redis().publish(
+            "platform_events",
+            json.dumps(
+                {
+                    "type": "repository.updated",
+                    "user_id": str(user_id),
+                    "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
+                }
+            ),
+        )
     except Exception:
         pass
     return SyncJobResponse(job_id=str(job.id))
@@ -137,10 +146,20 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
 
 @router.delete("/{repository_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Disconnect and remove a repository")
 def delete_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> None:
+    user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
     RepositoryRepository(db).delete(repo.id)
     try:
-        get_redis().publish("platform_events", json.dumps({"type": "repository.updated", "data": {"repository_id": str(repository_id)}}))
+        get_redis().publish(
+            "platform_events",
+            json.dumps(
+                {
+                    "type": "repository.updated",
+                    "user_id": str(user_id),
+                    "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
+                }
+            ),
+        )
     except Exception:
         pass
 
@@ -153,6 +172,8 @@ async def search_repository(
     db: Session = Depends(get_db),
 ) -> RepositorySearchResponse:
     """Search only code indexed for a repository the authenticated user owns."""
+    from app.core.secret_redaction import redact
+
     _owned_repository(repository_id, request, db)
     pipeline = get_rag_pipeline(request)
     chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
@@ -164,7 +185,7 @@ async def search_repository(
                 file_path=chunk.file_path,
                 start_line=chunk.start_line,
                 end_line=chunk.end_line,
-                content=chunk.content,
+                content=redact(chunk.content),
                 score=chunk.score,
             )
             for chunk in chunks
@@ -177,7 +198,7 @@ def list_files(
     repository_id: UUID,
     request: Request,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    page_size: int = Query(default=50, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> PaginatedResponse:
     _owned_repository(repository_id, request, db)
@@ -196,6 +217,9 @@ def get_file_content(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RepositoryFileContentResponse:
+    from app.core.secret_redaction import redact
+    from indexer.chunker import reconstruct_file_from_chunks
+
     _owned_repository(repository_id, request, db)
     file_record = (
         db.query(RepositoryFile)
@@ -211,7 +235,7 @@ def get_file_content(
         .order_by(CodeChunk.start_line)
         .all()
     )
-    content = "\n".join(chunk.content for chunk in chunks)
+    content = redact(reconstruct_file_from_chunks(chunks))
 
     symbols = (
         db.query(CodeSymbol)
@@ -236,7 +260,7 @@ def list_symbols(
     repository_id: UUID,
     request: Request,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=100),
+    page_size: int = Query(default=50, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> PaginatedResponse:
     _owned_repository(repository_id, request, db)
@@ -266,18 +290,27 @@ def _extract_dependencies(repository_id: UUID, db: Session) -> list[RepositoryDe
             .all()
         )
 
+        if not manifest_files:
+            return []
+
+        manifest_ids = [f.id for f in manifest_files]
+        all_manifest_chunks = (
+            db.query(CodeChunk.file_id, CodeChunk.content)
+            .filter(
+                CodeChunk.repository_id == repository_id,
+                CodeChunk.file_id.in_(manifest_ids),
+            )
+            .order_by(CodeChunk.file_id, CodeChunk.start_line)
+            .all()
+        )
+        chunks_by_file: dict[UUID, list[str]] = {}
+        for f_id, c_text in all_manifest_chunks:
+            if c_text:
+                chunks_by_file.setdefault(f_id, []).append(c_text)
+
         dependencies: list[RepositoryDependencyResponse] = []
         for file in manifest_files:
-            chunks = (
-                db.query(CodeChunk.content)
-                .filter(
-                    CodeChunk.repository_id == repository_id,
-                    CodeChunk.file_id == file.id,
-                )
-                .order_by(CodeChunk.start_line)
-                .all()
-            )
-            content = "\n".join(c[0] for c in chunks)
+            content = "\n".join(chunks_by_file.get(file.id, []))
             if file.path.endswith("package.json"):
                 try:
                     data = json.loads(content)
@@ -329,6 +362,62 @@ def _extract_dependencies(repository_id: UUID, db: Session) -> list[RepositoryDe
                         name = parts[0].strip()
                         ver = parts[1].strip().strip('"').strip("'")
                         dependencies.append(RepositoryDependencyResponse(name=name, version=ver, ecosystem="cargo"))
+            elif file.path.endswith("pyproject.toml"):
+                try:
+                    import tomllib
+
+                    toml_data = tomllib.loads(content)
+                    proj_deps = toml_data.get("project", {}).get("dependencies", [])
+                    for spec in proj_deps:
+                        m = re.match(r"^([A-Za-z0-9_\-\.]+)(?:\[[^\]]*\])?\s*(.*)$", str(spec).strip())
+                        if m:
+                            pkg_name, pkg_ver = m.groups()
+                            dependencies.append(
+                                RepositoryDependencyResponse(
+                                    name=pkg_name,
+                                    version=pkg_ver.strip() or "*",
+                                    ecosystem="pip",
+                                )
+                            )
+                    poetry_deps = toml_data.get("tool", {}).get("poetry", {}).get("dependencies", {})
+                    if isinstance(poetry_deps, dict):
+                        for pkg_name, pkg_spec in poetry_deps.items():
+                            if pkg_name.lower() == "python":
+                                continue
+                            ver_str = (
+                                pkg_spec.get("version", "*")
+                                if isinstance(pkg_spec, dict)
+                                else str(pkg_spec)
+                            )
+                            dependencies.append(
+                                RepositoryDependencyResponse(
+                                    name=pkg_name,
+                                    version=ver_str,
+                                    ecosystem="pip",
+                                )
+                            )
+                except Exception:
+                    pass
+            elif file.path.endswith("Pipfile"):
+                section = ""
+                for raw_ln in content.splitlines():
+                    ln = raw_ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    if ln.startswith("[") and ln.endswith("]"):
+                        section = ln[1:-1].strip().lower()
+                        continue
+                    if section in ("packages", "dev-packages") and "=" in ln:
+                        pkg_name, pkg_val = ln.split("=", 1)
+                        pkg_name = pkg_name.strip().strip('"').strip("'")
+                        pkg_val = pkg_val.strip().strip('"').strip("'")
+                        dependencies.append(
+                            RepositoryDependencyResponse(
+                                name=pkg_name,
+                                version=pkg_val or "*",
+                                ecosystem="pip",
+                            )
+                        )
         return dependencies
     except Exception:
         return []

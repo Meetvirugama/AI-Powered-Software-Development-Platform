@@ -103,8 +103,9 @@ async def github_callback(
     expected_state = request.cookies.get("oauth_state")
     state_valid = False
 
-    if expected_state and secrets.compare_digest(state, expected_state):
-        state_valid = True
+    if expected_state is not None:
+        if secrets.compare_digest(state, expected_state):
+            state_valid = True
     else:
         try:
             redis_client = get_redis()

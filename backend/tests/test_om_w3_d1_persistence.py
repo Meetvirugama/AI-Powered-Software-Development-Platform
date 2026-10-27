@@ -619,10 +619,10 @@ class TestWeek3Day1MigrationConsistency:
     """Confirms unbroken Alembic chain up to the new head revision `b3c4d5e6f7a8`."""
 
     def test_alembic_chain_linear_and_unbroken_up_to_head(self):
-        """Verify the migration chain includes all 7 revisions with b3c4d5e6f7a8 as head."""
+        """Verify the migration chain includes all 8 revisions with b3c4d5e6f7a8 as head."""
         versions_dir = Path(__file__).resolve().parent.parent / "migrations" / "versions"
         migration_files = list(versions_dir.glob("*.py"))
-        assert len(migration_files) >= 7, f"Expected at least 7 migrations, found {len(migration_files)}"
+        assert len(migration_files) >= 8, f"Expected at least 8 migrations, found {len(migration_files)}"
 
         revisions: dict[str, str | None] = {}
         for py_file in migration_files:
@@ -643,10 +643,12 @@ class TestWeek3Day1MigrationConsistency:
             "cb4e2a7d0f31",  # sync jobs
             "e7b8c9d0f1a2",  # chunks & memory
             "f1c2d3e4b5a6",  # analysis runs & findings
+            "a1b2c3d4e5f6",  # pull requests (Week 2)
             "b3c4d5e6f7a8",  # workflow automation & tasks (Week 3 Day 1)
         ]
         for milestone in expected_milestones:
             assert milestone in revisions, f"Milestone revision {milestone} missing from migration graph."
 
-        # Verify b3c4d5e6f7a8 down_revision is f1c2d3e4b5a6
-        assert revisions["b3c4d5e6f7a8"] == "f1c2d3e4b5a6"
+        # Verify linear continuity up to b3c4d5e6f7a8
+        assert revisions["a1b2c3d4e5f6"] == "f1c2d3e4b5a6"
+        assert revisions["b3c4d5e6f7a8"] == "a1b2c3d4e5f6"

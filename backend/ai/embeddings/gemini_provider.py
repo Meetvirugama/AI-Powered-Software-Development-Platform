@@ -7,6 +7,7 @@ Responsibilities:
 - Automatic round-robin key rotation across free-tier API keys on rate-limits (HTTP 429).
 - Translates Google API errors into structured `EmbeddingError` hierarchy.
 - Connection pooling via shared or managed `httpx.AsyncClient`.
+- Security (W2-S8): Sends API key via `x-goog-api-key` request header instead of URL query string.
 """
 
 from __future__ import annotations
@@ -40,6 +41,12 @@ _MAX_RETRIES = 3
 _BACKOFF_BASE_SECONDS = 1.0
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def _redact_key(text: str, key: str) -> str:
+    if not text or not key:
+        return text
+    return text.replace(key, "[REDACTED]")
 
 
 class GeminiEmbeddingProvider(EmbeddingProvider):
@@ -158,10 +165,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
         for attempt in range(1, max_attempts + 1):
             api_key = self._next_key()
-            url = f"{_GEMINI_API_BASE}/{self._model}:batchEmbedContents?key={api_key}"
+            url = f"{_GEMINI_API_BASE}/{self._model}:batchEmbedContents"
+            headers = {"x-goog-api-key": api_key}
 
             try:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
 
                 if response.status_code == 200:
                     data = response.json()
@@ -201,21 +209,21 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
 
                 if response.status_code in {401, 403}:
                     raise AuthenticationError(
-                        f"Gemini authentication failed (HTTP {response.status_code}): {response.text[:200]}",
+                        f"Gemini authentication failed (HTTP {response.status_code}): {_redact_key(response.text[:200], api_key)}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )
 
                 if response.status_code == 400:
                     raise InvalidRequestError(
-                        f"Gemini 400 Bad Request: {response.text[:200]}",
+                        f"Gemini 400 Bad Request: {_redact_key(response.text[:200], api_key)}",
                         status_code=400,
                         provider=self.provider_name,
                     )
 
                 if response.status_code in _RETRYABLE_STATUS_CODES:
                     last_error = ProviderUnavailableError(
-                        f"Gemini embedding temporary failure (HTTP {response.status_code}): {response.text[:200]}",
+                        f"Gemini embedding temporary failure (HTTP {response.status_code}): {_redact_key(response.text[:200], api_key)}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )
@@ -224,8 +232,9 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                 # When mock side_effects are exhausted in tests
                 break
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                safe_err = _redact_key(str(exc), api_key)
                 last_error = ProviderUnavailableError(
-                    f"Gemini network or timeout error: {exc}",
+                    f"Gemini network or timeout error: {safe_err}",
                     provider=self.provider_name,
                 )
 

@@ -12,7 +12,16 @@ from app.core.redis import get_redis
 from app.core.security import decode_access_token
 
 
-PUBLIC_PATHS = {"/docs", "/openapi.json", "/redoc", "/health", "/api/v1/health", "/api/v1/events"}
+PUBLIC_PATHS = {
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/health",
+    "/api/v1/health",
+    "/api/v1/events",
+    "/api/v1/github/webhook",
+    "/api/v1/github/installation/callback",
+}
 
 
 class JWTMiddleware(BaseHTTPMiddleware):
@@ -20,6 +29,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/api/v1/auth/github/"):
+            _try_populate_user_state(request)
             return await call_next(request)
 
         token = _get_token(request)
@@ -38,6 +48,22 @@ class JWTMiddleware(BaseHTTPMiddleware):
         except Exception:
             return error_response(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
         return await call_next(request)
+
+
+def _try_populate_user_state(request: Request) -> None:
+    """Opportunistically populate request.state.user_id on public/callback routes when a valid token is present."""
+    token = _get_token(request)
+    if not token:
+        return
+    try:
+        claims = decode_access_token(token)
+        jti = str(claims["jti"])
+        if not get_redis().exists(f"auth:blocklist:{jti}"):
+            request.state.user_id = str(claims["sub"])
+            request.state.token_jti = jti
+            request.state.token_exp = int(claims["exp"])
+    except Exception:
+        pass
 
 
 def _get_token(request: Request) -> str | None:

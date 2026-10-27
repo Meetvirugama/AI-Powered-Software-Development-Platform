@@ -230,9 +230,13 @@ class RAGPipeline:
             )
 
         # ---- Step 1: Retrieval & Repo Metadata ---------------------------
+        import asyncio
+
         retrieval_start = time.monotonic()
-        chunks = await self._retrieve(cleaned_question, repo_uuid)
-        related_files = await self._get_repository_files(repo_uuid)
+        chunks, related_files = await asyncio.gather(
+            self._retrieve(cleaned_question, repo_uuid),
+            self._get_repository_files(repo_uuid),
+        )
         retrieval_latency_ms = (time.monotonic() - retrieval_start) * 1000
 
         # ---- Step 2: Graceful fallback for zero retrieval ------------------
@@ -260,7 +264,9 @@ class RAGPipeline:
         )
 
         # ---- Step 4: Prompt construction ---------------------------------
-        rendered_data = self.context_builder.render_repository_data(ctx)
+        from app.core.secret_redaction import redact
+
+        rendered_data = redact(self.context_builder.render_repository_data(ctx))
         messages = self.prompt_builder.build_chat_prompt(
             context=rendered_data,
             question=cleaned_question,
@@ -275,10 +281,11 @@ class RAGPipeline:
         )
         llm_latency_ms = (time.monotonic() - llm_start) * 1000
 
-        # ---- Step 6: Grounding validation --------------------------------
+        # ---- Step 6: Grounding validation & secret redaction -------------
         validated = await self.grounding_validator.validate_sources(
             raw_answer, repo_uuid
         )
+        validated = validated.model_copy(update={"answer": redact(validated.answer)})
 
         total_latency_ms = (time.monotonic() - start_time) * 1000
         logger.info(

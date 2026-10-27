@@ -12,6 +12,9 @@ import {
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { ExplanationResultView } from './ExplanationResultView';
+import { BugScannerView } from './BugScannerView';
+import { TestGenerationView } from './TestGenerationView';
+import { CodeReviewView, ReviewTargetSelector } from './CodeReviewView';
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
@@ -19,6 +22,11 @@ import type {
   AnalysisStatus,
   SourceReference,
   CodeExplanation,
+  BugDetectionResponse,
+  TestGenerationResponse,
+  ReviewReportResponse,
+  ReviewTarget,
+  SupportedTestFramework,
   SymbolSummary,
 } from '../../types/analysis';
 
@@ -28,16 +36,29 @@ export interface AnalysisResultPanelProps {
   status: AnalysisStatus;
   error?: string | null;
   explanation?: CodeExplanation | null;
+  bugResult?: BugDetectionResponse | null;
+  testResult?: TestGenerationResponse | null;
+  reviewResult?: ReviewReportResponse | null;
+  reviewTarget?: ReviewTarget;
+  repositoryId?: string;
+  onReopenReview?: (result: ReviewReportResponse) => void;
+  proposedPathStatus?: 'EXISTS' | 'NEW' | 'UNKNOWN';
+  proposedPathExists?: boolean;
   onRetry?: () => void;
   onRunAnalysis?: (feature: AnalysisFeatureType, target: AnalysisTarget) => void;
+  onRunReviewTarget?: (target: ReviewTarget) => void;
   onClose?: () => void;
   onSelectSourceReference?: (source: SourceReference) => void;
   activeSourceReference?: SourceReference | null;
   onSelectSymbol?: (symbol: SymbolSummary) => void;
+  onSelectFramework?: (framework: SupportedTestFramework | null) => void;
+  selectedFrameworkOverride?: SupportedTestFramework | null;
   sources?: SourceReference[];
+  activeFileTreePaths?: string[];
   className?: string;
   children?: React.ReactNode;
 }
+
 
 const FEATURE_META: Record<
   AnalysisFeatureType,
@@ -90,13 +111,25 @@ export function AnalysisResultPanel({
   status,
   error,
   explanation,
+  bugResult,
+  testResult,
+  reviewResult,
+  reviewTarget,
+  repositoryId,
+  onReopenReview,
+  proposedPathStatus,
+  proposedPathExists = false,
   onRetry,
   onRunAnalysis,
+  onRunReviewTarget,
   onClose,
   onSelectSourceReference,
   activeSourceReference,
   onSelectSymbol,
+  onSelectFramework,
+  selectedFrameworkOverride,
   sources = [],
+  activeFileTreePaths = [],
   className,
   children,
 }: AnalysisResultPanelProps) {
@@ -200,7 +233,22 @@ export function AnalysisResultPanel({
         )}
 
         {/* State 2: IDLE (Feature selected, ready to run) */}
-        {feature && status === 'IDLE' && currentMeta && (
+        {feature === 'review' && status === 'IDLE' ? (
+          <ReviewTargetSelector
+            initialTarget={reviewTarget || { type: 'file', path: target.path }}
+            currentFilePath={target.path}
+            onRunReview={(revTarget) => {
+              if (onRunReviewTarget) {
+                onRunReviewTarget(revTarget);
+              } else {
+                onRunAnalysis?.('review', target);
+              }
+            }}
+            isRunning={isRunning}
+            repositoryId={repositoryId}
+            onReopenReview={onReopenReview}
+          />
+        ) : feature && status === 'IDLE' && currentMeta ? (
           <div className="space-y-4 py-2">
             <div className="rounded-xl border border-border/80 bg-background/60 p-4 space-y-3">
               <div className="flex items-start gap-3">
@@ -238,6 +286,25 @@ export function AnalysisResultPanel({
                     </span>
                   </div>
                 )}
+                {feature === 'tests' && onSelectFramework && (
+                  <div className="flex justify-between items-center text-muted-foreground text-[11px] pt-1">
+                    <span>Runner:</span>
+                    <select
+                      value={selectedFrameworkOverride || ''}
+                      onChange={(e) =>
+                        onSelectFramework(
+                          (e.target.value ? e.target.value : null) as SupportedTestFramework | null
+                        )
+                      }
+                      className="px-1.5 py-0.5 rounded border border-border bg-card text-foreground font-mono text-[10px] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="">Auto-Detect Framework</option>
+                      <option value="pytest">pytest (Python)</option>
+                      <option value="unittest">unittest (Python)</option>
+                      <option value="jest">jest (JS/TS)</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
               <div className="pt-2">
@@ -263,11 +330,15 @@ export function AnalysisResultPanel({
             <div className="rounded-lg bg-muted/20 border border-border/60 p-3 flex items-start gap-2.5 text-xs text-muted-foreground">
               <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed">
-                Analysis requests are scoped strictly to authorized repository context. Explanations decompose purpose, execution flow, key symbols, parameters, and limitations.
+                {feature === 'tests'
+                  ? 'Test generation inspects repository conventions, fixtures, and target semantics to construct framework-aware unit tests without mutating repository files.'
+                  : feature === 'bugs'
+                  ? 'Bug scans combine static AST pattern analysis with grounded AI reasoning to identify logic defects, edge case vulnerabilities, and regressions.'
+                  : 'Analysis requests are scoped strictly to authorized repository context. Explanations decompose purpose, execution flow, key symbols, parameters, and limitations.'}
               </p>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* State 3: RUNNING / PENDING */}
         {isRunning && (
@@ -326,6 +397,33 @@ export function AnalysisResultPanel({
                 activeSourceReference={activeSourceReference}
                 onSelectSymbol={onSelectSymbol}
               />
+            ) : feature === 'bugs' && bugResult ? (
+              <BugScannerView
+                result={bugResult}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+              />
+            ) : feature === 'tests' && testResult ? (
+              <TestGenerationView
+                result={testResult.result}
+                proposedPathStatus={proposedPathStatus}
+                proposedPathExists={proposedPathExists}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+                onSelectFramework={onSelectFramework}
+                selectedFrameworkOverride={selectedFrameworkOverride}
+              />
+            ) : feature === 'review' && reviewResult ? (
+              <CodeReviewView
+                result={reviewResult}
+                onSelectSourceReference={onSelectSourceReference}
+                activeSourceReference={activeSourceReference}
+                onRunReview={onRunReviewTarget}
+                isRunning={isRunning}
+                activeFileTreePaths={activeFileTreePaths}
+                repositoryId={repositoryId}
+                onReopenReview={onReopenReview}
+              />
             ) : children ? (
               children
             ) : (
@@ -339,32 +437,37 @@ export function AnalysisResultPanel({
             )}
 
             {/* Evidence & Sources Section (for other features or fallback) */}
-            {(!explanation || feature !== 'explain') && sources && sources.length > 0 && (
-              <div className="pt-3 border-t border-border/60 space-y-2">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono">
-                  Cited Evidence ({sources.length}):
-                </h4>
-                <div className="space-y-1.5">
-                  {sources.map((src, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => onSelectSourceReference?.(src)}
-                      className="w-full text-left p-2 rounded-lg border border-border/50 bg-muted/20 text-xs font-mono flex items-center justify-between gap-2 hover:bg-accent hover:border-border transition-colors cursor-pointer"
-                    >
-                      <span className="text-foreground truncate" title={src.file_path}>
-                        {src.file_path}
-                      </span>
-                      <span className="text-muted-foreground text-[10px] shrink-0">
-                        {typeof src.start_line === 'number' && typeof src.end_line === 'number'
-                          ? `L${src.start_line}–${src.end_line}`
-                          : 'File'}
-                      </span>
-                    </button>
-                  ))}
+            {(!explanation || feature !== 'explain') &&
+              feature !== 'bugs' &&
+              feature !== 'tests' &&
+              feature !== 'review' &&
+              sources &&
+              sources.length > 0 && (
+                <div className="pt-3 border-t border-border/60 space-y-2">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider font-mono">
+                    Cited Evidence ({sources.length}):
+                  </h4>
+                  <div className="space-y-1.5">
+                    {sources.map((src, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => onSelectSourceReference?.(src)}
+                        className="w-full text-left p-2 rounded-lg border border-border/50 bg-muted/20 text-xs font-mono flex items-center justify-between gap-2 hover:bg-accent hover:border-border transition-colors cursor-pointer"
+                      >
+                        <span className="text-foreground truncate" title={src.file_path}>
+                          {src.file_path}
+                        </span>
+                        <span className="text-muted-foreground text-[10px] shrink-0">
+                          {typeof src.start_line === 'number' && typeof src.end_line === 'number'
+                            ? `L${src.start_line}–${src.end_line}`
+                            : 'File'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </div>
         )}
       </div>

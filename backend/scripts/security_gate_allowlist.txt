@@ -6,3 +6,24 @@ fcf730b6d9  # Docs/week3.md documentation example
 8bcac7908e  # backend/README.md documentation example
 9915af1fc1  # backend/tests/test_static_reviewer.py mock test value
 654dcaa1e6  # backend/tests/test_static_reviewer.py mock test value
+1681f37b10  # backend/tests/test_backend_audit_fixes.py synthetic test secret
+570945b67f  # backend/tests/test_code_review_day5.py & test_generate_tests_day4.py synthetic test key
+4da9cecef5  # backend/tests/test_code_review_day5.py & test_generate_tests_day4.py synthetic test token
+3021d90eb9  # backend/app/core/secret_redaction.py regex docstring example
+6224936938  # backend/tests/test_security_week2_baseline.py synthetic redaction test fixture
+8ed45e8e43  # backend/tests/test_security_week2_baseline.py synthetic redaction test fixture
+5e70266c10  # backend/tests/test_om_w3_d1_persistence.py synthetic test key
+f23831a9da  # backend/tests/test_om_w3_d1_persistence.py synthetic test token
+5d2d3ceb7a  # backend/app/services/code_review_orchestrator.py synthetic test literal
+4235e60131  # backend/tests/test_keval_w2_day3_bug_detection_qa.py & day5/day6 synthetic test secret
+85db826b31  # backend/tests/test_keval_w2_day7_acceptance_scenarios.py synthetic test secret
+c93a088a7e  # backend/tests/test_dev_w2_day4_test_generation.py synthetic test secret
+a047030b4c  # Docs/persistence_day7_acceptance_report.md documentation redaction example
+e5e280f3c1  # backend/tests/test_om_w2_d7_acceptance_regression.py synthetic redaction test key
+8841c2397d  # backend/tests/test_om_w2_d7_acceptance_regression.py synthetic redaction test token
+a674773a64  # backend/tests/test_om_w2_d7_acceptance_regression.py synthetic redaction test key
+743554670c  # backend/tests/test_om_w2_d7_acceptance_regression.py synthetic redaction AWS test key
+46e8faffd3  # backend/tests/test_om_w2_d5_review_history.py synthetic test secret
+ed92e70c71  # backend/tests/test_day6_integration_and_security.py synthetic test secret
+917939e9f2  # backend/tests/test_backend_audit_fixes.py synthetic groq test key
+10e9550af2  # backend/tests/test_backend_audit_fixes.py synthetic gemini test key

@@ -92,19 +92,28 @@ class RepositoryRepository:
         from app.models.repository_file import RepositoryFile
         from app.models.sync_job import SyncJob
         from app.models.memory_entry import MemoryEntry
-        from app.models.analysis_run import AnalysisRun
-        from app.models.analysis_finding import AnalysisFinding
+        from app.models.pull_request import PullRequest
         from sqlalchemy import delete
 
-        self.session.execute(delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_id))
-        self.session.execute(delete(AnalysisRun).where(AnalysisRun.repository_id == repo_id))
+        try:
+            from app.models.analysis_finding import AnalysisFinding
+            from app.models.analysis_run import AnalysisRun
+            self.session.execute(delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_id))
+            self.session.execute(delete(AnalysisRun).where(AnalysisRun.repository_id == repo_id))
+        except Exception:
+            pass
+
+        try:
+            self.session.execute(delete(PullRequest).where(PullRequest.repository_id == repo_id))
+        except Exception:
+            pass
+
         self.session.execute(delete(CodeChunk).where(CodeChunk.repository_id == repo_id))
-        self.session.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repo_id))
         self.session.execute(delete(SymbolEdge).where(SymbolEdge.repository_id == repo_id))
+        self.session.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repo_id))
         self.session.execute(delete(RepositoryFile).where(RepositoryFile.repository_id == repo_id))
         self.session.execute(delete(SyncJob).where(SyncJob.repository_id == repo_id))
         self.session.execute(delete(MemoryEntry).where(MemoryEntry.repository_id == repo_id))
         self.session.delete(repo)
         self.session.commit()
         return True
-

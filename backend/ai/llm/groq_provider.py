@@ -97,6 +97,7 @@ class GroqProvider(LLMProvider):
         self._timeout = timeout
         self._default_model = model
         self._external_client = client
+        self._client: httpx.AsyncClient | None = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -114,6 +115,16 @@ class GroqProvider(LLMProvider):
     def timeout(self) -> float:
         return self._timeout
 
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._external_client is not None:
+            return self._external_client
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self._timeout, connect=10.0),
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+            )
+        return self._client
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -127,13 +138,9 @@ class GroqProvider(LLMProvider):
 
         for attempt in range(1, _MAX_RETRIES + 1):
             api_key = self._next_key()
-            client_ctx = (
-                self._external_client
-                if self._external_client is not None
-                else httpx.AsyncClient(timeout=self._timeout)
-            )
+            client = self._get_client()
 
-            async with (client_ctx if self._external_client is None else _noop_context(client_ctx)) as client:
+            async with _noop_context(client):
                 try:
                     start_ns = time.monotonic_ns()
                     resp = await client.post(
@@ -217,7 +224,10 @@ class GroqProvider(LLMProvider):
         )
 
     async def aclose(self) -> None:
-        """Close external client if managed."""
+        """Close persistent or external client if managed."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
         if self._external_client is not None and not self._external_client.is_closed:
             await self._external_client.aclose()
 
@@ -281,12 +291,20 @@ class GroqProvider(LLMProvider):
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise LLMValidationError(f"Response is not valid JSON: {exc}", provider="groq") from exc
+            raise LLMValidationError(
+                f"Response is not valid JSON: {exc}",
+                provider="groq",
+                raw_response=content,
+            ) from exc
 
         try:
             schema.model_validate(parsed)
         except Exception as exc:
-            raise LLMValidationError(f"Schema validation failed: {exc}", provider="groq") from exc
+            raise LLMValidationError(
+                f"Schema validation failed: {exc}",
+                provider="groq",
+                raw_response=content,
+            ) from exc
 
 
 class _noop_context:

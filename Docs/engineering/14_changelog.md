@@ -565,6 +565,68 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W2-Day6] 2026-10-23 — AST and Framework Reliability Verification & Test Report
+**Type:** Feature / Reliability  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/extractor.py`:
+  - Added support for `method_definition` and `method_declaration` in Tree-sitter extractor for TypeScript, JavaScript, and other class-based languages, ensuring member methods are correctly extracted with `parent_id` and `kind="method"`.
+- `backend/ai/context/test_context.py`:
+  - Normalized candidate test paths using `.as_posix()` to prevent Windows backslash path divergence.
+- `backend/tests/test_parser_reliability.py`:
+  - Added 24 comprehensive reliability and acceptance tests (100% passing) verifying:
+    - Multi-language source range fidelity on Python, TypeScript, and JavaScript sample fixtures.
+    - Class and method extraction, container enclosing invariants, and ambiguous symbol disambiguation.
+    - Framework detection across `pytest`, `unittest`, `jest`, `vitest`, and ambiguous manifests.
+    - Test path proposal logic and POSIX slash normalization across platforms.
+    - Zero-crash error resilience on malformed syntax, syntax errors, empty files (0 bytes), and unsupported languages.
+    - Strict 1-indexed line number agreement across all scanner components.
+- `Docs/parser_and_framework_test_report.md`:
+  - Authored and published the formal Day 6 deliverable: Parser and Framework Reliability Test Report documenting the test matrix, architectural invariants, 111-test suite inventory, and SLA benchmarks.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/scanner_languages.md`:
+  - Updated task tracking, release gate status, and language verification documentation.
+
+**Impact:** Provides bulletproof, zero-crash AST parsing, symbol extraction, framework convention discovery, and diff source mapping across all Developer Intelligence features (Code Explanation, Bug Detection, Test Generation, and Standalone AI Code Review).
+
+**Related Docs:** `Docs/parser_and_framework_test_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W2-Day7] 2026-10-24 — Final AST, Framework & Parser Failure Handling Acceptance Verification
+**Type:** Feature / Acceptance & Reliability  
+**Developer:** Prit  
+**Changes:**
+- `backend/scanner/parser.py`:
+  - Hardened string-to-byte encoding (`content.encode("utf-8", errors="replace")`) to eliminate `UnicodeEncodeError` crashes on lone surrogates (`\ud800`) or malformed UTF-8 source inputs.
+- `backend/scanner/extractor.py`:
+  - Hardened node text decoding (`node.text.decode("utf-8", errors="replace")`) to ensure zero-crash decoding of raw syntax tree slices.
+- `backend/scanner/ast_rules.py`:
+  - Hardened Python AST analysis to catch `(SyntaxError, UnicodeEncodeError)`, treating encoding anomalies gracefully as syntax warnings rather than unhandled exceptions.
+  - Safe byte length calculation using `errors="replace"`.
+- `backend/scanner/source_mapper.py`:
+  - Hardened diff file encoding with `errors="replace"`.
+- `backend/tests/test_prit_day7_acceptance.py`:
+  - Added 24 comprehensive Day 7 acceptance tests (100% passing) verifying:
+    - Final AST and 1-indexed inclusive source-range fidelity across Python, TypeScript, and JavaScript.
+    - Framework and convention detection across `pytest`, `unittest`, `jest`, `vitest` (unsupported), and ambiguous manifests.
+    - Comprehensive parser failure handling: zero-crash resilience on malformed syntax, 0-byte empty files, lone surrogates, path traversal guards, and unsupported language contracts.
+    - Seamless downstream feature bridges: Code Explanation `TargetSnippet`, Bug Detection `StaticFinding`, Test Generation `FrameworkProfile`, and AI Code Review `AnalysisSourceReference`.
+    - Mandatory Week 2 Acceptance Scenarios A through E scanner invariants.
+- `Docs/scanner_languages.md`:
+  - Added Section 11 documenting the Week 2 Day 7 Final Language Support Matrix (Tiers 1, 2, and 3), language-by-language capability specifications, documented limitations, failure handling guarantees, and 143-test verification inventory.
+- `Docs/week2_day7_ast_acceptance_report.md`:
+  - Authored and published the formal Day 7 deliverable report documenting verified invariants, downstream feature bridges, test suite inventory, SLA benchmarks, and Week 3 handoff.
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Updated Week 2 Day 7 task board and milestone completion status.
+
+**Impact:** Guarantees production-ready, zero-crash AST syntax parsing, symbol extraction, test runner convention discovery, and review source mapping across all Developer Intelligence features, ready for Week 3 Workflow Automation and Git execution sandboxes.
+
+**Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
+
 
 
 

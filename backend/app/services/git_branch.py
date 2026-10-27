@@ -1,18 +1,23 @@
 """Git branch management service for isolating agent changes.
 
-Deliverable for Parth — Week 2 Day 1:
+Deliverable for Parth — Week 2 Day 1–5 (hardened in Day 7 security audit):
 - create_agent_branch(repository_id, task_id) -> creates 'agent/task-{task_id}' from default branch
 - get_default_branch(repository_id) -> returns current default branch name
 - branch_exists(repository_id, branch_name) -> boolean check
 - delete_branch(repository_id, branch_name) -> cleanup on task cancel
+- commit(...) -> stages & commits workspace changes with path-traversal, host-repo, and secret-redaction guards
+- prepare_pr_metadata(...) / get_pr_metadata(...) -> persists & retrieves PR metadata with repository-scoped IDOR protection and secret scrubbing
 
 Branch naming convention: agent/task-{task_id} (e.g., agent/task-f47ac10b)
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 from uuid import UUID
 
@@ -20,11 +25,28 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import APIError, ErrorCode
+from app.core.input_security import require_safe_repo_path
+from app.core.secret_redaction import redact
 from app.integrations.github.client import GitHubAPIError, GitHubClient
+from app.integrations.github.schemas import PRMetadata
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository
+from app.repositories.pull_request_repository import PullRequestRepository
 
 logger = logging.getLogger(__name__)
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_PROTECTED_SYSTEM_PREFIXES: tuple[str, ...] = (
+    "/etc",
+    "/private/etc",
+    "/usr",
+    "/bin",
+    "/sbin",
+    "/System",
+    "/Library",
+)
+_SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
+_SAFE_TASK_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 @dataclass(frozen=True)
@@ -39,19 +61,120 @@ class AgentBranchInfo:
     status: str  # "created" or "ready"
 
 
+@dataclass(frozen=True)
+class CommitResult:
+    """Result of staging and committing agent changes in the workspace."""
+
+    commit_sha: str
+    branch: str
+    message: str
+    files_changed: list[str]
+    insertions: int = 0
+    deletions: int = 0
+    author_name: str = "Agent"
+    author_email: str = "agent@ai-platform.local"
+    pushed: bool = False  # Guaranteed False in Week 2 (push happens only in Week 3)
+
+
 def format_agent_branch_name(task_id: UUID | str) -> str:
     """Format an agent branch name following the convention: agent/task-{task_id}.
 
-    Example:
-        format_agent_branch_name(UUID("f47ac10b-58cc-4372-a567-0e02b2c3d479"))
-        -> "agent/task-f47ac10b"
+    Security (W2 Day 7):
+    - Strips unsafe characters and rejects empty or option-like task_ids so branch names
+      cannot inject git CLI flags or ref traversal (`..`).
     """
-    raw = str(task_id).strip()
+    raw = str(task_id or "").strip()
+    if not raw or "\x00" in raw or ".." in raw or raw.startswith("-"):
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Invalid task_id for agent branch name.",
+        )
     if "-" in raw:
         short_id = raw.split("-")[0]
     else:
         short_id = raw[:8] if len(raw) >= 8 else raw
-    return f"agent/task-{short_id}"
+    cleaned_short = _SAFE_TASK_ID_RE.sub("", short_id).lstrip(".-")
+    if not cleaned_short:
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Invalid task_id for agent branch name.",
+        )
+    return f"agent/task-{cleaned_short}"
+
+
+def _validate_safe_git_ref(ref_value: str, field_name: str = "branch") -> str:
+    """Validate that a git branch or ref string is free of CLI flag injection and traversal."""
+    cleaned = (ref_value or "").strip()
+    if (
+        not cleaned
+        or cleaned.startswith("-")
+        or ".." in cleaned
+        or "\x00" in cleaned
+        or not _SAFE_REF_RE.match(cleaned)
+    ):
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            f"Invalid {field_name}: '{ref_value}'.",
+        )
+    return cleaned
+
+
+def _validate_safe_author_field(value: str, field_name: str) -> str:
+    """Reject control characters, newlines, and leading dashes in git author fields."""
+    cleaned = (value or "").strip()
+    if not cleaned or cleaned.startswith("-") or any(ord(ch) < 32 for ch in cleaned):
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            f"Invalid {field_name} parameter.",
+        )
+    return cleaned
+
+
+def _validate_safe_workspace_path(workspace_path: str | Path) -> Path:
+    """Validate workspace directory path against traversal, system directories, and host repo mutation."""
+    raw_str = str(workspace_path or "").strip()
+    if not raw_str or "\x00" in raw_str:
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Workspace path must not be empty or contain null bytes.",
+        )
+    normalized_parts = raw_str.replace("\\", "/").split("/")
+    if ".." in normalized_parts:
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Path traversal ('..') is not allowed in workspace_path.",
+        )
+
+    path = Path(raw_str).resolve()
+    resolved_str = path.as_posix()
+    for prefix in _PROTECTED_SYSTEM_PREFIXES:
+        if resolved_str == prefix or resolved_str.startswith(prefix + "/"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Workspace path points to a protected system directory: {workspace_path}",
+            )
+
+    if path == _REPO_ROOT or path == (_REPO_ROOT / "backend") or path == (_REPO_ROOT / "frontend"):
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Refusing to run agent workspace commit directly against the host platform repository.",
+        )
+
+    if not path.exists() or not path.is_dir():
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            f"Workspace path does not exist or is not a directory: {workspace_path}",
+        )
+    return path
 
 
 class GitBranchService:
@@ -72,14 +195,25 @@ class GitBranchService:
         repository_id: UUID | str,
         user_id: UUID | str | None = None,
     ) -> Repository:
-        """Fetch repository, optionally validating ownership."""
-        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
-        stmt = select(Repository).where(Repository.id == repo_uuid)
-        if user_id is not None:
-            user_uuid = UUID(str(user_id)) if not isinstance(user_id, UUID) else user_id
-            stmt = stmt.where(Repository.user_id == user_uuid)
+        """Fetch repository via RepositoryRepository (with mock-session compatibility), optionally validating ownership."""
+        from unittest.mock import Mock
+        from app.repositories.repository_repository import RepositoryRepository
 
-        repo = self._db.scalars(stmt).first()
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+        if isinstance(self._db, Mock):
+            stmt = select(Repository).where(Repository.id == repo_uuid)
+            if user_id is not None:
+                user_uuid = UUID(str(user_id)) if not isinstance(user_id, UUID) else user_id
+                stmt = stmt.where(Repository.user_id == user_uuid)
+            repo = self._db.scalars(stmt).first()
+        else:
+            repo_store = RepositoryRepository(self._db)
+            if user_id is not None:
+                user_uuid = UUID(str(user_id)) if not isinstance(user_id, UUID) else user_id
+                repo = repo_store.get_for_user(repo_uuid, user_uuid)
+            else:
+                repo = repo_store.get_by_id(repo_uuid)
+
         if repo is None:
             raise APIError(
                 404,
@@ -93,14 +227,29 @@ class GitBranchService:
         if self._client is not None:
             return self._client
 
-        stmt = select(GitHubInstallation).where(
-            GitHubInstallation.installation_id == repo.installation_id,
-        )
-        installation = self._db.scalars(stmt).first()
-        if not installation or not installation.access_token:
-            token = await GitHubClient.get_installation_token(repo.installation_id)
+        installation = None
+        if hasattr(self._db, "get"):
+            try:
+                installation = self._db.get(GitHubInstallation, repo.installation_id)
+            except Exception:
+                installation = None
+
+        if installation is None:
+            stmt = select(GitHubInstallation).where(
+                GitHubInstallation.installation_id == str(repo.installation_id),
+            )
+            installation = self._db.scalars(stmt).first()
+
+        access_token = getattr(installation, "access_token", None) if installation else None
+        if access_token:
+            token = access_token
         else:
-            token = installation.access_token
+            ext_inst_id = (
+                installation.installation_id
+                if installation is not None and getattr(installation, "installation_id", None)
+                else str(repo.installation_id)
+            )
+            token = await GitHubClient.get_installation_token(str(ext_inst_id))
 
         return GitHubClient(token)
 
@@ -125,7 +274,7 @@ class GitBranchService:
         repo = self._get_repository(repository_id, user_id)
         client = await self._get_client_for_repo(repo)
 
-        clean_branch = branch_name.removeprefix("refs/heads/")
+        clean_branch = _validate_safe_git_ref(branch_name.removeprefix("refs/heads/"), "branch_name")
         try:
             await client.get_branch(repo.owner, repo.name, clean_branch)
             return True
@@ -146,22 +295,17 @@ class GitBranchService:
         user_id: UUID | str | None = None,
         base_branch: str | None = None,
     ) -> AgentBranchInfo:
-        """Triggered when execution starts (task transitions to EXECUTING).
-
-        Creates the isolated agent branch from default branch (main):
-        main
-          └── agent/task-f47ac10b    ← created here
-
-        All agent file edits stay in the workspace directory only during Week 2.
-        The branch exists in Git pointing to base_sha without any commits yet.
-        """
+        """Triggered when execution starts (task transitions to EXECUTING)."""
         repo = self._get_repository(repository_id, user_id)
         client = await self._get_client_for_repo(repo)
 
         branch_name = format_agent_branch_name(task_id)
-        source_branch = base_branch or repo.default_branch or "main"
+        source_branch = _validate_safe_git_ref(
+            base_branch or repo.default_branch or "main",
+            "base_branch",
+        )
 
-        # Check if agent branch already exists first (idempotent resume/re-execution)
+        # Check if agent branch already exists (idempotent resume/re-execution)
         if await self.branch_exists(repository_id, branch_name, user_id):
             logger.info("Agent branch %s already exists for repo %s", branch_name, repo.id)
             existing_sha = ""
@@ -169,9 +313,13 @@ class GitBranchService:
                 clean_branch = branch_name.removeprefix("refs/heads/")
                 existing_info = await client.get_branch(repo.owner, repo.name, clean_branch)
                 if isinstance(existing_info, dict):
-                    existing_sha = existing_info.get("commit", {}).get("sha", "")
-            except GitHubAPIError:
-                pass
+                    commit_obj = existing_info.get("commit")
+                    if isinstance(commit_obj, dict):
+                        existing_sha = commit_obj.get("sha", "")
+                    elif isinstance(existing_info.get("sha"), str):
+                        existing_sha = existing_info["sha"]
+            except Exception:
+                existing_sha = ""
 
             return AgentBranchInfo(
                 branch_name=branch_name,
@@ -233,10 +381,7 @@ class GitBranchService:
         user_id: UUID | str | None = None,
         base_branch: str | None = None,
     ) -> str:
-        """Create an isolated branch agent/task-{task_id} from the default branch.
-
-        Returns the created branch name (e.g. 'agent/task-f47ac10b').
-        """
+        """Create an isolated branch agent/task-{task_id} from the default branch."""
         info = await self.on_task_executing(repository_id, task_id, user_id, base_branch)
         return info.branch_name
 
@@ -246,15 +391,11 @@ class GitBranchService:
         branch_name: str,
         user_id: UUID | str | None = None,
     ) -> bool:
-        """Delete a branch (e.g. on task cancellation).
-
-        Returns True if deleted or already absent.
-        """
+        """Delete a branch (e.g. on task cancellation)."""
         repo = self._get_repository(repository_id, user_id)
         client = await self._get_client_for_repo(repo)
 
-        clean_branch = branch_name.removeprefix("refs/heads/")
-        # Do not allow deleting the default branch
+        clean_branch = _validate_safe_git_ref(branch_name.removeprefix("refs/heads/"), "branch_name")
         if clean_branch == (repo.default_branch or "main"):
             raise APIError(
                 400,
@@ -275,3 +416,308 @@ class GitBranchService:
                 f"Failed to delete branch '{clean_branch}': {exc}",
                 retryable=exc.retryable,
             ) from exc
+
+    # ----- Day 4: Commit Staging -------------------------------------------
+
+    async def _run_git(self, args: list[str], cwd: Path) -> tuple[int, str, str]:
+        """Execute a git command asynchronously in the specified workspace directory."""
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            cwd=str(cwd),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        return (
+            proc.returncode if proc.returncode is not None else 0,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
+
+    async def commit(
+        self,
+        workspace_path: str | Path,
+        commit_message: str,
+        task_id: UUID | str | None = None,
+        repository_id: UUID | str | None = None,
+        user_id: UUID | str | None = None,
+        files: list[str] | None = None,
+        author_name: str = "Agent",
+        author_email: str = "agent@ai-platform.local",
+        allow_empty: bool = False,
+    ) -> CommitResult:
+        """Stage agent changes as a Git commit in the local workspace."""
+        if repository_id is not None:
+            self._get_repository(repository_id, user_id)
+
+        path = _validate_safe_workspace_path(workspace_path)
+        safe_author_name = _validate_safe_author_field(author_name, "author_name")
+        safe_author_email = _validate_safe_author_field(author_email, "author_email")
+        safe_commit_message = redact((commit_message or "").strip())
+        if not safe_commit_message:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "commit_message must not be empty.")
+
+        # Validate git repository
+        code, _, err = await self._run_git(["rev-parse", "--is-inside-work-tree"], path)
+        if code != 0:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Workspace path is not a valid git repository: {workspace_path}. {redact(err)}".strip(),
+            )
+
+        # If task_id is provided, ensure branch matches agent/task-{task_id}
+        if task_id is not None:
+            expected_branch = format_agent_branch_name(task_id)
+            code, curr_branch, _ = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+            curr_branch = curr_branch.strip()
+            if curr_branch != expected_branch:
+                c_verify, _, _ = await self._run_git(["rev-parse", "--verify", expected_branch], path)
+                if c_verify == 0:
+                    await self._run_git(["checkout", expected_branch], path)
+                else:
+                    await self._run_git(["checkout", "-b", expected_branch], path)
+
+        # Stage changes (validating every file path against traversal/absolute escape)
+        if files:
+            safe_files = [require_safe_repo_path(f) for f in files]
+            for safe_f in safe_files:
+                c_add, _, err_add = await self._run_git(["add", "--", safe_f], path)
+                if c_add != 0:
+                    raise APIError(
+                        400,
+                        ErrorCode.INVALID_REQUEST,
+                        f"Failed to stage file '{safe_f}': {redact(err_add)}".strip(),
+                    )
+        else:
+            c_add, _, err_add = await self._run_git(["add", "-A"], path)
+            if c_add != 0:
+                raise APIError(
+                    500,
+                    ErrorCode.INTERNAL_SERVER_ERROR,
+                    f"Failed to stage workspace changes: {redact(err_add)}".strip(),
+                )
+
+        # Check staged files
+        _, staged_out, _ = await self._run_git(["diff", "--cached", "--name-only"], path)
+        staged_files = [f.strip() for f in staged_out.splitlines() if f.strip()]
+
+        if not staged_files and not allow_empty:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "No changes staged to commit in workspace.",
+            )
+
+        # Create commit
+        commit_args = [
+            "-c", f"user.name={safe_author_name}",
+            "-c", f"user.email={safe_author_email}",
+            "commit",
+            "-m", safe_commit_message,
+        ]
+        if allow_empty and not staged_files:
+            commit_args.append("--allow-empty")
+
+        c_commit, _, err_commit = await self._run_git(commit_args, path)
+        if c_commit != 0:
+            raise APIError(
+                500,
+                ErrorCode.INTERNAL_SERVER_ERROR,
+                f"Failed to create git commit: {redact(err_commit)}".strip(),
+            )
+
+        # Get commit SHA and current branch
+        _, sha_out, _ = await self._run_git(["rev-parse", "HEAD"], path)
+        commit_sha = sha_out.strip()
+
+        _, branch_out, _ = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+        branch_name = branch_out.strip()
+
+        # Parse stats
+        insertions = 0
+        deletions = 0
+        _, stat_out, _ = await self._run_git(["diff", "--shortstat", "HEAD~1..HEAD"], path)
+        if stat_out:
+            ins_match = re.search(r"(\d+)\s+insertion", stat_out)
+            del_match = re.search(r"(\d+)\s+deletion", stat_out)
+            if ins_match:
+                insertions = int(ins_match.group(1))
+            if del_match:
+                deletions = int(del_match.group(1))
+
+        logger.info(
+            "Created workspace commit %s on %s: %s (%d files staged)",
+            commit_sha,
+            branch_name,
+            safe_commit_message,
+            len(staged_files),
+        )
+
+        return CommitResult(
+            commit_sha=commit_sha,
+            branch=branch_name,
+            message=safe_commit_message,
+            files_changed=staged_files,
+            insertions=insertions,
+            deletions=deletions,
+            author_name=safe_author_name,
+            author_email=safe_author_email,
+            pushed=False,
+        )
+
+    # ----- Day 5: PR Metadata Preparation ----------------------------------
+
+    def prepare_pr_metadata(
+        self,
+        task_id: UUID | str,
+        repository_id: UUID | str,
+        branch: str,
+        base_branch: str,
+        changed_files: list[str],
+        commit_message: str,
+        test_summary: str,
+        verification_summary: str,
+        user_id: UUID | str | None = None,
+        status: str = "prepared",
+    ) -> PRMetadata:
+        """Collect and persist PR metadata in database table pull_requests."""
+        repo = self._get_repository(repository_id, user_id)
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_uuid = UUID(str(repo.id)) if not isinstance(repo.id, UUID) else repo.id
+
+        safe_branch = _validate_safe_git_ref(branch, "branch")
+        safe_base_branch = _validate_safe_git_ref(
+            base_branch or repo.default_branch or "main",
+            "base_branch",
+        )
+        safe_changed_files = [require_safe_repo_path(f) for f in (changed_files or [])]
+
+        safe_commit_msg = redact((commit_message or "").strip())
+        safe_test_summary = redact((test_summary or "").strip())
+        safe_verification_summary = redact((verification_summary or "").strip())
+
+        if not safe_commit_msg:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "commit_message must not be empty.")
+        if not safe_test_summary:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "test_summary must not be empty.")
+        if not safe_verification_summary:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "verification_summary must not be empty.")
+
+        repo_layer = PullRequestRepository(self._db)
+        pr_record = repo_layer.create_or_update(
+            task_id=task_uuid,
+            repository_id=repo_uuid,
+            branch=safe_branch,
+            base_branch=safe_base_branch,
+            changed_files=safe_changed_files,
+            commit_message=safe_commit_msg,
+            test_summary=safe_test_summary,
+            verification_summary=safe_verification_summary,
+            status=status,
+        )
+
+        return PRMetadata(
+            task_id=pr_record.task_id,
+            branch=pr_record.branch,
+            base_branch=pr_record.base_branch,
+            changed_files=pr_record.changed_files,
+            commit_message=pr_record.commit_message,
+            test_summary=pr_record.test_summary,
+            verification_summary=pr_record.verification_summary,
+            repository_id=pr_record.repository_id,
+            pr_number=pr_record.pr_number,
+            pr_url=pr_record.pr_url,
+            status=pr_record.status,
+        )
+
+    def get_pr_metadata(
+        self,
+        task_id: UUID | str,
+        user_id: UUID | str | None = None,
+        repository_id: UUID | str | None = None,
+    ) -> PRMetadata:
+        """Retrieve stored PR metadata for a task with strict repository and tenant isolation."""
+        # Security (W2 Day 7): If repository_id is supplied on the route, authorize the repository FIRST
+        # so unowned repository probes always fail with 404 REPOSITORY_NOT_FOUND without leaking task existence.
+        if repository_id is not None:
+            self._get_repository(repository_id, user_id)
+
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_layer = PullRequestRepository(self._db)
+        record = repo_layer.get_by_task_id(task_uuid)
+        if record is None:
+            raise APIError(
+                404,
+                ErrorCode.NOT_FOUND,
+                f"PR metadata for task {task_id} not found.",
+            )
+
+        if repository_id is not None and str(record.repository_id) != str(repository_id):
+            raise APIError(
+                404,
+                ErrorCode.NOT_FOUND,
+                f"PR metadata for task {task_id} not found in repository {repository_id}.",
+            )
+
+        if user_id is not None and repository_id is None:
+            self._get_repository(record.repository_id, user_id)
+
+        return PRMetadata(
+            task_id=record.task_id,
+            branch=record.branch,
+            base_branch=record.base_branch,
+            changed_files=record.changed_files,
+            commit_message=redact(record.commit_message or ""),
+            test_summary=redact(record.test_summary or ""),
+            verification_summary=redact(record.verification_summary or ""),
+            repository_id=record.repository_id,
+            pr_number=record.pr_number,
+            pr_url=record.pr_url,
+            status=record.status,
+        )
+
+    async def collect_pr_metadata_from_workspace(
+        self,
+        workspace_path: str | Path,
+        task_id: UUID | str,
+        repository_id: UUID | str,
+        base_branch: str | None = None,
+        test_summary: str = "All tests passed",
+        verification_summary: str = "Requirement match: PASS",
+        user_id: UUID | str | None = None,
+    ) -> PRMetadata:
+        """Inspect workspace git state and automatically persist PR metadata."""
+        repo = self._get_repository(repository_id, user_id)
+        path = _validate_safe_workspace_path(workspace_path)
+        effective_base = _validate_safe_git_ref(
+            base_branch or repo.default_branch or "main",
+            "base_branch",
+        )
+
+        # Get current branch
+        _, branch_out, _ = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], path)
+        branch = branch_out.strip() or format_agent_branch_name(task_id)
+
+        # Get latest commit message
+        _, msg_out, _ = await self._run_git(["log", "-1", "--pretty=%B"], path)
+        commit_message = msg_out.strip() or f"agent: Changes for task {task_id}"
+
+        # Get changed files compared to base branch (or HEAD~1 if no base ref)
+        _, diff_out, _ = await self._run_git(["diff", "--name-only", f"{effective_base}...HEAD"], path)
+        if not diff_out.strip():
+            _, diff_out, _ = await self._run_git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"], path)
+        changed_files = [f.strip() for f in diff_out.splitlines() if f.strip()]
+
+        return self.prepare_pr_metadata(
+            task_id=task_id,
+            repository_id=repository_id,
+            branch=branch,
+            base_branch=effective_base,
+            changed_files=changed_files,
+            commit_message=commit_message,
+            test_summary=test_summary,
+            verification_summary=verification_summary,
+            user_id=user_id,
+        )

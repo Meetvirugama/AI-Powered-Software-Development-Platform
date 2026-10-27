@@ -136,6 +136,32 @@ class GitHubSourceService:
             ) from exc
         return GitHubClient(token)
 
+    @staticmethod
+    def _validate_safe_git_ref(ref: str | None) -> str | None:
+        """Validate a Git branch, tag, or commit ref against path traversal and parameter injection."""
+        if ref is None:
+            return None
+        import re
+
+        clean_ref = ref.strip()
+        if not clean_ref:
+            return None
+        if (
+            ".." in clean_ref
+            or clean_ref.startswith("-")
+            or clean_ref.startswith("/")
+            or clean_ref.endswith("/")
+            or "//" in clean_ref
+            or any(c in clean_ref for c in ("?", "#", "\\", "\x00", "\r", "\n", "\t", " "))
+            or not re.match(r"^[A-Za-z0-9._/-]{1,255}$", clean_ref)
+        ):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Invalid Git ref format.",
+            )
+        return clean_ref
+
     async def resolve_commit_sha(
         self,
         repository: Repository,
@@ -143,7 +169,7 @@ class GitHubSourceService:
         client: GitHubClient,
     ) -> Optional[str]:
         """Resolve a branch or tag ref to its current commit SHA."""
-        clean_ref = ref.strip()
+        clean_ref = self._validate_safe_git_ref(ref) or "main"
         # If already a full 40-character hex commit SHA
         if len(clean_ref) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_ref):
             return clean_ref.lower()
@@ -204,9 +230,26 @@ class GitHubSourceService:
         - Handles deleted or inaccessible files with descriptive revision errors.
         - Prevents cached content from silently representing a different revision.
         """
+        from app.core.input_security import require_safe_repo_path
+        from app.core.secret_redaction import redact
+
+        safe_path = require_safe_repo_path(request.path)
+        request.path = safe_path
+        safe_req_ref = self._validate_safe_git_ref(request.ref)
+        if (
+            request.start_line is not None
+            and request.end_line is not None
+            and request.end_line < request.start_line
+        ):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "end_line must be greater than or equal to start_line.",
+            )
+
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
-        ref = request.ref or repository.default_branch or "main"
+        ref = safe_req_ref or repository.default_branch or "main"
 
         # 1. Resolve commit SHA for mutable refs to prevent silent drift
         commit_sha = await self.resolve_commit_sha(repository, ref, client)
@@ -220,7 +263,7 @@ class GitHubSourceService:
                 expected_commit_sha=commit_sha,
             )
             if cached is not None:
-                content = cached["content"]
+                content = redact(cached["content"])
                 lines = content.splitlines(keepends=True)
                 total_lines = len(lines)
                 if request.start_line or request.end_line:
@@ -308,6 +351,7 @@ class GitHubSourceService:
         else:
             content = raw_content
 
+        content = redact(content)
         blob_sha = data.get("sha")
 
         # 4. Cache full decoded file tagged with exact revision and commit_sha
@@ -375,9 +419,10 @@ class GitHubSourceService:
         ref: str | None = None,
     ) -> FileTreeResponse:
         """Retrieve the full file tree for an authorized repository."""
+        safe_ref = self._validate_safe_git_ref(ref)
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
-        resolved_ref = ref or repository.default_branch
+        resolved_ref = safe_ref or repository.default_branch
 
         try:
             data = await client.get_file_tree(
@@ -424,6 +469,7 @@ class GitHubSourceService:
         page: int = 1,
     ) -> CommitListResponse:
         """List commits for an authorized repository."""
+        safe_ref = self._validate_safe_git_ref(ref)
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 
@@ -431,7 +477,7 @@ class GitHubSourceService:
             data = await client.list_commits(
                 repository.owner,
                 repository.name,
-                sha=ref or repository.default_branch,
+                sha=safe_ref or repository.default_branch,
                 path=path,
                 per_page=per_page,
                 page=page,
@@ -458,6 +504,15 @@ class GitHubSourceService:
         sha: str,
     ) -> CommitDetail:
         """Get full commit detail including file changes."""
+        import re
+
+        clean_sha = (sha or "").strip()
+        if not re.match(r"^[A-Za-z0-9._-]{4,64}$", clean_sha) or ".." in clean_sha:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Invalid commit SHA or ref format.",
+            )
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 
@@ -465,14 +520,14 @@ class GitHubSourceService:
             data = await client.get_commit(
                 repository.owner,
                 repository.name,
-                sha,
+                clean_sha,
             )
         except GitHubAPIError as exc:
             if exc.status_code == 404:
                 raise APIError(
                     404,
                     ErrorCode.NOT_FOUND,
-                    f"Commit not found: {sha}",
+                    f"Commit not found: {clean_sha}",
                 ) from exc
             raise APIError(
                 502,
@@ -492,6 +547,12 @@ class GitHubSourceService:
         pr_number: int,
     ) -> PullRequestDiffResponse:
         """Retrieve the full diff for a pull request."""
+        if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number < 1:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Pull request number must be a positive integer.",
+            )
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 
@@ -579,12 +640,14 @@ class GitHubSourceService:
     @staticmethod
     def _parse_commit_summary(data: dict) -> CommitDetail:
         """Parse a commit summary from the list-commits response."""
+        from app.core.secret_redaction import redact
+
         commit_data = data.get("commit", {})
         author_data = commit_data.get("author", {})
         committer_data = commit_data.get("committer", {})
         return CommitDetail(
             sha=data.get("sha", ""),
-            message=commit_data.get("message", ""),
+            message=redact(commit_data.get("message", "")),
             author=CommitAuthor(
                 name=author_data.get("name", "Unknown"),
                 email=author_data.get("email"),
@@ -601,6 +664,8 @@ class GitHubSourceService:
     @staticmethod
     def _parse_commit_detail(data: dict) -> CommitDetail:
         """Parse a full commit response including file changes."""
+        from app.core.secret_redaction import redact
+
         commit_data = data.get("commit", {})
         author_data = commit_data.get("author", {})
         committer_data = commit_data.get("committer", {})
@@ -614,14 +679,14 @@ class GitHubSourceService:
                 additions=f.get("additions", 0),
                 deletions=f.get("deletions", 0),
                 changes=f.get("changes", 0),
-                patch=f.get("patch"),
+                patch=redact(f.get("patch")) if f.get("patch") else None,
             )
             for f in files_data
         ]
 
         return CommitDetail(
             sha=data.get("sha", ""),
-            message=commit_data.get("message", ""),
+            message=redact(commit_data.get("message", "")),
             author=CommitAuthor(
                 name=author_data.get("name", "Unknown"),
                 email=author_data.get("email"),
@@ -640,12 +705,15 @@ class GitHubSourceService:
     @staticmethod
     def _parse_pull_request(data: dict) -> PullRequestInfo:
         """Parse pull-request metadata from the GitHub API response."""
+        from app.core.secret_redaction import redact
+
         user = data.get("user", {})
         base = data.get("base", {})
         head = data.get("head", {})
+        raw_body = data.get("body")
         return PullRequestInfo(
             number=data.get("number", 0),
-            title=data.get("title", ""),
+            title=redact(data.get("title", "")),
             state=data.get("state", "unknown"),
             author=user.get("login") if isinstance(user, dict) else None,
             base_ref=base.get("ref") if isinstance(base, dict) else None,
@@ -655,25 +723,28 @@ class GitHubSourceService:
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             merged_at=data.get("merged_at"),
-            body=data.get("body"),
+            body=redact(raw_body) if raw_body else raw_body,
         )
 
     @staticmethod
     def _parse_pr_file(data: dict) -> PullRequestFile:
         """Parse a single file entry from the PR files response."""
+        from app.core.secret_redaction import redact
+
         status_raw = data.get("status", "modified")
         try:
             status = DiffStatus(status_raw)
         except ValueError:
             status = DiffStatus.MODIFIED
 
+        raw_patch = data.get("patch")
         return PullRequestFile(
             filename=data.get("filename", ""),
             status=status,
             additions=data.get("additions", 0),
             deletions=data.get("deletions", 0),
             changes=data.get("changes", 0),
-            patch=data.get("patch"),
+            patch=redact(raw_patch) if raw_patch else raw_patch,
             previous_filename=data.get("previous_filename"),
             sha=data.get("sha"),
             contents_url=data.get("contents_url"),
