@@ -34,6 +34,28 @@ from app.schemas.analysis import (
     TestGenerationResult,
     TestScenario,
 )
+from app.schemas.task import (
+    TaskAssumption,
+    TaskConstraint,
+    TaskConstraintType,
+    TaskCreateRequest,
+    TaskDetailResponse,
+    TaskIntakePayload,
+    TaskRequirement,
+    TaskRequirementCategory,
+    TaskSourceReference,
+    TaskSourceType,
+    TaskStatus,
+    VALID_TASK_TRANSITIONS,
+    can_transition,
+)
+from app.schemas.verification import (
+    VerificationCheckItem,
+    VerificationCheckStatus,
+    VerificationFinding,
+    VerificationOverallStatus,
+    VerificationResult,
+)
 
 __all__ = [
     "AnalysisFeatureType",
@@ -64,8 +86,27 @@ __all__ = [
     "ReviewTargetType",
     "SupportedTestFramework",
     "SymbolSummary",
+    "TaskAssumption",
+    "TaskConstraint",
+    "TaskConstraintType",
+    "TaskCreateRequest",
+    "TaskDetailResponse",
+    "TaskIntakePayload",
+    "TaskRequirement",
+    "TaskRequirementCategory",
+    "TaskSourceReference",
+    "TaskSourceType",
+    "TaskStatus",
     "TestGenerationRequest",
     "TestGenerationResponse",
     "TestGenerationResult",
     "TestScenario",
+    "VALID_TASK_TRANSITIONS",
+    "VerificationCheckItem",
+    "VerificationCheckStatus",
+    "VerificationFinding",
+    "VerificationOverallStatus",
+    "VerificationResult",
+    "can_transition",
 ]
+
