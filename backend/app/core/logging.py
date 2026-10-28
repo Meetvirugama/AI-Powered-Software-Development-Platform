@@ -40,7 +40,10 @@ def configure_logging(level: str) -> None:
     # output or exception text into logs.
     handler.addFilter(SecretRedactingFilter())
     root_logger = logging.getLogger()
-    root_logger.handlers = [handler]
+    existing_capture_handlers = [
+        h for h in root_logger.handlers if "LogCaptureHandler" in type(h).__name__ or "capture" in type(h).__name__.lower()
+    ]
+    root_logger.handlers = [handler, *existing_capture_handlers]
     root_logger.setLevel(level.upper())
 
 

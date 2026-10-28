@@ -9,8 +9,23 @@ const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login
 const AuthCallback = lazy(() => import('./pages/AuthCallback').then((m) => ({ default: m.AuthCallback })));
 const Dashboard = lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })));
 const Repositories = lazy(() => import('./pages/Repositories').then((m) => ({ default: m.Repositories })));
+const RepositoryStudioLayout = lazy(() =>
+  import('./layouts/RepositoryStudioLayout').then((m) => ({ default: m.RepositoryStudioLayout }))
+);
 const RepositoryDetail = lazy(() => import('./pages/RepositoryDetail').then((m) => ({ default: m.RepositoryDetail })));
 const RepositoryChat = lazy(() => import('./pages/RepositoryChat').then((m) => ({ default: m.RepositoryChat })));
+const RepositoryExplainStudio = lazy(() =>
+  import('./pages/RepositoryExplainStudio').then((m) => ({ default: m.RepositoryExplainStudio }))
+);
+const RepositoryBugStudio = lazy(() =>
+  import('./pages/RepositoryBugStudio').then((m) => ({ default: m.RepositoryBugStudio }))
+);
+const RepositoryTestStudio = lazy(() =>
+  import('./pages/RepositoryTestStudio').then((m) => ({ default: m.RepositoryTestStudio }))
+);
+const RepositoryReviewStudio = lazy(() =>
+  import('./pages/RepositoryReviewStudio').then((m) => ({ default: m.RepositoryReviewStudio }))
+);
 
 function RouteFallback() {
   return (
@@ -35,8 +50,16 @@ export function App() {
                 <Route index element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="repositories" element={<Repositories />} />
-                <Route path="repositories/:id" element={<RepositoryDetail />} />
-                <Route path="repositories/:id/chat" element={<RepositoryChat />} />
+
+                {/* Dedicated Antigravity-Style Repository Workspace Studios */}
+                <Route path="repositories/:id" element={<RepositoryStudioLayout />}>
+                  <Route index element={<RepositoryDetail />} />
+                  <Route path="chat" element={<RepositoryChat />} />
+                  <Route path="explain" element={<RepositoryExplainStudio />} />
+                  <Route path="bugs" element={<RepositoryBugStudio />} />
+                  <Route path="tests" element={<RepositoryTestStudio />} />
+                  <Route path="review" element={<RepositoryReviewStudio />} />
+                </Route>
               </Route>
             </Route>
 
