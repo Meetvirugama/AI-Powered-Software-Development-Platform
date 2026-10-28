@@ -601,7 +601,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 1 GitHub Issue Creation & Task Intake
 
-- ⬜ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens
+- ✅ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens & PR interfaces (`PR #139`)
 - ⬜ Yug: `POST /api/v1/repositories/{id}/issues` validating finding ownership and returning issue URL
 - ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
 - ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
@@ -612,6 +612,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
+- ✅ Parth: Git diff line-range extraction, hunk parser & symbol-level blast radius input provider (`GitBranchService.get_diff_line_ranges()`, `GitHubSourceService.get_pull_request_diff_ranges()`, `GET /api/v1/repositories/{id}/source/diff-ranges`, `test_week3_day2_diff_and_blast_radius_input.py`)
 - ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
 - ⬜ Dev: `PlannerSchema` and step dependency validation
 - ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)

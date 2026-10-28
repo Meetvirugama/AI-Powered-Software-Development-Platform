@@ -340,3 +340,61 @@ class PRMetadata(BaseModel):
     status: str = "prepared"
 
 
+# ---------------------------------------------------------------------------
+# Week 3 Day 2: Diff Line Ranges & Branch Isolation for Blast Radius
+# ---------------------------------------------------------------------------
+
+class LineRange(BaseModel):
+    """Inclusive 1-indexed line range affected by a diff hunk.
+
+    Used by AST symbol mappers (Prit Day 2) to match diff hunks with symbols:
+    code_symbols.start_line <= range.end_line AND code_symbols.end_line >= range.start_line.
+    """
+    start_line: int = Field(..., ge=1, description="First modified line in new file (1-indexed, inclusive)")
+    end_line: int = Field(..., ge=1, description="Last modified line in new file (1-indexed, inclusive)")
+    change_type: str = Field(default="modified", description="Type of change: added, modified, deleted")
+
+    @field_validator("end_line")
+    @classmethod
+    def end_ge_start(cls, v: int, info) -> int:
+        start = info.data.get("start_line")
+        if start is not None and v < start:
+            raise ValueError("end_line must be >= start_line")
+        return v
+
+
+class FileDiffRange(BaseModel):
+    """File-level diff details with exact modified line ranges for AST symbol mapping."""
+    file_path: str = Field(..., description="Target file path relative to repo root")
+    status: DiffStatus = Field(default=DiffStatus.MODIFIED, description="Diff change status")
+    diff_ranges: list[LineRange] = Field(default_factory=list, description="List of inclusive line ranges modified")
+    additions: int = 0
+    deletions: int = 0
+    patch: Optional[str] = None
+
+
+class TaskDiffRanges(BaseModel):
+    """Collection of modified files and line ranges for an agent task, consumed by BlastRadiusEngine."""
+    task_id: UUID
+    repository_id: Optional[UUID] = None
+    base_branch: str = "main"
+    head_branch: str = ""
+    files: list[FileDiffRange] = Field(default_factory=list)
+    total_files_changed: int = 0
+    total_additions: int = 0
+    total_deletions: int = 0
+
+
+class BranchIsolationCheck(BaseModel):
+    """Validation result for agent branch isolation before task plan approval (Day 2 approval gate)."""
+    task_id: UUID
+    repository_id: UUID
+    branch_name: str
+    base_branch: str
+    is_isolated: bool
+    base_sha: Optional[str] = None
+    conflicts_with_protected: bool = False
+    error_message: Optional[str] = None
+
+
+

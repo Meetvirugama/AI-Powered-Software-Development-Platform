@@ -42,6 +42,7 @@ from .exceptions import (
     GitHubPermissionDeniedError,
     GitHubRateLimitError,
 )
+from .client import GitHubClient
 from .schemas import PullRequestInfo
 from .token_manager import InstallationTokenManager
 
@@ -439,8 +440,6 @@ class GitHubService(GitHubIntegrationBase):
         installation_id: UUID | str | None = None,
     ) -> PullRequestInfo:
         """Create a pull request on GitHub (defaults to Draft PR for agent safety)."""
-        from app.integrations.github.client import GitHubClient
-
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         pr_data = await client.create_pull_request(
@@ -464,8 +463,6 @@ class GitHubService(GitHubIntegrationBase):
         installation_id: UUID | str | None = None,
     ) -> PullRequestInfo:
         """Update PR body/description with review & verification summaries."""
-        from app.integrations.github.client import GitHubClient
-
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         pr_data = await client.update_pull_request(
@@ -485,8 +482,6 @@ class GitHubService(GitHubIntegrationBase):
         installation_id: UUID | str | None = None,
     ) -> PullRequestInfo:
         """Retrieve pull request metadata by PR number."""
-        from app.integrations.github.client import GitHubClient
-
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         pr_data = await client.get_pull_request(owner=owner, repo=repo, pr_number=pr_number)
@@ -503,8 +498,6 @@ class GitHubService(GitHubIntegrationBase):
         installation_id: UUID | str | None = None,
     ) -> dict[str, Any]:
         """Create a GitHub issue from an unaddressed review finding (Feature F-23)."""
-        from app.integrations.github.client import GitHubClient
-
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         issue_labels = list(labels or ["ai-finding"])
@@ -526,8 +519,6 @@ class GitHubService(GitHubIntegrationBase):
         installation_id: UUID | str | None = None,
     ) -> dict[str, Any]:
         """Compare two branches or commits on GitHub and return diff information."""
-        from app.integrations.github.client import GitHubClient
-
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         return await client.compare_commits(owner, repo, base, head)

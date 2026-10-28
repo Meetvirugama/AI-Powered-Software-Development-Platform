@@ -410,6 +410,16 @@ class GitHubClient:
         clean_ref = ref.removeprefix("refs/")
         return await self._request("GET", f"/repos/{owner}/{repo}/git/ref/{clean_ref}")
 
+    async def compare_commits(
+        self,
+        owner: str,
+        repo: str,
+        base: str,
+        head: str,
+    ) -> dict[str, Any]:
+        """Compare two commits or branches: GET /repos/{owner}/{repo}/compare/{base}...{head}."""
+        return await self._request("GET", f"/repos/{owner}/{repo}/compare/{base}...{head}")
+
     # ----- Installation token management -----------------------------------
 
     @staticmethod
