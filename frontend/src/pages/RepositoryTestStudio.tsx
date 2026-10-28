@@ -27,6 +27,11 @@ export function RepositoryTestStudio() {
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
   // H-1: shared hook replaces ~30 lines of duplicated state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [frameworkOverride, setFrameworkOverride] = useState<SupportedTestFramework | null>(null);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
+
   const {
     selectedFile,
     activeTarget,
@@ -38,11 +43,6 @@ export function RepositoryTestStudio() {
     setActiveSourceReference(null);
     setTestResult(null);
   });
-
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [frameworkOverride, setFrameworkOverride] = useState<SupportedTestFramework | null>(null);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
 
   // Test generation mutation
   const testMutation = useGenerateTests(repoId, {

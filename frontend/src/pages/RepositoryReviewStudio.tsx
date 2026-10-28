@@ -28,6 +28,10 @@ export function RepositoryReviewStudio() {
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+
   // H-1: shared hook replaces ~30 lines of duplicated state
   const {
     selectedFile,
@@ -40,10 +44,6 @@ export function RepositoryReviewStudio() {
     setActiveSourceReference(null);
     setReviewResult(null);
   });
-
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
 
   // Review mutation
   const reviewMutation = useReviewCode(repoId, {

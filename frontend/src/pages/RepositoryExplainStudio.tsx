@@ -29,6 +29,11 @@ export function RepositoryExplainStudio() {
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
+  const [runId, setRunId] = useState<string | null>(null);
+
   // H-1: use shared hook instead of 30 lines of duplicated state
   const {
     selectedFile,
@@ -40,11 +45,6 @@ export function RepositoryExplainStudio() {
   } = useStudioFile(files, () => {
     setActiveSourceReference(null);
   });
-
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
 
   // Explain mutation
   const explainMutation = useExplainCode(repoId, {

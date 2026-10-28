@@ -54,9 +54,8 @@ async def chat_with_repository(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RepositoryAnswer:
-    """Return a source-cited answer only for a repository owned by the caller."""
-    import asyncio
-    await asyncio.to_thread(_owned_repository, repository_id, request, db)
+    """Return a source-cited answer only for a repository owned by the caller (F-03)."""
+    _owned_repository(repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
     answer = await pipeline.chat(payload.question, repository_id, payload.history)
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.
@@ -71,8 +70,14 @@ def _request_user_id(request: Request) -> UUID:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
 
 
-def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
-    repository = RepositoryRepository(db).get_for_user(repository_id, _request_user_id(request))
+def _owned_repository(
+    repository_id: UUID,
+    request: Request,
+    db: Session,
+) -> Repository:
+    """Ownership check executed within caller context without thread boundary crossing (F-03)."""
+    user_id = _request_user_id(request)
+    repository = RepositoryRepository(db).get_for_user(repository_id, user_id)
     if repository is None:
         raise APIError(
             404,

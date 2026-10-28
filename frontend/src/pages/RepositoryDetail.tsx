@@ -11,6 +11,7 @@ import {
 } from '../hooks/useRepositories';
 import { getRepositoryFiles, lookupRepositoryFileByPath } from '../services/repositories';
 import { checkProposedTestPath } from '../lib/testPath';
+import { normalizeFilePath, findMatchingRepositoryFile } from '../lib/sourceReference';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { FileTree } from '../components/explorer/FileTree';
@@ -76,43 +77,6 @@ const SYNC_POLL_INTERVAL_MS = 3000;
  * - Converts backslashes to forward slashes
  * - Strips leading relative prefixes ('./' or '/')
  * - Normalizes to lowercase for case-insensitive lookup
- */
-function normalizeFilePath(p: string): string {
-  return p
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\.?\//, '')
-    .toLowerCase();
-}
-
-/**
- * Find a repository file matching the requested path.
- * Searches for an exact normalized path match first, and falls back to
- * a suffix match at path boundaries only if no exact match is found.
- *
- * @param files Array of loaded repository files
- * @param requestedPath Path requested via query parameter or cited source reference
- * @returns The matching RepositoryFile or undefined
- */
-function findMatchingRepositoryFile(
-  files: RepositoryFile[],
-  requestedPath: string | null | undefined,
-): RepositoryFile | undefined {
-  if (!requestedPath || !files || files.length === 0) return undefined;
-  const targetNorm = normalizeFilePath(requestedPath);
-  if (!targetNorm) return undefined;
-
-  // 1. Exact normalized path match has strict priority
-  const exact = files.find((f) => normalizeFilePath(f.path) === targetNorm);
-  if (exact) return exact;
-
-  // 2. Suffix match at path segment boundary only if no exact match exists
-  return files.find((f) => {
-    const fileNorm = normalizeFilePath(f.path);
-    return fileNorm.endsWith('/' + targetNorm) || targetNorm.endsWith('/' + fileNorm);
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Repository Detail Page (Code Intelligence Workbench)
 // ---------------------------------------------------------------------------

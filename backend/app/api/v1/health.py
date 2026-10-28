@@ -73,10 +73,35 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         llm_health = ComponentHealth(status="degraded", message="No AI provider configured")
 
     rag_pipeline = getattr(request.app.state, "rag_pipeline", None)
-    if rag_pipeline is not None:
+    if rag_pipeline is None:
+        rag_health = ComponentHealth(status="unhealthy", message="RAG pipeline not initialized")
+    elif not hasattr(rag_pipeline, "retriever"):
         rag_health = ComponentHealth(status="healthy", message="RAG pipeline initialized")
     else:
-        rag_health = ComponentHealth(status="degraded", message="RAG pipeline not initialized")
+        has_retriever = getattr(rag_pipeline, "retriever", None) is not None
+        has_llm = (
+            getattr(rag_pipeline, "llm", None) is not None
+            or llm_gateway is not None
+        )
+        if has_retriever and has_llm:
+            rag_health = ComponentHealth(
+                status="healthy", message="RAG pipeline ready (retriever and LLM configured)"
+            )
+        elif not has_retriever and not has_llm:
+            rag_health = ComponentHealth(
+                status="unhealthy",
+                message="RAG pipeline unavailable (retriever and LLM gateway missing)",
+            )
+        elif not has_retriever:
+            rag_health = ComponentHealth(
+                status="degraded",
+                message="RAG pipeline degraded (retriever unavailable: missing Gemini API key)",
+            )
+        else:
+            rag_health = ComponentHealth(
+                status="degraded",
+                message="RAG pipeline degraded (LLM gateway unavailable)",
+            )
 
     # 4. Service mapping summary
     services_summary = {
@@ -88,7 +113,11 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
     if db_health.status == "unhealthy":
         overall_status = "not_ready"
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    elif redis_health.status == "degraded" or llm_health.status == "degraded" or rag_health.status == "degraded":
+    elif (
+        redis_health.status == "degraded"
+        or llm_health.status == "degraded"
+        or rag_health.status in ("degraded", "unhealthy")
+    ):
         overall_status = "degraded"
     else:
         overall_status = "ready"
