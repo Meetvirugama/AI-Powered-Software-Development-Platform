@@ -606,6 +606,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
 - ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
 - ✅ Dev: Validated task-intake schema separating requirements, assumptions, and constraints (`backend/app/schemas/task.py`, `backend/app/schemas/verification.py`, `backend/tests/test_dev_w3_day1_task_intake.py`)
+- ✅ Prit: Workspace & sandbox architecture audit, Git worktree verification, WorkspaceManager interface & resource limits (`Docs/workspace_sandbox_architecture_audit.md`, `backend/app/schemas/workspace.py`, `backend/sandbox/workspace_manager.py`, `backend/tests/test_prit_w3_d1_workspace.py`)
 - ⬜ Om: Issue-to-task persistence relationships and foreign keys
 - ⬜ Sukun: GitHub issue creation security checks & token confidentiality
 - ⬜ Keval: Acceptance tests for issue creation from bug and review findings

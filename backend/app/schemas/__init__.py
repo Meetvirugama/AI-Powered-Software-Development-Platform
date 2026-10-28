@@ -56,6 +56,23 @@ from app.schemas.verification import (
     VerificationOverallStatus,
     VerificationResult,
 )
+from app.schemas.workspace import (
+    VALID_WORKSPACE_TRANSITIONS,
+    WorkspaceCleanupResult,
+    WorkspaceCreateRequest,
+    WorkspaceCreateResult,
+    WorkspaceFilePatchRequest,
+    WorkspaceFilePatchResult,
+    WorkspaceFileReadRequest,
+    WorkspaceFileReadResult,
+    WorkspaceFileWriteRequest,
+    WorkspaceFileWriteResult,
+    WorkspaceIsolationType,
+    WorkspaceMetadata,
+    WorkspaceResourceLimits,
+    WorkspaceStatus,
+    can_transition_workspace,
+)
 
 __all__ = [
     "AnalysisFeatureType",
@@ -102,11 +119,27 @@ __all__ = [
     "TestGenerationResult",
     "TestScenario",
     "VALID_TASK_TRANSITIONS",
+    "VALID_WORKSPACE_TRANSITIONS",
     "VerificationCheckItem",
     "VerificationCheckStatus",
     "VerificationFinding",
     "VerificationOverallStatus",
     "VerificationResult",
+    "WorkspaceCleanupResult",
+    "WorkspaceCreateRequest",
+    "WorkspaceCreateResult",
+    "WorkspaceFilePatchRequest",
+    "WorkspaceFilePatchResult",
+    "WorkspaceFileReadRequest",
+    "WorkspaceFileReadResult",
+    "WorkspaceFileWriteRequest",
+    "WorkspaceFileWriteResult",
+    "WorkspaceIsolationType",
+    "WorkspaceMetadata",
+    "WorkspaceResourceLimits",
+    "WorkspaceStatus",
     "can_transition",
+    "can_transition_workspace",
 ]
+
 
