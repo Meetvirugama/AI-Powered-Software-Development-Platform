@@ -82,3 +82,15 @@ def test_prod_settings_valid() -> None:
     assert prod.app_env == "production"
     assert prod.cookie_secure is True
     assert prod.cors_origins == ["https://app.example.com", "https://dashboard.example.com"]
+
+
+def test_gemini_chat_model_default_is_flash_lite() -> None:
+    """F-15: Model configuration default must be gemini-flash-lite-latest."""
+    s = Settings(_env_file=None)
+    assert s.gemini_chat_model == "gemini-flash-lite-latest"
+
+
+def test_gemini_chat_model_can_be_overridden() -> None:
+    """F-15: Model configuration can be overridden by environment or kwargs."""
+    s = Settings(_env_file=None, gemini_chat_model="custom-model-v2")
+    assert s.gemini_chat_model == "custom-model-v2"
