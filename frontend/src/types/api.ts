@@ -421,6 +421,14 @@ export interface RepositoryChatResponse {
   sources: ChatSource[];
   /** Grounding confidence: "high" | "medium" | "low". */
   confidence: ChatConfidence;
+  /** Outcome status from the RAG pipeline. */
+  status?:
+    | 'completed'
+    | 'no_match'
+    | 'index_not_ready'
+    | 'retrieval_degraded'
+    | 'provider_unavailable'
+    | 'invalid_output';
 }
 
 /**

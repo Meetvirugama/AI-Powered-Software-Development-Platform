@@ -17,3 +17,14 @@ def get_redis() -> Redis:
 async def get_redis_async() -> AsyncRedis:
     """Create an async Redis client for use in async startup contexts."""
     return AsyncRedis.from_url(get_settings().redis_url, decode_responses=True)
+
+
+def close_redis() -> None:
+    """Close the cached synchronous Redis client if initialized."""
+    try:
+        client = get_redis()
+        client.close()
+    except Exception:
+        pass
+    get_redis.cache_clear()
+

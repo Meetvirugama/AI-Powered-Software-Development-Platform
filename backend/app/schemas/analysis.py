@@ -145,10 +145,10 @@ class AnalysisSourceReference(BaseModel):
     @model_validator(mode="after")
     def _validate_line_bounds(self) -> "AnalysisSourceReference":
         if self.end_line is not None and self.start_line is None:
-            raise ValueError("start_line is required when end_line is specified.")
+            self.start_line = self.end_line
         if self.start_line is not None and self.end_line is not None:
             if self.end_line < self.start_line:
-                raise ValueError("end_line must be greater than or equal to start_line.")
+                self.start_line, self.end_line = self.end_line, self.start_line
         return self
 
 
@@ -228,6 +228,13 @@ class AnalysisTarget(BaseModel):
         return self
 
 
+# Per-feature context budget defaults (Week 2 Section 12 Item 17, B-14)
+DEFAULT_EXPLAIN_CONTEXT_TOKENS: int = 4_000
+DEFAULT_BUGS_CONTEXT_TOKENS: int = 6_000
+DEFAULT_TESTS_CONTEXT_TOKENS: int = 6_000
+DEFAULT_REVIEW_CONTEXT_TOKENS: int = 8_000
+
+
 class AnalysisOptions(BaseModel):
     """Bounded execution and context options shared by intelligence endpoints."""
 
@@ -287,7 +294,9 @@ class ExplainCodeRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/explain`."""
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_EXPLAIN_CONTEXT_TOKENS)
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -385,9 +394,7 @@ class CodeExplanation(BaseModel):
 
         # 1. purpose
         p = d.get("purpose")
-        if not p or not isinstance(p, str) or not p.strip():
-            d["purpose"] = "Explanation of requested code target based on repository context."
-        else:
+        if p is not None and isinstance(p, str):
             d["purpose"] = p.strip()
 
         # 2. logic_flow
@@ -408,9 +415,7 @@ class CodeExplanation(BaseModel):
             if "outputs" in io and io["outputs"]:
                 parts.append(f"Outputs: {io['outputs']}")
             d["inputs_and_outputs"] = " | ".join(parts) if parts else "; ".join(f"{k}: {v}" for k, v in io.items())
-        elif not io or not isinstance(io, str) or not io.strip():
-            d["inputs_and_outputs"] = "No external inputs or outputs specified for target."
-        else:
+        elif isinstance(io, str):
             d["inputs_and_outputs"] = io.strip()
 
         # 4. dependencies
@@ -468,6 +473,7 @@ class CodeExplanationResponse(BaseModel):
     revision: str | None = None
     explanation: CodeExplanation
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +484,9 @@ class BugDetectionRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/detect-bugs`."""
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_BUGS_CONTEXT_TOKENS)
+    )
     include_static: bool = Field(
         default=True,
         description="Run configured static analysis adapters (Ruff/Bandit/secret checks).",
@@ -547,6 +555,30 @@ class BugFinding(BaseModel):
         max_length=128,
         description="Static analyzer rule identifier (e.g. 'F821', 'B105') when applicable.",
     )
+    provenance: str | None = Field(
+        default=None,
+        description="Finding origin provenance: 'static_rule', 'llm', or 'combined'.",
+    )
+    rule_version: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Static rule or analyzer version.",
+    )
+    model_version: str | None = Field(
+        default=None,
+        max_length=128,
+        description="LLM provider or model name when AI-generated.",
+    )
+    deduplication_key: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Stable deduplication key across runs and engines.",
+    )
+    evidence_hash: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Cryptographic SHA-256 hash of the evidence snippet.",
+    )
 
 
 class BugDetectionResponse(BaseModel):
@@ -563,6 +595,7 @@ class BugDetectionResponse(BaseModel):
     ai_findings_count: int = Field(default=0, ge=0)
     missing_context: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -575,7 +608,9 @@ class TestGenerationRequest(BaseModel):
     __test__ = False
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_TESTS_CONTEXT_TOKENS)
+    )
     framework: SupportedTestFramework | None = Field(
         default=None,
         description="Optional explicit test framework override ('pytest', 'unittest', 'jest').",
@@ -633,6 +668,30 @@ class TestGenerationResult(BaseModel):
         default_factory=list,
         description="Normalized syntax or structural validation errors, if any.",
     )
+    validation_stage: str = Field(
+        default="generated and statically validated",
+        description="Truthful validation status: e.g. 'generated and statically validated', 'not executed', or 'verified passing' if sandboxed.",
+    )
+    schema_valid: bool = Field(
+        default=True,
+        description="Whether the generated output strictly conforms to the expected schema.",
+    )
+    code_syntactically_valid: bool = Field(
+        default=True,
+        description="Whether the generated test source parses cleanly without syntax errors.",
+    )
+    framework_recognized: bool = Field(
+        default=True,
+        description="Whether test runner conventions and imports match the detected repository framework.",
+    )
+    execution_attempted: bool = Field(
+        default=False,
+        description="Whether sandboxed test execution was attempted.",
+    )
+    execution_status: str = Field(
+        default="NOT_EXECUTED",
+        description="Outcome of execution: 'NOT_EXECUTED', 'PASSED', 'FAILED', or 'TIMED_OUT'.",
+    )
     sources: list[AnalysisSourceReference] = Field(
         default_factory=list,
         description="Source references used to construct the test suite.",
@@ -664,6 +723,7 @@ class TestGenerationResponse(BaseModel):
     revision: str | None = None
     result: TestGenerationResult
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -727,7 +787,9 @@ class CodeReviewRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/review`."""
 
     target: ReviewTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_REVIEW_CONTEXT_TOKENS)
+    )
     include_static: bool = Field(
         default=True,
         description="Run static linters and secret checks on reviewed files.",
@@ -799,6 +861,30 @@ class ReviewFinding(BaseModel):
     )
     source_type: FindingSourceType = Field(default="AI")
     rule_id: str | None = Field(default=None, max_length=128)
+    provenance: str | None = Field(
+        default=None,
+        description="Finding origin provenance: 'static_rule', 'llm', or 'combined'.",
+    )
+    rule_version: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Static rule or analyzer version.",
+    )
+    model_version: str | None = Field(
+        default=None,
+        max_length=128,
+        description="LLM provider or model name when AI-generated.",
+    )
+    deduplication_key: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Stable deduplication key across runs and engines.",
+    )
+    evidence_hash: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Cryptographic SHA-256 hash of the evidence snippet.",
+    )
 
 
 class ReviewReport(BaseModel):
@@ -829,6 +915,7 @@ class ReviewReportResponse(BaseModel):
     target: ReviewTarget
     report: ReviewReport
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

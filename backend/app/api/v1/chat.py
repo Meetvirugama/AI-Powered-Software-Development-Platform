@@ -55,7 +55,8 @@ async def chat_with_repository(
     db: Session = Depends(get_db),
 ) -> RepositoryAnswer:
     """Return a source-cited answer only for a repository owned by the caller."""
-    _owned_repository(repository_id, request, db)
+    import asyncio
+    await asyncio.to_thread(_owned_repository, repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
     answer = await pipeline.chat(payload.question, repository_id, payload.history)
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.

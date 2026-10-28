@@ -13,8 +13,8 @@ from app.models.base import TimestampedModel
 class CodeChunk(TimestampedModel, Base):
     __tablename__ = "code_chunks"
 
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"))
-    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repository_files.id"))
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True)
+    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repository_files.id"), index=True)
     symbol_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("code_symbols.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer)
@@ -22,18 +22,24 @@ class CodeChunk(TimestampedModel, Base):
     start_line: Mapped[int] = mapped_column(Integer)
     end_line: Mapped[int] = mapped_column(Integer)
     content_hash: Mapped[str] = mapped_column(String)
-    chunk_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB)
+    chunk_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
 
     @validates("embedding")
     def validate_embedding(self, key: str, value: Any) -> Any:
-        """Enforce strict dimensionality matching the configured vector schema (768)."""
+        """Enforce strict dimensionality matching the configured vector schema (768) and finite values."""
         if value is not None and hasattr(value, "__len__"):
+            import math
             from app.core.config import get_settings
             expected_dim = get_settings().embedding_dimensions
             if len(value) != expected_dim:
                 raise ValueError(
                     f"CodeChunk embedding dimension mismatch: expected {expected_dim}, got {len(value)}"
                 )
+            for i, v in enumerate(value):
+                if not math.isfinite(v):
+                    raise ValueError(
+                        f"CodeChunk embedding contains non-finite value at index {i}: {v}"
+                    )
         return value
 
     __table_args__ = (

@@ -49,6 +49,19 @@ export type FindingSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
 export type FindingSourceType = 'STATIC' | 'AI' | 'COMBINED';
 
+export interface StageMetrics {
+  stages_ms: Record<string, number>;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  context_budget_tokens: number;
+  context_utilized_tokens: number;
+  provider?: string | null;
+  model?: string | null;
+  estimated_cost_usd: number;
+  total_latency_ms: number;
+}
+
 export type ConfidenceLevel = 'high' | 'medium' | 'low';
 
 export type BugCategory =
@@ -119,6 +132,7 @@ export interface BugDetectionResponse {
   ai_findings_count: number;
   missing_context: string[];
   error_message?: string | null;
+  stage_metrics?: StageMetrics | null;
   created_at: string;
   completed_at?: string | null;
 }
@@ -148,6 +162,7 @@ export interface CodeExplanationResponse {
   target: AnalysisTarget;
   revision?: string | null;
   explanation: CodeExplanation;
+  stage_metrics?: StageMetrics | null;
   created_at: string;
 }
 
@@ -193,6 +208,7 @@ export interface TestGenerationResponse {
   result: TestGenerationResult;
   test_output?: string | null;
   error_message?: string | null;
+  stage_metrics?: StageMetrics | null;
   created_at: string;
   completed_at?: string | null;
 }
@@ -255,6 +271,7 @@ export interface ReviewReportResponse {
   status: AnalysisStatus;
   target: ReviewTarget;
   report: ReviewReport;
+  stage_metrics?: StageMetrics | null;
   created_at: string;
   completed_at?: string | null;
 }

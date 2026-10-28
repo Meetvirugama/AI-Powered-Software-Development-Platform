@@ -14,6 +14,7 @@ Endpoints registered:
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone
@@ -82,6 +83,7 @@ from app.services.test_generation_orchestrator import (
     detect_repository_test_framework,
     validate_and_sanitize_generated_tests,
 )
+from app.core.telemetry import StageExecutionTimer
 
 logger = logging.getLogger(__name__)
 
@@ -197,12 +199,13 @@ def _validate_and_normalize_code_target(
     repository_id: UUID,
     target: AnalysisTarget,
     db: Session,
+    repo: Repository | Any | None = None,
 ) -> RepositoryFile | None:
     """Validate path safety and check indexed file bounds when DB records exist."""
     safe_path = require_safe_repo_path(target.path)
     target.path = safe_path
 
-    if not hasattr(db, "query"):
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
         return None
 
     try:
@@ -212,9 +215,33 @@ def _validate_and_normalize_code_target(
             .first()
             is not None
         )
-        if not repo_has_files:
-            return None
+    except Exception as exc:
+        logger.error(
+            "target_validation_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target validation.",
+            retryable=True,
+        ) from exc
 
+    if not repo_has_files:
+        sync_status = getattr(repo, "sync_status", None)
+        if sync_status in ("NOT_SYNCED", "SYNCING"):
+            raise APIError(
+                409,
+                ErrorCode.CONFLICT,
+                f"Repository indexing is in progress or not yet synced (status: {sync_status}). Please wait for indexing to complete.",
+            )
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
+        )
+
+    try:
         file_record = (
             db.query(RepositoryFile)
             .filter(
@@ -223,8 +250,17 @@ def _validate_and_normalize_code_target(
             )
             .first()
         )
-    except Exception:
-        return None
+    except Exception as exc:
+        logger.error(
+            "target_validation_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target validation.",
+            retryable=True,
+        ) from exc
 
     if file_record is None:
         raise APIError(
@@ -303,9 +339,12 @@ async def _invoke_service_method(
         pass
 
     try:
-        result = method(repository_id, payload, **kwargs)
-        if inspect.isawaitable(result):
-            result = await result
+        if inspect.iscoroutinefunction(method):
+            result = await method(repository_id, payload, **kwargs)
+        else:
+            result = await asyncio.to_thread(method, repository_id, payload, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
         return result
     except APIError:
         raise
@@ -355,30 +394,33 @@ async def explain_code(
     db: Session = Depends(get_db),
 ) -> CodeExplanationResponse:
     """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
+    timer = StageExecutionTimer("explain", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
 
-    resolved = resolve_target_and_build_context(repository_id, repo, payload, db)
-    payload.target = resolved.target
+    with timer.measure("target_resolution_and_context"):
+        resolved = resolve_target_and_build_context(repository_id, repo, payload, db)
+        payload.target = resolved.target
 
     service = _get_service(request, "explanation_service", "Code explanation")
     method = service.explain if hasattr(service, "explain") else service
 
     run_id = str(uuid4())
     try:
-        raw_result = await _invoke_service_method(
-            method,
-            repository_id,
-            payload,
-            user_id=user_id,
-            db=db,
-            file_record=resolved.file_record,
-            extra_kwargs={
-                "context": resolved.intelligence_context,
-                "code_content": resolved.code_content,
-                "revision": resolved.revision,
-            },
-        )
+        with timer.measure("llm_inference"):
+            raw_result = await _invoke_service_method(
+                method,
+                repository_id,
+                payload,
+                user_id=user_id,
+                db=db,
+                file_record=resolved.file_record,
+                extra_kwargs={
+                    "context": resolved.intelligence_context,
+                    "code_content": resolved.code_content,
+                    "revision": resolved.revision,
+                },
+            )
     except APIError as exc:
         if payload.options.persist_run:
             record_analysis_run(
@@ -478,11 +520,18 @@ async def explain_code(
             retryable=True,
         )
 
-    grounded_explanation = ground_explanation_sources(
-        explanation,
-        repository_id=repository_id,
-        resolved=resolved,
-    )
+    with timer.measure("grounding_and_redaction"):
+        grounded_explanation = ground_explanation_sources(
+            explanation,
+            repository_id=repository_id,
+            resolved=resolved,
+        )
+
+    ctx_tokens = getattr(resolved.intelligence_context, "total_tokens", None) if resolved else None
+    prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)
+    completion_tokens = getattr(raw_result, "output_tokens", None) or len(str(grounded_explanation).split())
+    timer.record_tokens(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, context_utilized=ctx_tokens)
+    stage_metrics = timer.finish().to_dict()
 
     response = CodeExplanationResponse(
         run_id=run_id,
@@ -491,6 +540,7 @@ async def explain_code(
         target=resolved.target,
         revision=revision,
         explanation=grounded_explanation,
+        stage_metrics=stage_metrics,
     )
     response = CodeExplanationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
@@ -534,33 +584,36 @@ async def detect_bugs(
     db: Session = Depends(get_db),
 ) -> BugDetectionResponse:
     """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
+    timer = StageExecutionTimer("detect_bugs", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
 
-    explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
-    resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
-    payload.target = resolved.target
+    with timer.measure("target_resolution_and_context"):
+        explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
+        resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+        payload.target = resolved.target
 
     service = _get_service(request, "bug_detection_service", "Bug detection")
     method = service.detect_bugs if hasattr(service, "detect_bugs") else service
 
     run_id = str(uuid4())
     try:
-        raw_result = await _invoke_service_method(
-            method,
-            repository_id,
-            payload,
-            user_id=user_id,
-            db=db,
-            file_record=resolved.file_record,
-            extra_kwargs={
-                "context": resolved.intelligence_context,
-                "code_content": resolved.code_content,
-                "revision": resolved.revision,
-                "skip_internal_static": True,
-                "_skip_engine_static": True,
-            },
-        )
+        with timer.measure("llm_inference"):
+            raw_result = await _invoke_service_method(
+                method,
+                repository_id,
+                payload,
+                user_id=user_id,
+                db=db,
+                file_record=resolved.file_record,
+                extra_kwargs={
+                    "context": resolved.intelligence_context,
+                    "code_content": resolved.code_content,
+                    "revision": resolved.revision,
+                    "skip_internal_static": True,
+                    "_skip_engine_static": True,
+                },
+            )
     except APIError as exc:
         if payload.options.persist_run:
             record_analysis_run(
@@ -601,38 +654,50 @@ async def detect_bugs(
     extra_static_raw: list[Any] = []
     parser_warnings: list[str] = []
     if payload.include_static:
-        ext_scanner = getattr(request.app.state, "static_bug_scanner", None)
-        if ext_scanner is not None:
-            scan_fn = getattr(ext_scanner, "scan", ext_scanner)
-            if callable(scan_fn):
-                try:
-                    ext_res = scan_fn(
-                        repository_id=repository_id,
-                        file_path=resolved.target.path,
-                        code_content=resolved.code_content,
-                        target=resolved.target,
-                    )
-                    if inspect.isawaitable(ext_res):
-                        ext_res = await ext_res
-                    if isinstance(ext_res, dict):
-                        extra_static_raw.extend(ext_res.get("findings", []))
-                    elif isinstance(ext_res, list):
-                        extra_static_raw.extend(ext_res)
-                except Exception as exc:
-                    logger.warning("external_static_scanner_error", extra={"error": str(exc)})
-                    parser_warnings.append("External static scanner encountered an error.")
+        with timer.measure("static_analysis"):
+            ext_scanner = getattr(request.app.state, "static_bug_scanner", None)
+            if ext_scanner is not None:
+                scan_fn = getattr(ext_scanner, "scan", ext_scanner)
+                if callable(scan_fn):
+                    try:
+                        if inspect.iscoroutinefunction(scan_fn):
+                            ext_res = await scan_fn(
+                                repository_id=repository_id,
+                                file_path=resolved.target.path,
+                                code_content=resolved.code_content,
+                                target=resolved.target,
+                            )
+                        else:
+                            ext_res = await asyncio.to_thread(
+                                scan_fn,
+                                repository_id=repository_id,
+                                file_path=resolved.target.path,
+                                code_content=resolved.code_content,
+                                target=resolved.target,
+                            )
+                        if inspect.isawaitable(ext_res):
+                            ext_res = await ext_res
+                        if isinstance(ext_res, dict):
+                            extra_static_raw.extend(ext_res.get("findings", []))
+                        elif isinstance(ext_res, list):
+                            extra_static_raw.extend(ext_res)
+                    except Exception as exc:
+                        logger.warning("external_static_scanner_error", extra={"error": str(exc)})
+                        parser_warnings.append("External static scanner encountered an error.")
 
-        if resolved.code_content:
-            builtin_items, builtin_warns = BuiltinStaticBugScanner().scan(
-                file_path=resolved.target.path,
-                code_content=resolved.code_content,
-                language=(resolved.file_record.language if resolved.file_record else "Python") or "Python",
-                base_start_line=resolved.target.start_line or 1,
-                revision=resolved.revision,
-                repository_id=str(repository_id),
-            )
-            extra_static_raw.extend(builtin_items)
-            parser_warnings.extend(builtin_warns)
+            if resolved.code_content:
+                scanner = BuiltinStaticBugScanner()
+                builtin_items, builtin_warns = await asyncio.to_thread(
+                    scanner.scan,
+                    file_path=resolved.target.path,
+                    code_content=resolved.code_content,
+                    language=(resolved.file_record.language if resolved.file_record else "Python") or "Python",
+                    base_start_line=resolved.target.start_line or 1,
+                    revision=resolved.revision,
+                    repository_id=str(repository_id),
+                )
+                extra_static_raw.extend(builtin_items)
+                parser_warnings.extend(builtin_warns)
 
     status_val = "COMPLETED"
     revision = resolved.revision
@@ -683,17 +748,25 @@ async def detect_bugs(
                 retryable=True,
             )
 
-        grounded_service, _ = normalize_and_ground_findings(
-            raw_findings_list,
-            repository_id=repository_id,
-            resolved=resolved,
-        )
-        grounded_static, _ = normalize_and_ground_findings(
-            extra_static_raw,
-            repository_id=repository_id,
-            resolved=resolved,
-            default_source_type="STATIC",
-        )
+        with timer.measure("grounding_and_ranking"):
+            grounded_service, _ = normalize_and_ground_findings(
+                raw_findings_list,
+                repository_id=repository_id,
+                resolved=resolved,
+            )
+            grounded_static, _ = normalize_and_ground_findings(
+                extra_static_raw,
+                repository_id=repository_id,
+                resolved=resolved,
+                default_source_type="STATIC",
+            )
+            merged_findings = merge_and_deduplicate_findings([*grounded_static, *grounded_service])
+            ranked_findings = filter_and_rank_findings(
+                merged_findings,
+                min_severity=payload.min_severity,
+                include_static=payload.include_static,
+                include_ai=payload.include_ai,
+            )
     except APIError:
         raise
     except (ValidationError, ValueError, TypeError) as exc:
@@ -718,14 +791,6 @@ async def detect_bugs(
             retryable=False,
         ) from exc
 
-    merged_findings = merge_and_deduplicate_findings([*grounded_static, *grounded_service])
-    ranked_findings = filter_and_rank_findings(
-        merged_findings,
-        min_severity=payload.min_severity,
-        include_static=payload.include_static,
-        include_ai=payload.include_ai,
-    )
-
     static_count = sum(
         1 for f in ranked_findings if f.source_type in ("STATIC", "COMBINED")
     )
@@ -735,6 +800,12 @@ async def detect_bugs(
     merged_missing = list(
         dict.fromkeys([*resolved.missing_context, *parser_warnings, *service_missing_ctx])
     )
+
+    ctx_tokens = getattr(resolved.intelligence_context, "total_tokens", None) if resolved else None
+    prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)
+    completion_tokens = getattr(raw_result, "output_tokens", None) or len(ranked_findings) * 50
+    timer.record_tokens(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, context_utilized=ctx_tokens)
+    stage_metrics = timer.finish().to_dict()
 
     response = BugDetectionResponse(
         run_id=run_id,
@@ -747,6 +818,7 @@ async def detect_bugs(
         static_findings_count=static_count,
         ai_findings_count=ai_count,
         missing_context=merged_missing,
+        stage_metrics=stage_metrics,
     )
     response = BugDetectionResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
@@ -791,49 +863,54 @@ async def generate_tests(
     db: Session = Depends(get_db),
 ) -> TestGenerationResponse:
     """Execute the Week 2 Day 4 Framework-Aware Test Generation pipeline."""
+    timer = StageExecutionTimer("generate_tests", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
-    resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
-    payload.target = resolved.target
 
-    detection, manifest_contents, all_repo_files = detect_repository_test_framework(
-        repository_id=repository_id,
-        target_path=resolved.target.path,
-        requested_framework=payload.framework,
-        db=db,
-        preloaded_repo_files=resolved.repo_files if resolved.repo_files else None,
-    )
-    test_context, proposed_test_path = build_repository_test_context(
-        repository_id=repository_id,
-        resolved=resolved,
-        detection=detection,
-        manifest_contents=manifest_contents,
-        all_repo_files=all_repo_files,
-        token_budget=payload.options.max_context_tokens,
-    )
+    with timer.measure("target_resolution_and_context"):
+        explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
+        resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+        payload.target = resolved.target
+
+    with timer.measure("framework_detection"):
+        detection, manifest_contents, all_repo_files = detect_repository_test_framework(
+            repository_id=repository_id,
+            target_path=resolved.target.path,
+            requested_framework=payload.framework,
+            db=db,
+            preloaded_repo_files=resolved.repo_files if resolved.repo_files else None,
+        )
+        test_context, proposed_test_path = build_repository_test_context(
+            repository_id=repository_id,
+            resolved=resolved,
+            detection=detection,
+            manifest_contents=manifest_contents,
+            all_repo_files=all_repo_files,
+            token_budget=payload.options.max_context_tokens,
+        )
 
     service = _get_service(request, "test_generation_service", "Test generation")
     method = service.generate_tests if hasattr(service, "generate_tests") else service
 
     run_id = str(uuid4())
     try:
-        raw_result = await _invoke_service_method(
-            method,
-            repository_id,
-            payload,
-            user_id=user_id,
-            db=db,
-            file_record=resolved.file_record,
-            extra_kwargs={
-                "context": test_context,
-                "code_content": resolved.code_content,
-                "detected_framework": detection.framework or "pytest",
-                "proposed_test_path": proposed_test_path,
-                "fixtures": list(detection.fixtures),
-                "revision": resolved.revision,
-            },
-        )
+        with timer.measure("llm_inference"):
+            raw_result = await _invoke_service_method(
+                method,
+                repository_id,
+                payload,
+                user_id=user_id,
+                db=db,
+                file_record=resolved.file_record,
+                extra_kwargs={
+                    "context": test_context,
+                    "code_content": resolved.code_content,
+                    "detected_framework": detection.framework or "pytest",
+                    "proposed_test_path": proposed_test_path,
+                    "fixtures": list(detection.fixtures),
+                    "revision": resolved.revision,
+                },
+            )
     except APIError as exc:
         if payload.options.persist_run:
             record_analysis_run(
@@ -937,13 +1014,20 @@ async def generate_tests(
             retryable=True,
         )
 
-    sanitized_result = validate_and_sanitize_generated_tests(
-        test_result,
-        repository_id=repository_id,
-        resolved=resolved,
-        detection=detection,
-        default_proposed_path=proposed_test_path,
-    )
+    with timer.measure("validation_and_sanitization"):
+        sanitized_result = validate_and_sanitize_generated_tests(
+            test_result,
+            repository_id=repository_id,
+            resolved=resolved,
+            detection=detection,
+            default_proposed_path=proposed_test_path,
+        )
+
+    ctx_tokens = getattr(test_context, "total_tokens", None) if test_context else None
+    prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)
+    completion_tokens = getattr(raw_result, "output_tokens", None) or len((sanitized_result.test_content or "").split())
+    timer.record_tokens(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, context_utilized=ctx_tokens)
+    stage_metrics = timer.finish().to_dict()
 
     response = TestGenerationResponse(
         run_id=run_id,
@@ -952,6 +1036,7 @@ async def generate_tests(
         target=resolved.target,
         revision=revision,
         result=sanitized_result,
+        stage_metrics=stage_metrics,
     )
     response = TestGenerationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
@@ -998,18 +1083,20 @@ async def review_code(
     db: Session = Depends(get_db),
 ) -> ReviewReportResponse:
     """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
+    timer = StageExecutionTimer("review", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
 
-    resolved = await resolve_review_target_and_build_context(
-        repository_id=repository_id,
-        repo=repo,
-        payload=payload,
-        user_id=user_id,
-        db=db,
-        app_state=request.app.state,
-    )
-    payload.target = resolved.target
+    with timer.measure("target_resolution_and_diff_mapping"):
+        resolved = await resolve_review_target_and_build_context(
+            repository_id=repository_id,
+            repo=repo,
+            payload=payload,
+            user_id=user_id,
+            db=db,
+            app_state=request.app.state,
+        )
+        payload.target = resolved.target
 
     history_target = AnalysisTarget(
         type="file",
@@ -1022,19 +1109,20 @@ async def review_code(
 
     run_id = str(uuid4())
     try:
-        raw_result = await _invoke_service_method(
-            method,
-            repository_id,
-            payload,
-            user_id=user_id,
-            db=db,
-            extra_kwargs={
-                "context": resolved.intelligence_context,
-                "modified_files": resolved.modified_files,
-                "source_map": resolved.source_map,
-                "revision": resolved.revision,
-            },
-        )
+        with timer.measure("llm_inference"):
+            raw_result = await _invoke_service_method(
+                method,
+                repository_id,
+                payload,
+                user_id=user_id,
+                db=db,
+                extra_kwargs={
+                    "context": resolved.intelligence_context,
+                    "modified_files": resolved.modified_files,
+                    "source_map": resolved.source_map,
+                    "revision": resolved.revision,
+                },
+            )
     except APIError as exc:
         if payload.options.persist_run:
             record_analysis_run(
@@ -1075,30 +1163,35 @@ async def review_code(
     extra_static_raw: list[Any] = []
     scanner_warnings: list[str] = []
     if payload.include_static:
-        ext_reviewer = getattr(request.app.state, "static_reviewer", None)
-        if ext_reviewer is not None:
-            rev_fn = getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer))
-            if callable(rev_fn):
-                try:
-                    mod_paths = [mf.file_path for mf in resolved.modified_files]
-                    ext_res = rev_fn(mod_paths)
-                    if inspect.isawaitable(ext_res):
-                        ext_res = await ext_res
-                    if isinstance(ext_res, dict):
-                        extra_static_raw.extend(ext_res.get("findings", []))
-                    elif isinstance(ext_res, list):
-                        extra_static_raw.extend(ext_res)
-                except Exception as exc:
-                    logger.warning("external_static_reviewer_error", extra={"error": str(exc)})
-                    scanner_warnings.append("External static reviewer encountered an error.")
+        with timer.measure("static_analysis"):
+            ext_reviewer = getattr(request.app.state, "static_reviewer", None)
+            if ext_reviewer is not None:
+                rev_fn = getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer))
+                if callable(rev_fn):
+                    try:
+                        mod_paths = [mf.file_path for mf in resolved.modified_files]
+                        if inspect.iscoroutinefunction(rev_fn):
+                            ext_res = await rev_fn(mod_paths)
+                        else:
+                            ext_res = await asyncio.to_thread(rev_fn, mod_paths)
+                        if inspect.isawaitable(ext_res):
+                            ext_res = await ext_res
+                        if isinstance(ext_res, dict):
+                            extra_static_raw.extend(ext_res.get("findings", []))
+                        elif isinstance(ext_res, list):
+                            extra_static_raw.extend(ext_res)
+                    except Exception as exc:
+                        logger.warning("external_static_reviewer_error", extra={"error": str(exc)})
+                        scanner_warnings.append("External static reviewer encountered an error.")
 
-        builtin_static, builtin_warns = run_static_review_on_changes(
-            repository_id=repository_id,
-            resolved=resolved,
-            app_state=request.app.state,
-        )
-        extra_static_raw.extend(builtin_static)
-        scanner_warnings.extend(builtin_warns)
+            builtin_static, builtin_warns = await asyncio.to_thread(
+                run_static_review_on_changes,
+                repository_id=repository_id,
+                resolved=resolved,
+                app_state=request.app.state,
+            )
+            extra_static_raw.extend(builtin_static)
+            scanner_warnings.extend(builtin_warns)
 
     status_val = "COMPLETED"
     try:
@@ -1157,32 +1250,33 @@ async def review_code(
             retryable=True,
         )
 
-    grounded_ai = normalize_and_ground_review_findings(
-        list(raw_report.findings),
-        repository_id=repository_id,
-        resolved=resolved,
-    )
-    grounded_static = normalize_and_ground_review_findings(
-        extra_static_raw,
-        repository_id=repository_id,
-        resolved=resolved,
-        default_source_type="STATIC",
-    )
+    with timer.measure("grounding_and_ranking"):
+        grounded_ai = normalize_and_ground_review_findings(
+            list(raw_report.findings),
+            repository_id=repository_id,
+            resolved=resolved,
+        )
+        grounded_static = normalize_and_ground_review_findings(
+            extra_static_raw,
+            repository_id=repository_id,
+            resolved=resolved,
+            default_source_type="STATIC",
+        )
 
-    merged_findings = merge_and_rank_review_findings(
-        [*grounded_static, *grounded_ai],
-        include_static=payload.include_static,
-    )
-    merged_missing = list(
-        dict.fromkeys([*resolved.missing_context, *scanner_warnings, *raw_report.missing_context])
-    )
+        merged_findings = merge_and_rank_review_findings(
+            [*grounded_static, *grounded_ai],
+            include_static=payload.include_static,
+        )
+        merged_missing = list(
+            dict.fromkeys([*resolved.missing_context, *scanner_warnings, *raw_report.missing_context])
+        )
 
-    grounded_report = build_grounded_review_report(
-        summary=raw_report.summary,
-        findings=merged_findings,
-        missing_context=merged_missing,
-        explicit_risk_level=raw_report.risk_level,
-    )
+        grounded_report = build_grounded_review_report(
+            summary=raw_report.summary,
+            findings=merged_findings,
+            missing_context=merged_missing,
+            explicit_risk_level=raw_report.risk_level,
+        )
 
     # Security (W2 Day 5–6): Never echo raw untrusted diff text back in response.target.diff
     sanitized_target = resolved.target.model_copy(
@@ -1199,12 +1293,19 @@ async def review_code(
         }
     )
 
+    ctx_tokens = getattr(resolved.intelligence_context, "total_tokens", None) if resolved else None
+    prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)
+    completion_tokens = getattr(raw_result, "output_tokens", None) or (len(grounded_report.findings) * 45)
+    timer.record_tokens(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, context_utilized=ctx_tokens)
+    stage_metrics = timer.finish().to_dict()
+
     response = ReviewReportResponse(
         run_id=run_id,
         repository_id=str(repository_id),
         status=status_val,
         target=sanitized_target,
         report=grounded_report,
+        stage_metrics=stage_metrics,
     )
     response = ReviewReportResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 

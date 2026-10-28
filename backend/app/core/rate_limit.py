@@ -112,6 +112,60 @@ class InMemoryRateLimitStore:
         return self.counts[key]
 
 
+class BoundedInMemoryRateLimitStore:
+    """Thread-safe bounded in-memory rate limit store for AI endpoint fallback during Redis outages (B-04).
+
+    Ensures that per-user limits for expensive LLM operations continue to be enforced
+    locally even when Redis is down, preventing runaway provider quota exhaustion.
+    Prunes expired keys automatically to prevent unbounded memory growth.
+    """
+
+    def __init__(self, max_keys: int = 10_000) -> None:
+        self._counts: dict[str, tuple[int, float]] = {}  # key -> (count, expires_at)
+        self._max_keys = max_keys
+
+    def hit(self, key: str, window_seconds: int) -> int:
+        now = time.time()
+        # Periodic pruning when table gets large
+        if len(self._counts) >= self._max_keys:
+            self._prune(now)
+
+        entry = self._counts.get(key)
+        if entry is None or now >= entry[1]:
+            new_count = 1
+            expires_at = now + window_seconds + 5
+            self._counts[key] = (new_count, expires_at)
+            return new_count
+
+        new_count = entry[0] + 1
+        self._counts[key] = (new_count, entry[1])
+        return new_count
+
+    def _prune(self, now: float) -> None:
+        expired = [k for k, (_, exp) in self._counts.items() if now >= exp]
+        for k in expired:
+            self._counts.pop(k, None)
+        if len(self._counts) >= self._max_keys:
+            # Evict oldest 25% of keys if still at cap
+            oldest = list(self._counts.keys())[: self._max_keys // 4]
+            for k in oldest:
+                self._counts.pop(k, None)
+
+    def reset(self) -> None:
+        self._counts.clear()
+
+
+AI_EXPENSIVE_RULES: frozenset[str] = frozenset({
+    "repo_chat",
+    "repo_explain",
+    "repo_detect_bugs",
+    "repo_generate_tests",
+    "repo_review",
+})
+
+_fallback_ai_store = BoundedInMemoryRateLimitStore()
+
+
 def get_rate_limit_store() -> RateLimitStore:
     """Return the store used by the middleware. Tests monkeypatch this."""
     return RedisRateLimitStore(redis_module.get_redis())
@@ -152,17 +206,42 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         window = int(now // rule.window_seconds)
         key = f"ratelimit:{rule.name}:{identity}:{window}"
 
+        is_ai_rule = rule.name in AI_EXPENSIVE_RULES
+        redis_failed = False
+
         try:
             count = get_rate_limit_store().hit(key, rule.window_seconds)
-        except Exception:  # noqa: BLE001 — Redis down: fail open, never fail the request
-            logger.warning("rate_limit_store_unavailable", extra={"rule": rule.name})
-            return await call_next(request)
+        except Exception as exc:  # noqa: BLE001
+            redis_failed = True
+            logger.warning(
+                "rate_limit_store_unavailable",
+                extra={
+                    "rule": rule.name,
+                    "identity": identity,
+                    "is_ai_rule": is_ai_rule,
+                    "error": str(exc),
+                },
+            )
+            if is_ai_rule:
+                # B-04 Fix: Enforce bounded in-memory rate limiting for expensive AI endpoints during Redis outages
+                count = _fallback_ai_store.hit(key, rule.window_seconds)
+            else:
+                # Non-AI endpoints fail open to preserve general site availability
+                return await call_next(request)
 
         remaining = max(0, rule.limit - count)
         reset_in = max(1, int((window + 1) * rule.window_seconds - now))
 
         if count > rule.limit:
-            logger.warning("rate_limit_exceeded", extra={"rule": rule.name, "identity": identity})
+            logger.warning(
+                "rate_limit_exceeded",
+                extra={
+                    "rule": rule.name,
+                    "identity": identity,
+                    "redis_failed": redis_failed,
+                    "fallback_active": is_ai_rule and redis_failed,
+                },
+            )
             response = error_response(
                 429, RATE_LIMITED,
                 f"Too many requests. Try again in {reset_in} seconds.",
@@ -175,6 +254,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response.headers["X-RateLimit-Limit"] = str(rule.limit)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(reset_in)
+        if redis_failed and is_ai_rule:
+            response.headers["X-RateLimit-Fallback"] = "local-in-memory"
         return response
 
     def _match(self, request: Request) -> RateLimitRule | None:

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import TYPE_CHECKING, Optional, Protocol
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import func, or_
@@ -66,8 +69,9 @@ def get_rag_pipeline(request: Request) -> RetrievalPipeline:
 def _get_counts_for_repos(
     repo_ids: list[UUID],
     db: Session,
+    request: Request | None = None,
 ) -> tuple[dict[UUID, int], dict[UUID, int], dict[UUID, int]]:
-    if not hasattr(db, "query") or not repo_ids:
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query") or not repo_ids:
         return {}, {}, {}
     try:
         file_counts = dict(
@@ -89,8 +93,18 @@ def _get_counts_for_repos(
             .all()
         )
         return file_counts, symbol_counts, chunk_counts
-    except Exception:
-        return {}, {}, {}
+    except Exception as exc:
+        req_id = getattr(getattr(request, "state", None), "request_id", None) if request else None
+        logger.error(
+            "repo_counts_query_failed",
+            extra={"repo_ids": [str(rid) for rid in repo_ids], "request_id": req_id, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while querying repository statistics.",
+            retryable=True,
+        ) from exc
 
 
 @router.get("", response_model=list[RepositoryResponse], summary="List connected repositories")
@@ -99,7 +113,7 @@ def list_repositories(request: Request, db: Session = Depends(get_db)) -> list[R
     if not repositories:
         return []
     repo_ids = [r.id for r in repositories if hasattr(r, "id")]
-    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos(repo_ids, db)
+    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos(repo_ids, db, request=request)
     return [
         _repository_response(
             repository,
@@ -114,7 +128,7 @@ def list_repositories(request: Request, db: Session = Depends(get_db)) -> list[R
 @router.get("/{repository_id}", response_model=RepositoryResponse, summary="Get repository details")
 def get_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> RepositoryResponse:
     repo = _owned_repository(repository_id, request, db)
-    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos([repo.id], db)
+    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos([repo.id], db, request=request)
     return _repository_response(
         repo,
         file_count=file_counts.get(repo.id, 0),
@@ -139,8 +153,18 @@ def sync_repository(repository_id: UUID, request: Request, db: Session = Depends
                 }
             ),
         )
-    except Exception:
-        pass
+    except Exception as pub_exc:
+        req_id = getattr(getattr(request, "state", None), "request_id", None)
+        logger.warning(
+            "event_publication_failed",
+            extra={
+                "event": "repository.updated",
+                "repository_id": str(repository_id),
+                "job_id": str(job.id),
+                "request_id": req_id,
+                "error": str(pub_exc),
+            },
+        )
     return SyncJobResponse(job_id=str(job.id))
 
 
@@ -160,8 +184,17 @@ def delete_repository(repository_id: UUID, request: Request, db: Session = Depen
                 }
             ),
         )
-    except Exception:
-        pass
+    except Exception as pub_exc:
+        req_id = getattr(getattr(request, "state", None), "request_id", None)
+        logger.warning(
+            "event_publication_failed",
+            extra={
+                "event": "repository.updated",
+                "repository_id": str(repository_id),
+                "request_id": req_id,
+                "error": str(pub_exc),
+            },
+        )
 
 
 @router.post("/{repository_id}/search", response_model=RepositorySearchResponse, summary="Hybrid code search")
@@ -174,9 +207,22 @@ async def search_repository(
     """Search only code indexed for a repository the authenticated user owns."""
     from app.core.secret_redaction import redact
 
-    _owned_repository(repository_id, request, db)
+    import asyncio
+
+    await asyncio.to_thread(_owned_repository, repository_id, request, db)
     pipeline = get_rag_pipeline(request)
-    chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
+    try:
+        chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
+    except Exception as exc:
+        from ai.retrieval.base import RetrievalUnavailableError
+        if isinstance(exc, RetrievalUnavailableError):
+            raise APIError(
+                503,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "Code search is temporarily unavailable. Please retry shortly.",
+                retryable=True,
+            ) from exc
+        raise
     return RepositorySearchResponse(
         query=payload.query,
         results=[
