@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   FlaskConical,
   History,
@@ -9,74 +9,40 @@ import {
 } from 'lucide-react';
 import { useRepositoryFiles } from '../hooks/useRepositories';
 import { useGenerateTests } from '../hooks/useAnalysis';
+import { useStudioFile } from '../hooks/useStudioFile';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { TestGenerationView } from '../components/explorer/TestGenerationView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { checkProposedTestPath } from '../lib/testPath';
-import type { RepositoryFile } from '../types/api';
-import type {
-  AnalysisTarget,
-  SourceReference,
-  TestGenerationResponse,
-  SupportedTestFramework,
-} from '../types/analysis';
+import type { SourceReference, TestGenerationResponse, SupportedTestFramework } from '../types/analysis';
 
 export function RepositoryTestStudio() {
   const { id } = useParams<{ id: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
 
   const repoId = id ?? '';
-  const { data: filesData, isLoading: filesLoading, isError: filesError } = useRepositoryFiles(repoId, 1, 100);
+  // H-2: increased from 100 to 500
+  const { data: filesData, isLoading: filesLoading, isError: filesError } = useRepositoryFiles(repoId, 1, 500);
+  const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  const files: RepositoryFile[] = useMemo(() => filesData?.items ?? [], [filesData]);
-  const fileQuery = searchParams.get('file');
+  // H-1: shared hook replaces ~30 lines of duplicated state
+  const {
+    selectedFile,
+    activeTarget,
+    showFilePicker,
+    setShowFilePicker,
+    handleSelectFile,
+    handleTargetChange,
+  } = useStudioFile(files, () => {
+    setActiveSourceReference(null);
+    setTestResult(null);
+  });
 
-  const [selectedFileOverride, setSelectedFileOverride] = useState<RepositoryFile | null>(null);
-  const [showFilePicker, setShowFilePicker] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [frameworkOverride, setFrameworkOverride] = useState<SupportedTestFramework | null>(null);
-  const [targetRange, setTargetRange] = useState<{ start_line?: number; end_line?: number; symbol?: string | null }>({});
-
-  const selectedFile: RepositoryFile | null = useMemo(() => {
-    if (selectedFileOverride) return selectedFileOverride;
-    if (fileQuery && files.length > 0) {
-      const match = files.find((f: RepositoryFile) => f.path === fileQuery);
-      if (match) return match;
-    }
-    if (files.length > 0) {
-      return files.find((f: RepositoryFile) => !f.path.startsWith('.') && f.size_bytes > 0) ?? files[0];
-    }
-    return null;
-  }, [selectedFileOverride, fileQuery, files]);
-
-  const activeTarget: AnalysisTarget = useMemo(() => ({
-    type: targetRange.start_line && targetRange.end_line ? 'range' : 'file',
-    path: selectedFile?.path ?? '',
-    start_line: targetRange.start_line,
-    end_line: targetRange.end_line,
-    symbol: targetRange.symbol,
-  }), [selectedFile, targetRange]);
-
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
-
-  const handleSelectFile = (file: RepositoryFile) => {
-    setSelectedFileOverride(file);
-    setTargetRange({});
-    setSearchParams({ file: file.path });
-    setShowFilePicker(false);
-    setActiveSourceReference(null);
-  };
-
-  const handleTargetChange = (target: AnalysisTarget) => {
-    setTargetRange({
-      start_line: target.start_line,
-      end_line: target.end_line,
-      symbol: target.symbol,
-    });
-  };
 
   // Test generation mutation
   const testMutation = useGenerateTests(repoId, {
@@ -133,6 +99,7 @@ export function RepositoryTestStudio() {
             onClick={() => setHistoryOpen(true)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
             title="View test generation history"
+            aria-label="View test generation history"
           >
             <History className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">History</span>
@@ -158,16 +125,23 @@ export function RepositoryTestStudio() {
         </div>
       </div>
 
-      {/* Popover File Picker */}
+      {/* H-3 Fix: fixed positioning to prevent clipping in nested flex layouts */}
       {showFilePicker && (
-        <div className="absolute left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-          <TargetFilePicker
-            files={files}
-            isLoading={filesLoading}
-            selectedFile={selectedFile}
-            onSelectFile={handleSelectFile}
+        <>
+          <div
+            className="fixed inset-0 z-20"
+            onClick={() => setShowFilePicker(false)}
+            aria-hidden="true"
           />
-        </div>
+          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+            <TargetFilePicker
+              files={files}
+              isLoading={filesLoading}
+              selectedFile={selectedFile}
+              onSelectFile={handleSelectFile}
+            />
+          </div>
+        </>
       )}
 
       {/* 2-Pane Split Studio Canvas */}

@@ -313,11 +313,9 @@ export interface AnalysisRunSummary {
 export interface PaginatedAnalysisRunResponse {
   page: number;
   page_size: number;
-  total: int | number;
+  total: number;
   items: AnalysisRunSummary[];
 }
-
-type int = number;
 
 export interface AnalysisRunDetailResponse {
   id: string;

@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   FileCheck,
   History,
@@ -9,71 +9,41 @@ import {
 } from 'lucide-react';
 import { useRepositoryFiles } from '../hooks/useRepositories';
 import { useReviewCode } from '../hooks/useAnalysis';
+import { useStudioFile } from '../hooks/useStudioFile';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { CodeReviewView } from '../components/explorer/CodeReviewView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
-import type { RepositoryFile } from '../types/api';
 import type {
-  AnalysisTarget,
   SourceReference,
   ReviewReportResponse,
 } from '../types/analysis';
 
 export function RepositoryReviewStudio() {
   const { id } = useParams<{ id: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
 
   const repoId = id ?? '';
-  const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 100);
+  // H-2: increased from 100 to 500
+  const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
+  const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  const files: RepositoryFile[] = useMemo(() => filesData?.items ?? [], [filesData]);
-  const fileQuery = searchParams.get('file');
+  // H-1: shared hook replaces ~30 lines of duplicated state
+  const {
+    selectedFile,
+    activeTarget,
+    showFilePicker,
+    setShowFilePicker,
+    handleSelectFile,
+    handleTargetChange,
+  } = useStudioFile(files, () => {
+    setActiveSourceReference(null);
+    setReviewResult(null);
+  });
 
-  const [selectedFileOverride, setSelectedFileOverride] = useState<RepositoryFile | null>(null);
-  const [showFilePicker, setShowFilePicker] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [targetRange, setTargetRange] = useState<{ start_line?: number; end_line?: number; symbol?: string | null }>({});
-
-  const selectedFile: RepositoryFile | null = useMemo(() => {
-    if (selectedFileOverride) return selectedFileOverride;
-    if (fileQuery && files.length > 0) {
-      const match = files.find((f: RepositoryFile) => f.path === fileQuery);
-      if (match) return match;
-    }
-    if (files.length > 0) {
-      return files.find((f: RepositoryFile) => !f.path.startsWith('.') && f.size_bytes > 0) ?? files[0];
-    }
-    return null;
-  }, [selectedFileOverride, fileQuery, files]);
-
-  const activeTarget: AnalysisTarget = useMemo(() => ({
-    type: targetRange.start_line && targetRange.end_line ? 'range' : 'file',
-    path: selectedFile?.path ?? '',
-    start_line: targetRange.start_line,
-    end_line: targetRange.end_line,
-    symbol: targetRange.symbol,
-  }), [selectedFile, targetRange]);
-
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
-
-  const handleSelectFile = (file: RepositoryFile) => {
-    setSelectedFileOverride(file);
-    setTargetRange({});
-    setSearchParams({ file: file.path });
-    setShowFilePicker(false);
-    setActiveSourceReference(null);
-  };
-
-  const handleTargetChange = (target: AnalysisTarget) => {
-    setTargetRange({
-      start_line: target.start_line,
-      end_line: target.end_line,
-      symbol: target.symbol,
-    });
-  };
 
   // Review mutation
   const reviewMutation = useReviewCode(repoId, {
@@ -122,6 +92,7 @@ export function RepositoryReviewStudio() {
             onClick={() => setHistoryOpen(true)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
             title="View review history"
+            aria-label="View review history"
           >
             <History className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">History</span>
@@ -147,16 +118,23 @@ export function RepositoryReviewStudio() {
         </div>
       </div>
 
-      {/* Popover File Picker */}
+      {/* H-3 Fix: fixed positioning with backdrop */}
       {showFilePicker && (
-        <div className="absolute left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-          <TargetFilePicker
-            files={files}
-            isLoading={filesLoading}
-            selectedFile={selectedFile}
-            onSelectFile={handleSelectFile}
+        <>
+          <div
+            className="fixed inset-0 z-20"
+            onClick={() => setShowFilePicker(false)}
+            aria-hidden="true"
           />
-        </div>
+          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+            <TargetFilePicker
+              files={files}
+              isLoading={filesLoading}
+              selectedFile={selectedFile}
+              onSelectFile={handleSelectFile}
+            />
+          </div>
+        </>
       )}
 
       {/* 2-Pane Split Studio Canvas */}

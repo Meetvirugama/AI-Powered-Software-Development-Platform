@@ -28,7 +28,15 @@ if not settings.database_url.startswith("sqlite"):
 engine = create_engine(settings.database_url, **db_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-async_engine = create_async_engine(settings.database_url, **db_kwargs)
+# Build the async-driver URL from the sync URL.
+# psycopg3 uses different driver names for sync vs async connections:
+#   sync:  postgresql+psycopg://
+#   async: postgresql+psycopg_async://
+# Using the wrong driver causes blocking I/O inside async event loops.
+_async_database_url = settings.database_url.replace(
+    "postgresql+psycopg://", "postgresql+psycopg_async://"
+)
+async_engine = create_async_engine(_async_database_url, **db_kwargs)
 AsyncSessionLocal = async_sessionmaker(async_engine, expire_on_commit=False)
 
 
