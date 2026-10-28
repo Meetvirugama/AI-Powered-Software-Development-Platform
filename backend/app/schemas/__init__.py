@@ -34,6 +34,18 @@ from app.schemas.analysis import (
     TestGenerationResult,
     TestScenario,
 )
+from app.schemas.planner_context import (
+    AffectedSymbol,
+    FileDiffRange,
+    LineRange,
+    ProposedTest,
+    RiskAssessment,
+    RiskLevel,
+    TaskDiffRanges,
+    TaskImpactAssessment,
+    TaskPlanningContext,
+    TestExecutionPlan,
+)
 from app.schemas.task import (
     TaskAssumption,
     TaskConstraint,
@@ -75,6 +87,7 @@ from app.schemas.workspace import (
 )
 
 __all__ = [
+    "AffectedSymbol",
     "AnalysisFeatureType",
     "AnalysisOptions",
     "AnalysisRunDetailResponse",
@@ -92,15 +105,20 @@ __all__ = [
     "CodeTargetType",
     "ConfidenceLevel",
     "ExplainCodeRequest",
+    "FileDiffRange",
     "FindingSeverity",
     "FindingSourceType",
+    "LineRange",
     "PaginatedAnalysisRunResponse",
+    "ProposedTest",
     "ReviewCategory",
     "ReviewFinding",
     "ReviewReport",
     "ReviewReportResponse",
     "ReviewTarget",
     "ReviewTargetType",
+    "RiskAssessment",
+    "RiskLevel",
     "SupportedTestFramework",
     "SymbolSummary",
     "TaskAssumption",
@@ -108,12 +126,16 @@ __all__ = [
     "TaskConstraintType",
     "TaskCreateRequest",
     "TaskDetailResponse",
+    "TaskDiffRanges",
+    "TaskImpactAssessment",
     "TaskIntakePayload",
+    "TaskPlanningContext",
     "TaskRequirement",
     "TaskRequirementCategory",
     "TaskSourceReference",
     "TaskSourceType",
     "TaskStatus",
+    "TestExecutionPlan",
     "TestGenerationRequest",
     "TestGenerationResponse",
     "TestGenerationResult",
@@ -141,5 +163,6 @@ __all__ = [
     "can_transition",
     "can_transition_workspace",
 ]
+
 
 
