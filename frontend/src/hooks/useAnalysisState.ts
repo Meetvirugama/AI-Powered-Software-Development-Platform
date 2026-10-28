@@ -154,6 +154,7 @@ export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | nul
         [feature]: {
           status: 'COMPLETED',
           error: null,
+          errorCode: null,
           result,
           target,
           runId: runId ?? (result as any)?.run_id ?? null,

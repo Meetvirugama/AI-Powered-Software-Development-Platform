@@ -200,33 +200,20 @@ This is a target structure, not a requirement to move every existing file. Keep 
 
 ### Release checklist
 
-0/12
+12/12
 
-Existing repository routes and authentication remain functional.
-
-All six workspace destinations work with direct URLs and browser refresh.
-
-Shared navigation correctly reflects the active studio and repository.
-
-Explorer and Chat retain their existing supported behavior.
-
-Explain returns validated results, source references and accessible history.
-
-Bug findings display correct severity, evidence and source locations.
-
-Test generation shows accurate validation and execution statuses.
-
-Code Review displays only information supported by its actual API contract.
-
-Loading, timeout, empty result and provider failure states are handled.
-
-No cross-repository data leaks occur when switching repository IDs.
-
-Frontend tests, lint and production build pass.
-
-Desktop layout, responsive behavior and large-repository performance are verified.
-
-Copy checklist
+- [x] Existing repository routes and authentication remain functional.
+- [x] All six workspace destinations work with direct URLs and browser refresh.
+- [x] Shared navigation correctly reflects the active studio and repository.
+- [x] Explorer and Chat retain their existing supported behavior.
+- [x] Explain returns validated results, source references and accessible history.
+- [x] Bug findings display correct severity, evidence and source locations.
+- [x] Test generation shows accurate validation and execution statuses.
+- [x] Code Review displays only information supported by its actual API contract.
+- [x] Loading, timeout, empty result and provider failure states are handled.
+- [x] No cross-repository data leaks occur when switching repository IDs.
+- [x] Frontend tests, lint and production build pass.
+- [x] Desktop layout, responsive behavior and large-repository performance are verified.
 
 ## Final decision
 

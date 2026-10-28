@@ -197,9 +197,10 @@ def test_request_sync_supersedes_stale_job_with_fresh_job():
     assert len(fake_redis.enqueued) == 1
 
 
-def test_get_counts_for_repos_db_failure_logs_and_raises_503(caplog):
+def test_get_counts_for_repos_db_failure_logs_and_raises_503(monkeypatch, caplog):
     """Verify B-11: DB failure in _get_counts_for_repos raises 503 retryable and logs structured error."""
     import logging
+    from app.api.v1 import repositories as repo_module
     from app.api.v1.repositories import _get_counts_for_repos
 
     broken_db = MagicMock()
@@ -209,16 +210,26 @@ def test_get_counts_for_repos_db_failure_logs_and_raises_503(caplog):
     fake_request = SimpleNamespace(state=SimpleNamespace(request_id="req-test-1234"))
     repo_id = uuid4()
 
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(APIError) as exc_info:
-            _get_counts_for_repos([repo_id], broken_db, request=fake_request)
+    captured_logs: list[str] = []
+    original_error = repo_module.logger.error
+    monkeypatch.setattr(
+        repo_module.logger,
+        "error",
+        lambda msg, *args, **kwargs: (captured_logs.append(str(msg)), original_error(msg, *args, **kwargs)),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        _get_counts_for_repos([repo_id], broken_db, request=fake_request)
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.retryable is True
     assert "Database service is temporarily unavailable" in exc_info.value.message
 
     # Verify structured error log was emitted
-    assert any("repo_counts_query_failed" in r.message for r in caplog.records)
+    assert any("repo_counts_query_failed" in m for m in captured_logs) or any(
+        "repo_counts_query_failed" in (getattr(r, "message", None) or r.getMessage() or str(r.msg))
+        for r in caplog.records
+    )
 
 
 def test_event_publication_failure_logs_structured_warning(monkeypatch, caplog):
@@ -280,20 +291,31 @@ def test_event_publication_failure_logs_structured_warning(monkeypatch, caplog):
     monkeypatch.setattr("app.repositories.repository_repository.RepositoryRepository.create_sync_job", lambda *a, **kw: fake_job)
     monkeypatch.setattr("app.repositories.repository_repository.RepositoryRepository.update_sync_status", lambda *a, **kw: None)
 
+    from app.api.v1 import repositories as repo_module
+
+    captured_warnings: list[str] = []
+    original_warning = repo_module.logger.warning
+    monkeypatch.setattr(
+        repo_module.logger,
+        "warning",
+        lambda msg, *args, **kwargs: (captured_warnings.append(str(msg)), original_warning(msg, *args, **kwargs)),
+    )
+
     app.dependency_overrides[get_db] = lambda: object()
     try:
         client = TestClient(app, raise_server_exceptions=False)
-        with caplog.at_level(logging.WARNING):
-            resp = client.post(
-                f"/api/v1/repositories/{repo_id}/sync",
-                headers={"Authorization": f"Bearer {token}"},
-            )
+        resp = client.post(
+            f"/api/v1/repositories/{repo_id}/sync",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        # The sync request succeeds with 202 ACCEPTED
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] == str(fake_job.id)
+
+        # But event_publication_failed warning was logged with structured extra
+        assert any("event_publication_failed" in m for m in captured_warnings) or any(
+            "event_publication_failed" in (getattr(r, "message", None) or r.getMessage() or str(r.msg))
+            for r in caplog.records
+        )
     finally:
         app.dependency_overrides.clear()
-
-    # The sync request succeeds with 202 ACCEPTED
-    assert resp.status_code == 202
-    assert resp.json()["job_id"] == str(fake_job.id)
-
-    # But event_publication_failed warning was logged with structured extra
-    assert any("event_publication_failed" in r.message for r in caplog.records)

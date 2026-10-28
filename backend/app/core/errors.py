@@ -90,12 +90,33 @@ async def http_exception_handler(_: Request, exc: StarletteHTTPException) -> JSO
     return error_response(exc.status_code, "HTTP_ERROR", message)
 
 
-async def validation_exception_handler(_: Request, __: RequestValidationError) -> JSONResponse:
-    return error_response(
-        status.HTTP_422_UNPROCESSABLE_ENTITY,
-        ErrorCode.INVALID_REQUEST,
-        "Request validation failed.",
-    )
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    _logger = logging.getLogger("app.errors")
+    try:
+        raw_errors = exc.errors()
+        # Log structured detail at DEBUG for backend observability (never exposes values)
+        _logger.debug(
+            "request_validation_failed",
+            extra={"error_count": len(raw_errors), "fields": [e.get("loc") for e in raw_errors]},
+        )
+        # Build safe field-path list: tuples like ("body", "target", "path") → "body.target.path"
+        failed_fields: list[str] = [
+            ".".join(str(part) for part in e.get("loc", ())) for e in raw_errors[:10]
+        ]
+    except Exception:
+        failed_fields = []
+
+    content: dict = {
+        "error": {
+            "code": ErrorCode.INVALID_REQUEST,
+            "message": "Request validation failed.",
+            "retryable": False,
+        }
+    }
+    if failed_fields:
+        content["error"]["details"] = {"invalid_fields": failed_fields}
+
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=content)
 
 
 async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:

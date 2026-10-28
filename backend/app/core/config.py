@@ -9,6 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
+# Frozen at module load time — avoids allocating a new set on every validator call.
+_ALLOWED_CHAT_PROVIDERS: frozenset[str] = frozenset({"gemini", "groq"})
+_ALLOWED_EMBEDDING_PROVIDERS: frozenset[str] = frozenset({"gemini"})
+
 
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and an optional .env."""
@@ -75,10 +79,9 @@ class Settings(BaseSettings):
     def validate_provider(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        allowed = {"gemini", "groq"}
-        if v.lower() not in allowed:
+        if v.lower() not in _ALLOWED_CHAT_PROVIDERS:
             raise ValueError(
-                f"Provider '{v}' is not supported. Allowed runtime providers are: {sorted(allowed)}. "
+                f"Provider '{v}' is not supported. Allowed runtime providers are: {sorted(_ALLOWED_CHAT_PROVIDERS)}. "
                 "OpenAI is explicitly prohibited."
             )
         return v.lower()
@@ -86,7 +89,7 @@ class Settings(BaseSettings):
     @field_validator("ai_embedding_provider")
     @classmethod
     def validate_embedding_provider(cls, v: str) -> str:
-        if v.lower() != "gemini":
+        if v.lower() not in _ALLOWED_EMBEDDING_PROVIDERS:
             raise ValueError(
                 f"Embedding provider '{v}' is not supported. Required runtime provider is: 'gemini'. "
                 "OpenAI is explicitly prohibited."
