@@ -1,12 +1,12 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Sparkles,
-  BookOpen,
   History,
   FolderOpen,
   MessageSquare,
   ArrowRight,
+  BookOpen,
   RefreshCw,
   Hash,
 } from 'lucide-react';
@@ -18,6 +18,7 @@ import { ExplanationResultView } from '../components/explorer/ExplanationResultV
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import { cn } from '../lib/utils';
 import type { SourceReference, CodeExplanation, CodeExplanationResponse } from '../types/analysis';
 
 export function RepositoryExplainStudio() {
@@ -25,7 +26,6 @@ export function RepositoryExplainStudio() {
   const navigate = useNavigate();
 
   const repoId = id ?? '';
-  // H-2: increased from 100 to 500 to avoid silently truncating large repos
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
@@ -33,8 +33,8 @@ export function RepositoryExplainStudio() {
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
+  const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
 
-  // H-1: use shared hook instead of 30 lines of duplicated state
   const {
     selectedFile,
     activeTarget,
@@ -44,6 +44,8 @@ export function RepositoryExplainStudio() {
     handleTargetChange,
   } = useStudioFile(files, () => {
     setActiveSourceReference(null);
+    setExplanationResult(null);
+    setRunId(null);
   });
 
   // Explain mutation
@@ -51,6 +53,7 @@ export function RepositoryExplainStudio() {
     onSuccess: (data: CodeExplanationResponse) => {
       setExplanationResult(data.explanation);
       setRunId(data.run_id);
+      setActiveMobileTab('results');
     },
   });
 
@@ -77,6 +80,7 @@ export function RepositoryExplainStudio() {
   // Jump to citation source in code viewer
   const handleSelectSourceReference = (source: SourceReference) => {
     setActiveSourceReference(source);
+    setActiveMobileTab('source');
     if (selectedFile && source.file_path && source.file_path !== selectedFile.path) {
       const targetFile = files.find((f) => f.path === source.file_path);
       if (targetFile) {
@@ -101,21 +105,70 @@ export function RepositoryExplainStudio() {
       {/* Studio Header Toolbar */}
       <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={() => setShowFilePicker(!showFilePicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
-            title="Switch target file"
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-primary" />
-            <span className="truncate max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
-          </button>
+          {/* Anchored Target File Picker (F-09) */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilePicker(!showFilePicker)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
+              title="Switch target file"
+              aria-expanded={showFilePicker}
+              aria-haspopup="dialog"
+            >
+              <FolderOpen className="h-3.5 w-3.5 text-primary" />
+              <span className="truncate max-w-[140px] sm:max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
+            </button>
+
+            {showFilePicker && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setShowFilePicker(false)}
+                  aria-hidden="true"
+                />
+                <div className="absolute left-0 top-full mt-1.5 z-30 w-80 sm:w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+                  <TargetFilePicker
+                    files={files}
+                    isLoading={filesLoading}
+                    selectedFile={selectedFile}
+                    onSelectFile={handleSelectFile}
+                  />
+                </div>
+              </>
+            )}
+          </div>
 
           {activeTarget.start_line && activeTarget.end_line && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent text-[11px] font-mono text-muted-foreground border border-border">
+            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent text-[11px] font-mono text-muted-foreground border border-border">
               <Hash className="h-3 w-3" />
               <span>L{activeTarget.start_line}–L{activeTarget.end_line}</span>
             </div>
           )}
+
+          {/* Responsive Mobile / Tablet Tab Switcher (F-09) */}
+          <div className="flex lg:hidden items-center p-0.5 rounded-lg bg-muted text-xs font-medium">
+            <button
+              onClick={() => setActiveMobileTab('source')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'source'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Source
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('results')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'results'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Results
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -150,30 +203,15 @@ export function RepositoryExplainStudio() {
         </div>
       </div>
 
-      {/* H-3 Fix: Use fixed positioning so the picker doesn't clip in nested flex layouts */}
-      {showFilePicker && (
-        <>
-          {/* Backdrop to dismiss picker on click-outside */}
-          <div
-            className="fixed inset-0 z-20"
-            onClick={() => setShowFilePicker(false)}
-            aria-hidden="true"
-          />
-          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <TargetFilePicker
-              files={files}
-              isLoading={filesLoading}
-              selectedFile={selectedFile}
-              onSelectFile={handleSelectFile}
-            />
-          </div>
-        </>
-      )}
-
-      {/* 2-Pane Split Studio Canvas */}
+      {/* Responsive Split Studio Canvas (F-09) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Pane: Code Viewer */}
-        <div className="w-1/2 min-w-[360px] h-full border-r border-border flex flex-col min-h-0 overflow-hidden bg-background">
+        <div
+          className={cn(
+            'w-full lg:w-1/2 min-w-0 h-full lg:border-r border-border flex flex-col min-h-0 overflow-hidden bg-background',
+            activeMobileTab !== 'source' && 'hidden lg:flex'
+          )}
+        >
           {selectedFile ? (
             <CodeViewer
               repositoryId={repoId}
@@ -193,7 +231,12 @@ export function RepositoryExplainStudio() {
         </div>
 
         {/* Right Pane: Explanation Canvas */}
-        <div className="flex-1 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
+        <div
+          className={cn(
+            'flex-1 lg:w-1/2 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6',
+            activeMobileTab !== 'results' && 'hidden lg:flex'
+          )}
+        >
           {explainMutation.isPending ? (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
               <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
@@ -278,6 +321,7 @@ export function RepositoryExplainStudio() {
           setExplanationResult(explanation);
           handleTargetChange(target);
           setRunId(run);
+          setActiveMobileTab('results');
           setHistoryOpen(false);
         }}
       />
