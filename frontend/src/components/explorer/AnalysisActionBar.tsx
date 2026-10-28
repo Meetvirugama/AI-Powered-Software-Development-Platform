@@ -1,4 +1,4 @@
-import { BookOpen, Bug, FlaskConical, FileCheck } from 'lucide-react';
+import { BookOpen, Bug, FlaskConical, FileCheck, History } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { AnalysisFeatureType, AnalysisTarget } from '../../types/analysis';
 
@@ -6,6 +6,7 @@ export interface AnalysisActionBarProps {
   activeFeature: AnalysisFeatureType | null;
   activeTarget: AnalysisTarget;
   onSelectFeature: (feature: AnalysisFeatureType) => void;
+  onOpenHistory?: () => void;
   disabled?: boolean;
   className?: string;
 }
@@ -58,6 +59,7 @@ export function AnalysisActionBar({
   activeFeature,
   activeTarget,
   onSelectFeature,
+  onOpenHistory,
   disabled = false,
   className,
 }: AnalysisActionBarProps) {
@@ -106,11 +108,25 @@ export function AnalysisActionBar({
       </div>
 
 
-      <div className="text-[10px] text-muted-foreground font-mono hidden md:flex items-center gap-1">
-        <span>Target:</span>
-        <span className="text-foreground font-medium truncate max-w-[180px]">
-          {targetLabel}
-        </span>
+      <div className="flex items-center gap-2">
+        <div className="text-[10px] text-muted-foreground font-mono hidden md:flex items-center gap-1">
+          <span>Target:</span>
+          <span className="text-foreground font-medium truncate max-w-[180px]">
+            {targetLabel}
+          </span>
+        </div>
+
+        {onOpenHistory && (
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border/70 bg-background/60 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/60 transition-colors shadow-xs"
+            title="View Analysis History & Reopen Past Runs"
+          >
+            <History className="h-3.5 w-3.5 text-primary" />
+            <span>History</span>
+          </button>
+        )}
       </div>
     </div>
   );

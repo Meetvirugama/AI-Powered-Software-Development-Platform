@@ -24,6 +24,7 @@ team_rules.md rules enforced:
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
@@ -32,8 +33,10 @@ from typing import Any, Protocol, Self, runtime_checkable
 from uuid import UUID
 
 from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact
 
 from ai.context.builder import AgentContext, ChatMessage, ContextBuilder, MemoryEntry
+from ai.retrieval.base import RetrievalUnavailableError
 from ai.llm.schemas import (
     LLMError,
     LLMRateLimitError,
@@ -122,7 +125,7 @@ class RAGPipeline:
         llm_gateway: Any = None,
         prompt_builder: PromptBuilder | None = None,
         grounding_validator: GroundingValidator | None = None,
-        max_context_tokens: int = 100_000,
+        max_context_tokens: int = 12_000,
         model: str = _DEFAULT_MODEL,
         max_retrieval_top_k: int = _DEFAULT_TOP_K,
         max_repair_attempts: int = _DEFAULT_MAX_REPAIR_ATTEMPTS,
@@ -227,21 +230,36 @@ class RAGPipeline:
                 answer="Please provide a valid question about the repository.",
                 sources=[],
                 confidence="low",
+                status="invalid_output",
             )
 
         # ---- Step 1: Retrieval & Repo Metadata ---------------------------
         import asyncio
 
         retrieval_start = time.monotonic()
-        chunks, related_files = await asyncio.gather(
-            self._retrieve(cleaned_question, repo_uuid),
-            self._get_repository_files(repo_uuid),
-        )
+        try:
+            chunks, related_files = await asyncio.gather(
+                self._retrieve(cleaned_question, repo_uuid),
+                self._get_repository_files(repo_uuid),
+            )
+        except RetrievalUnavailableError as exc:
+            logger.error(
+                "rag_chat_retrieval_unavailable",
+                extra={"repo_id": str(repo_uuid), "error": str(exc)},
+            )
+            raise APIError(
+                503,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "Code retrieval is temporarily unavailable. Please retry shortly.",
+                retryable=True,
+            ) from exc
+        except APIError:
+            raise
         retrieval_latency_ms = (time.monotonic() - retrieval_start) * 1000
 
         # ---- Step 2: Graceful fallback for zero retrieval ------------------
         if not chunks and not related_files:
-            logger.warning(
+            logger.info(
                 "rag_pipeline_zero_results",
                 extra={
                     "repo_id": str(repo_uuid),
@@ -253,6 +271,7 @@ class RAGPipeline:
                 answer="No relevant code found in this repository for your question.",
                 sources=[],
                 confidence="low",
+                status="no_match",
             )
 
         # ---- Step 3: Context assembly ------------------------------------
@@ -264,8 +283,6 @@ class RAGPipeline:
         )
 
         # ---- Step 4: Prompt construction ---------------------------------
-        from app.core.secret_redaction import redact
-
         rendered_data = redact(self.context_builder.render_repository_data(ctx))
         messages = self.prompt_builder.build_chat_prompt(
             context=rendered_data,
@@ -314,17 +331,18 @@ class RAGPipeline:
 
     @staticmethod
     def _coerce_uuid(value: UUID | str) -> UUID:
-        """Coerce string or UUID to verified UUID instance."""
+        """Coerce string or UUID to verified UUID instance, rejecting malformed identifiers (AI-04)."""
         if isinstance(value, UUID):
             return value
         try:
             return UUID(str(value))
-        except (ValueError, AttributeError, TypeError):
+        except (ValueError, AttributeError, TypeError) as exc:
             logger.warning("rag_pipeline_invalid_uuid", extra={"raw_value": str(value)})
-            # Fallback UUID for non-standard inputs in mock scenarios
-            import hashlib
-            raw_str = str(value) if value is not None else "00000000"
-            return UUID(hashlib.md5(raw_str.encode("utf-8")).hexdigest())
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Invalid repository UUID: '{value}'.",
+            ) from exc
 
     async def retrieve(
         self,
@@ -347,12 +365,19 @@ class RAGPipeline:
                 repository_id=repo_uuid,
                 top_k=top_k,
             )
+        except (RetrievalUnavailableError, APIError):
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.error(
                 "rag_pipeline_retrieval_error",
                 extra={"error": str(exc), "repo_id": str(repo_uuid)},
             )
-            return []
+            raise APIError(
+                503,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "Retrieval service encountered an error and is temporarily unavailable.",
+                retryable=True,
+            ) from exc
 
     async def _retrieve(
         self,
@@ -379,25 +404,32 @@ class RAGPipeline:
                 session = None
 
             stmt = select(DBRepoFile).where(DBRepoFile.repository_id == repo_uuid)
-            rows = []
+            rows: list[Any] = []
             if session_factory is not None:
-                async with session_factory() as s:
-                    res = await s.execute(stmt)
-                    scalars = getattr(res, "scalars", None)
-                    if callable(scalars):
-                        rows = scalars().all()
-                    else:
-                        rows = res.all()
-            elif hasattr(session, "execute"):
-                if inspect.iscoroutinefunction(session.execute):
-                    res = await session.execute(stmt)
+                sf: Any = session_factory
+                async with sf() as s:
+                    res: Any = await s.execute(stmt)
+                    scalars_fn: Any = getattr(res, "scalars", None)
+                    if callable(scalars_fn):
+                        sc: Any = scalars_fn()
+                        rows = list(sc.all())
+                    elif hasattr(res, "all"):
+                        all_fn: Any = getattr(res, "all")
+                        rows = list(all_fn())
+            elif session is not None and hasattr(session, "execute"):
+                sess: Any = session
+                execute_fn: Any = getattr(sess, "execute")
+                if inspect.iscoroutinefunction(execute_fn):
+                    res: Any = await execute_fn(stmt)
                 else:
-                    res = session.execute(stmt)
-                scalars = getattr(res, "scalars", None)
-                if callable(scalars):
-                    rows = scalars().all()
-                else:
-                    rows = res.all()
+                    res: Any = execute_fn(stmt)
+                scalars_fn: Any = getattr(res, "scalars", None)
+                if callable(scalars_fn):
+                    sc: Any = scalars_fn()
+                    rows = list(sc.all())
+                elif hasattr(res, "all"):
+                    all_fn: Any = getattr(res, "all")
+                    rows = list(all_fn())
 
             from ai.context.builder import RepositoryFile
             return [
@@ -488,11 +520,11 @@ class RAGPipeline:
             APIError(500) — on unrecoverable LLM errors.
         """
         if self.llm is None:
-            # Fallback for tests or environments without an injected LLM gateway
-            return RepositoryAnswer(
-                answer="LLM gateway not configured.",
-                sources=[],
-                confidence="low",
+            raise APIError(
+                503,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "LLM gateway is not configured or available.",
+                retryable=True,
             )
 
         target_model = model or self._model
@@ -532,19 +564,20 @@ class RAGPipeline:
                             "LLM returned invalid JSON after repair attempt.",
                         )
 
-                    # Inject repair prompt and retry
+                    # Inject bounded, redacted repair prompt and retry (AI-11, AI-12)
+                    bounded_content = redact(raw_content[:1000]) if raw_content else ""
                     logger.warning(
                         "rag_pipeline_json_repair_attempt",
-                        extra={"attempt": attempt + 1, "error": str(parse_err)},
+                        extra={"attempt": attempt + 1, "error_type": type(parse_err).__name__},
                     )
                     req.messages.append(
-                        Message(role="assistant", content=raw_content)
+                        Message(role="assistant", content=bounded_content)
                     )
                     req.messages.append(
                         Message(
                             role="user",
                             content=(
-                                f"Your previous response was invalid JSON: {parse_err}. "
+                                f"Your previous response was invalid JSON: {type(parse_err).__name__}. "
                                 "Please return ONLY a valid JSON object matching the schema. "
                                 "Do not wrap it in markdown code fences."
                             ),
@@ -593,10 +626,16 @@ class RAGPipeline:
 
     async def aclose(self) -> None:
         """Gracefully close any resources held by retriever or LLM gateway."""
-        if hasattr(self.llm, "aclose") and callable(self.llm.aclose):
-            await self.llm.aclose()
-        if hasattr(self.retriever, "aclose") and callable(self.retriever.aclose):
-            await self.retriever.aclose()
+        llm: Any = self.llm
+        if hasattr(llm, "aclose") and callable(getattr(llm, "aclose")):
+            res = llm.aclose()
+            if inspect.isawaitable(res):
+                await res
+        retriever: Any = self.retriever
+        if hasattr(retriever, "aclose") and callable(getattr(retriever, "aclose")):
+            res = retriever.aclose()
+            if inspect.isawaitable(res):
+                await res
 
     async def __aenter__(self: Self) -> Self:
         return self

@@ -163,7 +163,15 @@ async def process_sync_job(
                 ),
             )
         except Exception as pub_exc:
-            logger.debug("Failed to publish repository.updated event: %s", pub_exc)
+            logger.warning(
+                "event_publication_failed",
+                extra={
+                    "event": "repository.updated",
+                    "job_id": str(job_id),
+                    "repository_id": str(repository_id),
+                    "error": str(pub_exc),
+                },
+            )
 
         logger.info(
             "sync_worker_job_completed",
@@ -197,8 +205,16 @@ async def process_sync_job(
                     }
                 ),
             )
-        except Exception:
-            pass
+        except Exception as pub_exc:
+            logger.warning(
+                "event_publication_failed",
+                extra={
+                    "event": "repository.updated",
+                    "job_id": str(job_id),
+                    "repository_id": str(repository_id),
+                    "error": str(pub_exc),
+                },
+            )
 
     finally:
         if clone_dir and clone_dir.exists():
@@ -207,11 +223,30 @@ async def process_sync_job(
 
 async def sync_worker_loop(app: Any) -> None:
     """Continuously poll Redis `sync_jobs` queue and process sync jobs asynchronously."""
+    import time
+    from app.services.repository_sync import reconcile_stale_sync_jobs
+
     logger.info("sync_worker_loop_started")
     redis = await get_redis_async()
+    last_sweep_time = time.monotonic()
 
     while True:
         try:
+            # Periodic sweep for stale/stalled sync jobs every 60 seconds
+            now_mono = time.monotonic()
+            if now_mono - last_sweep_time >= 60.0:
+                last_sweep_time = now_mono
+                try:
+                    with SessionLocal() as db_session:
+                        reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+                        if reconciled:
+                            logger.info(
+                                "periodic_stale_sync_jobs_reconciled",
+                                extra={"count": len(reconciled), "job_ids": [str(j) for j in reconciled]},
+                            )
+                except Exception as sweep_exc:
+                    logger.warning("periodic_sync_reconciliation_error", extra={"error": str(sweep_exc)})
+
             # Pop job from Redis queue with 2 second timeout
             item = await redis.blpop("sync_jobs", timeout=2)
             if item:

@@ -6,9 +6,13 @@ export function Login() {
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [searchParams] = useSearchParams();
   const errorParam = searchParams.get('error');
+  const redirectParam = searchParams.get('redirect');
 
   function handleGitHubLogin() {
     setIsRedirecting(true);
+    if (redirectParam && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('auth_redirect', redirectParam);
+    }
     // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
     window.location.href = `/api/v1/auth/github/login`;
   }

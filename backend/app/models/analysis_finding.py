@@ -84,6 +84,12 @@ class AnalysisFinding(TimestampedModel, Base):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary compatible with BugFinding / ReviewFinding schemas."""
+        meta = self.finding_metadata or {}
+        prov = meta.get("provenance")
+        if not prov:
+            st = str(self.source_type or "").upper()
+            prov = "static_rule" if st == "STATIC" else ("combined" if st == "COMBINED" else "llm")
+
         return {
             "id": str(self.id),
             "analysis_run_id": str(self.analysis_run_id),
@@ -100,6 +106,11 @@ class AnalysisFinding(TimestampedModel, Base):
             "is_new_in_change": self.is_new_in_change,
             "source_type": self.source_type,
             "rule_id": self.rule_id,
+            "provenance": prov,
+            "rule_version": meta.get("rule_version"),
+            "model_version": meta.get("model_version"),
+            "deduplication_key": meta.get("deduplication_key"),
+            "evidence_hash": meta.get("evidence_hash"),
         }
 
     def __getitem__(self, key: str) -> Any:

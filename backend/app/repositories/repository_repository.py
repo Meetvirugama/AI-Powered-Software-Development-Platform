@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from sqlalchemy import func, select
@@ -55,10 +56,24 @@ class RepositoryRepository:
             self.session.refresh(repo)
         return repo
 
-    def list_files(self, repo_id: uuid.UUID, offset: int, limit: int) -> tuple[list[RepositoryFile], int]:
-        statement = select(RepositoryFile).where(RepositoryFile.repository_id == repo_id).order_by(RepositoryFile.path)
+    def list_files(
+        self, repo_id: uuid.UUID, offset: int, limit: int, path: Optional[str] = None
+    ) -> tuple[list[RepositoryFile], int]:
+        statement = select(RepositoryFile).where(RepositoryFile.repository_id == repo_id)
+        if path:
+            clean_path = path.strip().lstrip("./")
+            statement = statement.where(RepositoryFile.path.ilike(f"%{clean_path}%"))
+        statement = statement.order_by(RepositoryFile.path)
         total = self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0
         return list(self.session.scalars(statement.offset(offset).limit(limit)).all()), total
+
+    def get_file_by_path(self, repo_id: uuid.UUID, path: str) -> Optional[RepositoryFile]:
+        clean_path = path.strip().lstrip("./")
+        statement = select(RepositoryFile).where(
+            RepositoryFile.repository_id == repo_id,
+            RepositoryFile.path == clean_path,
+        )
+        return self.session.scalars(statement).first()
 
     def list_symbols(self, repo_id: uuid.UUID, offset: int, limit: int) -> tuple[list[CodeSymbol], int]:
         statement = select(CodeSymbol).where(CodeSymbol.repository_id == repo_id).order_by(CodeSymbol.name, CodeSymbol.start_line)
@@ -80,6 +95,35 @@ class RepositoryRepository:
             self.session.commit()
             self.session.refresh(job)
         return job
+
+    def get_active_sync_job(self, repository_id: uuid.UUID) -> Optional[SyncJob]:
+        """Find the most recent in-flight (QUEUED or RUNNING) sync job for a repository."""
+        if not hasattr(self.session, "scalars"):
+            return None
+        stmt = (
+            select(SyncJob)
+            .where(
+                SyncJob.repository_id == repository_id,
+                SyncJob.status.in_([SyncJobStatus.QUEUED, SyncJobStatus.RUNNING]),
+            )
+            .order_by(SyncJob.created_at.desc())
+        )
+        return self.session.scalars(stmt).first()
+
+    def get_stale_sync_jobs(self, timeout_seconds: int = 600) -> list[SyncJob]:
+        """Retrieve all QUEUED or RUNNING sync jobs exceeding timeout threshold."""
+        if not hasattr(self.session, "scalars"):
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        stmt = (
+            select(SyncJob)
+            .where(
+                SyncJob.status.in_([SyncJobStatus.QUEUED, SyncJobStatus.RUNNING]),
+                func.coalesce(SyncJob.updated_at, SyncJob.created_at) < cutoff,
+            )
+            .order_by(SyncJob.created_at.asc())
+        )
+        return list(self.session.scalars(stmt).all())
 
     def delete(self, repo_id: uuid.UUID) -> bool:
         """Delete a repository and all related dependent records."""

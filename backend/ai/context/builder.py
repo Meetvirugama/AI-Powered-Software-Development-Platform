@@ -22,29 +22,13 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from typing import Any
 try:
     import tiktoken
 except ImportError:
     tiktoken = None  # type: ignore
 
-try:
-    from ai.retrieval.base import CodeChunk
-except ImportError:  # pragma: no cover
-    from uuid import UUID
-
-    @dataclass
-    class CodeChunk:  # type: ignore[no-redef]
-        id: UUID
-        repository_id: UUID
-        file_id: UUID
-        symbol_id: UUID | None
-        content: str
-        token_count: int
-        start_line: int
-        end_line: int
-        content_hash: str
-        score: float
-        file_path: str
+from ai.retrieval.base import CodeChunk
 
 
 logger = logging.getLogger(__name__)
@@ -915,6 +899,8 @@ class ContextBuilder:
         """
         seen: dict[str, MemoryEntry] = {}
         for entry in entries:
+            if getattr(entry, "status", "active") in ("stale", "archived"):
+                continue
             seen[str(entry.id)] = entry
 
         # Sort by ISO 8601 created_at string descending (newest first)

@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://platform:platform@localhost:5433/agent_platform"
     redis_url: str = "redis://localhost:6379/0"
 
+    # PostgreSQL connection pool settings for concurrent analysis workloads (Week 2 Section 12 Item 17, B-14)
+    db_pool_size: int = 20
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
+    # Per-feature context token budget defaults (Week 2 Section 12 Item 17, B-14)
+    context_budget_explain: int = 4000
+    context_budget_bugs: int = 6000
+    context_budget_tests: int = 6000
+    context_budget_review: int = 8000
+
     github_app_id: str | None = None
     github_app_private_key: str | None = None
     github_client_id: str | None = None

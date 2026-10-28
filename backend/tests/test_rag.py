@@ -314,3 +314,40 @@ async def test_rag_quality_benchmark_hit_rate(repo_id: UUID, indexed_code_chunks
 
     hit_rate = hits / len(benchmark_dataset)
     assert hit_rate >= 0.80, f"Hit rate {hit_rate*100}% below required 80% threshold"
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_distinguishes_zero_results_from_retrieval_failure(repo_id: UUID):
+    """B-08: RAGPipeline must distinguish legitimate zero results from retrieval failure (503 retryable)."""
+    from ai.pipeline import RAGPipeline as MainRAGPipeline
+    from ai.retrieval.base import RetrievalUnavailableError
+    from app.core.errors import APIError
+
+    # 1. Total retrieval failure -> raises retryable 503 APIError
+    failing_retriever = AsyncMock()
+    failing_retriever.retrieve.side_effect = RetrievalUnavailableError("Both vector and lexical failed")
+
+    pipeline_fail = MainRAGPipeline(
+        retriever=failing_retriever,
+        llm_gateway=AsyncMock(),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        await pipeline_fail.chat("How does auth work?", repo_id, history=[])
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.retryable is True
+
+    # 2. Legitimate zero results -> returns honest message, does not raise 503
+    empty_retriever = AsyncMock()
+    empty_retriever.retrieve.return_value = []
+
+    pipeline_empty = MainRAGPipeline(
+        retriever=empty_retriever,
+        llm_gateway=AsyncMock(),
+    )
+
+    ans = await pipeline_empty.chat("blockchain DeFi smart contract", repo_id, history=[])
+    assert ans.answer == "No relevant code found in this repository for your question."
+    assert ans.sources == []
+    assert ans.confidence == "low"
+

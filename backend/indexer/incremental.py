@@ -356,6 +356,8 @@ class IncrementalIndexer:
                     "file_path": file_rel_path,
                     "language": language,
                     "chunk_type": chunk.chunk_type,
+                    "embedding_model": getattr(self.embedding_service, "model_name", "models/gemini-embedding-001"),
+                    "embedding_dim": len(vec) if vec is not None else (self.embedding_service.dimensions if self.embedding_service else 768),
                 }
 
                 await self._execute(
