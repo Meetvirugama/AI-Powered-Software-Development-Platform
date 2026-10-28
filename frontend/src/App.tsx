@@ -26,6 +26,9 @@ const RepositoryTestStudio = lazy(() =>
 const RepositoryReviewStudio = lazy(() =>
   import('./pages/RepositoryReviewStudio').then((m) => ({ default: m.RepositoryReviewStudio }))
 );
+const RepositoryTaskStudio = lazy(() =>
+  import('./pages/RepositoryTaskStudio').then((m) => ({ default: m.RepositoryTaskStudio }))
+);
 
 function RouteFallback() {
   return (
@@ -59,6 +62,7 @@ export function App() {
                   <Route path="bugs" element={<RepositoryBugStudio />} />
                   <Route path="tests" element={<RepositoryTestStudio />} />
                   <Route path="review" element={<RepositoryReviewStudio />} />
+                  <Route path="tasks" element={<RepositoryTaskStudio />} />
                 </Route>
               </Route>
             </Route>

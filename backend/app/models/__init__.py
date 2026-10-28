@@ -11,10 +11,37 @@ from app.models.memory_entry import MemoryEntry, MemoryType, MemoryStatus
 from app.models.pull_request import PullRequest
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus, AnalysisFeature
 from app.models.analysis_finding import AnalysisFinding
+from app.models.task import (
+    AgentTask,
+    GitHubIssue,
+    TaskApprovalRecord,
+    TaskEventRecord,
+    TaskPlanRecord,
+)
 
 __all__ = [
-    "TimestampedModel", "User", "GitHubInstallation", "Repository", "SyncStatus",
-    "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus",
-    "MemoryEntry", "MemoryType", "MemoryStatus", "PullRequest",
-    "AnalysisRun", "AnalysisRunStatus", "AnalysisFeature", "AnalysisFinding",
+    "TimestampedModel",
+    "User",
+    "GitHubInstallation",
+    "Repository",
+    "SyncStatus",
+    "RepositoryFile",
+    "CodeSymbol",
+    "SymbolEdge",
+    "CodeChunk",
+    "SyncJob",
+    "SyncJobStatus",
+    "MemoryEntry",
+    "MemoryType",
+    "MemoryStatus",
+    "PullRequest",
+    "AnalysisRun",
+    "AnalysisRunStatus",
+    "AnalysisFeature",
+    "AnalysisFinding",
+    "GitHubIssue",
+    "AgentTask",
+    "TaskPlanRecord",
+    "TaskApprovalRecord",
+    "TaskEventRecord",
 ]

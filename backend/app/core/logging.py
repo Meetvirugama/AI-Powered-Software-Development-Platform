@@ -12,13 +12,13 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from app.core.secret_redaction import SecretRedactingFilter
+from app.core.secret_redaction import SecretRedactingFilter, _STANDARD_RECORD_ATTRS
 
 request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
 class JsonFormatter(logging.Formatter):
-    """Emit predictable JSON logs that can be ingested by log platforms."""
+    """Emit predictable JSON logs that can be ingested by log platforms, preserving structured extra fields."""
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {
@@ -29,6 +29,12 @@ class JsonFormatter(logging.Formatter):
         }
         if request_id := request_id_context.get():
             payload["request_id"] = request_id
+
+        # Include structured extra={...} attributes (already redacted by SecretRedactingFilter)
+        for key, value in vars(record).items():
+            if key not in _STANDARD_RECORD_ATTRS and not key.startswith("_") and key not in payload:
+                payload[key] = value
+
         return json.dumps(payload, default=str)
 
 
@@ -52,6 +58,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = request.headers.get("X-Request-ID", str(uuid4()))
+        request.state.request_id = request_id
         token = request_id_context.set(request_id)
         started_at = time.perf_counter()
         logger = logging.getLogger("app.http")

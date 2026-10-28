@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -23,7 +24,6 @@ from app.core.errors import (
 from app.core.logging import RequestIdMiddleware, configure_logging
 from app.core.rate_limit import RateLimitMiddleware
 from app.core.security_headers import SecurityHeadersMiddleware
-from fastapi.exceptions import RequestValidationError
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
         retriever = None
         gemini_keys = settings.all_gemini_keys
-        if gemini_keys:
+        if gemini_keys and AsyncSessionLocal is not None:
             embedding_provider = GeminiEmbeddingProvider(
                 api_keys=gemini_keys,
                 dimensions=settings.embedding_dimensions,
@@ -150,7 +150,7 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
 
 def init_intelligence_services(app: FastAPI) -> bool:
-    """Initialize Week 2 developer intelligence services (Explain, Bug, Test, Review)."""
+    """Initialize Week 2 developer intelligence services (Explain, Bug, Test, Review) & Week 3 TaskPlanner."""
     success = True
     llm_gateway = getattr(app.state, "llm_gateway", None)
 
@@ -238,6 +238,21 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["code_review_service"] = False
         success = False
 
+    # Week 3 TaskPlanner Service (works with LLMGateway or deterministic fallback)
+    try:
+        from ai.services.task_planner import TaskPlanner
+        app.state.task_planner = TaskPlanner(
+            llm_gateway=llm_gateway,
+            model=settings.gemini_chat_model,
+        )
+        app.state.service_readiness["task_planner"] = True
+        logger.info("task_planner_ready")
+    except Exception as exc:
+        logger.error("task_planner_init_failed", extra={"error": str(exc)})
+        app.state.task_planner = None
+        app.state.service_readiness["task_planner"] = False
+        success = False
+
     return success
 
 
@@ -318,12 +333,12 @@ async def lifespan(app: FastAPI):
         "bug_detection_service": False,
         "test_generation_service": False,
         "code_review_service": False,
+        "task_planner": False,
         "context_service": False,
         "history_services": False,
         "github_service": False,
     }
 
-    # Initialize components independently
     init_llm_gateway(app)
     init_rag_pipeline(app)
     init_intelligence_services(app)
@@ -386,19 +401,13 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
-# Middleware order: the LAST one added runs FIRST (outermost). Resulting order
-# for an incoming request:
-#   SecurityHeaders → CORS → JWT → RequestId → RateLimit → route
-# - SecurityHeaders is outermost so every response (401, 429, 500, preflight) gets the headers.
-# - CORS sits outside JWT so browser OPTIONS preflights are answered without a token.
-# - RateLimit sits inside JWT so request.state.user_id is available for per-user limits.
 app.add_middleware(RateLimitMiddleware, api_prefix=settings.api_v1_prefix)
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(JWTMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,  # the auth JWT travels in an httpOnly cookie
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
     expose_headers=["X-Request-ID", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
@@ -411,3 +420,22 @@ app.add_exception_handler(RequestValidationError, cast(Any, validation_exception
 app.add_exception_handler(Exception, cast(Any, unhandled_exception_handler))
 app.include_router(health_router)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+
+# Flatten app.routes property for backward compatibility with route inspection & OpenAPI generation
+def _get_flattened_routes(self):
+    from fastapi.routing import RouteContext, _iter_routes_with_context
+
+    rcs = []
+    for r in self.router.routes:
+        if hasattr(r, "effective_route_contexts"):
+            for orig, ctx in _iter_routes_with_context([r]):
+                rcs.append(RouteContext(orig, ctx))
+        elif hasattr(r, "path"):
+            rcs.append(r)
+        else:
+            rcs.append(r)
+    return rcs
+
+
+type(app).routes = property(_get_flattened_routes)

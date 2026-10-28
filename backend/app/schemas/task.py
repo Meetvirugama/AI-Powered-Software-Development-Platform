@@ -1,6 +1,6 @@
 """Task Intake & Lifecycle Schemas.
 
-Owner: Dev — Week 3 Day 1 Deliverable (Docs/daily_tasks.md line 608 & Docs/week3.md §7)
+Owner: Dev & Yug — Week 3 Day 1–2 Deliverable (Docs/daily_tasks.md & Docs/week3.md §7)
 Reference: Docs/week3.md §7.1 (Task Lifecycle), §7.2 (State Transitions), §7.3 (Common Task Response)
 
 Responsibilities:
@@ -19,12 +19,14 @@ from enum import Enum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
+from app.core.secret_redaction import redact
 
 _HTTP_URL_RE = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +70,8 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         {TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED}
     ),
     TaskStatus.APPROVED: frozenset(
-        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        # Approved plan can enter WORKSPACE_SETUP/EXECUTING, or be re-planned if revised (which invalidates approval)
+        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.REJECTED: frozenset(
         # Rejected plan can be re-planned, cancelled, or closed; never directly executed
@@ -124,6 +127,8 @@ TaskSourceType = Literal["GITHUB_ISSUE", "BUG_FINDING", "REVIEW_FINDING", "USER_
 class TaskSourceReference(BaseModel):
     """Traceability link connecting task to GitHub issues or Week 2 findings."""
 
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     type: TaskSourceType = Field(
         ...,
         description="Source type: GITHUB_ISSUE, BUG_FINDING, REVIEW_FINDING, or USER_PROMPT.",
@@ -138,6 +143,11 @@ class TaskSourceReference(BaseModel):
         default=None,
         max_length=2048,
         description="HTTP URL for the imported GitHub issue.",
+    )
+    url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="Alias for issue_url matching Docs/week3.md §6 F31 example.",
     )
     finding_id: str | None = Field(
         default=None,
@@ -154,7 +164,19 @@ class TaskSourceReference(BaseModel):
         description="Git commit SHA from which the task branches.",
     )
 
-    @field_validator("issue_url")
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_url_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            d = dict(data)
+            if d.get("url") and not d.get("issue_url"):
+                d["issue_url"] = d["url"]
+            elif d.get("issue_url") and not d.get("url"):
+                d["url"] = d["issue_url"]
+            return d
+        return data
+
+    @field_validator("issue_url", "url")
     @classmethod
     def _validate_issue_url(cls, value: str | None) -> str | None:
         if value is None:
@@ -197,6 +219,14 @@ class TaskRequirement(BaseModel):
         description="Conditions that must pass for this requirement to be satisfied.",
     )
 
+    @field_validator("description")
+    @classmethod
+    def _redact_description(cls, value: str) -> str:
+        cleaned = redact(value.strip())
+        if not cleaned:
+            raise ValueError("Requirement description must not be empty.")
+        return cleaned
+
     @field_validator("target_files")
     @classmethod
     def _validate_target_files(cls, files: list[str]) -> list[str]:
@@ -222,6 +252,11 @@ class TaskAssumption(BaseModel):
         default="low",
         description="Risk of failure if assumption proves false.",
     )
+
+    @field_validator("description")
+    @classmethod
+    def _redact_description(cls, value: str) -> str:
+        return redact(value.strip())
 
 
 TaskConstraintType = Literal[
@@ -292,29 +327,58 @@ class TaskIntakePayload(BaseModel):
     )
     base_revision: str | None = Field(
         default=None,
-        description="Git commit SHA to branch from. If omitted, uses default branch HEAD.",
+        description="Git commit SHA or branch ref to branch from. If omitted, uses default branch HEAD.",
     )
 
     @field_validator("title")
     @classmethod
     def _validate_title_not_blank(cls, value: str) -> str:
-        cleaned = value.strip()
+        cleaned = redact(value.strip())
         if not cleaned:
             raise ValueError("Task title must contain non-whitespace characters.")
         return cleaned
 
+    @field_validator("description")
+    @classmethod
+    def _validate_and_redact_description(cls, value: str) -> str:
+        cleaned = redact(value.strip())
+        if not cleaned:
+            raise ValueError("Task description must contain non-whitespace characters.")
+        return cleaned
+
+    @field_validator("base_revision")
+    @classmethod
+    def _validate_base_revision(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if (
+            cleaned.startswith("-")
+            or ".." in cleaned
+            or "\x00" in cleaned
+            or not (_COMMIT_SHA_RE.match(cleaned) or _SAFE_GIT_REF_RE.match(cleaned))
+        ):
+            raise ValueError(f"Invalid base_revision format: '{value}'")
+        return cleaned
+
     @model_validator(mode="after")
     def _validate_constraint_disjointness(self) -> "TaskIntakePayload":
-        """Ensure target files in requirements are not listed in forbidden_files constraints."""
-        forbidden_set: set[str] = set()
+        """Ensure target files in requirements are not listed in forbidden_files constraints (case-insensitive)."""
+        forbidden_map: dict[str, str] = {}
         for c in self.constraints:
-            forbidden_set.update(c.forbidden_files)
+            for f_path in c.forbidden_files:
+                forbidden_map[f_path.lower()] = f_path
 
         for req in self.requirements:
-            overlap = set(req.target_files).intersection(forbidden_set)
-            if overlap:
+            overlaps: list[str] = []
+            for t_path in req.target_files:
+                if t_path.lower() in forbidden_map:
+                    overlaps.append(t_path)
+            if overlaps:
                 raise ValueError(
-                    f"Requirement '{req.id}' targets forbidden file(s): {', '.join(sorted(overlap))}"
+                    f"Requirement '{req.id}' targets forbidden file(s): {', '.join(sorted(set(overlaps)))}"
                 )
         return self
 
@@ -331,6 +395,7 @@ class TaskDetailResponse(BaseModel):
     title: str
     description: str
     status: TaskStatus = Field(default=TaskStatus.CREATED)
+    source_type: TaskSourceType = Field(default="USER_PROMPT")
     source: TaskSourceReference
     requirements: list[TaskRequirement]
     assumptions: list[TaskAssumption] = Field(default_factory=list)
@@ -340,6 +405,8 @@ class TaskDetailResponse(BaseModel):
     approved_plan_version: int | None = None
     repair_attempts_used: int = Field(default=0, ge=0)
     repair_attempts_max: int = Field(default=3, ge=1, le=5)
+    latest_plan: dict[str, Any] | None = None
+    approvals: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -347,8 +414,42 @@ class TaskDetailResponse(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
+    @model_validator(mode="after")
+    def _sync_source_type(self) -> "TaskDetailResponse":
+        if self.source and self.source.type:
+            self.source_type = self.source.type
+        return self
+
+
+class TaskSummaryResponse(BaseModel):
+    """Compact summary item for task list views (Docs/week3.md §6 F38 & §7.3)."""
+
+    task_id: str
+    repository_id: str
+    title: str
+    status: TaskStatus
+    source_type: TaskSourceType
+    source: TaskSourceReference
+    base_revision: str | None = None
+    plan_version: int = 1
+    approved_plan_version: int | None = None
+    repair_attempts_used: int = 0
+    repair_attempts_max: int = 3
+    created_at: str
+    updated_at: str
+
+
+class PaginatedTaskListResponse(BaseModel):
+    """Paginated task list response."""
+
+    items: list[TaskSummaryResponse] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+
 
 __all__ = [
+    "PaginatedTaskListResponse",
     "TaskAssumption",
     "TaskConstraint",
     "TaskConstraintType",
@@ -360,6 +461,7 @@ __all__ = [
     "TaskSourceReference",
     "TaskSourceType",
     "TaskStatus",
+    "TaskSummaryResponse",
     "VALID_TASK_TRANSITIONS",
     "can_transition",
 ]

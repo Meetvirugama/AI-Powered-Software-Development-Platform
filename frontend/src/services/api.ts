@@ -43,6 +43,7 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     url.includes('/detect-bugs') ||
     url.includes('/generate-tests') ||
     url.includes('/review') ||
+    url.includes('/plan') ||
     url.includes('/chat');
 
   if (isAiEndpoint && (reqConfig.timeout === undefined || reqConfig.timeout === DEFAULT_TIMEOUT_MS)) {

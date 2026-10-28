@@ -56,6 +56,22 @@ class GitHubInstallation:
     installed_at: datetime | None = None
 
 
+@dataclass
+class GitHubIssueData:
+    """Metadata for a GitHub issue imported into or created from the platform (Week 3 F31)."""
+
+    number: int
+    title: str
+    body: str
+    state: str
+    html_url: str
+    labels: list[str] = field(default_factory=list)
+    author: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    is_pull_request: bool = False
+
+
 # ---------------------------------------------------------------------------
 # Abstract interface
 # ---------------------------------------------------------------------------
@@ -75,18 +91,7 @@ class GitHubIntegrationBase(ABC):
 
     @abstractmethod
     async def get_installation(self, installation_id: int) -> GitHubInstallation:
-        """Return metadata for a specific App installation.
-
-        Args:
-            installation_id: GitHub's numeric installation ID.
-
-        Returns:
-            A :class:`GitHubInstallation` record.
-
-        Raises:
-            GitHubNotFoundError: If the installation does not exist.
-            GitHubAuthError: If the App JWT is invalid.
-        """
+        """Return metadata for a specific App installation."""
 
     # ------------------------------------------------------------------
     # Repository operations (require installation token)
@@ -94,64 +99,19 @@ class GitHubIntegrationBase(ABC):
 
     @abstractmethod
     async def list_repositories(self, installation_id: int) -> list[GitHubRepository]:
-        """List all repositories accessible to this installation.
-
-        Args:
-            installation_id: GitHub's numeric installation ID.
-
-        Returns:
-            A list of :class:`GitHubRepository` records. May be empty.
-
-        Raises:
-            GitHubAuthError: If the installation token cannot be obtained.
-            GitHubRateLimitError: If the API rate limit is exceeded.
-        """
+        """List all repositories accessible to this installation."""
 
     @abstractmethod
     async def get_repository(self, owner: str, repo: str) -> GitHubRepository:
-        """Fetch full metadata for a single repository.
-
-        Args:
-            owner: GitHub user or organization name.
-            repo: Repository name.
-
-        Returns:
-            A :class:`GitHubRepository` record with full metadata.
-
-        Raises:
-            GitHubNotFoundError: If the repository does not exist or is inaccessible.
-            GitHubAuthError: If the installation token is invalid.
-        """
+        """Fetch full metadata for a single repository."""
 
     @abstractmethod
     async def list_branches(self, owner: str, repo: str) -> list[GitHubBranch]:
-        """Return all branches for the given repository.
-
-        Args:
-            owner: GitHub user or organization name.
-            repo: Repository name.
-
-        Returns:
-            Ordered list of :class:`GitHubBranch` records.
-
-        Raises:
-            GitHubNotFoundError: If the repository does not exist.
-        """
+        """Return all branches for the given repository."""
 
     @abstractmethod
     async def get_default_branch(self, owner: str, repo: str) -> str:
-        """Return the name of the repository's default branch.
-
-        Args:
-            owner: GitHub user or organization name.
-            repo: Repository name.
-
-        Returns:
-            Branch name string (e.g. ``"main"`` or ``"master"``).
-
-        Raises:
-            GitHubNotFoundError: If the repository does not exist.
-        """
+        """Return the name of the repository's default branch."""
 
     @abstractmethod
     async def clone_repository(
@@ -162,24 +122,41 @@ class GitHubIntegrationBase(ABC):
         branch: str,
         workspace_path: str,
     ) -> str:
-        """Shallow-clone a repository into a local workspace directory.
+        """Shallow-clone a repository into a local workspace directory."""
 
-        Uses a short-lived installation token so the private key never
-        touches disk.  Always performs ``git clone --depth=1``.
+    # ------------------------------------------------------------------
+    # Week 3 F31 — GitHub Issue Integration operations
+    # ------------------------------------------------------------------
 
-        Args:
-            installation_id: GitHub App installation ID.
-            owner: Repository owner login.
-            repo: Repository name.
-            branch: Branch to clone.
-            workspace_path: Absolute local path where the repo will be cloned.
-                            Must be inside the allowed workspace root
-                            (no ``../`` path traversal).
+    async def create_issue(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str = "",
+        labels: list[str] | None = None,
+        installation_id: int | None = None,
+    ) -> GitHubIssueData:
+        """Create a GitHub issue on the target repository."""
+        raise NotImplementedError
 
-        Returns:
-            The ``workspace_path`` string on success.
+    async def get_issue(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        installation_id: int | None = None,
+    ) -> GitHubIssueData:
+        """Fetch a single GitHub issue by number."""
+        raise NotImplementedError
 
-        Raises:
-            ValueError: If ``workspace_path`` is outside the allowed root.
-            GitHubCloneError: If the clone process fails.
-        """
+    async def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "open",
+        installation_id: int | None = None,
+    ) -> list[GitHubIssueData]:
+        """List issues for the given repository."""
+        raise NotImplementedError

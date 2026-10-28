@@ -6,6 +6,7 @@ import {
   FolderOpen,
   RefreshCw,
   ShieldCheck,
+  PlusCircle,
 } from 'lucide-react';
 import { useRepositoryFiles } from '../hooks/useRepositories';
 import { useReviewCode } from '../hooks/useAnalysis';
@@ -13,6 +14,7 @@ import { useStudioFile } from '../hooks/useStudioFile';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { CodeReviewView } from '../components/explorer/CodeReviewView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
+import { CreateIssueModal, type FindingForIssue } from '../components/explorer/CreateIssueModal';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type {
@@ -44,6 +46,7 @@ export function RepositoryReviewStudio() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+  const [issueFinding, setIssueFinding] = useState<FindingForIssue | null>(null);
 
   // Review mutation
   const reviewMutation = useReviewCode(repoId, {
@@ -53,7 +56,8 @@ export function RepositoryReviewStudio() {
   });
 
   const handleRunReview = useCallback(() => {
-    if (!selectedFile || reviewMutation.isPending) return;
+    if (reviewMutation.isPending) return;
+    if (!selectedFile) return;
 
     reviewMutation.mutate({
       target: {
@@ -62,6 +66,25 @@ export function RepositoryReviewStudio() {
       },
     });
   }, [selectedFile, reviewMutation]);
+
+  const handleSelectSourceReference = useCallback(
+    (source: SourceReference) => {
+      setActiveSourceReference(source);
+      if (source.file_path && selectedFile && source.file_path !== selectedFile.path) {
+        const targetFile = files.find((f) => f.path === source.file_path);
+        if (targetFile) {
+          handleSelectFile(targetFile, { preserveResults: true });
+          handleTargetChange({
+            type: 'range',
+            path: source.file_path,
+            start_line: source.start_line ?? undefined,
+            end_line: source.end_line ?? undefined,
+          });
+        }
+      }
+    },
+    [files, selectedFile, handleSelectFile, handleTargetChange]
+  );
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden bg-background">
@@ -88,6 +111,18 @@ export function RepositoryReviewStudio() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {reviewResult?.report?.findings && reviewResult.report.findings.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIssueFinding(reviewResult.report.findings[0])}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-xs font-semibold text-primary transition-colors"
+              title="Create GitHub Issue & Task from top review finding"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Create Issue</span>
+            </button>
+          )}
+
           <button
             onClick={() => setHistoryOpen(true)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -182,7 +217,7 @@ export function RepositoryReviewStudio() {
               <CodeReviewView
                 result={reviewResult}
                 activeSourceReference={activeSourceReference}
-                onSelectSourceReference={setActiveSourceReference}
+                onSelectSourceReference={handleSelectSourceReference}
                 repositoryId={repoId}
               />
             </div>
@@ -224,6 +259,15 @@ export function RepositoryReviewStudio() {
           setReviewResult(review);
           setHistoryOpen(false);
         }}
+      />
+
+      {/* Week 3 Day 1 (F31): Create GitHub Issue & Task Modal */}
+      <CreateIssueModal
+        isOpen={Boolean(issueFinding)}
+        onClose={() => setIssueFinding(null)}
+        repositoryId={repoId}
+        finding={issueFinding}
+        sourceType="REVIEW_FINDING"
       />
     </div>
   );

@@ -6,6 +6,7 @@ import {
   ShieldAlert,
   FlaskConical,
   FileCheck,
+  ListChecks,
   ArrowLeft,
   RefreshCw,
   GitBranch,
@@ -72,6 +73,12 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
       label: 'Code Review',
       icon: FileCheck,
       badge: undefined,
+    },
+    {
+      to: `/app/repositories/${repoId}/tasks`,
+      label: 'Task Planner',
+      icon: ListChecks,
+      badge: 'W3',
     },
   ];
 
@@ -180,7 +187,7 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
                 <span
                   className={cn(
                     'px-1.5 py-0.2 rounded text-[10px] font-mono leading-none',
-                    item.badge === 'RAG'
+                    item.badge === 'RAG' || item.badge === 'W3'
                       ? 'bg-primary/10 text-primary border border-primary/20'
                       : 'bg-muted text-muted-foreground'
                   )}

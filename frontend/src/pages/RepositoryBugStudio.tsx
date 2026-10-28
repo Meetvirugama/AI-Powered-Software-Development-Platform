@@ -6,6 +6,7 @@ import {
   FolderOpen,
   RefreshCw,
   Bug,
+  PlusCircle,
 } from 'lucide-react';
 import { useRepositoryFiles } from '../hooks/useRepositories';
 import { useDetectBugs } from '../hooks/useAnalysis';
@@ -13,6 +14,7 @@ import { useStudioFile } from '../hooks/useStudioFile';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { BugScannerView } from '../components/explorer/BugScannerView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
+import { CreateIssueModal, type FindingForIssue } from '../components/explorer/CreateIssueModal';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type { SourceReference, BugDetectionResponse } from '../types/analysis';
@@ -21,11 +23,9 @@ export function RepositoryBugStudio() {
   const { id } = useParams<{ id: string }>();
 
   const repoId = id ?? '';
-  // H-2: increased from 100 to 500
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  // H-1: shared hook replaces ~30 lines of duplicated state
   const {
     selectedFile,
     activeTarget,
@@ -41,8 +41,8 @@ export function RepositoryBugStudio() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
+  const [issueFinding, setIssueFinding] = useState<FindingForIssue | null>(null);
 
-  // Bug detection mutation
   const bugMutation = useDetectBugs(repoId, {
     onSuccess: (data) => {
       setBugResult(data);
@@ -62,7 +62,8 @@ export function RepositoryBugStudio() {
     if (selectedFile && source.file_path && source.file_path !== selectedFile.path) {
       const targetFile = files.find((f) => f.path === source.file_path);
       if (targetFile) {
-        handleSelectFile(targetFile);
+        // BUG-W3-05 Fix: preserve bugResult when jumping to a cross-file citation
+        handleSelectFile(targetFile, { preserveResults: true });
         handleTargetChange({
           type: 'range',
           path: source.file_path,
@@ -97,6 +98,18 @@ export function RepositoryBugStudio() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          {bugResult && bugResult.findings.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIssueFinding(bugResult.findings[0])}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-xs font-semibold text-primary transition-colors"
+              title="Create GitHub Issue & Task from top finding"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Create Issue</span>
+            </button>
+          )}
+
           <button
             onClick={() => setHistoryOpen(true)}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -127,7 +140,6 @@ export function RepositoryBugStudio() {
         </div>
       </div>
 
-      {/* H-3 Fix: Use fixed positioning so the picker doesn't clip in nested flex layouts */}
       {showFilePicker && (
         <>
           <div
@@ -182,9 +194,7 @@ export function RepositoryBugStudio() {
             </div>
           ) : bugMutation.isError ? (
             <div className="p-4">
-              <ErrorMessage
-                error={bugMutation.error}
-              />
+              <ErrorMessage error={bugMutation.error} />
             </div>
           ) : bugResult ? (
             <div className="space-y-4">
@@ -233,6 +243,15 @@ export function RepositoryBugStudio() {
           handleTargetChange(target);
           setHistoryOpen(false);
         }}
+      />
+
+      {/* Week 3 Day 1 (F31): Create GitHub Issue & Task Modal */}
+      <CreateIssueModal
+        isOpen={Boolean(issueFinding)}
+        onClose={() => setIssueFinding(null)}
+        repositoryId={repoId}
+        finding={issueFinding}
+        sourceType="BUG_FINDING"
       />
     </div>
   );

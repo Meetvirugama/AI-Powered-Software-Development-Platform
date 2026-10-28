@@ -4,6 +4,11 @@
  * Consolidates the identical file-selection pattern that previously existed
  * in RepositoryExplainStudio, RepositoryBugStudio, RepositoryTestStudio,
  * and RepositoryReviewStudio (~30 duplicate lines each).
+ *
+ * BUG-W3-05 Fix:
+ * `handleSelectFile` accepts an optional `{ preserveResults?: boolean }` flag
+ * so cross-file source reference navigation in BugScannerView / ExplanationResultView
+ * switches the code viewer file without wiping the active analysis result!
  */
 
 import { useState, useMemo } from 'react';
@@ -15,6 +20,10 @@ export interface TargetRange {
   start_line?: number;
   end_line?: number;
   symbol?: string | null;
+}
+
+export interface SelectFileOptions {
+  preserveResults?: boolean;
 }
 
 export interface UseStudioFileReturn {
@@ -29,10 +38,10 @@ export interface UseStudioFileReturn {
   /** Show or hide the file picker popover. */
   setShowFilePicker: (visible: boolean) => void;
   /**
-   * Called when the user selects a file in the file picker.
+   * Called when the user selects a file in the file picker or via citation click.
    * Resets target range, updates the URL search param, and hides the picker.
    */
-  handleSelectFile: (file: RepositoryFile) => void;
+  handleSelectFile: (file: RepositoryFile, options?: SelectFileOptions) => void;
   /**
    * Called when the code viewer emits a new range selection.
    * Narrows the analysis target to the specified lines or symbol.
@@ -42,13 +51,6 @@ export interface UseStudioFileReturn {
   resetTargetRange: () => void;
 }
 
-/**
- * Shared file-selection hook for all four developer studio pages.
- *
- * @param files         The list of indexed repository files (from useRepositoryFiles).
- * @param onFileChange  Optional callback invoked after file selection changes.
- *                      Useful for clearing analysis results in the parent.
- */
 export function useStudioFile(
   files: RepositoryFile[],
   onFileChange?: () => void
@@ -83,12 +85,14 @@ export function useStudioFile(
     [selectedFile, targetRange]
   );
 
-  const handleSelectFile = (file: RepositoryFile) => {
+  const handleSelectFile = (file: RepositoryFile, options?: SelectFileOptions) => {
     setSelectedFileOverride(file);
     setTargetRange({});
     setSearchParams({ file: file.path });
     setShowFilePicker(false);
-    onFileChange?.();
+    if (!options?.preserveResults) {
+      onFileChange?.();
+    }
   };
 
   const handleTargetChange = (target: AnalysisTarget) => {

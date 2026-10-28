@@ -1,15 +1,15 @@
-"""Migration smoke tests against clean PostgreSQL + pgvector schema (Week 2 Section 12 Item 12, B-21).
+"""Migration smoke tests against clean PostgreSQL + pgvector schema (Week 2 Section 12 Item 12, B-21 & Week 3 F39).
 
 Verifies:
 1. Clean schema full lifecycle:
-   - Upgrades an empty, isolated schema from <base> to head (a1b2c3d4e5f6).
-   - Validates all 13 platform tables, composite indexes, enum types, and pgvector HNSW index.
+   - Upgrades an empty, isolated schema from <base> to head (c94e1f8a2d73).
+   - Validates all platform tables, composite indexes, enum types, and pgvector HNSW index.
    - Downgrades -1 to verify rollback integrity.
    - Upgrades back to head to verify idempotent re-application.
 2. Zero schema drift (B-21):
    - Programmatically runs autogenerate compare_metadata to verify exact parity between Base.metadata and database schema.
 3. Acyclic and complete revision history:
-   - Verifies all 7 migrations form a continuous, unbroken, acyclic chain.
+   - Verifies all migrations form a continuous, unbroken, acyclic chain.
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import Base
@@ -45,6 +44,11 @@ EXPECTED_TABLES = frozenset({
     "analysis_runs",
     "analysis_findings",
     "pull_requests",
+    "github_issues",
+    "tasks",
+    "task_plans",
+    "task_approvals",
+    "task_events",
 })
 
 EXPECTED_MILESTONE_REVISIONS = (
@@ -54,7 +58,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "cb4e2a7d0f31",  # sync jobs
     "e7b8c9d0f1a2",  # code_chunks and memory_entries
     "f1c2d3e4b5a6",  # analysis_runs and analysis_findings
-    "a1b2c3d4e5f6",  # pull_requests
+    "b627460d74e0",  # pull_requests
+    "c94e1f8a2d73",  # week3 github_issues, tasks, task_plans, task_approvals, task_events
 )
 
 
@@ -117,18 +122,18 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         pr_fks = insp.get_foreign_keys("pull_requests", schema=clean_schema_name)
         assert any(fk.get("options", {}).get("ondelete") == "CASCADE" or fk.get("name") == "pull_requests_repository_id_fkey" for fk in pr_fks)
 
-        # 2. Downgrade -1 (rolls back pull_requests)
+        # 2. Downgrade -1 (rolls back Week 3 task tables)
         command.downgrade(cfg, "-1")
         insp_downgraded = inspect(create_engine(f"{settings.database_url}?options=-csearch_path={clean_schema_name},public"))
         tables_after_downgrade = set(insp_downgraded.get_table_names(schema=clean_schema_name))
-        assert "pull_requests" not in tables_after_downgrade, "pull_requests table should be dropped after downgrade -1"
-        assert "analysis_runs" in tables_after_downgrade, "analysis_runs should remain after downgrade -1"
+        assert "tasks" not in tables_after_downgrade, "tasks table should be dropped after downgrade -1"
+        assert "pull_requests" in tables_after_downgrade, "pull_requests should remain after downgrade -1"
 
         # 3. Re-upgrade to head (idempotent re-creation)
         command.upgrade(cfg, "head")
         insp_reupgraded = inspect(create_engine(f"{settings.database_url}?options=-csearch_path={clean_schema_name},public"))
         tables_reupgraded = set(insp_reupgraded.get_table_names(schema=clean_schema_name))
-        assert "pull_requests" in tables_reupgraded, "pull_requests must be restored after re-upgrade head"
+        assert "tasks" in tables_reupgraded, "tasks must be restored after re-upgrade head"
 
     finally:
         engine.dispose()
@@ -138,6 +143,11 @@ def test_zero_schema_drift_against_database() -> None:
     """Verify that ORM models (Base.metadata) and Alembic migrations have zero schema drift (B-21)."""
     settings = get_settings()
     try:
+        ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
+        cfg = Config(str(ini_path))
+        cfg.set_main_option("sqlalchemy.url", settings.database_url)
+        command.upgrade(cfg, "head")
+
         engine = create_engine(settings.database_url)
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn, opts={"compare_type": True})
@@ -147,7 +157,6 @@ def test_zero_schema_drift_against_database() -> None:
             # (e.g. pgvector vector type internal details)
             actionable_diffs = []
             for diff in diffs:
-                # If diff is a vector type representation difference, ignore
                 diff_str = str(diff)
                 if "vector" in diff_str.lower() and "type" in diff_str.lower():
                     continue
@@ -173,7 +182,9 @@ def test_alembic_chain_is_unbroken_and_acyclic() -> None:
     assert versions_dir.is_dir()
 
     migration_files = list(versions_dir.glob("*.py"))
-    assert len(migration_files) >= 7, f"Expected at least 7 migrations, found {len(migration_files)}"
+    assert len(migration_files) >= len(EXPECTED_MILESTONE_REVISIONS), (
+        f"Expected at least {len(EXPECTED_MILESTONE_REVISIONS)} migrations, found {len(migration_files)}"
+    )
 
     revisions: dict[str, str | None] = {}
     for py_file in migration_files:
@@ -192,8 +203,14 @@ def test_alembic_chain_is_unbroken_and_acyclic() -> None:
     for milestone in EXPECTED_MILESTONE_REVISIONS:
         assert milestone in revisions, f"Milestone revision {milestone} missing from Alembic versions"
 
+    # Determine leaf head revision dynamically (the revision not referenced as any other revision's down_revision)
+    referenced_downs = {d for d in revisions.values() if d is not None}
+    heads = [r for r in revisions if r not in referenced_downs]
+    assert len(heads) == 1, f"Expected exactly 1 Alembic head revision, found {heads}"
+    head_rev = heads[0]
+    assert head_rev == EXPECTED_MILESTONE_REVISIONS[-1]
+
     # Walk backwards from head to root
-    head_rev = EXPECTED_MILESTONE_REVISIONS[-1]
     curr: str | None = head_rev
     visited: list[str] = []
     while curr is not None:
