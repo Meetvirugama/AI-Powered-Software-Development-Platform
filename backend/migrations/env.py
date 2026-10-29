@@ -31,7 +31,7 @@ import app.models
 custom_url = config.get_main_option("sqlalchemy.url")
 if not custom_url or "driver://user:pass" in custom_url:
     settings = get_settings()
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
