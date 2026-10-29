@@ -68,8 +68,9 @@ VALID_WORKSPACE_TRANSITIONS: dict[WorkspaceStatus, frozenset[WorkspaceStatus]] =
         }
     ),
     WorkspaceStatus.STOPPED: frozenset(
-        {WorkspaceStatus.CLEANUP_PENDING, WorkspaceStatus.READY, WorkspaceStatus.FAILED}
+        {WorkspaceStatus.IN_USE, WorkspaceStatus.READY, WorkspaceStatus.CLEANUP_PENDING, WorkspaceStatus.FAILED}
     ),
+
     WorkspaceStatus.FAILED: frozenset(
         {WorkspaceStatus.CLEANUP_PENDING}
     ),
@@ -303,11 +304,125 @@ class WorkspaceCleanupResult(BaseModel):
     error: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# 7. Execution Start & Lifecycle Schemas (Docs/week3.md §8 Day 3)
+# ---------------------------------------------------------------------------
+
+class WorkspaceExecutionEventType(str, Enum):
+    """Event types emitted during task execution in an isolated workspace."""
+
+    WORKSPACE_CREATED = "WORKSPACE_CREATED"
+    BASE_REVISION_VERIFIED = "BASE_REVISION_VERIFIED"
+    BRANCH_SETUP = "BRANCH_SETUP"
+    EXECUTION_STARTED = "EXECUTION_STARTED"
+    TOOL_INVOCATION = "TOOL_INVOCATION"
+    EXECUTION_PAUSED = "EXECUTION_PAUSED"
+    EXECUTION_RESUMED = "EXECUTION_RESUMED"
+    EXECUTION_STOPPED = "EXECUTION_STOPPED"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
+    CLEANUP_INITIATED = "CLEANUP_INITIATED"
+    CLEANUP_COMPLETED = "CLEANUP_COMPLETED"
+
+
+class WorkspaceExecutionEvent(BaseModel):
+    """Timeline event recording progress, actions, and status changes."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    event_id: str = Field(..., description="Unique UUID for this event.")
+    task_id: str = Field(..., description="Task UUID bound to the event.")
+    workspace_id: str = Field(..., description="Workspace UUID where event occurred.")
+    event_type: WorkspaceExecutionEventType = Field(..., description="Classification of event.")
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    status: WorkspaceStatus = Field(..., description="Workspace status at event emission.")
+    message: str = Field(..., description="Human-readable description of the event.")
+    payload: dict[str, Any] = Field(default_factory=dict, description="Redacted event metadata.")
+
+
+class WorkspaceStartExecutionRequest(BaseModel):
+    """Request payload to initiate execution in an isolated workspace."""
+
+    task_id: str = Field(..., min_length=1, description="Task identifier to start.")
+    approval_token: str | None = Field(default=None, description="Optional human approval token.")
+    plan_version: int = Field(default=1, ge=1, description="Approved plan version.")
+    approved_base_revision: str | None = Field(
+        default=None,
+        description="Base revision SHA at approval time for stale-check.",
+    )
+    task_status: str = Field(
+        default="APPROVED",
+        description="Current task status (must be APPROVED to enter execution).",
+    )
+
+
+class WorkspaceStartExecutionResult(BaseModel):
+    """Result of starting workspace execution."""
+
+    success: bool
+    task_id: str
+    workspace_id: str | None = None
+    status: WorkspaceStatus
+    branch_name: str | None = None
+    base_revision: str | None = None
+    error: str | None = None
+    started_at: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# 8. Command Execution & Tool Policy Schemas (F34, F35)
+# ---------------------------------------------------------------------------
+
+class WorkspaceCommandRequest(BaseModel):
+    """Request to safely execute an allowlisted command in the workspace."""
+
+    task_id: str = Field(..., min_length=1, description="Task identifier.")
+    command: str = Field(..., min_length=1, description="Executable name (e.g. pytest, git, npm).")
+    arguments: list[str] = Field(default_factory=list, description="Positional command arguments.")
+    timeout_seconds: int | None = Field(default=None, ge=1, le=300, description="Execution timeout.")
+    environment: dict[str, str] = Field(default_factory=dict, description="Optional custom env vars.")
+
+
+class WorkspaceCommandResult(BaseModel):
+    """Result of running a command inside the workspace sandbox."""
+
+    success: bool
+    command: str
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+    duration_ms: float = 0.0
+    timed_out: bool = False
+    error: str | None = None
+
+
+class WorkspaceToolPolicyRequest(BaseModel):
+    """Tool invocation payload inspected by the policy engine."""
+
+    tool_name: str = Field(..., min_length=1, description="Registered tool name.")
+    task_id: str = Field(..., min_length=1, description="Task invoking tool.")
+    arguments: dict[str, Any] = Field(default_factory=dict, description="Raw tool arguments.")
+
+
+class WorkspaceToolPolicyResult(BaseModel):
+    """Policy authorization evaluation outcome for a tool request."""
+
+    is_permitted: bool
+    tool_name: str
+    sanitized_arguments: dict[str, Any] = Field(default_factory=dict)
+    violation_reason: str | None = None
+
+
 __all__ = [
     "VALID_WORKSPACE_TRANSITIONS",
     "WorkspaceCleanupResult",
+    "WorkspaceCommandRequest",
+    "WorkspaceCommandResult",
     "WorkspaceCreateRequest",
     "WorkspaceCreateResult",
+    "WorkspaceExecutionEvent",
+    "WorkspaceExecutionEventType",
     "WorkspaceFilePatchRequest",
     "WorkspaceFilePatchResult",
     "WorkspaceFileReadRequest",
@@ -317,6 +432,11 @@ __all__ = [
     "WorkspaceIsolationType",
     "WorkspaceMetadata",
     "WorkspaceResourceLimits",
+    "WorkspaceStartExecutionRequest",
+    "WorkspaceStartExecutionResult",
     "WorkspaceStatus",
+    "WorkspaceToolPolicyRequest",
+    "WorkspaceToolPolicyResult",
     "can_transition_workspace",
 ]
+
