@@ -15,20 +15,21 @@ import { CodeReviewView } from '../components/explorer/CodeReviewView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
-import type {
-  SourceReference,
-  ReviewReportResponse,
-} from '../types/analysis';
+import { cn } from '../lib/utils';
+import type { SourceReference, ReviewReportResponse } from '../types/analysis';
 
 export function RepositoryReviewStudio() {
   const { id } = useParams<{ id: string }>();
 
   const repoId = id ?? '';
-  // H-2: increased from 100 to 500
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  // H-1: shared hook replaces ~30 lines of duplicated state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+  const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
+
   const {
     selectedFile,
     activeTarget,
@@ -41,14 +42,11 @@ export function RepositoryReviewStudio() {
     setReviewResult(null);
   });
 
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
-
   // Review mutation
   const reviewMutation = useReviewCode(repoId, {
     onSuccess: (data) => {
       setReviewResult(data);
+      setActiveMobileTab('results');
     },
   });
 
@@ -68,14 +66,37 @@ export function RepositoryReviewStudio() {
       {/* Studio Header Toolbar */}
       <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={() => setShowFilePicker(!showFilePicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
-            title="Switch target file"
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-primary" />
-            <span className="truncate max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
-          </button>
+          {/* Anchored Target File Picker (F-09) */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilePicker(!showFilePicker)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
+              title="Switch target file"
+              aria-expanded={showFilePicker}
+              aria-haspopup="dialog"
+            >
+              <FolderOpen className="h-3.5 w-3.5 text-primary" />
+              <span className="truncate max-w-[140px] sm:max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
+            </button>
+
+            {showFilePicker && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setShowFilePicker(false)}
+                  aria-hidden="true"
+                />
+                <div className="absolute left-0 top-full mt-1.5 z-30 w-80 sm:w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+                  <TargetFilePicker
+                    files={files}
+                    isLoading={filesLoading}
+                    selectedFile={selectedFile}
+                    onSelectFile={handleSelectFile}
+                  />
+                </div>
+              </>
+            )}
+          </div>
 
           {reviewResult?.report && (
             <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[11px] font-mono">
@@ -85,6 +106,32 @@ export function RepositoryReviewStudio() {
               <span>{reviewResult.report.total_findings} findings</span>
             </div>
           )}
+
+          {/* Responsive Mobile / Tablet Tab Switcher (F-09) */}
+          <div className="flex lg:hidden items-center p-0.5 rounded-lg bg-muted text-xs font-medium">
+            <button
+              onClick={() => setActiveMobileTab('source')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'source'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Source
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('results')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'results'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Results
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -118,29 +165,15 @@ export function RepositoryReviewStudio() {
         </div>
       </div>
 
-      {/* H-3 Fix: fixed positioning with backdrop */}
-      {showFilePicker && (
-        <>
-          <div
-            className="fixed inset-0 z-20"
-            onClick={() => setShowFilePicker(false)}
-            aria-hidden="true"
-          />
-          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <TargetFilePicker
-              files={files}
-              isLoading={filesLoading}
-              selectedFile={selectedFile}
-              onSelectFile={handleSelectFile}
-            />
-          </div>
-        </>
-      )}
-
-      {/* 2-Pane Split Studio Canvas */}
+      {/* Responsive Split Studio Canvas (F-09) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Pane: Code Viewer */}
-        <div className="w-1/2 min-w-[360px] h-full border-r border-border flex flex-col min-h-0 overflow-hidden bg-background">
+        <div
+          className={cn(
+            'w-full lg:w-1/2 min-w-0 h-full lg:border-r border-border flex flex-col min-h-0 overflow-hidden bg-background',
+            activeMobileTab !== 'source' && 'hidden lg:flex'
+          )}
+        >
           {selectedFile ? (
             <CodeViewer
               repositoryId={repoId}
@@ -160,7 +193,12 @@ export function RepositoryReviewStudio() {
         </div>
 
         {/* Right Pane: Code Review Findings Canvas */}
-        <div className="flex-1 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
+        <div
+          className={cn(
+            'flex-1 lg:w-1/2 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6',
+            activeMobileTab !== 'results' && 'hidden lg:flex'
+          )}
+        >
           {reviewMutation.isPending ? (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
               <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
@@ -182,7 +220,10 @@ export function RepositoryReviewStudio() {
               <CodeReviewView
                 result={reviewResult}
                 activeSourceReference={activeSourceReference}
-                onSelectSourceReference={setActiveSourceReference}
+                onSelectSourceReference={(ref) => {
+                  setActiveSourceReference(ref);
+                  setActiveMobileTab('source');
+                }}
                 repositoryId={repoId}
               />
             </div>
@@ -222,6 +263,7 @@ export function RepositoryReviewStudio() {
         currentFilePath={selectedFile?.path}
         onReopenReview={(review) => {
           setReviewResult(review);
+          setActiveMobileTab('results');
           setHistoryOpen(false);
         }}
       />

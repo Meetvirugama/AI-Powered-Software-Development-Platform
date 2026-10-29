@@ -54,7 +54,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "cb4e2a7d0f31",  # sync jobs
     "e7b8c9d0f1a2",  # code_chunks and memory_entries
     "f1c2d3e4b5a6",  # analysis_runs and analysis_findings
-    "a1b2c3d4e5f6",  # pull_requests
+    "b627460d74e0",  # pull_requests
 )
 
 

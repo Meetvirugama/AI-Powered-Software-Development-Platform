@@ -131,13 +131,14 @@ async def process_sync_job(
             embedding_service=embedding_service,
         )
 
-        stats = await indexer.sync(
-            repository_id=repository_id,
-            scanned_files=scanned_files,
-            root_path=str(clone_dir),
-        )
-
-        await embedding_service.aclose()
+        try:
+            stats = await indexer.sync(
+                repository_id=repository_id,
+                scanned_files=scanned_files,
+                root_path=str(clone_dir),
+            )
+        finally:
+            await embedding_service.aclose()
 
         # Mark completed
         with SessionLocal() as db:

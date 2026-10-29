@@ -132,16 +132,23 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
         grounding_validator = GroundingValidator(db_session=AsyncSessionLocal)
 
+        llm_gateway = getattr(app.state, "llm_gateway", None)
         app.state.rag_pipeline = RAGPipeline(
             retriever=retriever,
-            llm_gateway=getattr(app.state, "llm_gateway", None),
+            llm_gateway=llm_gateway,
             grounding_validator=grounding_validator,
             model=settings.gemini_chat_model,
             db_session=AsyncSessionLocal,
         )
-        app.state.service_readiness["rag_pipeline"] = True
-        logger.info("rag_pipeline_ready", extra={"has_retriever": retriever is not None})
-        return True
+        has_retriever = retriever is not None
+        has_llm = llm_gateway is not None
+        is_ready = has_retriever and has_llm
+        app.state.service_readiness["rag_pipeline"] = is_ready
+        logger.info(
+            "rag_pipeline_init",
+            extra={"has_retriever": has_retriever, "has_llm": has_llm, "is_ready": is_ready},
+        )
+        return is_ready
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None
@@ -366,8 +373,9 @@ async def lifespan(app: FastAPI):
             pass
 
     try:
-        from app.core.redis import close_redis
+        from app.core.redis import close_redis, close_redis_async
         close_redis()
+        await close_redis_async()
     except Exception:
         pass
 
