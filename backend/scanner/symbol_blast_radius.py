@@ -182,6 +182,8 @@ class SymbolBlastRadiusEngine:
 
             dependents = incoming_edges.get(curr_sym.id, [])
             for dep_id, edge_type in dependents:
+                if (len(directly_modified) + len(transitively_affected)) >= self.max_symbols_budget:
+                    break
                 if dep_id in visited:
                     continue
 

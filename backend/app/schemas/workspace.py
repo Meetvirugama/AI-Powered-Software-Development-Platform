@@ -360,7 +360,7 @@ class WorkspaceStartExecutionRequest(BaseModel):
         description="Base revision SHA at approval time for stale-check.",
     )
     task_status: str = Field(
-        default="APPROVED",
+        ...,
         description="Current task status (must be APPROVED to enter execution).",
     )
 

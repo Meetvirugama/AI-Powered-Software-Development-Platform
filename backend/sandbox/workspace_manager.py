@@ -14,6 +14,7 @@ Key Capabilities:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -102,6 +103,7 @@ class WorkspaceManager:
         self._command_runner = WorkspaceCommandRunner()
         self._test_runner = WorkspaceTestRunner(command_runner=self._command_runner)
         self._test_history: dict[str, list[WorkspaceTestExecutionResult]] = {}
+        self._repo_roots: dict[str, Path] = {}
 
     @property
     def base_directory(self) -> Path:
@@ -143,7 +145,8 @@ class WorkspaceManager:
         # Formulate safe workspace path
         raw_slug = task_id[5:] if task_id.lower().startswith("task-") else task_id
         cleaned_short = format_agent_branch_name(raw_slug).replace("agent/task-", "")
-        safe_task_slug = f"task-{cleaned_short}"
+        task_hash = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:8]
+        safe_task_slug = f"task-{cleaned_short}-{task_hash}"
         workspace_path = (self._base_dir / safe_task_slug).resolve()
 
         branch_name = request.branch_name or f"agent/{safe_task_slug}"
@@ -162,6 +165,9 @@ class WorkspaceManager:
             resource_limits=limits,
         )
         self._workspaces[task_id] = metadata
+
+        if request.repository_root:
+            self._repo_roots[task_id] = Path(request.repository_root)
 
         try:
             isolation_used = self._provision_workspace(
@@ -264,11 +270,13 @@ class WorkspaceManager:
             for item in repo_root.iterdir():
                 if item.name in (".git", ".workspaces", "venv", "__pycache__", ".pytest_cache", "node_modules"):
                     continue
+                if item.is_symlink():
+                    continue
                 dest = workspace_path / item.name
                 if item.is_dir():
-                    shutil.copytree(item, dest, symlinks=False, ignore=shutil.ignore_patterns(".git*", "__pycache__"))
+                    shutil.copytree(item, dest, symlinks=True, ignore=shutil.ignore_patterns(".git*", "__pycache__"))
                 elif item.is_file():
-                    shutil.copy2(item, dest)
+                    shutil.copy2(item, dest, follow_symlinks=False)
         return "directory_copy"
 
     def get_workspace(self, task_id: str) -> WorkspaceMetadata | None:
@@ -866,9 +874,13 @@ class WorkspaceManager:
             # Attempt Git worktree removal if applicable
             if meta.isolation_type == "git_worktree":
                 try:
-                    # git worktree remove --force <workspace_path>
+                    repo_context = self._repo_roots.get(task_id)
+                    cmd = ["git"]
+                    if repo_context and repo_context.exists():
+                        cmd.extend(["-C", str(repo_context)])
+                    cmd.extend(["worktree", "remove", "--force", str(workspace_path)])
                     proc = subprocess.run(
-                        ["git", "worktree", "remove", "--force", str(workspace_path)],
+                        cmd,
                         capture_output=True,
                         text=True,
                         check=False,
@@ -876,6 +888,14 @@ class WorkspaceManager:
                     )
                     if proc.returncode == 0:
                         worktree_pruned = True
+                    if repo_context and repo_context.exists():
+                        subprocess.run(
+                            ["git", "-C", str(repo_context), "worktree", "prune"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=30,
+                        )
                 except Exception as e:
                     logger.warning("git_worktree_remove_failed", extra={"error": str(e)})
 
@@ -886,6 +906,7 @@ class WorkspaceManager:
             meta.cleaned_at = datetime.now(timezone.utc).isoformat()
             meta.updated_at = meta.cleaned_at
             self._monitors.pop(task_id, None)
+            self._repo_roots.pop(task_id, None)
 
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             return WorkspaceCleanupResult(

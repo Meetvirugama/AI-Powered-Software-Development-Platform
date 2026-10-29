@@ -422,14 +422,14 @@ def test_shell_injection_tokens_rejected(
         assert "contains forbidden shell" in str(exc_info.value)
 
 
-def test_command_environment_strips_sensitive_keys():
+def test_command_environment_strips_sensitive_keys(monkeypatch: pytest.MonkeyPatch):
     """Verify host credentials and sensitive environment variables are purged from execution."""
     runner = WorkspaceCommandRunner()
 
     # Simulate environment with secrets
-    os.environ["GITHUB_TOKEN"] = "ghp_super_secret_token_12345"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-    os.environ["DATABASE_URL"] = "postgresql://user:pass@localhost:5432/db"
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_super_secret_token_12345")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db")
 
     clean_env = runner.sanitize_environment()
 

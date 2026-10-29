@@ -636,7 +636,7 @@ Related Docs: Which documentation may need updating
 **Developer:** Prit  
 **Changes:**
 - `backend/app/schemas/workspace.py`:
-  - Implemented `WorkspaceStatus`, `WorkspaceConfig`, `ResourceLimits`, `WorkspacePathGuard`, and `WorkspaceMetadata` Pydantic schemas.
+  - Implemented `WorkspaceStatus`, `WorkspaceResourceLimits`, and `WorkspaceMetadata` schemas, plus request/result schemas for create, file, and cleanup operations.
 - `backend/sandbox/workspace_manager.py`:
   - Implemented `WorkspaceManager` interface providing isolated directory provisioning under `.workspaces/task-<task_id>/`.
   - Built path traversal containment and resource limits enforcement.

@@ -12,16 +12,16 @@
 
 ## 1. Executive Summary
 
-During Week 3 Day 3, Prit Zania executed the mandatory **Workspace Execution Start & Tool Policy Integration** deliverables specified in [`Docs/week3.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/week3.md) (§5, §6 F33 & F34, §8 Day 3, §9, §11 Scenarios A–C) and [`Docs/daily_tasks.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/daily_tasks.md):
+During Week 3 Day 3, Prit Zania executed the mandatory **Workspace Execution Start & Tool Policy Integration** deliverables specified in [`Docs/week3.md`](week3.md) (§5, §6 F33 & F34, §8 Day 3, §9, §11 Scenarios A–C) and [`Docs/daily_tasks.md`](daily_tasks.md):
 
 1. **Mandatory Approval Gate & Execution Start:** Implemented `WorkspaceManager.start_execution()` enforcing server-side approval verification per ADR-010. Any attempt by unapproved tasks (`PENDING_APPROVAL`, `REJECTED`, `CREATED`, `CANCELLED`) to enter an isolated workspace is blocked with `WorkspaceAuthorizationError`. Stale approvals where base revision shifted since plan generation are detected and invalidated with `WorkspaceStaleApprovalError` (Docs/week3.md §11 Scenarios B & C).
 2. **Controlled Execution Lifecycle:** Implemented pause (`IN_USE -> STOPPED`), resume (`STOPPED -> IN_USE`), graceful stop, and failure handling (`FAILED`), preserving diagnostics and state without deleting user files or active task evidence.
 3. **Restricted Sandboxed Command Runner:** Created `WorkspaceCommandRunner` enforcing an explicit allowlist of permitted commands (`ALLOWED_COMMAND_TEMPLATES`: `git`, `python`, `python3`, `pytest`, `npm`, `npx`, `node`, `ls`, `dir`, `cat`, `echo`). Rejects shell injections, logical operators, and metacharacters (`;`, `&&`, `||`, `|`, `` ` ``, `$`, `\n`, `\r`, null bytes). Enforces execution timeouts and output-size limits (100 KB max capture) with secret scrubbing.
 4. **Environment Isolation & Secret Purging:** Purges sensitive credentials and host tokens (`GITHUB_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `DATABASE_URL`, `POSTGRES_PASSWORD`, `SECRET_KEY`, `JWT_SECRET`, AI keys) before subprocess spawning, preventing sandbox escape or credential exposure.
-5. **Tool Policy Bridge & Router Integration:** Built `WorkspaceToolPolicyBridge` and `register_workspace_tools()` connecting Devu's `ToolRouter` ([`backend/agent/tools/router.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/agent/tools/router.py)) to `WorkspaceManager`. Registers 6 canonical workspace tools (`read_file`, `write_file`, `patch_file`, `delete_file`, `list_files`, `execute_command`) with strict JSON parameter schemas, `WorkspacePathGuard` boundary confinement, and fail-closed policy enforcement.
+5. **Tool Policy Bridge & Router Integration:** Built `WorkspaceToolPolicyBridge` and `register_workspace_tools()` connecting Devu's `ToolRouter` ([`backend/agent/tools/router.py`](../backend/agent/tools/router.py)) to `WorkspaceManager`. Registers 6 canonical workspace tools (`read_file`, `write_file`, `patch_file`, `delete_file`, `list_files`, `execute_command`) with strict JSON parameter schemas, `WorkspacePathGuard` boundary confinement, and fail-closed policy enforcement.
 6. **Execution Timeline & Observability:** Implemented `WorkspaceExecutionEvent` timeline tracking every lifecycle transition (`WORKSPACE_CREATED`, `BRANCH_SETUP`, `EXECUTION_STARTED`, `TOOL_INVOCATION`, `EXECUTION_PAUSED`, `EXECUTION_RESUMED`, `EXECUTION_STOPPED`, `EXECUTION_FAILED`, `CLEANUP_COMPLETED`), supporting Dhramraj's live progress dashboard and Yug's timeline APIs.
-7. **Canonical Pydantic Schemas:** Exported all Day 3 schemas (`WorkspaceExecutionEvent`, `WorkspaceExecutionEventType`, `WorkspaceStartExecutionRequest`, `WorkspaceStartExecutionResult`, `WorkspaceCommandRequest`, `WorkspaceCommandResult`, `WorkspaceToolPolicyRequest`, `WorkspaceToolPolicyResult`) from [`backend/app/schemas/workspace.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/workspace.py) and [`app.schemas`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/__init__.py).
-8. **Automated Verification:** Created [`backend/tests/test_prit_w3_d3_workspace_execution.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d3_workspace_execution.py) with 16 comprehensive tests passing synchronously with 100% success rate, bringing total Week 3 passing tests to 91.
+7. **Canonical Pydantic Schemas:** Exported all Day 3 schemas (`WorkspaceExecutionEvent`, `WorkspaceExecutionEventType`, `WorkspaceStartExecutionRequest`, `WorkspaceStartExecutionResult`, `WorkspaceCommandRequest`, `WorkspaceCommandResult`, `WorkspaceToolPolicyRequest`, `WorkspaceToolPolicyResult`) from [`backend/app/schemas/workspace.py`](../backend/app/schemas/workspace.py) and [`app.schemas`](../backend/app/schemas/__init__.py).
+8. **Automated Verification:** Created [`backend/tests/test_prit_w3_d3_workspace_execution.py`](../backend/tests/test_prit_w3_d3_workspace_execution.py) with 16 comprehensive tests passing synchronously with 100% success rate, bringing total Week 3 passing tests to 91.
 
 ---
 
@@ -150,7 +150,7 @@ All tool handlers verify that the workspace is currently in `WorkspaceStatus.IN_
 
 ## 6. Verification & Test Suite Matrix
 
-The Day 3 test suite [`backend/tests/test_prit_w3_d3_workspace_execution.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d3_workspace_execution.py) contains 16 automated tests passing synchronously with 100% success rate:
+The Day 3 test suite [`backend/tests/test_prit_w3_d3_workspace_execution.py`](../backend/tests/test_prit_w3_d3_workspace_execution.py) contains 16 automated tests passing synchronously with 100% success rate:
 
 | Test Case | Capability Under Test | Result |
 |---|---|---|
@@ -163,7 +163,7 @@ The Day 3 test suite [`backend/tests/test_prit_w3_d3_workspace_execution.py`](fi
 | `test_sandboxed_command_execution_success` | Allowlisted command execution (`python -V`), output capture | 🟢 Pass |
 | `test_command_blocked_when_workspace_not_in_use` | Command blocked when workspace is not in `IN_USE` state | 🟢 Pass |
 | `test_disallowed_command_rejected_by_policy` | Rejection of non-allowlisted commands (`curl`) | 🟢 Pass |
-| `test_shell_injection_tokens_rejected` | Rejection of shell operators (`;`, `&&`, `|`) | 🟢 Pass |
+| `test_shell_injection_tokens_rejected` | Rejection of shell operators (`;`, `&&`, `\|`) | 🟢 Pass |
 | `test_command_environment_strips_sensitive_keys` | Host credential purging from subprocess environment | 🟢 Pass |
 | `test_tool_router_registration_and_policy_dispatch` | Registration with `ToolRouter` and execution of read/write/list | 🟢 Pass |
 | `test_tool_policy_blocks_path_traversal` | Blocking directory climbing (`../`), UNC paths, and system files | 🟢 Pass |

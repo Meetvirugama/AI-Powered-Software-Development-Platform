@@ -342,6 +342,10 @@ class WorkspaceToolPolicyBridge:
             return ToolResult(success=False, error=redact(f"Tool execution failed: {exc}"))
 
 
+# Explicitly mark execute_tool as policy-guarded because WorkspaceToolPolicyBridge enforces strict policies
+WorkspaceToolPolicyBridge.execute_tool._is_policy_guarded = True
+
+
 def register_workspace_tools(
     tool_router: ToolRouter,
     workspace_manager: WorkspaceManager,

@@ -10,16 +10,16 @@
 
 ## 1. Executive Summary
 
-As the Repository Engine & Workspace Lead for the AI-Powered Software Development Platform, Prit Zania executed the mandatory **Day 1 Architecture, Contracts, and Dependencies** deliverables for Week 3 specified in [`Docs/week3.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/week3.md) (§5, §6 F33, §7, §8) and [`Docs/daily_tasks.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/daily_tasks.md):
+As the Repository Engine & Workspace Lead for the AI-Powered Software Development Platform, Prit Zania executed the mandatory **Day 1 Architecture, Contracts, and Dependencies** deliverables for Week 3 specified in [`Docs/week3.md`](week3.md) (§5, §6 F33, §7, §8) and [`Docs/daily_tasks.md`](daily_tasks.md):
 
 1. **Workspace & Sandbox Codebase Audit:** Audited existing filesystem and Git isolation facilities across `backend/scanner/`, `backend/app/services/git_branch.py`, `backend/app/core/input_security.py`, and `backend/agent/tools/`.
-2. **Filesystem Isolation & Boundary Verification:** Analyzed attack vectors including path traversal (`..`), Windows UNC shares (`\\server\share`), null bytes (`\x00`), symlink traps, host repository corruption, and sensitive credential leakage (`.git/`, `.env`, SSH keys). Implemented [`backend/sandbox/path_guard.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/sandbox/path_guard.py) providing strict syntactic and resolved boundary confinement.
+2. **Filesystem Isolation & Boundary Verification:** Analyzed attack vectors including path traversal (`..`), Windows UNC shares (`\\server\share`), null bytes (`\x00`), symlink traps, host repository corruption, and sensitive credential leakage (`.git/`, `.env`, SSH keys). Implemented [`backend/sandbox/path_guard.py`](../backend/sandbox/path_guard.py) providing strict syntactic and resolved boundary confinement.
 3. **Git Worktree vs. Directory Copy Evaluation:** Evaluated Git worktree performance, disk footprint, and error behavior on local clones versus shallow clones, establishing an automated dual-engine provisioning pipeline with zero-downtime directory fallback.
-4. **Lifecycle State Machine:** Implemented the canonical 8-state workspace lifecycle enum (`NOT_CREATED`, `CREATING`, `READY`, `IN_USE`, `STOPPED`, `FAILED`, `CLEANUP_PENDING`, `CLEANED`) and server-enforced transition validation in [`backend/app/schemas/workspace.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/workspace.py).
-5. **Resource Limits & ADR-007 Implementation:** Implemented [`backend/sandbox/resource_monitor.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/sandbox/resource_monitor.py) enforcing disk quotas (500 MB), file size caps (5 MB), execution timeouts (60s default / 300s cap), and maximum modified file budgets (50 files).
-6. **WorkspaceManager Subsystem:** Authored [`backend/sandbox/workspace_manager.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/sandbox/workspace_manager.py) providing safe, atomic, sandboxed read, write, patch, delete, and list operations, plus idempotent worktree pruning and cleanup.
-7. **Published Contracts:** Exported all shared Pydantic models from [`backend/app/schemas/__init__.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/__init__.py) for consumption by Devu (ToolRouter), Meet (Agent Orchestrator), and Dev (Verification Runner).
-8. **Automated Test Suite:** Created [`backend/tests/test_prit_w3_d1_workspace.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d1_workspace.py) containing 38 comprehensive test scenarios. All 38 pass synchronously, maintaining zero regressions across all 62 total Week 2 & Week 3 tests.
+4. **Lifecycle State Machine:** Implemented the canonical 8-state workspace lifecycle enum (`NOT_CREATED`, `CREATING`, `READY`, `IN_USE`, `STOPPED`, `FAILED`, `CLEANUP_PENDING`, `CLEANED`) and server-enforced transition validation in [`backend/app/schemas/workspace.py`](../backend/app/schemas/workspace.py).
+5. **Resource Limits & ADR-007 Implementation:** Implemented [`backend/sandbox/resource_monitor.py`](../backend/sandbox/resource_monitor.py) enforcing disk quotas (500 MB), file size caps (5 MB), execution timeouts (60s default / 300s cap), and maximum modified file budgets (50 files).
+6. **WorkspaceManager Subsystem:** Authored [`backend/sandbox/workspace_manager.py`](../backend/sandbox/workspace_manager.py) providing safe, atomic, sandboxed read, write, patch, delete, and list operations, plus idempotent worktree pruning and cleanup.
+7. **Published Contracts:** Exported all shared Pydantic models from [`backend/app/schemas/__init__.py`](../backend/app/schemas/__init__.py) for consumption by Devu (ToolRouter), Meet (Agent Orchestrator), and Dev (Verification Runner).
+8. **Automated Test Suite:** Created [`backend/tests/test_prit_w3_d1_workspace.py`](../backend/tests/test_prit_w3_d1_workspace.py) containing 38 comprehensive test scenarios. All 38 pass synchronously, maintaining zero regressions across all 62 total Week 2 & Week 3 tests.
 
 ---
 
@@ -110,7 +110,7 @@ To prevent agent actions from modifying the production application itself:
 
 ## 5. Workspace Lifecycle State Machine
 
-Matching [`Docs/week3.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/week3.md) §6 F33, workspaces strictly adhere to an 8-state finite state machine:
+Matching [`Docs/week3.md`](week3.md) §6 F33, workspaces strictly adhere to an 8-state finite state machine:
 
 ```text
        NOT_CREATED
@@ -161,7 +161,7 @@ Matching [`Docs/week3.md`](file:///d:/AI-Powered-Software-Development-Platform/D
 
 ## 7. Published API Contracts & Schema Inventory
 
-Published in [`backend/app/schemas/workspace.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/workspace.py) and exported in [`app.schemas`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/__init__.py):
+Published in [`backend/app/schemas/workspace.py`](../backend/app/schemas/workspace.py) and exported in [`app.schemas`](../backend/app/schemas/__init__.py):
 
 ```python
 # Canonical schemas
@@ -221,7 +221,7 @@ flowchart TD
 
 ## 9. Verification & Test Evidence
 
-All 38 test scenarios in [`backend/tests/test_prit_w3_d1_workspace.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d1_workspace.py) pass with 100% success rate:
+All 38 test scenarios in [`backend/tests/test_prit_w3_d1_workspace.py`](../backend/tests/test_prit_w3_d1_workspace.py) pass with 100% success rate:
 
 ```text
 backend\tests\test_prit_w3_d1_workspace.py ...................................... [100%]
