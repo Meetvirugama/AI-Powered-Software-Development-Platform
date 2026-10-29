@@ -89,8 +89,9 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
     assert ini_path.is_file(), f"alembic.ini not found at {ini_path}"
 
     cfg = Config(str(ini_path))
-    # Escape % in search_path option for configparser compatibility
-    url_with_schema = f"{settings.database_url}?options=-csearch_path%%3D{clean_schema_name},public"
+    # Escape % in search_path option and credentials for configparser compatibility
+    escaped_url = settings.database_url.replace("%", "%%")
+    url_with_schema = f"{escaped_url}?options=-csearch_path%%3D{clean_schema_name},public"
     cfg.set_main_option("sqlalchemy.url", url_with_schema)
     cfg.set_main_option("version_table_schema", clean_schema_name)
 
