@@ -635,7 +635,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
-- ⬜ Prit: Restricted test runner executing `pytest` or `npm test` with timeout and resource limits
+- ✅ Prit: Restricted test runner (`WorkspaceTestRunner`) executing `pytest` or `npm test` with timeout, 100 KB output bounds, failure classification, bounded 3-attempt auto-repair loop, duplicate patch rejection, and ToolRouter integration (`Docs/restricted_test_runner_bounded_repair_audit.md`, `backend/sandbox/test_runner.py`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d4_restricted_test_runner.py`)
 - ⬜ Devu: Command allowlist enforcement and argument validation
 - ⬜ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts
 - ⬜ Dev: Failure traceback diagnosis and repair patch validation

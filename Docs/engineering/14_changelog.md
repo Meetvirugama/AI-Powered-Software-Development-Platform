@@ -716,3 +716,39 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/workspace_execution_start_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W3-Day4] 2026-10-29 — Restricted Test Runner, Failure Classification & Bounded Auto-Repair Loop
+**Type:** Feature / Test Execution & Bounded Self-Repair  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `TestOutcomeStatus` (`PASSED`, `FAILED`, `ERROR`, `TIMEOUT`, `UNSUPPORTED_FRAMEWORK`, `AMBIGUOUS`, `NO_TESTS_FOUND`).
+  - Implemented `TestFailureClassification` (`NONE`, `TEST_FAILURE`, `INFRASTRUCTURE_ERROR`, `TIMEOUT`, `SECURITY_VIOLATION`).
+  - Implemented `WorkspaceTestExecutionRequest`, `WorkspaceTestExecutionResult`, `RepairAttemptRecord`, and `WorkspaceRepairBudgetStatus`.
+  - Added new test and repair timeline events to `WorkspaceExecutionEventType`: `TESTS_STARTED`, `TESTS_PASSED`, `TESTS_FAILED`, `TEST_INFRASTRUCTURE_FAILURE`, `TEST_TIMEOUT`, `REPAIR_ATTEMPT_STARTED`, `REPAIR_ATTEMPT_COMPLETED`, and `REPAIR_BUDGET_EXHAUSTED`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 4 test runner and repair schemas.
+- `backend/sandbox/exceptions.py`:
+  - Added `WorkspaceTestExecutionError`, `WorkspaceUnsupportedFrameworkError`, `WorkspaceRepairBudgetExhaustedError`, and `WorkspaceDuplicateRepairPatchError`.
+- `backend/sandbox/test_runner.py`:
+  - Implemented `WorkspaceTestRunner` with automatic framework detection (`pytest`, `unittest`, `jest`), graceful handling of unsupported frameworks (`vitest`, `go test`), command allowlisting, dependency install prevention (`npm install`, `pip install`), shell injection blocking, path traversal containment, timeout budgeting (default 60s, max 300s), 100 KB output log bounding with truncation notices, and automatic secret redaction.
+  - Implemented structured output parser and failure classifier distinguishing assertion/test failures (`is_repair_eligible=True`) from infrastructure crashes, timeouts, and security violations (`is_repair_eligible=False`).
+  - Implemented bounded auto-repair tracker enforcing the strict 3-attempt task-level budget ceiling per ADR-010, emitting `REPAIR_BUDGET_EXHAUSTED` timeline events upon exhaustion, and detecting duplicate failed repair patches via SHA-256 hashing.
+- `backend/sandbox/workspace_manager.py`:
+  - Integrated `run_tests()`, `get_test_history()`, `get_repair_budget_status()`, `record_repair_attempt()`, and `get_repair_history()`.
+  - Recorded timeline events across the entire test execution and repair attempt lifecycle.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Registered canonical tools `TOOL_RUN_TESTS` (`run_tests`) and `TOOL_RECORD_REPAIR` (`record_repair_attempt`) with Devu's `ToolRouter`.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceTestRunner`, `TOOL_RUN_TESTS`, `TOOL_RECORD_REPAIR`, and Day 4 exceptions.
+- `Docs/restricted_test_runner_bounded_repair_audit.md`:
+  - Authored comprehensive Week 3 Day 4 Architecture, Restricted Test Runner, Failure Classification, and Bounded Repair Loop Audit Report.
+- `backend/tests/test_prit_w3_d4_restricted_test_runner.py`:
+  - 18 comprehensive unit and integration tests covering framework autodetection, explicit overrides, unsupported frameworks, allowlist enforcement, shell injection blocking, path traversal containment, output parsing, failure classification, secret redaction, output truncation, 3-attempt repair budget enforcement, duplicate patch rejection, WorkspaceManager integration, timeline events, and ToolRouter dispatch (100% pass rate).
+
+**Impact:** Delivers sandboxed test execution and bounded auto-repair enforcement for Meet's agent self-repair loop, Dev's failure diagnosis, Yug's test APIs, and Dhramraj's live repair counter UI.
+
+**Related Docs:** `Docs/restricted_test_runner_bounded_repair_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/engineering/14_changelog.md`
+
+
