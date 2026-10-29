@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     github_workspace_root: str | None = None
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 10080
+    jwt_expire_minutes: int = 15
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     ai_fallback_provider: str | None = "groq"
     gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
-    gemini_chat_model: str = "gemini-flash-latest"
+    gemini_chat_model: str = "gemini-flash-lite-latest"
     groq_api_key: str | None = None
     groq_api_keys: str | None = None       # comma-separated list
     groq_chat_model: str = "openai/gpt-oss-120b"
@@ -130,6 +130,39 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
         return [o for o in origins if o != "*"]
+
+    @model_validator(mode="after")
+    def validate_production_security(self) -> "Settings":
+        """Fail closed on insecure production defaults (F-04)."""
+        is_prod = self.app_env.lower() in ("production", "prod")
+        if is_prod:
+            if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
+                raise ValueError(
+                    "Production configuration error: JWT_SECRET must be configured with at least 32 characters."
+                )
+            insecure_dummies = {"test-secret", "dev-secret", "changeme", "placeholder"}
+            if any(dummy in self.jwt_secret.lower() for dummy in insecure_dummies) or self.jwt_secret.lower().strip() == "secret":
+                raise ValueError(
+                    "Production configuration error: Insecure default JWT_SECRET detected in production."
+                )
+            if not self.cookie_secure:
+                raise ValueError(
+                    "Production configuration error: COOKIE_SECURE must be True in production."
+                )
+            for origin in self.cors_origins:
+                if "localhost" in origin or "127.0.0.1" in origin:
+                    raise ValueError(
+                        f"Production configuration error: Localhost CORS origin '{origin}' is not permitted in production."
+                    )
+            if not self.cors_origins:
+                raise ValueError(
+                    "Production configuration error: CORS_ALLOWED_ORIGINS must contain valid production origins."
+                )
+            if self.jwt_expire_minutes > 1440:
+                raise ValueError(
+                    "Production configuration error: JWT_EXPIRE_MINUTES must not exceed 1440 minutes in production."
+                )
+        return self
 
 
 @lru_cache

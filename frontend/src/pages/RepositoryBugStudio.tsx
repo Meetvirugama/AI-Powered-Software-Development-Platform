@@ -15,17 +15,21 @@ import { BugScannerView } from '../components/explorer/BugScannerView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { TargetFilePicker } from '../components/studios/TargetFilePicker';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import { cn } from '../lib/utils';
 import type { SourceReference, BugDetectionResponse } from '../types/analysis';
 
 export function RepositoryBugStudio() {
   const { id } = useParams<{ id: string }>();
 
   const repoId = id ?? '';
-  // H-2: increased from 100 to 500
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  // H-1: shared hook replaces ~30 lines of duplicated state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
+  const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
+
   const {
     selectedFile,
     activeTarget,
@@ -38,14 +42,11 @@ export function RepositoryBugStudio() {
     setBugResult(null);
   });
 
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
-
   // Bug detection mutation
   const bugMutation = useDetectBugs(repoId, {
     onSuccess: (data) => {
       setBugResult(data);
+      setActiveMobileTab('results');
     },
   });
 
@@ -59,6 +60,7 @@ export function RepositoryBugStudio() {
 
   const handleSelectSourceReference = (source: SourceReference) => {
     setActiveSourceReference(source);
+    setActiveMobileTab('source');
     if (selectedFile && source.file_path && source.file_path !== selectedFile.path) {
       const targetFile = files.find((f) => f.path === source.file_path);
       if (targetFile) {
@@ -78,14 +80,37 @@ export function RepositoryBugStudio() {
       {/* Studio Header Toolbar */}
       <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={() => setShowFilePicker(!showFilePicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
-            title="Switch target file"
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-primary" />
-            <span className="truncate max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
-          </button>
+          {/* Anchored Target File Picker (F-09) */}
+          <div className="relative">
+            <button
+              onClick={() => setShowFilePicker(!showFilePicker)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
+              title="Switch target file"
+              aria-expanded={showFilePicker}
+              aria-haspopup="dialog"
+            >
+              <FolderOpen className="h-3.5 w-3.5 text-primary" />
+              <span className="truncate max-w-[140px] sm:max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
+            </button>
+
+            {showFilePicker && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setShowFilePicker(false)}
+                  aria-hidden="true"
+                />
+                <div className="absolute left-0 top-full mt-1.5 z-30 w-80 sm:w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+                  <TargetFilePicker
+                    files={files}
+                    isLoading={filesLoading}
+                    selectedFile={selectedFile}
+                    onSelectFile={handleSelectFile}
+                  />
+                </div>
+              </>
+            )}
+          </div>
 
           {bugResult && (
             <div className="hidden sm:flex items-center gap-2 text-xs font-mono">
@@ -94,6 +119,37 @@ export function RepositoryBugStudio() {
               </span>
             </div>
           )}
+
+          {/* Responsive Mobile / Tablet Tab Switcher (F-09) */}
+          <div className="flex lg:hidden items-center p-0.5 rounded-lg bg-muted text-xs font-medium">
+            <button
+              onClick={() => setActiveMobileTab('source')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'source'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Source
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('results')}
+              className={cn(
+                'px-2.5 py-1 rounded-md transition-colors',
+                activeMobileTab === 'results'
+                  ? 'bg-background text-foreground shadow-2xs font-semibold'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              Results
+              {bugResult && (
+                <span className="ml-1 px-1 py-0.2 rounded-full bg-destructive/10 text-destructive text-[10px]">
+                  {bugResult.total_findings}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
@@ -127,29 +183,15 @@ export function RepositoryBugStudio() {
         </div>
       </div>
 
-      {/* H-3 Fix: Use fixed positioning so the picker doesn't clip in nested flex layouts */}
-      {showFilePicker && (
-        <>
-          <div
-            className="fixed inset-0 z-20"
-            onClick={() => setShowFilePicker(false)}
-            aria-hidden="true"
-          />
-          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <TargetFilePicker
-              files={files}
-              isLoading={filesLoading}
-              selectedFile={selectedFile}
-              onSelectFile={handleSelectFile}
-            />
-          </div>
-        </>
-      )}
-
-      {/* 2-Pane Split Studio Canvas */}
+      {/* Responsive Split Studio Canvas (F-09) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Pane: Code Viewer */}
-        <div className="w-1/2 min-w-[360px] h-full border-r border-border flex flex-col min-h-0 overflow-hidden bg-background">
+        <div
+          className={cn(
+            'w-full lg:w-1/2 min-w-0 h-full lg:border-r border-border flex flex-col min-h-0 overflow-hidden bg-background',
+            activeMobileTab !== 'source' && 'hidden lg:flex'
+          )}
+        >
           {selectedFile ? (
             <CodeViewer
               repositoryId={repoId}
@@ -169,7 +211,12 @@ export function RepositoryBugStudio() {
         </div>
 
         {/* Right Pane: Bug Findings Canvas */}
-        <div className="flex-1 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
+        <div
+          className={cn(
+            'flex-1 lg:w-1/2 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6',
+            activeMobileTab !== 'results' && 'hidden lg:flex'
+          )}
+        >
           {bugMutation.isPending ? (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
               <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center text-destructive animate-pulse">
@@ -181,13 +228,19 @@ export function RepositoryBugStudio() {
               </p>
             </div>
           ) : bugMutation.isError ? (
-            <div className="p-4">
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
               <ErrorMessage
-                error={bugMutation.error}
+                message={bugMutation.error instanceof Error ? bugMutation.error.message : 'Bug scan failed.'}
               />
+              <button
+                onClick={handleRunScan}
+                className="mt-4 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium"
+              >
+                Retry Scan
+              </button>
             </div>
           ) : bugResult ? (
-            <div className="space-y-4">
+            <div className="max-w-4xl w-full mx-auto space-y-4">
               <BugScannerView
                 result={bugResult}
                 activeSourceReference={activeSourceReference}
@@ -195,27 +248,12 @@ export function RepositoryBugStudio() {
               />
             </div>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center max-w-md mx-auto space-y-4">
-              <div className="h-12 w-12 rounded-2xl bg-destructive/10 border border-destructive/20 flex items-center justify-center text-destructive shadow-xs">
-                <Bug className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-semibold text-foreground tracking-tight">Bug Hunter & Security Auditor</h3>
-                <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                  Identify logical defects, security vulnerabilities, edge-case crashes, and race conditions with source-grounded evidence and remediation patches.
-                </p>
-              </div>
-
-              <div className="w-full pt-2">
-                <button
-                  onClick={handleRunScan}
-                  disabled={!selectedFile}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium rounded-md bg-destructive hover:bg-destructive/90 text-destructive-foreground transition-colors shadow-xs"
-                >
-                  <ShieldAlert className="h-3.5 w-3.5" />
-                  <span>Scan Current File ({selectedFile?.path.split('/').pop() ?? 'None'})</span>
-                </button>
-              </div>
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground space-y-3">
+              <Bug className="h-10 w-10 opacity-30 text-destructive" />
+              <h3 className="text-sm font-semibold text-foreground">Ready to scan</h3>
+              <p className="text-xs max-w-sm">
+                Select a target file or range and click &quot;Scan for Bugs&quot; to detect potential bugs, antipatterns, and security risks.
+              </p>
             </div>
           )}
         </div>
@@ -227,15 +265,13 @@ export function RepositoryBugStudio() {
         onClose={() => setHistoryOpen(false)}
         repositoryId={repoId}
         initialFeature="bugs"
-        currentFilePath={selectedFile?.path}
-        onReopenBugs={(bugs, target) => {
-          setBugResult(bugs);
-          handleTargetChange(target);
+        onReopenBugs={(reopened) => {
+          setBugResult(reopened);
+          setActiveMobileTab('results');
           setHistoryOpen(false);
         }}
       />
     </div>
   );
 }
-
 export default RepositoryBugStudio;

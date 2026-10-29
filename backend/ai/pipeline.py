@@ -148,6 +148,16 @@ class RAGPipeline:
     # ------------------------------------------------------------------
 
     @property
+    def has_retriever(self) -> bool:
+        """True if a retriever instance is configured."""
+        return self.retriever is not None
+
+    @property
+    def is_ready(self) -> bool:
+        """True if both retriever and LLM gateway are available for repository RAG."""
+        return self.retriever is not None and self.llm is not None
+
+    @property
     def model(self) -> str:
         """Active inference model name."""
         return self._model
@@ -231,6 +241,19 @@ class RAGPipeline:
                 sources=[],
                 confidence="low",
                 status="invalid_output",
+            )
+
+        # Guard against unconfigured retriever
+        if self.retriever is None:
+            logger.warning(
+                "rag_pipeline_retriever_not_configured",
+                extra={"repo_id": str(repo_uuid)},
+            )
+            return RepositoryAnswer(
+                answer="Code retrieval is currently unavailable because no retriever is configured. Please verify Gemini API key configuration.",
+                sources=[],
+                confidence="low",
+                status="retrieval_degraded",
             )
 
         # ---- Step 1: Retrieval & Repo Metadata ---------------------------
