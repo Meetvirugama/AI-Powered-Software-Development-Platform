@@ -613,7 +613,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 ## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
 - ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
-- ⬜ Dev: `PlannerSchema` and step dependency validation
+- ✅ Dev: `PlannerSchema` and step dependency validation (`backend/app/schemas/plan.py`, `backend/tests/test_dev_w3_day2_planner_schema.py`)
 - ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
 - ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
 - ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
