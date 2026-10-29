@@ -45,3 +45,4 @@ def test_alembic_migration_defines_vector_768() -> None:
             break
 
     assert found_vector_768, "At least one Alembic migration must create Vector(768) column."
+
