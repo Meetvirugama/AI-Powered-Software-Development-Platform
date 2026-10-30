@@ -319,3 +319,72 @@ def test_event_publication_failure_logs_structured_warning(monkeypatch, caplog):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_json_formatter_serializes_exceptions_and_extra_fields() -> None:
+    """Verify JsonFormatter outputs exception stack and extra fields in JSON."""
+    import logging
+    from app.core.logging import JsonFormatter
+
+    formatter = JsonFormatter()
+    logger = logging.getLogger("test.json.formatter")
+
+    record = None
+    try:
+        raise ValueError("Simulated failure for logging")
+    except ValueError:
+        import sys
+        record = logger.makeRecord(
+            name="test.logger",
+            level=logging.ERROR,
+            fn="test_file.py",
+            lno=42,
+            msg="database_connection_failed",
+            args=(),
+            exc_info=sys.exc_info(),
+            extra={"repo_id": "test-repo-123", "retry_count": 3},
+        )
+
+    formatted_json = formatter.format(record)
+    parsed = json.loads(formatted_json)
+
+    assert parsed["message"] == "database_connection_failed"
+    assert parsed["level"] == "ERROR"
+    assert parsed["repo_id"] == "test-repo-123"
+    assert parsed["retry_count"] == 3
+    assert "exception" in parsed
+    assert "Simulated failure for logging" in parsed["exception"]
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_loop_handles_idle_redis_timeout_without_warning(monkeypatch) -> None:
+    """Verify sync_worker_loop suppresses normal idle TimeoutError and does not log sync_worker_loop_error."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from app.services.sync_worker import sync_worker_loop
+
+    mock_redis = AsyncMock()
+    mock_redis.brpoplpush = AsyncMock(side_effect=RedisTimeoutError("Timeout reading from socket"))
+    monkeypatch.setattr("app.services.sync_worker.get_redis_async", AsyncMock(return_value=mock_redis))
+
+    captured_warnings = []
+    import app.services.sync_worker as sw_mod
+    orig_warn = sw_mod.logger.warning
+    monkeypatch.setattr(
+        sw_mod.logger,
+        "warning",
+        lambda msg, *a, **kw: (captured_warnings.append(str(msg)), orig_warn(msg, *a, **kw)),
+    )
+
+    task = asyncio.create_task(sync_worker_loop(app_or_service=MagicMock()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert mock_redis.brpoplpush.call_count >= 1
+    # Verify no loop error warning was emitted for idle timeout
+    assert not any("sync_worker_loop_error" in w for w in captured_warnings)

@@ -30,6 +30,7 @@ from ai.embeddings.service import EmbeddingService
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, SessionLocal
 from app.core.redis import get_redis_async
+from redis.exceptions import TimeoutError as RedisTimeoutError
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
@@ -319,16 +320,41 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
 
             # Dequeue with reliable queue hand-off
             raw_data = None
-            if hasattr(redis, "brpoplpush"):
-                raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=2)
-            elif hasattr(redis, "rpoplpush"):
-                raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
-                if not raw_data:
-                    await asyncio.sleep(0.5)
-            else:
-                item = await redis.blpop("sync_jobs", timeout=2)
-                if item:
-                    _, raw_data = item
+            try:
+                if hasattr(redis, "brpoplpush"):
+                    raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=1)
+                elif hasattr(redis, "rpoplpush"):
+                    raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                    if not raw_data:
+                        await asyncio.sleep(1.0)
+                else:
+                    item = await redis.blpop("sync_jobs", timeout=1)
+                    if item:
+                        _, raw_data = item
+            except (RedisTimeoutError, asyncio.TimeoutError):
+                # Idle polling timeout with no jobs is normal; proceed cleanly
+                raw_data = None
+            except Exception as pop_exc:
+                # Fallback for Redis providers (like Upstash) where BRPOPLPUSH may be disallowed
+                try:
+                    if hasattr(redis, "rpoplpush"):
+                        raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                        if not raw_data:
+                            await asyncio.sleep(1.0)
+                    else:
+                        item = await redis.blpop("sync_jobs", timeout=1)
+                        if item:
+                            _, raw_data = item
+                except (RedisTimeoutError, asyncio.TimeoutError):
+                    raw_data = None
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "sync_worker_dequeue_error: %s",
+                        fallback_exc,
+                        exc_info=True,
+                        extra={"error": str(fallback_exc)},
+                    )
+                    await asyncio.sleep(2.0)
 
             if raw_data:
                 decoded = raw_data.decode("utf-8") if isinstance(raw_data, bytes) else str(raw_data)
@@ -347,10 +373,12 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
                             await redis.lrem("sync_jobs:processing", 1, raw_data)
                         except Exception as lrem_exc:
                             logger.warning("sync_worker_ack_lrem_warning", extra={"error": str(lrem_exc)})
+            else:
+                await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             logger.info("sync_worker_loop_cancelled")
             break
         except Exception as exc:
-            logger.warning("sync_worker_loop_error", extra={"error": str(exc)})
-            await asyncio.sleep(2)
+            logger.warning("sync_worker_loop_error: %s", exc, exc_info=True, extra={"error": str(exc)})
+            await asyncio.sleep(2.0)
