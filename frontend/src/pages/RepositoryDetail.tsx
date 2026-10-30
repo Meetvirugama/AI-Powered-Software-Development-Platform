@@ -255,19 +255,7 @@ export function RepositoryDetail() {
   const isSyncActive = repo.sync_status === 'SYNCING' || isSyncPending;
 
   return (
-    <div className="h-full flex flex-col min-h-0 gap-3 md:gap-4 overflow-hidden">
-      {/* Docked Repository Header with Disconnect Alert */}
-      <RepositoryHeader
-        repo={repo}
-        progress={progress}
-        isReady={isReady}
-        isSyncActive={isSyncActive}
-        isDeletePending={isDeletePending}
-        onSync={handleSync}
-        onDelete={handleDelete}
-      />
-
-      {/* Workbench Content Area */}
+    <div className="h-full flex flex-col min-h-0 gap-3 overflow-hidden p-3 md:p-4">
       {!isReady ? (
         <RepositorySyncCard
           repo={repo}
@@ -276,7 +264,15 @@ export function RepositoryDetail() {
           onSync={handleSync}
         />
       ) : (
-        <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 h-full">
+        <>
+          {/* Compact Metadata Toolbar */}
+          <RepositoryHeader
+            repo={repo}
+            isDeletePending={isDeletePending}
+            onDelete={handleDelete}
+          />
+
+          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 h-full">
           {/* Left Column: Metrics & Dependencies Explorer */}
           <div className="md:col-span-4 lg:col-span-3 min-h-0 h-full">
             <RepositoryMetricsSidebar
@@ -352,7 +348,8 @@ export function RepositoryDetail() {
             </div>
           </div>
         </div>
-      )}
+      </>
+    )}
 
       {/* Universal Analysis History & Reopen Drawer */}
       <AnalysisHistoryDrawer
