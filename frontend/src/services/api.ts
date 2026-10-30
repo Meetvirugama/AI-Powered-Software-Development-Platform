@@ -126,6 +126,82 @@ export function normaliseError(error: unknown): ApiError {
     (typeof data?.request_id === 'string' ? data.request_id : undefined) ||
     (typeof envelope?.requestId === 'string' ? envelope.requestId : undefined);
 
+  // Week 3 domain error code defaults
+  const WEEK3_ERROR_DEFAULTS: Record<string, { message: string; retryable: boolean; status?: number }> = {
+    APPROVAL_REQUIRED: {
+      message: 'Human approval of the plan is required before this action can proceed.',
+      retryable: false,
+      status: 409,
+    },
+    PLAN_VERSION_MISMATCH: {
+      message: 'The plan has been revised. Please refresh the page and review the updated plan version.',
+      retryable: false,
+      status: 409,
+    },
+    INVALID_STATE_TRANSITION: {
+      message: 'This action cannot be performed from the current task state.',
+      retryable: false,
+      status: 409,
+    },
+    TASK_NOT_FOUND: {
+      message: 'Task not found. It may have been deleted or moved.',
+      retryable: false,
+      status: 404,
+    },
+    POLICY_VIOLATION: {
+      message: 'Action blocked by security or governance policy.',
+      retryable: false,
+      status: 403,
+    },
+    COMMAND_NOT_ALLOWED: {
+      message: 'The requested command is not permitted by policy.',
+      retryable: false,
+      status: 403,
+    },
+    RETRY_BUDGET_EXHAUSTED: {
+      message: 'Maximum repair attempts (3) exhausted for this task.',
+      retryable: false,
+      status: 400,
+    },
+    EXECUTION_TIMEOUT: {
+      message: 'Request or execution timed out. Please check history before retrying.',
+      retryable: true,
+      status: 408,
+    },
+    WORKSPACE_CREATION_FAILED: {
+      message: 'Failed to create an isolated workspace for this task.',
+      retryable: true,
+      status: 500,
+    },
+    RECOVERY_REQUIRED: {
+      message: 'Task state is inconsistent. State reconciliation required.',
+      retryable: false,
+      status: 500,
+    },
+    GITHUB_API_ERROR: {
+      message: 'GitHub API error occurred. Please verify your GitHub connection.',
+      retryable: true,
+      status: 502,
+    },
+  };
+
+  const rawCode =
+    envelope?.code ||
+    (typeof data?.code === 'string' ? data.code : undefined) ||
+    (typeof data?.detail === 'string' && data.detail in WEEK3_ERROR_DEFAULTS ? data.detail : undefined);
+
+  if (rawCode && rawCode in WEEK3_ERROR_DEFAULTS) {
+    const config = WEEK3_ERROR_DEFAULTS[rawCode];
+    return {
+      code: rawCode,
+      message: envelope?.message || (typeof data?.message === 'string' ? data.message : undefined) || config.message,
+      retryable: envelope?.retryable ?? config.retryable,
+      status: status ?? config.status,
+      requestId,
+      details: envelope?.details ?? (data?.details as Record<string, unknown> | unknown[] | undefined),
+    };
+  }
+
   // If backend returned a structured error envelope
   if (envelope?.code && envelope?.message) {
     return {

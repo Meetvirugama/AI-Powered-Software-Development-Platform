@@ -24,6 +24,9 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@oxlint/binding-win32-x64-msvc": "^1.90.0",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.16",
+    "@tailwindcss/oxide-win32-x64-msvc": "^4.3.3",
     "@tailwindcss/postcss": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.9.1",
@@ -34,11 +37,18 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.6.1",
     "jsdom": "^29.1.1",
+    "lightningcss-win32-x64-msvc": "^1.33.0",
+    "msw": "^2.15.0",
     "oxlint": "^1.81.0",
     "postcss": "^8.5.28",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "vitest": "^4.1.12"
+  },
+  "msw": {
+    "workerDirectory": [
+      "public"
+    ]
   }
 }
