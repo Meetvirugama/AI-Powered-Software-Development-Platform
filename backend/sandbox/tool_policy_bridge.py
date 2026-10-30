@@ -29,7 +29,11 @@ from app.schemas.workspace import (
     WorkspaceToolPolicyRequest,
     WorkspaceToolPolicyResult,
 )
-from sandbox.constants import PROTECTED_BRANCHES
+from sandbox.constants import (
+    DEFAULT_MAX_ORPHAN_AGE_SECONDS,
+    PROTECTED_BRANCHES,
+    RECOVERY_STALE_TIMEOUT_SECONDS,
+)
 from sandbox.exceptions import (
     WorkspaceError,
     WorkspacePathEscapeError,
@@ -58,6 +62,13 @@ TOOL_VALIDATE_DIFF = "validate_task_diff"
 TOOL_COMMIT_CHANGES = "commit_task_changes"
 TOOL_PUSH_BRANCH = "push_task_branch"
 TOOL_CREATE_DRAFT_PR = "create_draft_pr"
+# Week 3 Day 6 — Reliability, Security & Failure Recovery tools (Docs/week3.md §8 Day 6)
+TOOL_RECOVER_WORKSPACE = "recover_workspace"
+TOOL_CHECK_STALE_REVISION = "check_stale_revision"
+TOOL_VERIFY_DIFF_IMMUTABILITY = "verify_diff_immutability"
+TOOL_CLEANUP_ORPHANED = "cleanup_orphaned_workspaces"
+TOOL_VALIDATE_INVARIANTS = "validate_workspace_invariants"
+TOOL_CHECK_DISK_BUDGET = "check_disk_budget"
 
 CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_READ_FILE,
@@ -73,6 +84,12 @@ CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_COMMIT_CHANGES,
     TOOL_PUSH_BRANCH,
     TOOL_CREATE_DRAFT_PR,
+    TOOL_RECOVER_WORKSPACE,
+    TOOL_CHECK_STALE_REVISION,
+    TOOL_VERIFY_DIFF_IMMUTABILITY,
+    TOOL_CLEANUP_ORPHANED,
+    TOOL_VALIDATE_INVARIANTS,
+    TOOL_CHECK_DISK_BUDGET,
 )
 
 
@@ -98,6 +115,14 @@ class WorkspaceToolPolicyBridge:
                 violation_reason=f"Tool '{clean_name}' is not an authorized workspace tool.",
             )
 
+        # Global administrative tools (recovery, orphan cleanup) do not require task-level checks
+        if clean_name in (TOOL_RECOVER_WORKSPACE, TOOL_CLEANUP_ORPHANED):
+            return WorkspaceToolPolicyResult(
+                is_permitted=True,
+                tool_name=clean_name,
+                sanitized_arguments=dict(arguments),
+            )
+
         # Check workspace status
         meta = self._workspace_manager.get_workspace(task_id)
         if not meta:
@@ -108,7 +133,14 @@ class WorkspaceToolPolicyBridge:
                 violation_reason=f"No workspace found for task '{task_id}'.",
             )
 
-        if meta.status != WorkspaceStatus.IN_USE:
+        # Reliability and inspection tools are allowed outside IN_USE (e.g. READY, STOPPED, FAILED)
+        day6_inspection_tools = (
+            TOOL_VALIDATE_INVARIANTS,
+            TOOL_CHECK_STALE_REVISION,
+            TOOL_VERIFY_DIFF_IMMUTABILITY,
+            TOOL_CHECK_DISK_BUDGET,
+        )
+        if clean_name not in day6_inspection_tools and meta.status != WorkspaceStatus.IN_USE:
             return WorkspaceToolPolicyResult(
                 is_permitted=False,
                 tool_name=clean_name,
@@ -235,7 +267,7 @@ class WorkspaceToolPolicyBridge:
         elif "task_id" in request.arguments:
             task_id = str(request.arguments["task_id"])
 
-        if not task_id:
+        if not task_id and request.tool_name not in (TOOL_RECOVER_WORKSPACE, TOOL_CLEANUP_ORPHANED):
             return ToolResult(
                 success=False,
                 error="Policy violation: task_id could not be resolved from agent state or arguments.",
@@ -484,6 +516,75 @@ class WorkspaceToolPolicyBridge:
                         "summary": pr_res.summary,
                     },
                     error=pr_res.error,
+                )
+
+            elif tool_name == TOOL_RECOVER_WORKSPACE:
+                target_task_id = args.get("task_id") or task_id
+                if target_task_id:
+                    rec = self._workspace_manager.reconcile_workspace(target_task_id)
+                    return ToolResult(
+                        success=True,
+                        output=rec.model_dump(),
+                    )
+                else:
+                    recovery_res = self._workspace_manager.recover_workspaces(
+                        stale_timeout_seconds=args.get("stale_timeout_seconds", RECOVERY_STALE_TIMEOUT_SECONDS)
+                    )
+                    return ToolResult(
+                        success=True,
+                        output=recovery_res.model_dump(),
+                    )
+
+            elif tool_name == TOOL_CHECK_STALE_REVISION:
+                stale_res = self._workspace_manager.detect_stale_base_revision(
+                    task_id=task_id,
+                    remote_name=args.get("remote_name", "origin"),
+                    base_branch=args.get("base_branch", "main"),
+                )
+                return ToolResult(
+                    success=True,
+                    output=stale_res.model_dump(),
+                )
+
+            elif tool_name == TOOL_VERIFY_DIFF_IMMUTABILITY:
+                imm_res = self._workspace_manager.verify_diff_immutability(
+                    task_id=task_id,
+                    expected_hash=args.get("expected_hash"),
+                )
+                return ToolResult(
+                    success=imm_res.is_immutable,
+                    output=imm_res.model_dump(),
+                    error=imm_res.error_message if not imm_res.is_immutable else None,
+                )
+
+            elif tool_name == TOOL_CLEANUP_ORPHANED:
+                cleanup_res = self._workspace_manager.cleanup_orphaned_workspaces(
+                    max_age_seconds=args.get("max_age_seconds", DEFAULT_MAX_ORPHAN_AGE_SECONDS),
+                    dry_run=args.get("dry_run", False),
+                )
+                return ToolResult(
+                    success=True,
+                    output=cleanup_res.model_dump(),
+                )
+
+            elif tool_name == TOOL_VALIDATE_INVARIANTS:
+                inv_res = self._workspace_manager.validate_workspace_invariants(task_id=task_id)
+                return ToolResult(
+                    success=inv_res.is_valid,
+                    output=inv_res.model_dump(),
+                    error="; ".join(inv_res.violations) if not inv_res.is_valid else None,
+                )
+
+            elif tool_name == TOOL_CHECK_DISK_BUDGET:
+                disk_res = self._workspace_manager.check_disk_budget(
+                    task_id=task_id,
+                    max_bytes=args.get("max_bytes"),
+                    max_files=args.get("max_files"),
+                )
+                return ToolResult(
+                    success=not disk_res.is_exceeded,
+                    output=disk_res.model_dump(),
+                    error=disk_res.error_message if disk_res.is_exceeded else None,
                 )
 
             return ToolResult(success=False, error=f"Unhandled tool: {tool_name}")
@@ -797,6 +898,99 @@ def register_workspace_tools(
                     },
                 },
                 "required": ["title", "head_branch"],
+            },
+        ),
+        (
+            TOOL_RECOVER_WORKSPACE,
+            "Scan workspaces and recover from worker crashes, interrupted tasks, and orphan states.",
+            {
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Optional specific task_id to reconcile.",
+                    },
+                    "stale_timeout_seconds": {
+                        "type": "integer",
+                        "description": "Seconds without activity before a running workspace is considered stale and recovered.",
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_CHECK_STALE_REVISION,
+            "Verify that the workspace base branch has not diverged from the remote tracking branch.",
+            {
+                "type": "object",
+                "properties": {
+                    "remote_name": {
+                        "type": "string",
+                        "description": "Remote name to fetch (default 'origin').",
+                        "default": "origin",
+                    },
+                    "base_branch": {
+                        "type": "string",
+                        "description": "Base branch to compare against (default 'main').",
+                        "default": "main",
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_VERIFY_DIFF_IMMUTABILITY,
+            "Verify that no workspace files have mutated since the independent verification step.",
+            {
+                "type": "object",
+                "properties": {
+                    "expected_hash": {
+                        "type": "string",
+                        "description": "Expected SHA-256 hash of the git diff output from the verification gate.",
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_CLEANUP_ORPHANED,
+            "Clean up orphaned workspace directories exceeding the maximum orphan age threshold.",
+            {
+                "type": "object",
+                "properties": {
+                    "max_age_seconds": {
+                        "type": "integer",
+                        "description": "Maximum age in seconds before an untracked workspace is deleted (default 86400).",
+                        "default": 86400,
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, simulates cleanup without removing directories.",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_VALIDATE_INVARIANTS,
+            "Audit structural, disk, process, and security invariants for the workspace.",
+            {
+                "type": "object",
+                "properties": {},
+            },
+        ),
+        (
+            TOOL_CHECK_DISK_BUDGET,
+            "Check workspace disk usage and file counts against allocated quotas.",
+            {
+                "type": "object",
+                "properties": {
+                    "max_bytes": {
+                        "type": "integer",
+                        "description": "Maximum allowed workspace disk bytes.",
+                    },
+                    "max_files": {
+                        "type": "integer",
+                        "description": "Maximum allowed file count.",
+                    },
+                },
             },
         ),
     ]

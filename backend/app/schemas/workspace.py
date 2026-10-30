@@ -136,7 +136,7 @@ WorkspaceIsolationType = Literal["git_worktree", "directory_copy"]
 class WorkspaceMetadata(BaseModel):
     """Comprehensive state record for an isolated task workspace."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, extra="allow")
 
     workspace_id: str = Field(..., description="Unique UUID for this workspace instance.")
     task_id: str = Field(..., description="Task UUID bound to this workspace.")
@@ -153,8 +153,10 @@ class WorkspaceMetadata(BaseModel):
     updated_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    last_active_at: str | None = Field(default=None)
     cleaned_at: str | None = Field(default=None)
     error_message: str | None = Field(default=None)
+    verification_diff_hash: str | None = Field(default=None)
 
     @field_validator("base_revision")
     @classmethod
@@ -339,6 +341,14 @@ class WorkspaceExecutionEventType(str, Enum):
     BRANCH_PUSHED = "BRANCH_PUSHED"
     PR_CREATED = "PR_CREATED"
     PUBLICATION_FAILED = "PUBLICATION_FAILED"
+    # Week 3 Day 6 reliability, security & failure recovery timeline events
+    WORKER_CRASH_RECOVERED = "WORKER_CRASH_RECOVERED"
+    EXECUTION_INTERRUPTED = "EXECUTION_INTERRUPTED"
+    STALE_REVISION_DETECTED = "STALE_REVISION_DETECTED"
+    POST_VERIFICATION_MUTATION_DETECTED = "POST_VERIFICATION_MUTATION_DETECTED"
+    ORPHANED_WORKSPACES_CLEANED = "ORPHANED_WORKSPACES_CLEANED"
+    INVARIANT_VALIDATION_FAILED = "INVARIANT_VALIDATION_FAILED"
+    DISK_QUOTA_EXCEEDED = "DISK_QUOTA_EXCEEDED"
 
 
 class WorkspaceExecutionEvent(BaseModel):
@@ -719,7 +729,193 @@ class WorkspaceDraftPRResult(BaseModel):
     error: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# 11. Day 6 Reliability, Security & Failure Recovery Schemas (Docs/week3.md §8 Day 6)
+# ---------------------------------------------------------------------------
+
+class StaleRevisionCheckRequest(BaseModel):
+    """Request to detect whether repository base revision has drifted."""
+
+    task_id: str = Field(..., description="Task UUID.")
+    current_remote_sha: str = Field(..., description="Latest commit SHA from remote head.")
+
+    @field_validator("current_remote_sha")
+    @classmethod
+    def _validate_sha(cls, value: str) -> str:
+        clean = (value or "").strip()
+        if not _COMMIT_SHA_RE.match(clean):
+            raise ValueError(f"Invalid remote commit SHA: {clean}")
+        return clean
+
+
+class StaleRevisionCheckResult(BaseModel):
+    """Outcome of stale base revision verification."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    task_id: str = ""
+    is_stale: bool = False
+    workspace_base_revision: str = ""
+    current_base_revision: str = ""
+    current_remote_sha: str = ""
+    commits_behind: int = 0
+    remote_head: str | None = None
+    remediation_suggestion: str | None = None
+    message: str = ""
+    checked_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_base_revision(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "current_base_revision" in data and not data.get("workspace_base_revision"):
+                data["workspace_base_revision"] = data["current_base_revision"]
+            elif "workspace_base_revision" in data and not data.get("current_base_revision"):
+                data["current_base_revision"] = data["workspace_base_revision"]
+        return data
+
+
+class DiffImmutabilityCheckRequest(BaseModel):
+    """Request to verify that diff has not mutated after independent verification."""
+
+    task_id: str = Field(..., description="Task UUID.")
+    expected_diff_hash: str = Field(..., description="SHA-256 hash of verified diff.")
+
+
+class DiffImmutabilityCheckResult(BaseModel):
+    """Outcome of post-verification diff immutability check."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    task_id: str
+    immutable: bool = True
+    is_immutable: bool = True
+    expected_diff_hash: str
+    current_diff_hash: str
+    verified_diff_hash: str = ""
+    message: str = ""
+    error_message: str | None = None
+    checked_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_immutable(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "is_immutable" in data and "immutable" not in data:
+                data["immutable"] = data["is_immutable"]
+            elif "immutable" in data and "is_immutable" not in data:
+                data["is_immutable"] = data["immutable"]
+            if "expected_diff_hash" in data and not data.get("verified_diff_hash"):
+                data["verified_diff_hash"] = data["expected_diff_hash"]
+            elif "verified_diff_hash" in data and not data.get("expected_diff_hash"):
+                data["expected_diff_hash"] = data["verified_diff_hash"]
+        return data
+
+
+class WorkspaceRecoveryRecord(BaseModel):
+    """Record of a single recovered workspace after worker crash or restart."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    task_id: str
+    previous_status: WorkspaceStatus
+    recovered_status: WorkspaceStatus
+    new_status: WorkspaceStatus | None = None
+    reconciliation_action: str = ""
+    details: str = ""
+    recovered_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_recovery(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "recovered_status" in data and not data.get("new_status"):
+                data["new_status"] = data["recovered_status"]
+            elif "new_status" in data and not data.get("recovered_status"):
+                data["recovered_status"] = data["new_status"]
+            if "details" in data and not data.get("reconciliation_action"):
+                data["reconciliation_action"] = data["details"]
+            elif "reconciliation_action" in data and not data.get("details"):
+                data["details"] = data["reconciliation_action"]
+        return data
+
+
+class WorkspaceRecoveryResult(BaseModel):
+    """Summary of bulk workspace state recovery across worker restart."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_scanned: int = 0
+    recovered_count: int = 0
+    failed_count: int = 0
+    unmodified_count: int = 0
+    records: list[WorkspaceRecoveryRecord] = Field(default_factory=list)
+
+
+class WorkspaceOrphanCleanupResult(BaseModel):
+    """Summary of orphaned workspace sweeping."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_scanned: int = 0
+    cleaned_count: int = 0
+    failed_count: int = 0
+    cleaned_task_ids: list[str] = Field(default_factory=list)
+    candidate_paths: list[str] = Field(default_factory=list)
+    duration_ms: float = 0.0
+
+
+class WorkspaceInvariantCheckResult(BaseModel):
+    """Outcome of workspace state, storage, and security invariant validation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    valid: bool
+    violations: list[str] = Field(default_factory=list)
+    checked_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @property
+    def is_valid(self) -> bool:
+        return self.valid
+
+
+class WorkspaceDiskUsageResult(BaseModel):
+    """Workspace storage budget telemetry."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    disk_usage_bytes: int
+    max_disk_bytes: int
+    within_budget: bool
+    file_count: int
+    error_message: str | None = None
+
+    @property
+    def is_exceeded(self) -> bool:
+        return not self.within_budget
+
+    @property
+    def total_bytes(self) -> int:
+        return self.disk_usage_bytes
+
+    @property
+    def total_files(self) -> int:
+        return self.file_count
+
+
 __all__ = [
+    "DiffImmutabilityCheckRequest",
+    "DiffImmutabilityCheckResult",
     "DiffValidationRequest",
     "DiffValidationResult",
     "FileChangeType",
@@ -727,6 +923,8 @@ __all__ = [
     "FileDiffSummary",
     "RepairAttemptRecord",
     "SecretScanFinding",
+    "StaleRevisionCheckRequest",
+    "StaleRevisionCheckResult",
     "TestFailureClassification",
     "TestOutcomeStatus",
     "VALID_WORKSPACE_TRANSITIONS",
@@ -739,6 +937,7 @@ __all__ = [
     "WorkspaceCreateResult",
     "WorkspaceDiffRequest",
     "WorkspaceDiffResult",
+    "WorkspaceDiskUsageResult",
     "WorkspaceDraftPRRequest",
     "WorkspaceDraftPRResult",
     "WorkspaceExecutionEvent",
@@ -749,10 +948,14 @@ __all__ = [
     "WorkspaceFileReadResult",
     "WorkspaceFileWriteRequest",
     "WorkspaceFileWriteResult",
+    "WorkspaceInvariantCheckResult",
     "WorkspaceIsolationType",
     "WorkspaceMetadata",
+    "WorkspaceOrphanCleanupResult",
     "WorkspacePushRequest",
     "WorkspacePushResult",
+    "WorkspaceRecoveryRecord",
+    "WorkspaceRecoveryResult",
     "WorkspaceRepairBudgetStatus",
     "WorkspaceResourceLimits",
     "WorkspaceStartExecutionRequest",
