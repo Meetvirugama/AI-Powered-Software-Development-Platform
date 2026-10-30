@@ -34,6 +34,16 @@ from app.schemas.analysis import (
     TestGenerationResult,
     TestScenario,
 )
+from app.schemas.repair import (
+    DiagnosedFailure,
+    FailureCategory,
+    PatchValidationResult,
+    RepairLoopState,
+    RepairPatchPayload,
+    RepairStateStatus,
+    TestFrameworkName,
+    TracebackDiagnosisResult,
+)
 from app.schemas.task import (
     TaskAssumption,
     TaskConstraint,
@@ -74,10 +84,16 @@ __all__ = [
     "CodeReviewRequest",
     "CodeTargetType",
     "ConfidenceLevel",
+    "DiagnosedFailure",
     "ExplainCodeRequest",
+    "FailureCategory",
     "FindingSeverity",
     "FindingSourceType",
     "PaginatedAnalysisRunResponse",
+    "PatchValidationResult",
+    "RepairLoopState",
+    "RepairPatchPayload",
+    "RepairStateStatus",
     "ReviewCategory",
     "ReviewFinding",
     "ReviewReport",
@@ -97,10 +113,12 @@ __all__ = [
     "TaskSourceReference",
     "TaskSourceType",
     "TaskStatus",
+    "TestFrameworkName",
     "TestGenerationRequest",
     "TestGenerationResponse",
     "TestGenerationResult",
     "TestScenario",
+    "TracebackDiagnosisResult",
     "VALID_TASK_TRANSITIONS",
     "VerificationCheckItem",
     "VerificationCheckStatus",
@@ -109,4 +127,3 @@ __all__ = [
     "VerificationResult",
     "can_transition",
 ]
-
