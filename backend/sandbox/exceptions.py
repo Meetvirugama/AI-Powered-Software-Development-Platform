@@ -69,3 +69,36 @@ class WorkspaceRepairBudgetExhaustedError(WorkspaceError):
 class WorkspaceDuplicateRepairPatchError(WorkspaceError):
     """Raised when an identical failed repair patch is repeatedly applied."""
 
+
+# Week 3 Day 5 — Verification, Commit, Push and Draft PR Exceptions (Docs/week3.md §6 F36, F37)
+class WorkspaceDiffError(WorkspaceError):
+    """Raised when extracting or parsing a unified git diff from the workspace fails."""
+
+
+class WorkspaceDiffValidationError(WorkspaceError):
+    """Raised when workspace changes violate diff boundary, critical file, or allowed file rules."""
+
+
+class WorkspaceSecretLeakDetectedError(WorkspaceDiffValidationError):
+    """Raised when sensitive tokens, private keys, or credentials are found in diff or commit."""
+
+
+class WorkspaceProtectedBranchError(WorkspaceError):
+    """Raised when an operation attempts to commit to or push directly to a protected/default branch."""
+
+
+class WorkspaceCommitError(WorkspaceError):
+    """Raised when staging or committing validated changes on the task branch fails."""
+
+
+class WorkspacePublicationUnauthorizedError(WorkspaceError):
+    """Raised when git push or Draft PR publication is attempted without explicit human authorization."""
+
+
+class WorkspacePushError(WorkspaceError):
+    """Raised when git push to remote repository encounters a network, permission, or ref failure."""
+
+
+class WorkspaceDraftPRError(WorkspaceError):
+    """Raised when opening or formatting a GitHub Draft Pull Request fails."""
+

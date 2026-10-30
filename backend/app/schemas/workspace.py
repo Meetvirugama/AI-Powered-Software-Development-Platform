@@ -330,6 +330,15 @@ class WorkspaceExecutionEventType(str, Enum):
     REPAIR_ATTEMPT_STARTED = "REPAIR_ATTEMPT_STARTED"
     REPAIR_ATTEMPT_COMPLETED = "REPAIR_ATTEMPT_COMPLETED"
     REPAIR_BUDGET_EXHAUSTED = "REPAIR_BUDGET_EXHAUSTED"
+    # Week 3 Day 5 verification & publication timeline events
+    DIFF_INSPECTED = "DIFF_INSPECTED"
+    DIFF_VALIDATED = "DIFF_VALIDATED"
+    DIFF_VALIDATION_FAILED = "DIFF_VALIDATION_FAILED"
+    PUBLICATION_AUTHORIZED = "PUBLICATION_AUTHORIZED"
+    CHANGES_COMMITTED = "CHANGES_COMMITTED"
+    BRANCH_PUSHED = "BRANCH_PUSHED"
+    PR_CREATED = "PR_CREATED"
+    PUBLICATION_FAILED = "PUBLICATION_FAILED"
 
 
 class WorkspaceExecutionEvent(BaseModel):
@@ -525,16 +534,213 @@ class WorkspaceRepairBudgetStatus(BaseModel):
     last_attempt_at: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# 9. Week 3 Day 5 — Diff Validation, Verification, Commit, Push & Draft PR
+# ---------------------------------------------------------------------------
+
+class FileChangeType(str, Enum):
+    """Type of file change in unified workspace diff."""
+
+    MODIFIED = "MODIFIED"
+    ADDED = "ADDED"
+    DELETED = "DELETED"
+    RENAMED = "RENAMED"
+
+
+class FileDiffHunk(BaseModel):
+    """A single unified diff hunk within a file diff."""
+
+    old_start: int
+    old_lines: int
+    new_start: int
+    new_lines: int
+    lines: list[str] = Field(default_factory=list)
+
+
+class FileDiffSummary(BaseModel):
+    """Structured diff summary for a single file in the workspace."""
+
+    file_path: str
+    change_type: FileChangeType = FileChangeType.MODIFIED
+    insertions: int = 0
+    deletions: int = 0
+    patch: str = ""
+    hunks: list[FileDiffHunk] = Field(default_factory=list)
+
+
+class WorkspaceDiffRequest(BaseModel):
+    """Request to extract unified git diff from workspace."""
+
+    task_id: str = Field(..., min_length=1)
+    base_revision: str | None = Field(default=None)
+
+
+class WorkspaceDiffResult(BaseModel):
+    """Result of extracting and analyzing unified git diff from the workspace."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    workspace_id: str | None = None
+    base_revision: str
+    head_revision: str | None = None
+    total_files_changed: int = 0
+    insertions: int = 0
+    deletions: int = 0
+    is_empty: bool = True
+    files: list[FileDiffSummary] = Field(default_factory=list)
+    raw_diff: str = ""
+    extracted_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    error: str | None = None
+
+
+class SecretScanFinding(BaseModel):
+    """Finding when a potential credential or secret token is discovered in code."""
+
+    file_path: str
+    line_number: int = 0
+    secret_type: str
+    redacted_preview: str
+
+
+class DiffValidationRequest(BaseModel):
+    """Request to validate workspace diff against approved task scope."""
+
+    task_id: str = Field(..., min_length=1)
+    allowed_files: list[str] | None = Field(default=None)
+
+
+class DiffValidationResult(BaseModel):
+    """Result of independent diff validation against security and boundary rules."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    is_valid: bool
+    verified_revision: str | None = None
+    modified_files: list[str] = Field(default_factory=list)
+    unapproved_files: list[str] = Field(default_factory=list)
+    deleted_critical_files: list[str] = Field(default_factory=list)
+    secret_findings: list[SecretScanFinding] = Field(default_factory=list)
+    blocking_findings: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    validated_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class WorkspaceCommitRequest(BaseModel):
+    """Request to stage and commit validated changes on task branch."""
+
+    task_id: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1)
+    branch_name: str | None = Field(default=None)
+    author_name: str = "Agent"
+    author_email: str = "agent@ai-platform.local"
+    files: list[str] | None = None
+
+
+class WorkspaceCommitResult(BaseModel):
+    """Outcome of committing task changes to dedicated branch."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    task_id: str
+    commit_sha: str
+    branch: str
+    message: str
+    files_committed: list[str] = Field(default_factory=list)
+    author_name: str = "Agent"
+    committed_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    error: str | None = None
+
+
+class WorkspacePushRequest(BaseModel):
+    """Request to push task branch to remote origin with authorization gate."""
+
+    task_id: str = Field(..., min_length=1)
+    branch_name: str = Field(..., min_length=1)
+    remote_name: str = "origin"
+    publication_authorized: bool = False
+    remote_url: str | None = None
+
+
+class WorkspacePushResult(BaseModel):
+    """Outcome of pushing task branch to remote repository."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    task_id: str
+    branch: str
+    pushed_sha: str | None = None
+    remote_name: str = "origin"
+    pushed_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    error: str | None = None
+
+
+class WorkspaceDraftPRRequest(BaseModel):
+    """Request to synthesize and create GitHub Draft Pull Request."""
+
+    task_id: str = Field(..., min_length=1)
+    title: str = Field(..., min_length=1)
+    body: str | None = None
+    head_branch: str = Field(..., min_length=1)
+    base_branch: str = "main"
+    draft: bool = True
+    repository_owner: str | None = None
+    repository_name: str | None = None
+    publication_authorized: bool = False
+
+
+class WorkspaceDraftPRResult(BaseModel):
+    """Outcome of opening or formatting GitHub Draft Pull Request."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    success: bool
+    task_id: str
+    pr_number: int | None = None
+    pr_url: str | None = None
+    head_branch: str
+    base_branch: str
+    is_draft: bool = True
+    summary: str = ""
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    error: str | None = None
+
+
 __all__ = [
+    "DiffValidationRequest",
+    "DiffValidationResult",
+    "FileChangeType",
+    "FileDiffHunk",
+    "FileDiffSummary",
     "RepairAttemptRecord",
+    "SecretScanFinding",
     "TestFailureClassification",
     "TestOutcomeStatus",
     "VALID_WORKSPACE_TRANSITIONS",
     "WorkspaceCleanupResult",
     "WorkspaceCommandRequest",
     "WorkspaceCommandResult",
+    "WorkspaceCommitRequest",
+    "WorkspaceCommitResult",
     "WorkspaceCreateRequest",
     "WorkspaceCreateResult",
+    "WorkspaceDiffRequest",
+    "WorkspaceDiffResult",
+    "WorkspaceDraftPRRequest",
+    "WorkspaceDraftPRResult",
     "WorkspaceExecutionEvent",
     "WorkspaceExecutionEventType",
     "WorkspaceFilePatchRequest",
@@ -545,6 +751,8 @@ __all__ = [
     "WorkspaceFileWriteResult",
     "WorkspaceIsolationType",
     "WorkspaceMetadata",
+    "WorkspacePushRequest",
+    "WorkspacePushResult",
     "WorkspaceRepairBudgetStatus",
     "WorkspaceResourceLimits",
     "WorkspaceStartExecutionRequest",

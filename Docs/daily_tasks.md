@@ -645,6 +645,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 
+- ✅ Prit: Sandbox `WorkspaceDiffVerifier` diff extraction & scope validation, addition-level secret scanner, protected branch guards, authorized git push & draft PR preparation with structured task summary (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/diff_verifier.py`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d5_verification_and_draft_pr.py`)
 - ⬜ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary
 - ⬜ Meet: Requirement-to-code verification comparing final diff against original plan
 - ⬜ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)`
