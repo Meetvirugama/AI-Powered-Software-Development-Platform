@@ -1,7 +1,9 @@
-import { CheckCircle2, XCircle, Shield, Clock } from 'lucide-react';
+import { CheckCircle2, XCircle, Shield, Clock, RefreshCw } from 'lucide-react';
 import { useTaskEvents } from '../../hooks/useTasks';
 import type { TaskDetailResponse } from '../../types/task';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
+import { ErrorMessage } from '../shared/ErrorMessage';
+import { getDecisionPlanVersion } from '../../lib/taskUtils';
 import { cn } from '../../lib/utils';
 
 export interface ApprovalHistoryPanelProps {
@@ -24,12 +26,13 @@ function formatDate(dateStr: string): string {
   }
 }
 
+
 export function ApprovalHistoryPanel({
   taskId,
   task,
   className,
 }: ApprovalHistoryPanelProps) {
-  const { data: eventsData, isLoading } = useTaskEvents(taskId);
+  const { data: eventsData, isLoading, isError, error, refetch } = useTaskEvents(taskId);
 
   const approvalEvents = (eventsData?.items || []).filter(
     (e) => e.event_type === 'PLAN_APPROVED' || e.event_type === 'PLAN_REJECTED'
@@ -48,11 +51,25 @@ export function ApprovalHistoryPanel({
           Approval & Rejection History
         </h3>
         <span className="text-xs font-mono text-muted-foreground">
-          {approvalEvents.length} decision(s)
+          {isError ? 'Error' : `${approvalEvents.length} decision(s)`}
         </span>
       </div>
 
-      {isLoading ? (
+      {isError ? (
+        <div className="space-y-3 py-2">
+          <ErrorMessage error={error} message="Failed to load approval history." />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Retry</span>
+            </button>
+          </div>
+        </div>
+      ) : isLoading ? (
         <div className="py-8 text-center">
           <LoadingSpinner size="sm" label="Loading approval records..." />
         </div>
@@ -73,6 +90,7 @@ export function ApprovalHistoryPanel({
               (evt.details?.notes as string) ||
               (evt.details?.reason as string) ||
               evt.description;
+            const decisionVersion = getDecisionPlanVersion(evt, task);
 
             return (
               <div
@@ -102,8 +120,8 @@ export function ApprovalHistoryPanel({
                       {isApproved ? 'APPROVED' : 'REJECTED'}
                     </span>
 
-                    <span className="font-mono text-muted-foreground text-[11px]">
-                      Plan v{task.approved_plan_version || task.plan_version}
+                    <span className="font-mono text-muted-foreground text-[11px]" data-testid="decision-plan-version">
+                      Plan v{decisionVersion}
                     </span>
                   </div>
 

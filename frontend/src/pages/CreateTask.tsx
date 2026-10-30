@@ -9,7 +9,7 @@ export function CreateTask() {
   const [activeTab, setActiveTab] = useState<'manual' | 'github'>('manual');
 
   return (
-    <div className="flex flex-col h-full space-y-6 max-w-5xl mx-auto w-full">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto space-y-6 max-w-5xl mx-auto w-full">
       {/* Top Navigation & Breadcrumbs */}
       <div>
         <Link

@@ -88,12 +88,12 @@ export type TaskStatus =
 ```
 
 ### 3.2. Verified Backend Schemas (Mapped from `backend/app/schemas/task.py`)
-- `TaskSourceReference`: Source type (`github_issue` | `manual_prompt` | `chat_request`), external issue ID, issue number, issue URL.
-- `TaskRequirement`: Unique ID, description, priority (`low` | `medium` | `high` | `critical`), acceptance criteria.
-- `TaskAssumption`: Unique ID, assumption statement.
-- `TaskConstraint`: Unique ID, constraint statement.
-- `TaskCreateRequest` / `TaskIntakePayload`: Full intake payload with repository ID, title, description, requirements, assumptions, constraints, target files, and forbidden files.
-- `TaskDetailResponse`: Canonical representation of a task, including status, plan version, timestamps, requirements, and metadata.
+- `TaskSourceReference`: Source type (`GITHUB_ISSUE` | `BUG_FINDING` | `REVIEW_FINDING` | `USER_PROMPT`), `issue_number`, `issue_url`, `finding_id`, `repository_id`, `base_revision`.
+- `TaskRequirement`: Unique ID (`req-1`), description, category (`functional` | `bug_fix` | `refactor` | `security` | `test`), `target_files` (array of file paths), `acceptance_criteria` (array of criteria).
+- `TaskAssumption`: Unique ID (`asm-1`), description, `unresolved` (boolean), `risk_level` (`low` | `medium` | `high`).
+- `TaskConstraint`: Unique ID (`cst-1`), description, `constraint_type` (`protected_file` | `forbidden_dependency` | `backward_compatibility` | `resource_limit` | `security_policy`), `forbidden_files`, `forbidden_packages`, `max_budget_tokens`.
+- `TaskCreateRequest` / `TaskIntakePayload`: Full intake payload with repository ID, title, description, source reference, requirements, optional assumptions, optional constraints, and optional base revision.
+- `TaskDetailResponse`: Canonical representation of a task, including status, plan version, approved plan version, repair attempts used/max, timestamps, requirements, assumptions, constraints, and source reference.
 - `VALID_TASK_TRANSITIONS` & `canTransition()`: Client-side representation of the transition state machine for anticipatory UI gating.
 
 ### 3.3. Provisional Contracts (Documented for Teammate Alignment)
@@ -136,13 +136,20 @@ The frontend manages asynchronous state via `frontend/src/hooks/useTasks.ts` usi
 export const taskKeys = {
   all: ['tasks'] as const,
   lists: () => [...taskKeys.all, 'list'] as const,
-  list: (filters: Record<string, unknown>) => [...taskKeys.lists(), filters] as const,
+  list: (filters?: TaskListFilterParams) => [...taskKeys.all, 'list', filters] as const,
   details: () => [...taskKeys.all, 'detail'] as const,
-  detail: (id: string) => [...taskKeys.details(), id] as const,
+  detail: (taskId: string) => [...taskKeys.all, 'detail', taskId] as const,
   plans: () => [...taskKeys.all, 'plan'] as const,
-  plan: (taskId: string, version?: number) => [...taskKeys.plans(), taskId, version] as const,
-  events: (taskId: string, params?: Record<string, unknown>) => [...taskKeys.all, 'events', taskId, params] as const,
-  repoIssues: (repoId: string, params?: Record<string, unknown>) => ['repositories', repoId, 'issues', params] as const,
+  plan: (taskId: string, version?: number) =>
+    [...taskKeys.all, 'detail', taskId, 'plan', version] as const,
+  events: (taskId: string, params?: { limit?: number; since?: string }) =>
+    [...taskKeys.all, 'detail', taskId, 'events', params] as const,
+  tests: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'tests'] as const,
+  verification: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'verification'] as const,
+  repoIssues: (
+    repoId: string,
+    params?: { state?: 'open' | 'closed' | 'all'; page?: number; page_size?: number }
+  ) => [...taskKeys.all, 'repoIssues', repoId, params] as const,
 };
 ```
 

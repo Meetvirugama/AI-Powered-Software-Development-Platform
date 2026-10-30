@@ -25,7 +25,7 @@ export function ImportIssueForm() {
 
   // Selected repository state
   const [selectedRepoId, setSelectedRepoId] = useState<string>('');
-  const activeRepoId = selectedRepoId || repoData?.items?.[0]?.id || 'repo-1';
+  const activeRepoId = selectedRepoId || repoData?.items?.[0]?.id || '';
 
   // Issue state filter and search
   const [issueState, setIssueState] = useState<'open' | 'closed' | 'all'>('open');
@@ -71,7 +71,7 @@ export function ImportIssueForm() {
   const importMutation = useImportIssue(activeRepoId);
 
   async function handleImport() {
-    if (!selectedIssueNumber) return;
+    if (!selectedIssueNumber || !activeRepoId) return;
     if (selectedIssue?.is_imported) return;
 
     try {
@@ -175,7 +175,13 @@ export function ImportIssueForm() {
           </div>
 
           <div className="rounded-lg border border-border bg-card p-2 min-h-[350px] max-h-[500px] overflow-y-auto space-y-1.5">
-            {isLoadingIssues ? (
+            {!activeRepoId ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <FolderGit2 className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p className="text-sm font-medium">No repository selected</p>
+                <p className="text-xs mt-1">Please select or configure a repository to view issues.</p>
+              </div>
+            ) : isLoadingIssues ? (
               <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
                 <LoadingSpinner size="md" label="Loading issues..." />
                 <p className="mt-2 text-xs">Fetching repository issues from GitHub...</p>

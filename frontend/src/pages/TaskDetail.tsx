@@ -57,7 +57,7 @@ export function TaskDetail() {
 
   if (isError || !task) {
     return (
-      <div className="max-w-4xl mx-auto py-12 space-y-6">
+      <div className="flex flex-col h-full min-h-0 overflow-y-auto max-w-4xl mx-auto py-12 space-y-6">
         <Link
           to="/app/tasks"
           className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -92,7 +92,7 @@ export function TaskDetail() {
   }
 
   return (
-    <div className="flex flex-col h-full space-y-8 max-w-6xl mx-auto w-full pb-12">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto space-y-8 max-w-6xl mx-auto w-full pb-12">
       {/* ------------------------------------------------------------------ */}
       {/* 1. Header & Navigation                                              */}
       {/* ------------------------------------------------------------------ */}

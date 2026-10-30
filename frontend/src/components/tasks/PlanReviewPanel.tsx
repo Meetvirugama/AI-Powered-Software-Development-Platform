@@ -67,6 +67,8 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
   async function handleApprove() {
     if (!plan || !canApproveOrReject) return;
     setVersionMismatchAlert(null);
+    rejectMutation.reset();
+    generatePlanMutation.reset();
 
     try {
       await approveMutation.mutateAsync({
@@ -89,6 +91,8 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
   async function handleReject() {
     if (!plan || !canApproveOrReject) return;
     setVersionMismatchAlert(null);
+    approveMutation.reset();
+    generatePlanMutation.reset();
 
     try {
       await rejectMutation.mutateAsync({
@@ -111,6 +115,9 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
   // Handle plan revision / re-generation
   async function handleRevise() {
     setVersionMismatchAlert(null);
+    approveMutation.reset();
+    rejectMutation.reset();
+
     try {
       await generatePlanMutation.mutateAsync({
         regenerate: true,
@@ -163,10 +170,20 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
             <p className="text-xs text-muted-foreground max-w-md mx-auto">
               This task does not have an active implementation plan. Generate a plan with the AI Planner to initiate structured steps and validation strategies.
             </p>
+            {generatePlanMutation.isError && (
+              <div className="pt-1">
+                <ErrorMessage error={generatePlanMutation.error} />
+              </div>
+            )}
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => generatePlanMutation.mutateAsync({ regenerate: false })}
+                onClick={() => {
+                  setVersionMismatchAlert(null);
+                  approveMutation.reset();
+                  rejectMutation.reset();
+                  generatePlanMutation.mutate({ regenerate: false });
+                }}
                 disabled={generatePlanMutation.isPending}
                 className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >

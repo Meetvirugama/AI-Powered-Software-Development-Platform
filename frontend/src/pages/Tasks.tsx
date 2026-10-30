@@ -109,7 +109,7 @@ export function Tasks() {
   }
 
   return (
-    <div className="flex flex-col h-full space-y-6">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto space-y-6">
       {/* Top Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>

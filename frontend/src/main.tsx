@@ -14,20 +14,28 @@ const queryClient = new QueryClient({
 });
 
 async function enableMocking(): Promise<void> {
-  if (import.meta.env.DEV) {
-    const { worker } = await import('./mocks/browser');
-    await worker.start({
-      onUnhandledRequest: 'bypass',
-    });
+  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MSW !== 'false') {
+    try {
+      const { worker } = await import('./mocks/browser');
+      await worker.start({
+        onUnhandledRequest: 'bypass',
+      });
+    } catch (err) {
+      console.error('MSW failed to start:', err);
+    }
   }
 }
 
-enableMocking().then(() => {
-  ReactDOM.createRoot(document.getElementById('root')!).render(
-    <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </React.StrictMode>,
-  );
-});
+enableMocking()
+  .catch((err) => {
+    console.error('Error during MSW bootstrap:', err);
+  })
+  .finally(() => {
+    ReactDOM.createRoot(document.getElementById('root')!).render(
+      <React.StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </React.StrictMode>,
+    );
+  });

@@ -1,4 +1,4 @@
-import { useState, useId } from 'react';
+import { useState, useId, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -106,16 +106,19 @@ export function CreateTaskForm() {
 
   // Client-side validation errors
   const [clientErrors, setClientErrors] = useState<Record<string, string>>({});
+  const reqCounterRef = useRef(2);
+  const asmCounterRef = useRef(1);
+  const cstCounterRef = useRef(1);
 
   // --------------------------------------------------------------------------
   // Requirement Handlers
   // --------------------------------------------------------------------------
   function addRequirement() {
-    const nextIndex = requirements.length + 1;
+    const nextId = `req-${reqCounterRef.current++}`;
     setRequirements((prev) => [
       ...prev,
       {
-        id: `req-${nextIndex}`,
+        id: nextId,
         description: '',
         category: 'functional',
         targetFilesStr: '',
@@ -145,11 +148,11 @@ export function CreateTaskForm() {
   // Assumption Handlers
   // --------------------------------------------------------------------------
   function addAssumption() {
-    const nextIndex = assumptions.length + 1;
+    const nextId = `asm-${asmCounterRef.current++}`;
     setAssumptions((prev) => [
       ...prev,
       {
-        id: `asm-${nextIndex}`,
+        id: nextId,
         description: '',
         unresolved: false,
         risk_level: 'low',
@@ -177,11 +180,11 @@ export function CreateTaskForm() {
   // Constraint Handlers
   // --------------------------------------------------------------------------
   function addConstraint() {
-    const nextIndex = constraints.length + 1;
+    const nextId = `cst-${cstCounterRef.current++}`;
     setConstraints((prev) => [
       ...prev,
       {
-        id: `cst-${nextIndex}`,
+        id: nextId,
         description: '',
         constraint_type: 'protected_file',
         forbiddenFilesStr: '',
@@ -229,6 +232,17 @@ export function CreateTaskForm() {
       errors.description = 'Task description is required.';
     }
 
+    if (sourceType === 'GITHUB_ISSUE' && issueUrl.trim()) {
+      try {
+        const parsed = new URL(issueUrl.trim());
+        if (parsed.protocol !== 'https:') {
+          errors.issueUrl = 'Issue URL must be a valid HTTPS URL.';
+        }
+      } catch {
+        errors.issueUrl = 'Issue URL must be a valid HTTPS URL.';
+      }
+    }
+
     if (requirements.length === 0) {
       errors.requirements = 'At least one requirement is required.';
     } else {
@@ -270,7 +284,7 @@ export function CreateTaskForm() {
     e.preventDefault();
     if (!validate()) return;
 
-    const chosenRepo = repositoryId.trim() || (repoData?.items?.[0]?.id ?? 'repo-1');
+    const chosenRepo = repositoryId.trim() || (repoData?.items?.[0]?.id ?? '');
 
     // Build requirements payload
     const formattedRequirements: TaskRequirement[] = requirements.map((r) => ({
@@ -281,11 +295,14 @@ export function CreateTaskForm() {
         .split(',')
         .map((f) => f.trim())
         .filter(Boolean),
-      acceptance_criteria: r.acceptanceCriteriaStr
-        .split('\n')
-        .concat(r.acceptanceCriteriaStr.split(','))
-        .map((c) => c.trim())
-        .filter(Boolean),
+      acceptance_criteria: Array.from(
+        new Set(
+          r.acceptanceCriteriaStr
+            .split(/[\r\n,]+/)
+            .map((c) => c.trim())
+            .filter(Boolean)
+        )
+      ),
     }));
 
     // Build assumptions payload
@@ -300,7 +317,13 @@ export function CreateTaskForm() {
 
     // Build constraints payload
     const formattedConstraints: TaskConstraint[] = constraints
-      .filter((c) => c.description.trim() || c.forbiddenFilesStr.trim())
+      .filter(
+        (c) =>
+          c.description.trim() ||
+          c.forbiddenFilesStr.trim() ||
+          c.forbiddenPackagesStr.trim() ||
+          c.maxBudgetTokensStr.trim()
+      )
       .map((c) => ({
         id: c.id,
         description: c.description.trim() || `Constraint on ${c.constraint_type}`,
@@ -313,7 +336,9 @@ export function CreateTaskForm() {
           .split(',')
           .map((p) => p.trim())
           .filter(Boolean),
-        max_budget_tokens: c.maxBudgetTokensStr ? parseInt(c.maxBudgetTokensStr, 10) : undefined,
+        max_budget_tokens: c.maxBudgetTokensStr.trim()
+          ? parseInt(c.maxBudgetTokensStr.trim(), 10)
+          : undefined,
       }));
 
     const payload: TaskCreateRequest = {
@@ -322,11 +347,17 @@ export function CreateTaskForm() {
       description: description.trim(),
       source: {
         type: sourceType,
-        issue_number: issueNumber ? parseInt(issueNumber, 10) : undefined,
-        issue_url: issueUrl.trim() || undefined,
-        finding_id: findingId.trim() || undefined,
-        repository_id: chosenRepo,
-        base_revision: baseRevision.trim() || undefined,
+        ...(sourceType === 'GITHUB_ISSUE' && issueNumber.trim()
+          ? { issue_number: parseInt(issueNumber.trim(), 10) }
+          : {}),
+        ...(sourceType === 'GITHUB_ISSUE' && issueUrl.trim()
+          ? { issue_url: issueUrl.trim() }
+          : {}),
+        ...(sourceType === 'BUG_FINDING' && findingId.trim()
+          ? { finding_id: findingId.trim() }
+          : {}),
+        ...(chosenRepo ? { repository_id: chosenRepo } : {}),
+        ...(baseRevision.trim() ? { base_revision: baseRevision.trim() } : {}),
       },
       requirements: formattedRequirements,
       assumptions: formattedAssumptions.length > 0 ? formattedAssumptions : undefined,
@@ -459,6 +490,9 @@ export function CreateTaskForm() {
                 onChange={(e) => setIssueUrl(e.target.value)}
                 className="w-full py-2 px-3 text-sm bg-background border border-border rounded-md text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
+              {clientErrors.issueUrl && (
+                <p className="mt-1 text-xs text-destructive">{clientErrors.issueUrl}</p>
+              )}
             </div>
           </div>
         )}

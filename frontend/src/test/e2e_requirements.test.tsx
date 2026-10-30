@@ -17,9 +17,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
 import { apiClient, normaliseError } from '../services/api';
+import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
 import {
   createTask,
   listTasks,
@@ -239,24 +241,9 @@ describe('Tier 1: Functional Feature Coverage', () => {
   });
 
   it('T1.11: renders status badge correctly for all 17 canonical TaskStatus states and falls back safely on unknown states', () => {
-    // Minimal requirement-driven badge component testing presentation contracts
-    function RequirementStatusBadge({ status }: { status: string }) {
-      const isCanonical = ALL_CANONICAL_STATUSES.includes(status as TaskStatus);
-      const displayLabel = status.replace(/_/g, ' ');
-      return (
-        <span
-          data-testid="status-badge"
-          data-status={status}
-          className={isCanonical ? `badge-${status.toLowerCase()}` : 'badge-neutral-fallback'}
-        >
-          {displayLabel}
-        </span>
-      );
-    }
-
-    // Test each canonical state
+    // Test each canonical state using production TaskStatusBadge
     for (const canonicalStatus of ALL_CANONICAL_STATUSES) {
-      const { unmount } = render(<RequirementStatusBadge status={canonicalStatus} />);
+      const { unmount } = render(<TaskStatusBadge status={canonicalStatus} />);
       const badge = screen.getByTestId('status-badge');
       expect(badge).toHaveAttribute('data-status', canonicalStatus);
       expect(badge.textContent).toBe(canonicalStatus.replace(/_/g, ' '));
@@ -265,10 +252,10 @@ describe('Tier 1: Functional Feature Coverage', () => {
     }
 
     // Test unknown future state fallback
-    const { unmount } = render(<RequirementStatusBadge status="ARCHIVED_FUTURE_STATUS" />);
+    const { unmount } = render(<TaskStatusBadge status="ARCHIVED_FUTURE_STATUS" />);
     const fallbackBadge = screen.getByTestId('status-badge');
     expect(fallbackBadge).toHaveAttribute('data-status', 'ARCHIVED_FUTURE_STATUS');
-    expect(fallbackBadge.className).toBe('badge-neutral-fallback');
+    expect(fallbackBadge.className).toContain('badge-neutral-fallback');
     unmount();
   });
 });
@@ -628,6 +615,13 @@ describe('Tier 4: Real-World Scenarios & Security Guardrails', () => {
     // According to Docs/week3.md §7.2 and ORIGINAL_REQUEST.md R5:
     // - Approve/Reject buttons must be strictly disabled unless status is PENDING_APPROVAL.
     // - NO execution actions (Run, Execute, Create PR) are rendered in Day 1/2 UI.
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, gcTime: 0 },
+        mutations: { retry: false },
+      },
+    });
+
     function Day1Day2ReviewControls({
       taskStatus,
       onApprove,
@@ -640,15 +634,17 @@ describe('Tier 4: Real-World Scenarios & Security Guardrails', () => {
       const canAct = taskStatus === TaskStatus.PENDING_APPROVAL;
 
       return (
-        <div data-testid="review-controls">
-          <button data-testid="approve-button" disabled={!canAct} onClick={onApprove}>
-            Approve Plan
-          </button>
-          <button data-testid="reject-button" disabled={!canAct} onClick={onReject}>
-            Reject Plan
-          </button>
-          {/* Day 1/2 UI must NOT render execution triggers under any circumstances */}
-        </div>
+        <QueryClientProvider client={queryClient}>
+          <div data-testid="review-controls">
+            <button data-testid="approve-button" disabled={!canAct} onClick={onApprove}>
+              Approve Plan
+            </button>
+            <button data-testid="reject-button" disabled={!canAct} onClick={onReject}>
+              Reject Plan
+            </button>
+            {/* Day 1/2 UI must NOT render execution triggers under any circumstances */}
+          </div>
+        </QueryClientProvider>
       );
     }
 

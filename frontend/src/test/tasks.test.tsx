@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../mocks/server';
 import { resetMockStore } from '../mocks/handlers';
-import { TaskStatus, type TaskDetailResponse } from '../types/task';
+import { TaskStatus, type TaskDetailResponse, type TaskEvent } from '../types/task';
 import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
 import { TaskCard } from '../components/tasks/TaskCard';
 import { Tasks } from '../pages/Tasks';
@@ -14,6 +14,7 @@ import { CreateTaskForm } from '../components/tasks/CreateTaskForm';
 import { ImportIssueForm } from '../components/tasks/ImportIssueForm';
 import { PlanReviewPanel } from '../components/tasks/PlanReviewPanel';
 import { ApprovalHistoryPanel } from '../components/tasks/ApprovalHistoryPanel';
+import { getDecisionPlanVersion } from '../lib/taskUtils';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
 import { TaskDetail } from '../pages/TaskDetail';
 
@@ -261,15 +262,37 @@ describe('CreateTask & CreateTaskForm', () => {
     });
   });
 
-  it('adds and removes dynamic requirements in CreateTaskForm', () => {
+  it('adds and removes dynamic requirements with monotonic unique IDs in CreateTaskForm', () => {
     renderWithProviders(<CreateTaskForm />, '/app/tasks/new');
 
     expect(screen.getByText('req-1')).toBeInTheDocument();
 
     const addReqBtn = screen.getByRole('button', { name: /Add Requirement/i });
     fireEvent.click(addReqBtn);
-
     expect(screen.getByText('req-2')).toBeInTheDocument();
+
+    // Adding another requirement produces req-3 monotonically
+    fireEvent.click(addReqBtn);
+    expect(screen.getByText('req-3')).toBeInTheDocument();
+  });
+
+  it('validates HTTPS issue URL when intake source is GITHUB_ISSUE', async () => {
+    renderWithProviders(<CreateTaskForm />, '/app/tasks/new');
+
+    // Select GitHub Issue source type
+    const sourceSelect = screen.getByLabelText(/Intake Source Type/i);
+    fireEvent.change(sourceSelect, { target: { value: 'GITHUB_ISSUE' } });
+
+    // Enter non-HTTPS URL
+    const issueUrlInput = screen.getByPlaceholderText('https://github.com/...');
+    fireEvent.change(issueUrlInput, { target: { value: 'http://insecure-site.com/issue/1' } });
+
+    const submitBtn = screen.getByRole('button', { name: /Create Task/i });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Issue URL must be a valid HTTPS URL/i)).toBeInTheDocument();
+    });
   });
 
   it('adds and removes dynamic assumptions in CreateTaskForm', () => {
@@ -488,11 +511,15 @@ describe('PlanReviewPanel', () => {
     });
   });
 
-  it('strictly adheres to Day 1/2 UI constraints by NOT rendering any execution triggers', () => {
+  it('strictly adheres to Day 1/2 UI constraints by NOT rendering any execution triggers', async () => {
     renderWithProviders(
       <PlanReviewPanel task={mockSampleTask} />,
       '/app/tasks/task-test-sample'
     );
+
+    await waitFor(() => {
+      expect(screen.getByText('Implementation Plan')).toBeInTheDocument();
+    });
 
     expect(screen.queryByText(/execute task/i)).toBeNull();
     expect(screen.queryByText(/run in sandbox/i)).toBeNull();
@@ -504,6 +531,84 @@ describe('PlanReviewPanel', () => {
 // 7. ApprovalHistoryPanel & ExecutionTimeline Tests
 // ============================================================================
 describe('ApprovalHistoryPanel & ExecutionTimeline', () => {
+  it('correctly resolves decision plan version using explicit precedence', () => {
+    // 1. Explicit event.details.plan_version takes precedence
+    const evtWithDetail: TaskEvent = {
+      id: 'evt-1',
+      task_id: 'task-1',
+      event_type: 'PLAN_APPROVED',
+      description: 'Plan version 1 approved',
+      created_at: new Date().toISOString(),
+      details: { plan_version: 1 },
+    };
+    const taskMultiRev: TaskDetailResponse = {
+      ...mockSampleTask,
+      plan_version: 3,
+      approved_plan_version: 2,
+    };
+    expect(getDecisionPlanVersion(evtWithDetail, taskMultiRev)).toBe(1);
+
+    // 2. Fallback to task.approved_plan_version when detail is absent
+    const evtNoDetail: TaskEvent = {
+      id: 'evt-2',
+      task_id: 'task-1',
+      event_type: 'PLAN_APPROVED',
+      description: 'Plan approved',
+      created_at: new Date().toISOString(),
+    };
+    expect(getDecisionPlanVersion(evtNoDetail, taskMultiRev)).toBe(2);
+
+    // 3. Fallback to task.plan_version when approved_plan_version is null
+    const taskNoApproved: TaskDetailResponse = {
+      ...mockSampleTask,
+      plan_version: 3,
+      approved_plan_version: null,
+    };
+    expect(getDecisionPlanVersion(evtNoDetail, taskNoApproved)).toBe(3);
+  });
+
+  it('handles query error state and renders retry button in ApprovalHistoryPanel', async () => {
+    server.use(
+      http.get('*/api/v1/tasks/:taskId/events', () => {
+        return HttpResponse.json(
+          { error: { code: 'INTERNAL_ERROR', message: 'Database connection failed' } },
+          { status: 500 }
+        );
+      })
+    );
+
+    renderWithProviders(
+      <ApprovalHistoryPanel taskId="task-err" task={mockSampleTask} />,
+      '/app/tasks/task-err'
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Database connection failed/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+    });
+  });
+
+  it('handles query error state and renders retry button in ExecutionTimeline', async () => {
+    server.use(
+      http.get('*/api/v1/tasks/:taskId/events', () => {
+        return HttpResponse.json(
+          { error: { code: 'INTERNAL_ERROR', message: 'Database connection failed' } },
+          { status: 500 }
+        );
+      })
+    );
+
+    renderWithProviders(
+      <ExecutionTimeline taskId="task-err" />,
+      '/app/tasks/task-err'
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Database connection failed/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+    });
+  });
+
   it('renders approval decisions history', async () => {
     // task-seed-2 has a PLAN_APPROVED event in seed
     const taskApproved: TaskDetailResponse = {

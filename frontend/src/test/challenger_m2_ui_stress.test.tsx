@@ -9,7 +9,7 @@
  * 5. Lifecycle gatekeeping (Approve/Reject disabled outside PENDING_APPROVAL) and Day 1/2 UI execution button suppression
  */
 
-import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -54,26 +54,18 @@ function renderWithProviders(ui: React.ReactElement, initialRoute = '/app/tasks'
   );
 }
 
-beforeAll(() => {
+beforeEach(() => {
+  resetMockStore();
+
   // Intercept repository listing to prevent real network timeouts during useRepositories queries
   server.use(
     http.get('*/api/v1/repositories', () => {
-      return HttpResponse.json({
-        items: [
-          { id: 'repo-1', name: 'repo-1', full_name: 'example/repo-1' },
-          { id: 'repo-2', name: 'repo-2', full_name: 'example/repo-2' },
-        ],
-        total: 2,
-        page: 1,
-        page_size: 100,
-        total_pages: 1,
-      });
+      return HttpResponse.json([
+        { id: 'repo-1', name: 'repo-1', full_name: 'example/repo-1' },
+        { id: 'repo-2', name: 'repo-2', full_name: 'example/repo-2' },
+      ]);
     })
   );
-});
-
-beforeEach(() => {
-  resetMockStore();
 });
 
 // ============================================================================

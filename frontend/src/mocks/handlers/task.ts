@@ -10,6 +10,7 @@
 import { http, HttpResponse } from 'msw';
 import {
   TaskStatus,
+  canTransition,
   type TaskCreateRequest,
   type TaskDetailResponse,
   type TaskListResponse,
@@ -702,11 +703,30 @@ function createInitialSeedData(): MockDatabase {
 
 let db = createInitialSeedData();
 
+let eventSeq = 0;
+let approvalSeq = 0;
+let taskSeq = 0;
+
+function nextEventId(): string {
+  return `evt-${++eventSeq}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function nextApprovalId(): string {
+  return `appr-${++approvalSeq}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function nextTaskId(prefix = 'task'): string {
+  return `${prefix}-${++taskSeq}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
 /**
  * Reset mock store to initial seed state. Useful for test isolation.
  */
 export function resetMockStore(): void {
   db = createInitialSeedData();
+  eventSeq = 0;
+  approvalSeq = 0;
+  taskSeq = 0;
 }
 
 /**
@@ -851,7 +871,7 @@ export const taskHandlers = [
       }
     }
 
-    const taskId = `task-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const taskId = nextTaskId();
     const now = new Date().toISOString();
 
     const newTask: TaskDetailResponse = {
@@ -879,7 +899,7 @@ export const taskHandlers = [
     db.tasks.set(taskId, newTask);
 
     const initialEvent: TaskEvent = {
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: 'TASK_CREATED',
       description: `Task intake registered: "${title}".`,
@@ -980,11 +1000,11 @@ export const taskHandlers = [
       );
     }
 
-    // Cannot generate plan if task is in active execution or finished
+    // Plan synthesis / revision guard: allow PENDING_APPROVAL, APPROVED, or valid transition to PLANNING
     if (
-      task.status === TaskStatus.EXECUTING ||
-      task.status === TaskStatus.PUBLISHING ||
-      task.status === TaskStatus.DRAFT_PR_CREATED
+      task.status !== TaskStatus.PENDING_APPROVAL &&
+      task.status !== TaskStatus.APPROVED &&
+      !canTransition(task.status, TaskStatus.PLANNING)
     ) {
       return HttpResponse.json(
         {
@@ -1049,7 +1069,7 @@ export const taskHandlers = [
     // Record audit event
     const taskEvents = db.events.get(taskId) || [];
     taskEvents.push({
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: nextVersion > 1 ? 'PLAN_REVISED' : 'PLAN_GENERATED',
       description:
@@ -1216,7 +1236,7 @@ export const taskHandlers = [
     // Record approval audit record
     const taskApprovals = db.approvals.get(taskId) || [];
     taskApprovals.push({
-      id: `appr-${Date.now()}`,
+      id: nextApprovalId(),
       task_id: taskId,
       plan_version: payload.plan_version,
       decision: 'APPROVED',
@@ -1229,7 +1249,7 @@ export const taskHandlers = [
     // Record timeline event
     const taskEvents = db.events.get(taskId) || [];
     taskEvents.push({
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: 'PLAN_APPROVED',
       description: payload.notes
@@ -1321,7 +1341,7 @@ export const taskHandlers = [
     // Record audit record
     const taskApprovals = db.approvals.get(taskId) || [];
     taskApprovals.push({
-      id: `appr-${Date.now()}`,
+      id: nextApprovalId(),
       task_id: taskId,
       plan_version: payload.plan_version,
       decision: 'REJECTED',
@@ -1334,7 +1354,7 @@ export const taskHandlers = [
     // Record timeline event
     const taskEvents = db.events.get(taskId) || [];
     taskEvents.push({
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: 'PLAN_REJECTED',
       description: `Plan version ${payload.plan_version} rejected: ${payload.reason || 'No reason provided'}.`,
@@ -1399,7 +1419,7 @@ export const taskHandlers = [
 
     const taskEvents = db.events.get(taskId) || [];
     taskEvents.push({
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: 'WORKSPACE_SETUP',
       description: 'Workspace allocation initiated.',
@@ -1578,7 +1598,7 @@ export const taskHandlers = [
       issue.is_imported = true;
     }
 
-    const taskId = `task-issue-${issueNumber}-${Date.now()}`;
+    const taskId = nextTaskId(`task-issue-${issueNumber}`);
     const now = new Date().toISOString();
 
     const importedTask: TaskDetailResponse = {
@@ -1616,7 +1636,7 @@ export const taskHandlers = [
     db.tasks.set(taskId, importedTask);
 
     const importEvent: TaskEvent = {
-      id: `evt-${Date.now()}`,
+      id: nextEventId(),
       task_id: taskId,
       event_type: 'TASK_CREATED',
       description: `Task created from imported GitHub Issue #${issueNumber}.`,
