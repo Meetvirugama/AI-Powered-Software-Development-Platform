@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
+    cookie_samesite: str | None = None
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
@@ -130,6 +131,12 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
         return [o for o in origins if o != "*"]
+
+    @property
+    def effective_cookie_samesite(self) -> str:
+        if self.cookie_samesite:
+            return self.cookie_samesite.lower()
+        return "none" if self.cookie_secure else "lax"
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

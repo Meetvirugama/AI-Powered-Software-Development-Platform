@@ -58,7 +58,7 @@ def github_login() -> RedirectResponse:
         state,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.effective_cookie_samesite,
         max_age=600,
         path="/",
     )
@@ -148,7 +148,7 @@ async def github_callback(
         token,
         httponly=True,
         secure=get_settings().cookie_secure,
-        samesite="lax",
+        samesite=get_settings().effective_cookie_samesite,
         max_age=expires_in,
         path="/",
     )
@@ -161,7 +161,7 @@ async def github_callback(
             token,
             httponly=True,
             secure=get_settings().cookie_secure,
-            samesite="lax",
+            samesite=get_settings().effective_cookie_samesite,
             max_age=expires_in,
             path="/",
         )
