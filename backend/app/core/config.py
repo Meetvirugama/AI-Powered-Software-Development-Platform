@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -74,6 +75,17 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048
+
+    @model_validator(mode="before")
+    @classmethod
+    def fallback_github_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("github_app_private_key"):
+                for alt in ("github_private_key", "GITHUB_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY"):
+                    if data.get(alt):
+                        data["github_app_private_key"] = data[alt]
+                        break
+        return data
 
     @field_validator("ai_primary_provider", "ai_fallback_provider")
     @classmethod

@@ -75,11 +75,15 @@ async def list_github_repositories(
                         app_installs = resp.json()
                         for inst in app_installs:
                             acc_login = inst.get("account", {}).get("login", "")
-                            if acc_login.lower() == user.login.lower():
+                            acc_id = str(inst.get("target_id") or inst.get("account", {}).get("id") or "")
+                            if (
+                                (acc_login and acc_login.lower() == user.login.lower())
+                                or (user.github_id and acc_id == str(user.github_id))
+                            ):
                                 installation_repo.upsert(
                                     user_id=user.id,
                                     installation_id=str(inst["id"]),
-                                    account_login=acc_login,
+                                    account_login=acc_login or user.login,
                                     permissions=inst.get("permissions", {}),
                                 )
                         installations = installation_repo.list_by_user(user_id)
@@ -119,7 +123,7 @@ async def list_github_repositories(
                         )
                     )
             except Exception as exc:
-                logger.warning("github_list_repos_error", extra={"error": str(exc)})
+                logger.error("github_list_repos_error: %s", exc, exc_info=True)
     else:
         # Fallback: return connected repos as available (no GitHub App configured)
         for r in connected_repos:
