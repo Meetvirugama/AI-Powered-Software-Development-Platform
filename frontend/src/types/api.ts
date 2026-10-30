@@ -305,7 +305,7 @@ export interface ConnectRepositoryResponse {
  * The four sync stages shown to the user in the Day 4 UI.
  * Maps to the Cloning → Scanning → Indexing → Ready sequence from week1.md.
  */
-export type SyncStage = 'CLONING' | 'SCANNING' | 'INDEXING' | 'READY' | 'FAILED' | 'NOT_STARTED';
+export type SyncStage = 'SYNCING' | 'CLONING' | 'SCANNING' | 'INDEXING' | 'READY' | 'FAILED' | 'NOT_STARTED';
 
 /**
  * UI-facing representation of a repository's current sync progress.

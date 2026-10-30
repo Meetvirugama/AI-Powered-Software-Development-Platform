@@ -44,7 +44,12 @@ export const repositoryKeys = {
 export function useRepositories(
   page: number = 1,
   pageSize: number = 20,
-  options?: { refetchInterval?: number | false | ((query: any) => number | false | undefined) },
+  options?: {
+    refetchInterval?:
+      | number
+      | false
+      | ((query: { state: { data?: PaginatedRepositoryResponse } }) => number | false | undefined);
+  },
 ) {
   return useQuery<PaginatedRepositoryResponse>({
     queryKey: repositoryKeys.list(page, pageSize),
@@ -55,7 +60,12 @@ export function useRepositories(
 
 export function useRepository(
   id: string | undefined,
-  options?: { refetchInterval?: number | false | ((query: any) => number | false | undefined) },
+  options?: {
+    refetchInterval?:
+      | number
+      | false
+      | ((query: { state: { data?: Repository } }) => number | false | undefined);
+  },
 ) {
   return useQuery<Repository>({
     queryKey: repositoryKeys.detail(id ?? ''),
@@ -107,13 +117,10 @@ export function useRepository(
 export function syncProgressFromStatus(status: SyncStatus): SyncProgress {
   switch (status) {
     case 'SYNCING':
-      // ASSUMPTION: Currently the backend does not distinguish between
-      // Cloning, Scanning, and Indexing. We show CLONING as the active stage.
-      // When backend adds intermediate status, update this switch to route
-      // through the fine-grained stages.
+      // General syncing state without assuming specific sub-stages
       return {
-        stage: 'CLONING',
-        label: 'Cloning',
+        stage: 'SYNCING',
+        label: 'Syncing repository…',
         isActive: true,
         isComplete: false,
         isFailed: false,

@@ -333,9 +333,9 @@ class GitHubService(GitHubIntegrationBase):
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
             raise ValueError(f"Invalid branch name: {branch!r}")
 
-        # --- get installation token (never touches disk) ---
+        # --- get installation token (never exposed in process arguments) ---
         token = await self._token_manager.get_token(installation_id)
-        auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+        clone_url = f"https://x-access-token@github.com/{owner}/{repo}.git"
 
         cmd = [
             "git",
@@ -344,19 +344,30 @@ class GitHubService(GitHubIntegrationBase):
             "--branch",
             branch,
             "--",
-            auth_url,
+            clone_url,
             str(target),
         ]
 
         logger.info("Cloning %s/%s (branch=%s) into %s", owner, repo, branch, target)
 
+        askpass_path: Path | None = None
         try:
+            # Secure GIT_ASKPASS helper with 0o700 permissions to supply token to Git
+            # without exposing it in cmd / argv process arguments
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as askpass_file:
+                askpass_file.write(f'#!/bin/sh\necho "{token}"\n')
+                askpass_path = Path(askpass_file.name)
+            askpass_path.chmod(0o700)
+
             result = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                # Strip token from env-level git configs if any
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env={
+                    **os.environ,
+                    "GIT_ASKPASS": str(askpass_path),
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
             )
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
 
@@ -375,6 +386,12 @@ class GitHubService(GitHubIntegrationBase):
                 shutil.rmtree(target, ignore_errors=True)
                 logger.warning("Cleaned up partial clone at %s", target)
             raise
+        finally:
+            if askpass_path and askpass_path.exists():
+                try:
+                    askpass_path.unlink()
+                except Exception:
+                    pass
 
         logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
         return str(target)

@@ -18,6 +18,20 @@ export function SyncProgressIndicator({
   currentStage,
   isFailed,
 }: SyncProgressIndicatorProps) {
+  if (currentStage === 'SYNCING') {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-border/80 bg-muted/40 px-4 py-3">
+        <RefreshCw className="h-4 w-4 animate-spin text-primary shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-foreground">Syncing repository…</p>
+          <p className="text-[11px] text-muted-foreground truncate">
+            Cloning files and indexing symbols in the background.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   let currentIndex = STAGES.findIndex((s) => s.id === currentStage);
   if (currentIndex === -1) {
     currentIndex = isFailed ? 0 : -1;
