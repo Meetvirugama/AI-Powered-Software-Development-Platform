@@ -1,7 +1,10 @@
 
-"""Tool definitions and safe routing for agent tools."""
+"""Tool definitions and policy-enforced routing for agent tools."""
 
 from dataclasses import dataclass, field
+import json
+import math
+import re
 from typing import Any, Callable
 
 
@@ -32,11 +35,32 @@ class ToolResult:
 
 
 class ToolRouter:
-    """Registers tools and validates requests before execution."""
+    """Registers tools and authorizes requests before execution."""
 
-    def __init__(self) -> None:
+    SECRET_PATTERNS = (
+        re.compile(
+            r"""(?i)(["']?(?:api[_-]?key|access[_-]?token|secret|password)["']?\s*[:=]\s*["']?)([^\s,"';}]+)"""
+        ),
+        re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
+        re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    )
+
+    def __init__(
+        self,
+        policy_engine: Any = None,
+        policy_context_factory: Callable[[Any, ToolRequest], Any] | None = None,
+        command_allowlist: dict[str, list[list[str]]] | None = None,
+        max_output_chars: int = 10000,
+    ) -> None:
         self._tools: dict[str, ToolDefinition] = {}
         self._handlers: dict[str, Callable[..., Any]] = {}
+        self._policy_engine = policy_engine
+        self._policy_context_factory = policy_context_factory
+        self._command_allowlist = command_allowlist or {}
+        self._max_output_chars = max_output_chars
+
+        if max_output_chars < 1:
+            raise ValueError("max_output_chars must be positive")
 
     def register(
         self,
@@ -77,7 +101,8 @@ class ToolRouter:
             "integer": lambda v: isinstance(v, int)
             and not isinstance(v, bool),
             "number": lambda v: isinstance(v, (int, float))
-            and not isinstance(v, bool),
+            and not isinstance(v, bool)
+            and math.isfinite(v),
             "boolean": lambda v: isinstance(v, bool),
             "null": lambda v: v is None,
         }
@@ -99,6 +124,8 @@ class ToolRouter:
         expected = schema.get("type")
         if expected is not None:
             if isinstance(expected, list):
+                if not all(isinstance(item, str) for item in expected):
+                    return f"Invalid type declaration at {path}"
                 if not any(cls._matches_type(value, item) for item in expected):
                     return f"{path} has an invalid type"
             elif not isinstance(expected, str) or not cls._matches_type(
@@ -106,8 +133,11 @@ class ToolRouter:
             ):
                 return f"{path} must be of type {expected}"
 
-        if "enum" in schema and value not in schema["enum"]:
-            return f"{path} must be one of {schema['enum']}"
+        if "enum" in schema:
+            if not isinstance(schema["enum"], list):
+                return f"Invalid enum at {path}"
+            if value not in schema["enum"]:
+                return f"{path} must be one of {schema['enum']}"
 
         if isinstance(value, dict):
             properties = schema.get("properties", {})
@@ -117,6 +147,8 @@ class ToolRouter:
                 return f"Invalid object schema at {path}"
 
             for key in required:
+                if not isinstance(key, str):
+                    return f"Invalid required property at {path}"
                 if key not in value:
                     return f"Missing required argument: {path}.{key}"
 
@@ -136,7 +168,9 @@ class ToolRouter:
 
         if isinstance(value, list):
             item_schema = schema.get("items")
-            if isinstance(item_schema, dict):
+            if item_schema is not None:
+                if not isinstance(item_schema, dict):
+                    return f"Invalid items schema at {path}"
                 for index, item in enumerate(value):
                     error = cls._validate_value(
                         item, item_schema, f"{path}[{index}]"
@@ -158,6 +192,9 @@ class ToolRouter:
                 return f"{path} is too long"
 
         if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not math.isfinite(value):
+                return f"{path} must be finite"
+
             if "minimum" in schema and value < schema["minimum"]:
                 return f"{path} must be at least {schema['minimum']}"
 
@@ -182,10 +219,130 @@ class ToolRouter:
 
         return cls._validate_value(arguments, schema, "arguments")
 
-    def route(self, request: ToolRequest, agent_state: Any) -> ToolResult:
-        """Validate requests; fail closed until policy checks are integrated."""
+    def _validate_command(
+        self,
+        tool_name: str,
+        arguments: dict,
+    ) -> str | None:
+        """Validate argv against exact approved command templates."""
+
+        if "command" in arguments:
+            return "Shell command strings are not permitted; use argv"
+
+        if "argv" not in arguments:
+            return None
+
+        argv = arguments["argv"]
+
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or not all(isinstance(item, str) and item for item in argv)
+        ):
+            return "Command argv must be a non-empty list of strings"
+
+        allowed = self._command_allowlist.get(tool_name, [])
+
+        if not allowed:
+            return f"No approved command templates for tool: {tool_name}"
+
+        if not any(
+            isinstance(template, list) and argv == template
+            for template in allowed
+        ):
+            return "Command is not in the approved command allowlist"
+
+        return None
+
+    def _authorize(
+        self,
+        request: ToolRequest,
+        agent_state: Any,
+    ) -> str | None:
+        """Call the policy engine. Any missing or failed check denies access."""
+
+        if self._policy_engine is None:
+            return "Policy engine unavailable; execution denied"
+
+        if self._policy_context_factory is None:
+            return "Policy context unavailable; execution denied"
+
+        try:
+            context = self._policy_context_factory(agent_state, request)
+
+            if context is None:
+                return "Policy context unavailable; execution denied"
+
+            decision = self._policy_engine.check(
+                tool=request.tool_name,
+                agent_state=agent_state,
+                context=context,
+            )
+
+            if decision is None:
+                return "Policy returned no decision; execution denied"
+
+            decision_value = getattr(decision, "value", decision)
+            decision_name = getattr(decision, "name", decision_value)
+
+            if str(decision_value).upper() == "ALLOW":
+                return None
+
+            return f"Policy denied tool execution: {decision_name}"
+
+        except Exception:
+            return "Policy evaluation failed; execution denied"
+
+    @classmethod
+    def _redact_string(cls, value: str) -> str:
+        """Redact common credential patterns from output."""
+
+        result = value
+
+        for index, pattern in enumerate(cls.SECRET_PATTERNS):
+            if index == 0:
+                result = pattern.sub(r"\1[REDACTED]", result)
+            else:
+                result = pattern.sub("[REDACTED]", result)
+
+        return result
+
+    def _sanitize_output(self, output: Any) -> Any:
+        """Redact secrets and bound the total returned output."""
+
+        try:
+            serialized = json.dumps(output, default=str)
+        except (TypeError, ValueError):
+            serialized = repr(output)
+
+        sanitized = self._redact_string(serialized)
+
+        if len(sanitized) > self._max_output_chars:
+            sanitized = (
+                sanitized[:self._max_output_chars]
+                + "... [OUTPUT TRUNCATED]"
+            )
+
+        try:
+            return json.loads(sanitized)
+        except (json.JSONDecodeError, TypeError):
+            return sanitized
+
+    def route(
+        self,
+        request: ToolRequest,
+        agent_state: Any,
+    ) -> ToolResult:
+        """Validate, authorize, and execute an approved tool request."""
+
+        if not isinstance(request, ToolRequest):
+            return ToolResult(
+                success=False,
+                error="Invalid tool request",
+            )
 
         definition = self._tools.get(request.tool_name)
+
         if definition is None:
             return ToolResult(
                 success=False,
@@ -193,16 +350,38 @@ class ToolRouter:
             )
 
         error = self._validate_arguments(
-            request.arguments, definition.parameters
+            request.arguments,
+            definition.parameters,
         )
+
         if error:
             return ToolResult(success=False, error=error)
 
-        # Never execute handlers until PolicyEngine integration is complete.
-        return ToolResult(
-            success=False,
-            error=(
-                "Tool execution is not enabled until policy checks "
-                "and argument validation are integrated."
-            ),
+        error = self._validate_command(
+            request.tool_name,
+            request.arguments,
         )
+
+        if error:
+            return ToolResult(success=False, error=error)
+
+        error = self._authorize(request, agent_state)
+
+        if error:
+            return ToolResult(success=False, error=error)
+
+        try:
+            output = self._handlers[request.tool_name](
+                **request.arguments
+            )
+
+            return ToolResult(
+                success=True,
+                output=self._sanitize_output(output),
+            )
+
+        except Exception:
+            return ToolResult(
+                success=False,
+                error="Tool execution failed",
+            )
