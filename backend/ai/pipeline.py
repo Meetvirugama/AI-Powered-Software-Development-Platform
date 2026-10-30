@@ -50,6 +50,7 @@ from ai.llm.schemas import (
 from ai.schemas.grounding import GroundingValidator
 from ai.schemas.output import RepositoryAnswer
 from ai.schemas.prompt_builder import PromptBuilder
+from ai.schemas.validator import OutputValidator
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +139,18 @@ class RAGPipeline:
         self.grounding_validator = grounding_validator or GroundingValidator(db_session=db_session)
         if getattr(self.grounding_validator, "_db", None) is None and db_session is not None:
             self.grounding_validator._db = db_session
-        self._model = model
+        if (not model or model == self._DEFAULT_MODEL) and llm_gateway is not None:
+            provider_default = getattr(getattr(llm_gateway, "provider", None), "default_model", None)
+            if isinstance(provider_default, str) and provider_default.strip():
+                self._model = provider_default
+            else:
+                try:
+                    from app.core.config import settings
+                    self._model = settings.active_chat_model
+                except Exception:
+                    self._model = model or self._DEFAULT_MODEL
+        else:
+            self._model = model or self._DEFAULT_MODEL
         self._max_retrieval_top_k = max_retrieval_top_k
         self._max_repair_attempts = max_repair_attempts
         self._db_session = db_session
@@ -502,29 +514,17 @@ class RAGPipeline:
     def _clean_json_content(raw: str) -> str:
         """
         Strip markdown code fences and surrounding prose from LLM JSON responses.
-
-        Handles:
-        - ```json { ... } ```
-        - ``` { ... } ```
-        - Leading / trailing prose around the fence
-        - Raw JSON without fences
+        Delegates to canonical OutputValidator.clean_json_text.
         """
-        content = raw.strip()
-        # Regex search for ```json ... ``` or ``` ... ```
-        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
+        if not raw:
+            return ""
+        # First use canonical fence cleaning
+        cleaned = OutputValidator.clean_json_text(raw)
+        # Regex search for ```json ... ``` or ``` ... ``` if embedded in prose
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned)
         if match:
             return match.group(1).strip()
-
-        # Fallback manual fence removal if fence wasn't properly closed
-        if content.startswith("```"):
-            lines = content.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].rstrip().endswith("```"):
-                lines = lines[:-1]
-            return "\n".join(lines).strip()
-
-        return content
+        return cleaned
 
     async def _generate_with_repair(
         self,

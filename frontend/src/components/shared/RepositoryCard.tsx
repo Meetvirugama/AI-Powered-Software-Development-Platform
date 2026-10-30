@@ -9,7 +9,6 @@ import {
   MessageSquare,
   FolderOpen,
   Trash2,
-  RotateCw,
 } from 'lucide-react';
 import type { Repository, SyncStatus } from '../../types/api';
 import { useSyncRepository, useDeleteRepository } from '../../hooks/useRepositories';
@@ -95,7 +94,7 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
 
   function handleSync(e: React.MouseEvent) {
     e.stopPropagation();
-    triggerSync(repo.id);
+    triggerSync({ id: repo.id, force: isFailed });
   }
 
   function handleDelete(e: React.MouseEvent) {
@@ -132,17 +131,6 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
             </span>
           )}
 
-          {/* Quick Re-sync button */}
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
-            title="Re-sync repository"
-            aria-label={`Re-sync ${repo.name}`}
-          >
-            <RotateCw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin text-primary")} />
-          </button>
-
           {/* Quick Delete / Disconnect button */}
           <button
             onClick={(e) => {
@@ -178,18 +166,6 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
             {formatLastSynced(repo.last_synced_at)}
           </span>
         </div>
-
-        {/* If failed or not synced, show a direct inline sync button */}
-        {(isFailed || isNotSynced) && (
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={cn("h-3 w-3", isSyncing && "animate-spin")} />
-            {isFailed ? 'Retry' : 'Sync'}
-          </button>
-        )}
       </div>
 
       {/* Confirmation banner for deletion */}

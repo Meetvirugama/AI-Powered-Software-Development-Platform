@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileCode, Check, Copy, MessageSquare, X } from 'lucide-react';
 import { useRepositoryFileContent } from '../../hooks/useRepositories';
@@ -19,13 +19,29 @@ export function FilePreviewModal({
   const navigate = useNavigate();
   const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Close on Escape key press
+  useEffect(() => {
+    function handleKeyDown(e: globalThis.KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, [onClose]);
 
   async function handleCopy() {
     if (!fileData?.content) return;
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     try {
       await navigator.clipboard.writeText(fileData.content);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Ignore
     }
@@ -35,6 +51,7 @@ export function FilePreviewModal({
     <div
       role="dialog"
       aria-modal="true"
+      aria-labelledby="file-preview-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200"
     >
       <div className="relative flex flex-col w-full max-w-5xl max-h-[90vh] rounded-xl border border-border bg-card shadow-2xl overflow-hidden">
@@ -43,7 +60,7 @@ export function FilePreviewModal({
           <div className="flex items-center gap-3 min-w-0">
             <FileCode className="h-5 w-5 text-primary shrink-0" />
             <div className="min-w-0">
-              <h3 className="font-mono text-sm font-semibold text-foreground truncate">
+              <h3 id="file-preview-title" className="font-mono text-sm font-semibold text-foreground truncate">
                 {file.path}
               </h3>
               <p className="text-xs text-muted-foreground">
