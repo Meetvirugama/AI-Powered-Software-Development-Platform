@@ -42,16 +42,27 @@ export function RepositorySyncCard({
             </p>
           </div>
 
-          {(progress.isFailed || repo.sync_status === 'NOT_SYNCED') && (
-            <button
-              onClick={onSync}
-              disabled={isSyncActive}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0 shadow-xs"
-            >
-              <RefreshCw className={cn('h-3.5 w-3.5', isSyncActive && 'animate-spin')} />
-              <span>{isSyncActive ? 'Starting…' : 'Retry Sync'}</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {(progress.isFailed || repo.sync_status === 'NOT_SYNCED') ? (
+              <button
+                onClick={onSync}
+                disabled={isSyncActive}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0 shadow-xs"
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', isSyncActive && 'animate-spin')} />
+                <span>{isSyncActive ? 'Starting…' : 'Retry Sync'}</span>
+              </button>
+            ) : isSyncActive ? (
+              <button
+                onClick={onSync}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-secondary/50 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors shrink-0 shadow-xs"
+                title="Restart synchronization if stalled"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span>Restart Sync</span>
+              </button>
+            ) : null}
+          </div>
         </div>
 
         <SyncProgressIndicator

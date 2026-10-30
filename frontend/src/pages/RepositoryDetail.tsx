@@ -216,8 +216,8 @@ export function RepositoryDetail() {
   const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
   const { mutate: deleteRepo, isPending: isDeletePending } = useDeleteRepository();
 
-  function handleSync() {
-    if (id) triggerSync(id);
+  function handleSync(force: boolean = false) {
+    if (id) triggerSync({ id, force });
   }
 
   function handleDelete() {
@@ -261,7 +261,7 @@ export function RepositoryDetail() {
           repo={repo}
           progress={progress}
           isSyncActive={isSyncActive}
-          onSync={handleSync}
+          onSync={() => handleSync(isSyncActive)}
         />
       ) : (
         <>
