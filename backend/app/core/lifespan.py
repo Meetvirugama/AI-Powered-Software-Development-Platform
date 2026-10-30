@@ -5,6 +5,7 @@ Encapsulates startup, graceful shutdown, background reconciliation, and dependen
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -354,7 +355,6 @@ async def lifespan(app: FastAPI):
     sync_worker_task = None
     if "PYTEST_CURRENT_TEST" not in os.environ and not getattr(settings, "disable_embedded_sync_worker", False):
         try:
-            import asyncio
             from app.services.sync_worker import sync_worker_loop
 
             sync_worker_task = asyncio.create_task(sync_worker_loop(app))

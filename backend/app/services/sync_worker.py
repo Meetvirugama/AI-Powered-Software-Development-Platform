@@ -17,23 +17,25 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
 from ai.embeddings.service import EmbeddingService
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, SessionLocal
 from app.core.redis import get_redis_async
-from redis.exceptions import TimeoutError as RedisTimeoutError
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
+from app.services.repository_sync import reconcile_stale_sync_jobs
 from indexer.incremental import IncrementalIndexer
 from scanner.walker import FileWalker
 
@@ -153,7 +155,7 @@ async def process_sync_job(
 
         # Notify connected frontend clients via Redis pub/sub
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -196,7 +198,7 @@ async def process_sync_job(
                 db.commit()
 
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -273,11 +275,8 @@ async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) 
 
 async def sync_worker_loop(app_or_service: Any = None) -> None:
     """Continuously poll Redis `sync_jobs` queue and process sync jobs asynchronously."""
-    import time
-    from app.services.repository_sync import reconcile_stale_sync_jobs
-
     logger.info("sync_worker_loop_started")
-    redis = await get_redis_async()
+    redis: Any = await get_redis_async()
     last_sweep_time = time.monotonic()
 
     # Resolve GitHubService
@@ -334,7 +333,7 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
             except (RedisTimeoutError, asyncio.TimeoutError):
                 # Idle polling timeout with no jobs is normal; proceed cleanly
                 raw_data = None
-            except Exception as pop_exc:
+            except Exception:
                 # Fallback for Redis providers (like Upstash) where BRPOPLPUSH may be disallowed
                 try:
                     if hasattr(redis, "rpoplpush"):
