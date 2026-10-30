@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
+    cookie_samesite: str | None = None
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
@@ -73,6 +75,17 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048
+
+    @model_validator(mode="before")
+    @classmethod
+    def fallback_github_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("github_app_private_key"):
+                for alt in ("github_private_key", "GITHUB_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY"):
+                    if data.get(alt):
+                        data["github_app_private_key"] = data[alt]
+                        break
+        return data
 
     @field_validator("ai_primary_provider", "ai_fallback_provider")
     @classmethod
@@ -130,6 +143,12 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
         return [o for o in origins if o != "*"]
+
+    @property
+    def effective_cookie_samesite(self) -> str:
+        if self.cookie_samesite:
+            return self.cookie_samesite.lower()
+        return "none" if self.cookie_secure else "lax"
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":

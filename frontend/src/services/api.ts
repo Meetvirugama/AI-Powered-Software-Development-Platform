@@ -9,7 +9,7 @@ import type { ApiError } from '../types/api';
  * The frontend never stores or reads the token value directly — `withCredentials: true`
  * ensures the browser sends the cookie on every request automatically.
  */
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '');
 
 export const DEFAULT_TIMEOUT_MS = 30000;
 export const AI_ANALYSIS_TIMEOUT_MS = 120000;

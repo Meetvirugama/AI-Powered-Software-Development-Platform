@@ -137,8 +137,16 @@ class InstallationTokenManager:
             "iss": str(app_id),
         }
 
-        # The private key may be stored with literal `\n` in the env var.
-        pem_key = private_key.replace("\\n", "\n")
+        # The private key may be stored with literal `\n` or surrounding quotes in env vars.
+        pem_key = (
+            private_key.strip()
+            .strip('"')
+            .strip("'")
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .strip()
+        )
 
         token: str = jwt.encode(payload, pem_key, algorithm="RS256")
         return token
