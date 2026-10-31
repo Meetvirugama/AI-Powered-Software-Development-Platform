@@ -150,7 +150,7 @@ export function RepositoryTaskStudio() {
         getTaskEvents(taskId),
       ]);
       setTaskDetail(detail);
-      setEvents(evtList);
+      setEvents(Array.isArray(evtList) ? evtList : (evtList as any)?.items || []);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to load task details.');
     } finally {
@@ -720,8 +720,8 @@ export function RepositoryTaskStudio() {
                         )}
                         <div className="space-y-0.5">
                           <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                            Human Approval Gate — Plan v{latestPlan.plan_version} (Hash:{' '}
-                            <span className="font-mono">{latestPlan.plan_hash.slice(0, 10)}</span>)
+                            Human Approval Gate — Plan v{latestPlan.plan_version}
+                            {latestPlan.plan_hash ? ` (Hash: ${latestPlan.plan_hash.slice(0, 10)})` : ''}
                           </h3>
                           <p className="text-xs text-muted-foreground">
                             {isApproved
@@ -801,15 +801,17 @@ export function RepositoryTaskStudio() {
                       <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                         Structured Plan Overview (v{latestPlan.plan_version})
                       </h3>
-                      <span className="text-[11px] font-mono text-muted-foreground">
-                        Max Repair Budget: {latestPlan.resource_budget.max_repair_attempts} attempts ·{' '}
-                        {latestPlan.resource_budget.max_tokens} tokens
-                      </span>
+                      {latestPlan.resource_budget && (
+                        <span className="text-[11px] font-mono text-muted-foreground">
+                          Max Repair Budget: {latestPlan.resource_budget.max_repair_attempts ?? 3} attempts ·{' '}
+                          {latestPlan.resource_budget.max_tokens ?? 20000} tokens
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-foreground leading-relaxed">{latestPlan.summary}</p>
 
                     <div className="flex flex-wrap gap-1.5 pt-1">
-                      {latestPlan.expected_files.map((fp) => (
+                      {((latestPlan.expected_files || (latestPlan as any).expected_files_to_modify || []) as string[]).map((fp: string) => (
                         <span
                           key={fp}
                           className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary text-[11px] font-mono"
@@ -837,11 +839,11 @@ export function RepositoryTaskStudio() {
                               #{index + 1} · {step.step_id}
                             </span>
                             <span className="px-2 py-0.5 rounded bg-muted text-muted-foreground text-[10px] font-mono uppercase">
-                              {step.action_type}
+                              {step.action_type || step.step_type}
                             </span>
                             <h4 className="text-xs font-semibold text-foreground">{step.title}</h4>
                           </div>
-                          {step.depends_on.length > 0 && (
+                          {step.depends_on && step.depends_on.length > 0 && (
                             <span className="text-[10px] font-mono text-muted-foreground">
                               Depends on: {step.depends_on.join(', ')}
                             </span>
@@ -874,34 +876,41 @@ export function RepositoryTaskStudio() {
                   </div>
 
                   {/* Risks & Validation Strategy */}
-                  {latestPlan.risks.length > 0 && (
+                  {Array.isArray(latestPlan.risks) && latestPlan.risks.length > 0 && (
                     <div className="rounded-xl border border-border bg-card p-4 space-y-2">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                         Identified Risks & Mitigations
                       </h3>
-                      {latestPlan.risks.map((risk) => (
-                        <div
-                          key={risk.id}
-                          className="flex items-start justify-between gap-3 text-xs border-t border-border/40 pt-2"
-                        >
-                          <div className="space-y-0.5">
-                            <div className="font-medium text-foreground">{risk.description}</div>
-                            {risk.mitigation && (
-                              <div className="text-[11px] text-muted-foreground">
-                                Mitigation: {risk.mitigation}
-                              </div>
-                            )}
-                          </div>
-                          <span
-                            className={cn(
-                              'px-2 py-0.5 rounded border text-[10px] font-mono uppercase font-bold shrink-0',
-                              RISK_BADGE_MAP[risk.severity] || RISK_BADGE_MAP.low
-                            )}
+                      {latestPlan.risks.map((risk: any, rIdx: number) => {
+                        const isObj = typeof risk === 'object' && risk !== null;
+                        const rId = isObj ? (risk.id || risk.risk_id || `risk-${rIdx}`) : `risk-${rIdx}`;
+                        const rDesc = isObj ? risk.description : String(risk);
+                        const rMitigation = isObj ? risk.mitigation : null;
+                        const rSeverity = isObj ? (risk.severity || 'low') : 'low';
+                        return (
+                          <div
+                            key={rId}
+                            className="flex items-start justify-between gap-3 text-xs border-t border-border/40 pt-2"
                           >
-                            {risk.severity}
-                          </span>
-                        </div>
-                      ))}
+                            <div className="space-y-0.5">
+                              <div className="font-medium text-foreground">{rDesc}</div>
+                              {rMitigation && (
+                                <div className="text-[11px] text-muted-foreground">
+                                  Mitigation: {rMitigation}
+                                </div>
+                              )}
+                            </div>
+                            <span
+                              className={cn(
+                                'px-2 py-0.5 rounded border text-[10px] font-mono uppercase font-bold shrink-0',
+                                RISK_BADGE_MAP[rSeverity] || RISK_BADGE_MAP.low
+                              )}
+                            >
+                              {rSeverity}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

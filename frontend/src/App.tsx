@@ -30,6 +30,9 @@ const RepositoryTaskStudio = lazy(() =>
   import('./pages/RepositoryTaskStudio').then((m) => ({ default: m.RepositoryTaskStudio }))
 );
 const NotFound = lazy(() => import('./pages/NotFound').then((m) => ({ default: m.NotFound })));
+const Tasks = lazy(() => import('./pages/Tasks').then((m) => ({ default: m.Tasks })));
+const CreateTask = lazy(() => import('./pages/CreateTask').then((m) => ({ default: m.CreateTask })));
+const TaskDetail = lazy(() => import('./pages/TaskDetail').then((m) => ({ default: m.TaskDetail })));
 
 function RouteFallback() {
   return (
@@ -54,6 +57,9 @@ export function App() {
                 <Route index element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="repositories" element={<Repositories />} />
+                <Route path="tasks" element={<Tasks />} />
+                <Route path="tasks/new" element={<CreateTask />} />
+                <Route path="tasks/:taskId" element={<TaskDetail />} />
 
                 {/* Dedicated Antigravity-Style Repository Workspace Studios */}
                 <Route path="repositories/:id" element={<RepositoryStudioLayout />}>
