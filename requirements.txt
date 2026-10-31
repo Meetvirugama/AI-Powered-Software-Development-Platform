@@ -1,7 +1,1 @@
-pathspec
-pytest
-pytest-asyncio>=0.24,<1.0
-pytest-cov
-httpx
-responses
-factory-boy
+-r backend/requirements-dev.txt

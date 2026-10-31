@@ -85,7 +85,14 @@ class GitHubSourceService:
 
     def __init__(self, db: Session, cache: SourceRevisionCache | None = None) -> None:
         self._db = db
-        self._cache = cache if cache is not None else SourceRevisionCache()
+        if cache is not None:
+            self._cache = cache
+        else:
+            try:
+                from app.core.redis import get_redis
+                self._cache = SourceRevisionCache(redis_client=get_redis())
+            except Exception:
+                self._cache = SourceRevisionCache()
 
     # ----- Authorization helpers -------------------------------------------
 

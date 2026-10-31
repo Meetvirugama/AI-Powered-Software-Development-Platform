@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.errors import APIError, ErrorCode
+from app.core.errors import APIError, ErrorCode, error_response
 from app.core.redis import get_redis
 from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
@@ -58,7 +58,7 @@ def github_login() -> RedirectResponse:
         state,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.effective_cookie_samesite,
         max_age=600,
         path="/",
     )
@@ -101,29 +101,30 @@ async def github_callback(
         raise APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
 
     expected_state = request.cookies.get("oauth_state")
-    state_valid = False
+    # OAuth state must match the browser cookie (CSRF binding)
+    if not expected_state or not secrets.compare_digest(state, expected_state):
+        err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+        err_resp = error_response(err.status_code, err.code, err.message)
+        err_resp.delete_cookie("oauth_state", path="/")
+        err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        return err_resp
 
-    if expected_state is not None:
-        if secrets.compare_digest(state, expected_state):
-            state_valid = True
-    else:
+    # Atomically consume the state in Redis to enforce single-use
+    redis_client = get_redis()
+    if redis_client and hasattr(redis_client, "delete"):
         try:
-            redis_client = get_redis()
-            redis_key = f"oauth_state:{state}"
-            if redis_client and redis_client.exists(redis_key):
-                state_valid = True
+            deleted = redis_client.delete(f"oauth_state:{state}")
+            if hasattr(redis_client, "exists") and deleted == 0:
+                # State was already consumed or expired in Redis
+                err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+                err_resp = error_response(err.status_code, err.code, err.message)
+                err_resp.delete_cookie("oauth_state", path="/")
+                err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
+                return err_resp
+        except APIError:
+            raise
         except Exception as exc:
-            logger.warning("Could not verify oauth_state via Redis: %s", exc)
-
-    if not state_valid:
-        raise APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
-
-    try:
-        redis_client = get_redis()
-        if redis_client and hasattr(redis_client, "delete"):
-            redis_client.delete(f"oauth_state:{state}")
-    except Exception:
-        pass
+            logger.warning("Could not consume oauth_state via Redis: %s", exc)
 
     github_user = await _github_user_for_code(code)
     github_id = github_user.get("id")
@@ -148,7 +149,7 @@ async def github_callback(
         token,
         httponly=True,
         secure=get_settings().cookie_secure,
-        samesite="lax",
+        samesite=get_settings().effective_cookie_samesite,
         max_age=expires_in,
         path="/",
     )
@@ -161,7 +162,7 @@ async def github_callback(
             token,
             httponly=True,
             secure=get_settings().cookie_secure,
-            samesite="lax",
+            samesite=get_settings().effective_cookie_samesite,
             max_age=expires_in,
             path="/",
         )

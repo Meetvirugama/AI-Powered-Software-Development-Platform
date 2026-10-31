@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# Development, testing, and test coverage dependencies
+pytest>=8.0.0
+pytest-asyncio>=0.24,<1.0
+pytest-cov>=4.0.0
+respx>=0.21.0
+responses>=0.25.0
+factory-boy>=3.3.0
+

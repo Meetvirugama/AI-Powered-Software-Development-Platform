@@ -185,17 +185,23 @@ class OutputValidator:
         repair_model = getattr(
             getattr(self._gateway, "provider", None),
             "default_model",
-            "gemini-flash-lite-latest",
-        )
-        if not isinstance(repair_model, str) or not repair_model.strip():
-            repair_model = "gemini-flash-lite-latest"
+            None,
+        ) or getattr(self._gateway, "default_model", None)
+        if not repair_model or not isinstance(repair_model, str) or not repair_model.strip():
+            try:
+                from app.core.config import settings
+                repair_model = settings.active_chat_model
+            except Exception:
+                repair_model = "gemini-flash-lite-latest"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
+            bounded_raw = current_raw[:4000] if current_raw else ""
+            bounded_error = current_error[:500] if current_error else ""
             repair_prompt = (
                 f"Fix this JSON so it matches the required schema.\n"
                 f"Schema: {schema.__name__}\n"
-                f"Validation error: {current_error}\n"
-                f"Invalid JSON:\n{current_raw}\n\n"
+                f"Validation error: {bounded_error}\n"
+                f"Invalid JSON:\n{bounded_raw}\n\n"
                 f"Respond with ONLY the corrected JSON object. No explanation."
             )
 
