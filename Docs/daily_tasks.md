@@ -616,8 +616,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Parth: Git diff line-range extraction, hunk parser & symbol-level blast radius input provider (`GitBranchService.get_diff_line_ranges()`, `GitHubSourceService.get_pull_request_diff_ranges()`, `GET /api/v1/repositories/{id}/source/diff-ranges`, `test_week3_day2_diff_and_blast_radius_input.py`)
 - ✅ Prit: Symbol-level blast radius engine, dependency impact analyzer, test discovery planner & pre-flight workspace validator (`Docs/task_planning_blast_radius_audit.md`, `backend/scanner/symbol_blast_radius.py`, `backend/scanner/task_test_planner.py`, `backend/scanner/workspace_preflight.py`, `backend/app/schemas/planner_context.py`, `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`)
 - ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
-
-- ⬜ Dev: `PlannerSchema` and step dependency validation
+- ✅ Dev: `PlannerSchema` and step dependency validation (`backend/app/schemas/plan.py`, `backend/tests/test_dev_w3_day2_planner_schema.py`)
 - ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
 - ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
 - ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
