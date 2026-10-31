@@ -16,6 +16,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import get_settings
+from app.core.secret_redaction import redact
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,7 @@ class GitHubAPIError(Exception):
         retryable: bool = False,
         rate_limited: bool = False,
     ) -> None:
-        super().__init__(message)
+        super().__init__(redact(message))
         self.status_code = status_code
         self.retryable = retryable
         self.rate_limited = rate_limited
@@ -130,6 +131,12 @@ class GitHubClient:
                         status_code=404,
                     )
 
+                if response.status_code == 410:
+                    raise GitHubAPIError(
+                        f"Resource permanently removed or disabled: {path}",
+                        status_code=410,
+                    )
+
                 if response.status_code >= 500:
                     raise GitHubAPIError(
                         f"GitHub server error ({response.status_code}).",
@@ -149,7 +156,7 @@ class GitHubClient:
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
                 raise GitHubAPIError(
-                    f"GitHub API error ({exc.response.status_code}): {exc.response.text[:200]}",
+                    f"GitHub API error ({exc.response.status_code}): {redact(exc.response.text[:200])}",
                     status_code=exc.response.status_code,
                     retryable=exc.response.status_code >= 500,
                 ) from exc
@@ -160,15 +167,14 @@ class GitHubClient:
                         "GitHub API request failed (attempt %d/%d): %s",
                         attempt + 1,
                         MAX_RETRIES + 1,
-                        str(exc),
+                        redact(str(exc)),
                     )
                     continue
                 raise GitHubAPIError(
-                    f"GitHub API is unavailable: {exc}",
+                    f"GitHub API is unavailable: {redact(str(exc))}",
                     retryable=True,
                 ) from exc
 
-        # Should not be reached, but be defensive
         raise GitHubAPIError(
             f"GitHub API request failed after {MAX_RETRIES + 1} attempts.",
             retryable=True,
@@ -184,11 +190,7 @@ class GitHubClient:
         *,
         ref: str | None = None,
     ) -> dict[str, Any]:
-        """Retrieve a single file from a repository via the contents API.
-
-        Returns the raw GitHub API response including ``content``, ``encoding``,
-        ``sha``, and ``size``.
-        """
+        """Retrieve a single file from a repository via the contents API."""
         params: dict[str, str] = {}
         if ref:
             params["ref"] = ref
@@ -202,11 +204,7 @@ class GitHubClient:
         ref: str | None = None,
         recursive: bool = True,
     ) -> dict[str, Any]:
-        """Retrieve the full tree for a repository.
-
-        Uses ``GET /repos/{owner}/{repo}/git/trees/{tree_sha}?recursive=1``
-        for a flat listing of all paths.
-        """
+        """Retrieve the full tree for a repository."""
         tree_sha = ref or "HEAD"
         params: dict[str, str] = {}
         if recursive:
@@ -326,24 +324,31 @@ class GitHubClient:
             payload["state"] = state
         return await self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{pr_number}", json_body=payload)
 
-    # ----- Issues (F-23) ---------------------------------------------------
+    # ----- Week 3 F31 & F-23: Issues ---------------------------------------
 
     async def create_issue(
         self,
         owner: str,
         repo: str,
         title: str,
-        body: str,
+        body: str = "",
         labels: list[str] | None = None,
         assignees: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a new issue on GitHub (e.g. from AI code review finding F-23)."""
-        payload: dict[str, Any] = {"title": title, "body": body}
+        """Create a new GitHub issue in `owner/repo` (e.g. from AI code review finding F-23 or F31)."""
+        payload: dict[str, Any] = {
+            "title": redact(title.strip()),
+            "body": redact(body or ""),
+        }
         if labels:
-            payload["labels"] = labels
+            payload["labels"] = [redact(str(lbl).strip()) for lbl in labels if str(lbl).strip()]
         if assignees:
             payload["assignees"] = assignees
-        return await self._request("POST", f"/repos/{owner}/{repo}/issues", json_body=payload)
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/issues",
+            json_body=payload,
+        )
 
     async def get_issue(
         self,
@@ -351,8 +356,32 @@ class GitHubClient:
         repo: str,
         issue_number: int,
     ) -> dict[str, Any]:
-        """Retrieve issue details by issue number."""
-        return await self._request("GET", f"/repos/{owner}/{repo}/issues/{issue_number}")
+        """Get metadata and body for a single GitHub issue."""
+        return await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/issues/{int(issue_number)}",
+        )
+
+    async def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "open",
+        per_page: int = 30,
+        page: int = 1,
+    ) -> list[dict[str, Any]]:
+        """List issues for a repository (excluding pull requests where callers filter)."""
+        params: dict[str, Any] = {
+            "state": state,
+            "per_page": per_page,
+            "page": page,
+        }
+        return await self._request(
+            "GET",
+            f"/repos/{owner}/{repo}/issues",
+            params=params,
+        )
 
     # ----- Git References and Branches ------------------------------------
 
@@ -372,10 +401,7 @@ class GitHubClient:
         branch_name: str,
         source_sha: str,
     ) -> dict[str, Any]:
-        """Create a new Git branch pointing to source_sha.
-
-        Creates git ref 'refs/heads/{branch_name}'.
-        """
+        """Create a new Git branch pointing to source_sha."""
         ref_path = f"refs/heads/{branch_name.lstrip('/')}"
         payload = {"ref": ref_path, "sha": source_sha}
         return await self._request(
@@ -390,10 +416,7 @@ class GitHubClient:
         repo: str,
         branch_name: str,
     ) -> None:
-        """Delete a Git branch by deleting its ref.
-
-        Deletes git ref 'refs/heads/{branch_name}'.
-        """
+        """Delete a Git branch by deleting its ref."""
         clean_name = branch_name.removeprefix("refs/heads/")
         await self._request(
             "DELETE",
@@ -424,11 +447,7 @@ class GitHubClient:
 
     @staticmethod
     async def get_installation_token(installation_id: str) -> str:
-        """Exchange a GitHub App JWT for an installation access token.
-
-        This requires ``GITHUB_APP_ID`` and ``GITHUB_APP_PRIVATE_KEY`` to be
-        configured. Returns the short-lived installation token.
-        """
+        """Exchange a GitHub App JWT for an installation access token."""
         settings = get_settings()
         if not settings.github_app_id or not settings.github_app_private_key:
             raise GitHubAPIError(
@@ -471,7 +490,7 @@ class GitHubClient:
             )
             if response.status_code != 201:
                 raise GitHubAPIError(
-                    f"Failed to obtain installation token: {response.text[:200]}",
+                    f"Failed to obtain installation token: {redact(response.text[:200])}",
                     status_code=response.status_code,
                     retryable=response.status_code >= 500,
                 )
