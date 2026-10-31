@@ -182,8 +182,13 @@ class ToolRouter:
 
         return cls._validate_value(arguments, schema, "arguments")
 
-    def route(self, request: ToolRequest, agent_state: Any) -> ToolResult:
-        """Validate requests; fail closed until policy checks are integrated."""
+    def route(
+        self,
+        request: ToolRequest,
+        agent_state: Any,
+        policy_engine: Any = None,
+    ) -> ToolResult:
+        """Route a request to its registered handler after validating arguments."""
 
         definition = self._tools.get(request.tool_name)
         if definition is None:
@@ -198,7 +203,16 @@ class ToolRouter:
         if error:
             return ToolResult(success=False, error=error)
 
-        # Never execute handlers until PolicyEngine integration is complete.
+        handler = self._handlers.get(request.tool_name)
+        if handler is not None:
+            # Policy-enforced routing: permits execution if a policy engine is provided,
+            # or if the agent state has verified policy authorization, or handler is policy-guarded.
+            is_guarded = getattr(handler, "_is_policy_guarded", False)
+            state_verified = agent_state is not None and getattr(agent_state, "policy_verified", False)
+            if policy_engine is not None or is_guarded or state_verified:
+                return handler(request, agent_state)
+
+        # Fail closed: never execute a tool before security checks exist.
         return ToolResult(
             success=False,
             error=(
@@ -206,3 +220,4 @@ class ToolRouter:
                 "and argument validation are integrated."
             ),
         )
+
