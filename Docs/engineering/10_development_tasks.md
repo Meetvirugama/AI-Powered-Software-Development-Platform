@@ -81,7 +81,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | W3-03 | Mandatory Human Approval Gate (F32) | Meet / Dhramraj | P0 | TODO | Server-enforced approval, invalidation on plan revision |
 | W3-04 | Isolated Workspace & Task Branch Manager (F33) | Prit / Parth | P0 | IN PROGRESS | Prit: `WorkspaceManager` execution start, human approval gate, lifecycle transitions, command allowlist runner, timeline events & Devu `ToolRouter` policy bridge DONE; Parth: Task branch manager |
 | W3-05 | Tool Router & Allowed Command Policy Engine (F34) | Devu / Sukun | P0 | TODO | Command allowlist, sandboxed tool dispatch, audit logging |
-| W3-06 | Restricted Test Runner & Execution Loop (F35) | Prit / Devu | P0 | TODO | Command execution with timeouts and output bounds |
+| W3-06 | Restricted Test Runner & Execution Loop (F35) | Prit / Devu | P0 | IN PROGRESS | Prit: Restricted test runner (`WorkspaceTestRunner`), failure classification, bounded 3-attempt repair loop & ToolRouter bridge DONE; Devu: Command allowlist |
 | W3-07 | Bounded Self-Repair Loop (Max 3 attempts) (F35) | Meet / Dev | P0 | TODO | Failure diagnosis, targeted patch, task-level budget ceiling |
 | W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval | P0 | TODO | Separate verification check, static scan, AI code review |
 | W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug | P0 | TODO | Human push authorization, GitHub Draft PR with summary |
@@ -101,7 +101,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
 | **Om** | Analysis Persistence & History Services | `analysis_runs`, `code_findings` models, Alembic migration, `AnalysisRunRepository`, Day 1–5 History Services (Explanation, Bug Scan, Test Gen, Review) |
 | **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
-| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `SymbolBlastRadiusEngine`, `TaskTestPlanner` |
+| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceTestRunner`, `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `SymbolBlastRadiusEngine`, `TaskTestPlanner` |
 | **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |
 | **Sukun** | Prompt-Injection Defenses & Scrubbing | Untrusted data boundary markers, secret scrubbers |
 | **Keval** | Quality Fixtures & Regression Testing | Acceptance test suites, fixture codebases with defects |

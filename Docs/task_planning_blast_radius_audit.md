@@ -11,15 +11,15 @@
 
 ## 1. Executive Summary
 
-During Week 3 Day 2, Prit Zania executed the mandatory **Repository Engine & Task Planning Intelligence** deliverables specified in [`Docs/week3.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/week3.md) (§5, §6 F32 & F33, §7, §13) and [`Docs/daily_tasks.md`](file:///d:/AI-Powered-Software-Development-Platform/Docs/daily_tasks.md):
+During Week 3 Day 2, Prit Zania executed the mandatory **Repository Engine & Task Planning Intelligence** deliverables specified in [`Docs/week3.md`](week3.md) (§5, §6 F32 & F33, §7, §13) and [`Docs/daily_tasks.md`](daily_tasks.md):
 
 1. **Diff Line-Range to AST Symbol Mapping:** Implemented `SymbolBlastRadiusEngine.map_diff_ranges_to_symbols()` bridging Parth's Day 2 diff line-range provider with the repository AST symbol index, resolving 1-indexed inclusive line bounds to exact function, method, and class symbols across Python, TypeScript, and JavaScript.
 2. **Dependency Graph Traversal & Blast Radius:** Implemented bounded BFS traversal across `SymbolEdge` relations (`calls`, `imports`, `extends`, `implements`) up to configurable depths. Equipped with cycle-detection sets to guarantee zero infinite loops on mutually recursive functions and circular imports.
 3. **Multi-Tier Risk Assessment Engine:** Created quantitative (0.0 to 1.0) and categorical (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) risk scoring with deterministic justifications and automated `requires_human_review` flags based on fan-in callers, cross-module blast radius, and subclass inheritance impact.
 4. **Task Test Planner & Missing Coverage Discovery:** Implemented `TaskTestPlanner` connecting the blast radius to `FrameworkDetector` (`pytest`, `unittest`, `jest`) and `FileTestMapper`. Automatically identifies existing test suites, flags untested modified symbols, proposes standardized new test files/names, and formats exact CLI test commands for the Day 4 Restricted Test Runner.
 5. **Workspace Base-Revision Pre-Flight Validator:** Built `WorkspaceBaseValidator` ensuring target files in requirements are strictly confined within `.workspaces/task-<id>/` using `WorkspacePathGuard`, verifying Git commit SHAs, and checking that workspace status is in `READY` or `IN_USE` prior to plan approval.
-6. **Published Canonical Schemas:** Authored [`backend/app/schemas/planner_context.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/planner_context.py) and exported all models (`LineRange`, `FileDiffRange`, `TaskDiffRanges`, `AffectedSymbol`, `RiskAssessment`, `TestExecutionPlan`, `TaskImpactAssessment`, `TaskPlanningContext`) from [`app.schemas`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/__init__.py).
-7. **Automated Test Suite:** Created [`backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py) containing 35 comprehensive tests passing synchronously with 100% success rate, preserving zero regressions across all 73 Week 3 tests and 84 scanner tests.
+6. **Published Canonical Schemas:** Authored [`backend/app/schemas/planner_context.py`](../backend/app/schemas/planner_context.py) and exported all models (`LineRange`, `FileDiffRange`, `TaskDiffRanges`, `AffectedSymbol`, `RiskAssessment`, `TestExecutionPlan`, `TaskImpactAssessment`, `TaskPlanningContext`) from [`app.schemas`](../backend/app/schemas/__init__.py).
+7. **Automated Test Suite:** Created [`backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`](../backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py) containing 35 comprehensive tests passing synchronously with 100% success rate, preserving zero regressions across all 73 Week 3 tests and 84 scanner tests.
 
 ---
 
@@ -145,7 +145,7 @@ Before a task plan is approved or transitioned to `WORKSPACE_SETUP`, `WorkspaceB
 
 ## 7. Published API Contracts
 
-Published in [`backend/app/schemas/planner_context.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/planner_context.py) and re-exported from [`app.schemas`](file:///d:/AI-Powered-Software-Development-Platform/backend/app/schemas/__init__.py):
+Published in [`backend/app/schemas/planner_context.py`](../backend/app/schemas/planner_context.py) and re-exported from [`app.schemas`](../backend/app/schemas/__init__.py):
 
 ```python
 # Diff Line Range Inputs
@@ -171,7 +171,7 @@ class TaskPlanningContext(BaseModel): ...
 
 ## 8. Verification & Test Evidence
 
-All 35 test scenarios in [`backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`](file:///d:/AI-Powered-Software-Development-Platform/backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py) pass synchronously with 100% success rate:
+All 35 test scenarios in [`backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`](../backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py) pass synchronously with 100% success rate:
 
 ```text
 backend\tests\test_prit_w3_d2_blast_radius_and_test_planner.py ................................... [100%]

@@ -22,6 +22,7 @@ from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceStatus,
+    WorkspaceTestExecutionRequest,
     WorkspaceToolPolicyRequest,
     WorkspaceToolPolicyResult,
 )
@@ -44,6 +45,8 @@ TOOL_PATCH_FILE = "patch_file"
 TOOL_DELETE_FILE = "delete_file"
 TOOL_LIST_FILES = "list_files"
 TOOL_EXECUTE_COMMAND = "execute_command"
+TOOL_RUN_TESTS = "run_tests"
+TOOL_RECORD_REPAIR = "record_repair_attempt"
 
 CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_READ_FILE,
@@ -52,6 +55,8 @@ CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_DELETE_FILE,
     TOOL_LIST_FILES,
     TOOL_EXECUTE_COMMAND,
+    TOOL_RUN_TESTS,
+    TOOL_RECORD_REPAIR,
 )
 
 
@@ -138,6 +143,19 @@ class WorkspaceToolPolicyBridge:
                 if not cmd:
                     raise WorkspacePolicyViolationError("Missing required argument: 'command'")
                 self._workspace_manager.command_runner.validate_command(cmd, raw_args)
+
+            elif clean_name == TOOL_RUN_TESTS:
+                test_path = arguments.get("test_path")
+                if test_path:
+                    WorkspacePathGuard.resolve_within_workspace(workspace_root, str(test_path).strip())
+                raw_args = arguments.get("arguments", [])
+                if raw_args:
+                    self._workspace_manager.command_runner.validate_command("pytest", raw_args)
+
+            elif clean_name == TOOL_RECORD_REPAIR:
+                patch_summary = arguments.get("patch_summary")
+                if not patch_summary:
+                    raise WorkspacePolicyViolationError("Missing required argument: 'patch_summary'")
 
         except (WorkspacePathEscapeError, WorkspacePolicyViolationError, WorkspaceError) as exc:
             return WorkspaceToolPolicyResult(
@@ -265,11 +283,67 @@ class WorkspaceToolPolicyBridge:
                     error=cmd_res.error,
                 )
 
+            elif tool_name == TOOL_RUN_TESTS:
+                test_req = WorkspaceTestExecutionRequest(
+                    task_id=task_id,
+                    framework=args.get("framework"),
+                    test_path=args.get("test_path"),
+                    arguments=args.get("arguments", []),
+                    timeout_seconds=args.get("timeout_seconds"),
+                    environment=args.get("environment", {}),
+                )
+                test_res = self._workspace_manager.run_tests(test_req)
+                return ToolResult(
+                    success=test_res.success,
+                    output={
+                        "status": test_res.status.value,
+                        "classification": test_res.classification.value,
+                        "is_repair_eligible": test_res.is_repair_eligible,
+                        "passed_count": test_res.passed_count,
+                        "failed_count": test_res.failed_count,
+                        "skipped_count": test_res.skipped_count,
+                        "error_count": test_res.error_count,
+                        "total_count": test_res.total_count,
+                        "duration_ms": test_res.duration_ms,
+                        "failed_test_names": test_res.failed_test_names,
+                        "failure_details": test_res.failure_details,
+                        "stdout": test_res.stdout,
+                        "stderr": test_res.stderr,
+                        "timed_out": test_res.timed_out,
+                        "framework": test_res.framework,
+                    },
+                    error=test_res.error,
+                )
+
+            elif tool_name == TOOL_RECORD_REPAIR:
+                record = self._workspace_manager.record_repair_attempt(
+                    task_id=task_id,
+                    patch_summary=args["patch_summary"],
+                    patch_content=args.get("patch_content"),
+                    test_status_before=args.get("test_status_before"),
+                    test_status_after=args.get("test_status_after"),
+                    success=args.get("success", False),
+                )
+                return ToolResult(
+                    success=True,
+                    output={
+                        "attempt_number": record.attempt_number,
+                        "patch_summary": record.patch_summary,
+                        "patch_hash": record.patch_hash,
+                        "success": record.success,
+                        "timestamp": record.timestamp,
+                    },
+                )
+
             return ToolResult(success=False, error=f"Unhandled tool: {tool_name}")
 
         except Exception as exc:
             logger.error("tool_execution_unhandled_error", extra={"tool": tool_name, "error": str(exc)})
             return ToolResult(success=False, error=redact(f"Tool execution failed: {exc}"))
+
+
+# Explicitly mark execute_tool as policy-guarded because WorkspaceToolPolicyBridge enforces strict policies
+WorkspaceToolPolicyBridge.execute_tool._is_policy_guarded = True
 
 
 def register_workspace_tools(
@@ -389,6 +463,56 @@ def register_workspace_tools(
                     },
                 },
                 "required": ["command"],
+            },
+        ),
+        (
+            TOOL_RUN_TESTS,
+            "Execute repository tests inside the task workspace sandbox with resource limits.",
+            {
+                "type": "object",
+                "properties": {
+                    "test_path": {
+                        "type": "string",
+                        "description": "Optional specific test file or directory path.",
+                    },
+                    "framework": {
+                        "type": "string",
+                        "description": "Optional explicit framework (pytest, unittest, jest).",
+                    },
+                    "arguments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional positional test runner arguments.",
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Test execution timeout in seconds (default: 60, max: 300).",
+                        "default": 60,
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_RECORD_REPAIR,
+            "Record a self-repair attempt against the task-level 3-attempt ceiling.",
+            {
+                "type": "object",
+                "properties": {
+                    "patch_summary": {
+                        "type": "string",
+                        "description": "Summary of code changes applied during this repair attempt.",
+                    },
+                    "patch_content": {
+                        "type": "string",
+                        "description": "Optional raw patch content to detect duplicate cycles.",
+                    },
+                    "success": {
+                        "type": "boolean",
+                        "description": "Whether the repair attempt produced passing tests.",
+                        "default": False,
+                    },
+                },
+                "required": ["patch_summary"],
             },
         ),
     ]

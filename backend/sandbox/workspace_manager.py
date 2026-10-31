@@ -14,6 +14,7 @@ Key Capabilities:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import shutil
@@ -28,6 +29,9 @@ from app.core.config import PROJECT_ROOT
 from app.core.secret_redaction import redact
 from app.services.git_branch import format_agent_branch_name
 from app.schemas.workspace import (
+    RepairAttemptRecord,
+    TestFailureClassification,
+    TestOutcomeStatus,
     WorkspaceCleanupResult,
     WorkspaceCommandRequest,
     WorkspaceCommandResult,
@@ -43,10 +47,13 @@ from app.schemas.workspace import (
     WorkspaceFileWriteResult,
     WorkspaceIsolationType,
     WorkspaceMetadata,
+    WorkspaceRepairBudgetStatus,
     WorkspaceResourceLimits,
     WorkspaceStartExecutionRequest,
     WorkspaceStartExecutionResult,
     WorkspaceStatus,
+    WorkspaceTestExecutionRequest,
+    WorkspaceTestExecutionResult,
     can_transition_workspace,
 )
 from sandbox.command_runner import WorkspaceCommandRunner
@@ -57,16 +64,21 @@ from sandbox.exceptions import (
     WorkspaceCommandError,
     WorkspaceCommandTimeoutError,
     WorkspaceCreationError,
+    WorkspaceDuplicateRepairPatchError,
     WorkspaceError,
     WorkspaceFileError,
     WorkspaceLimitExceededError,
     WorkspacePathEscapeError,
     WorkspacePolicyViolationError,
+    WorkspaceRepairBudgetExhaustedError,
     WorkspaceStaleApprovalError,
     WorkspaceStateError,
+    WorkspaceTestExecutionError,
+    WorkspaceUnsupportedFrameworkError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
+from sandbox.test_runner import WorkspaceTestRunner
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +101,9 @@ class WorkspaceManager:
         self._monitors: dict[str, WorkspaceResourceMonitor] = {}
         self._timeline: dict[str, list[WorkspaceExecutionEvent]] = {}
         self._command_runner = WorkspaceCommandRunner()
+        self._test_runner = WorkspaceTestRunner(command_runner=self._command_runner)
+        self._test_history: dict[str, list[WorkspaceTestExecutionResult]] = {}
+        self._repo_roots: dict[str, Path] = {}
 
     @property
     def base_directory(self) -> Path:
@@ -99,6 +114,11 @@ class WorkspaceManager:
     def command_runner(self) -> WorkspaceCommandRunner:
         """Return the bound sandboxed command runner."""
         return self._command_runner
+
+    @property
+    def test_runner(self) -> WorkspaceTestRunner:
+        """Return the bound restricted test runner."""
+        return self._test_runner
 
 
     # -----------------------------------------------------------------------
@@ -125,7 +145,8 @@ class WorkspaceManager:
         # Formulate safe workspace path
         raw_slug = task_id[5:] if task_id.lower().startswith("task-") else task_id
         cleaned_short = format_agent_branch_name(raw_slug).replace("agent/task-", "")
-        safe_task_slug = f"task-{cleaned_short}"
+        task_hash = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:8]
+        safe_task_slug = f"task-{cleaned_short}-{task_hash}"
         workspace_path = (self._base_dir / safe_task_slug).resolve()
 
         branch_name = request.branch_name or f"agent/{safe_task_slug}"
@@ -144,6 +165,9 @@ class WorkspaceManager:
             resource_limits=limits,
         )
         self._workspaces[task_id] = metadata
+
+        if request.repository_root:
+            self._repo_roots[task_id] = Path(request.repository_root)
 
         try:
             isolation_used = self._provision_workspace(
@@ -246,11 +270,13 @@ class WorkspaceManager:
             for item in repo_root.iterdir():
                 if item.name in (".git", ".workspaces", "venv", "__pycache__", ".pytest_cache", "node_modules"):
                     continue
+                if item.is_symlink():
+                    continue
                 dest = workspace_path / item.name
                 if item.is_dir():
-                    shutil.copytree(item, dest, symlinks=False, ignore=shutil.ignore_patterns(".git*", "__pycache__"))
+                    shutil.copytree(item, dest, symlinks=True, ignore=shutil.ignore_patterns(".git*", "__pycache__"))
                 elif item.is_file():
-                    shutil.copy2(item, dest)
+                    shutil.copy2(item, dest, follow_symlinks=False)
         return "directory_copy"
 
     def get_workspace(self, task_id: str) -> WorkspaceMetadata | None:
@@ -469,6 +495,158 @@ class WorkspaceManager:
             },
         )
         return result
+
+    def run_tests(self, request: WorkspaceTestExecutionRequest) -> WorkspaceTestExecutionResult:
+        """Execute project tests strictly inside the task workspace sandbox."""
+        meta = self.get_workspace(request.task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{request.task_id}'.")
+        if meta.status != WorkspaceStatus.IN_USE:
+            raise WorkspaceStateError(
+                f"Cannot run tests in workspace state '{meta.status.value}'. "
+                f"Tests can only be executed when workspace is '{WorkspaceStatus.IN_USE.value}'."
+            )
+
+        root = Path(meta.workspace_path)
+
+        # 1. Emit Tests Started Timeline Event
+        self.record_timeline_event(
+            task_id=request.task_id,
+            event_type=WorkspaceExecutionEventType.TESTS_STARTED,
+            message=f"Running tests for task '{request.task_id}' (target: {request.test_path or 'all tests'}).",
+            payload={
+                "test_path": request.test_path,
+                "framework": request.framework,
+                "timeout_seconds": request.timeout_seconds,
+            },
+        )
+
+        # 2. Execute tests via WorkspaceTestRunner
+        result = self._test_runner.run_tests(
+            workspace_root=root,
+            request=request,
+            workspace_id=meta.workspace_id,
+            workspace_revision=meta.base_revision,
+        )
+
+        # 3. Emit Result Timeline Event
+        if result.status == TestOutcomeStatus.PASSED:
+            event_type = WorkspaceExecutionEventType.TESTS_PASSED
+            msg = f"Tests passed successfully: {result.passed_count} passed in {result.duration_ms:.1f}ms."
+        elif result.status == TestOutcomeStatus.TIMEOUT:
+            event_type = WorkspaceExecutionEventType.TEST_TIMEOUT
+            msg = f"Test execution timed out after {request.timeout_seconds or 60}s."
+        elif result.classification == TestFailureClassification.INFRASTRUCTURE_ERROR:
+            event_type = WorkspaceExecutionEventType.TEST_INFRASTRUCTURE_FAILURE
+            msg = f"Test infrastructure failure: {result.error or 'Execution failed before test completion'}."
+        else:
+            event_type = WorkspaceExecutionEventType.TESTS_FAILED
+            msg = (
+                f"Tests failed: {result.failed_count} failed, {result.passed_count} passed "
+                f"(repair eligible: {result.is_repair_eligible})."
+            )
+
+        self.record_timeline_event(
+            task_id=request.task_id,
+            event_type=event_type,
+            message=msg,
+            payload={
+                "status": result.status.value,
+                "classification": result.classification.value,
+                "is_repair_eligible": result.is_repair_eligible,
+                "passed_count": result.passed_count,
+                "failed_count": result.failed_count,
+                "total_count": result.total_count,
+                "duration_ms": result.duration_ms,
+            },
+        )
+
+        # 4. Store in test history
+        self._test_history.setdefault(request.task_id, []).append(result)
+        return result
+
+    def get_test_history(self, task_id: str) -> list[WorkspaceTestExecutionResult]:
+        """Return the chronological test execution history for a task."""
+        return list(self._test_history.get(task_id, []))
+
+    def get_repair_budget_status(self, task_id: str) -> WorkspaceRepairBudgetStatus:
+        """Return the current self-repair budget status for a task."""
+        return self._test_runner.get_repair_budget_status(task_id)
+
+    def record_repair_attempt(
+        self,
+        task_id: str,
+        patch_summary: str,
+        patch_content: str | None = None,
+        test_status_before: TestOutcomeStatus | None = None,
+        test_status_after: TestOutcomeStatus | None = None,
+        success: bool = False,
+    ) -> RepairAttemptRecord:
+        """Record a repair attempt against the 3-attempt ceiling and reject duplicate patches."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+        if meta.status != WorkspaceStatus.IN_USE:
+            raise WorkspaceStateError(
+                f"Cannot record repair attempt in workspace state '{meta.status.value}'. Must be IN_USE."
+            )
+
+        # Emit repair attempt started
+        current_status = self.get_repair_budget_status(task_id)
+        attempt_num = current_status.repair_attempts_used + 1
+
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.REPAIR_ATTEMPT_STARTED,
+            message=f"Starting self-repair attempt {attempt_num}/{current_status.repair_attempts_max} for task '{task_id}'.",
+            payload={"attempt_number": attempt_num, "patch_summary": patch_summary},
+        )
+
+        try:
+            record = self._test_runner.record_repair_attempt(
+                task_id=task_id,
+                patch_summary=patch_summary,
+                patch_content=patch_content,
+                workspace_revision=meta.base_revision,
+                test_status_before=test_status_before,
+                test_status_after=test_status_after,
+                success=success,
+            )
+        except WorkspaceRepairBudgetExhaustedError:
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.REPAIR_BUDGET_EXHAUSTED,
+                message=f"Self-repair budget exhausted ({current_status.repair_attempts_max}/{current_status.repair_attempts_max} attempts used). Stopping execution.",
+                payload={"repair_attempts_used": current_status.repair_attempts_max},
+            )
+            raise
+
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.REPAIR_ATTEMPT_COMPLETED,
+            message=f"Completed self-repair attempt {record.attempt_number} (success: {record.success}).",
+            payload={
+                "attempt_number": record.attempt_number,
+                "patch_hash": record.patch_hash,
+                "success": record.success,
+            },
+        )
+
+        # Check if this attempt exhausted the budget
+        post_status = self.get_repair_budget_status(task_id)
+        if post_status.is_budget_exhausted and not record.success:
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.REPAIR_BUDGET_EXHAUSTED,
+                message=f"Self-repair budget exhausted ({post_status.repair_attempts_used}/{post_status.repair_attempts_max} attempts used). Human intervention required.",
+                payload={"repair_attempts_used": post_status.repair_attempts_used},
+            )
+
+        return record
+
+    def get_repair_history(self, task_id: str) -> list[RepairAttemptRecord]:
+        """Return the immutable list of repair attempts for a task."""
+        return self._test_runner.get_repair_history(task_id)
 
     def record_timeline_event(
         self,
@@ -696,9 +874,13 @@ class WorkspaceManager:
             # Attempt Git worktree removal if applicable
             if meta.isolation_type == "git_worktree":
                 try:
-                    # git worktree remove --force <workspace_path>
+                    repo_context = self._repo_roots.get(task_id)
+                    cmd = ["git"]
+                    if repo_context and repo_context.exists():
+                        cmd.extend(["-C", str(repo_context)])
+                    cmd.extend(["worktree", "remove", "--force", str(workspace_path)])
                     proc = subprocess.run(
-                        ["git", "worktree", "remove", "--force", str(workspace_path)],
+                        cmd,
                         capture_output=True,
                         text=True,
                         check=False,
@@ -706,6 +888,14 @@ class WorkspaceManager:
                     )
                     if proc.returncode == 0:
                         worktree_pruned = True
+                    if repo_context and repo_context.exists():
+                        subprocess.run(
+                            ["git", "-C", str(repo_context), "worktree", "prune"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=30,
+                        )
                 except Exception as e:
                     logger.warning("git_worktree_remove_failed", extra={"error": str(e)})
 
@@ -716,6 +906,7 @@ class WorkspaceManager:
             meta.cleaned_at = datetime.now(timezone.utc).isoformat()
             meta.updated_at = meta.cleaned_at
             self._monitors.pop(task_id, None)
+            self._repo_roots.pop(task_id, None)
 
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             return WorkspaceCleanupResult(

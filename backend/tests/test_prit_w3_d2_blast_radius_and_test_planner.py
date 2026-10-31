@@ -512,24 +512,27 @@ class TestTaskTestPlanner:
 
     def test_detect_framework_from_pytest_fixture_sample(self):
         planner = TaskTestPlanner()
-        fixture_dir = Path("backend/tests/fixtures/framework_samples/pytest_repo")
-        if fixture_dir.exists():
-            fw = planner.detect_framework(repo_root=fixture_dir)
-            assert fw == "pytest"
+        fixture_dir = Path(__file__).parent / "fixtures" / "framework_samples" / "pytest_repo"
+        if not fixture_dir.exists():
+            pytest.skip("Fixture not found")
+        fw = planner.detect_framework(repo_root=fixture_dir)
+        assert fw == "pytest"
 
     def test_detect_framework_from_jest_fixture_sample(self):
         planner = TaskTestPlanner()
-        fixture_dir = Path("backend/tests/fixtures/framework_samples/jest_repo")
-        if fixture_dir.exists():
-            fw = planner.detect_framework(repo_root=fixture_dir)
-            assert fw == "jest"
+        fixture_dir = Path(__file__).parent / "fixtures" / "framework_samples" / "jest_repo"
+        if not fixture_dir.exists():
+            pytest.skip("Fixture not found")
+        fw = planner.detect_framework(repo_root=fixture_dir)
+        assert fw == "jest"
 
     def test_detect_framework_from_unittest_fixture_sample(self):
         planner = TaskTestPlanner()
-        fixture_dir = Path("backend/tests/fixtures/framework_samples/unittest_repo")
-        if fixture_dir.exists():
-            fw = planner.detect_framework(repo_root=fixture_dir)
-            assert fw == "unittest"
+        fixture_dir = Path(__file__).parent / "fixtures" / "framework_samples" / "unittest_repo"
+        if not fixture_dir.exists():
+            pytest.skip("Fixture not found")
+        fw = planner.detect_framework(repo_root=fixture_dir)
+        assert fw == "unittest"
 
     def test_detect_framework_fallback_from_paths(self):
         planner = TaskTestPlanner()
@@ -737,7 +740,7 @@ class TestMultiLanguageFixtureResolution:
         from scanner.parser import Parser
         from scanner.symbols import FileInfo
 
-        fixture_file = Path("backend/tests/fixtures/ast_sample/supported_python.py")
+        fixture_file = Path(__file__).parent / "fixtures" / "ast_sample" / "supported_python.py"
         if not fixture_file.exists():
             pytest.skip("Fixture not found")
 
@@ -768,7 +771,7 @@ class TestMultiLanguageFixtureResolution:
         from scanner.extractor import SymbolExtractor
         from scanner.symbols import FileInfo
 
-        fixture_file = Path("backend/tests/fixtures/ast_sample/supported_typescript.ts")
+        fixture_file = Path(__file__).parent / "fixtures" / "ast_sample" / "supported_typescript.ts"
         if not fixture_file.exists():
             pytest.skip("Fixture not found")
 
