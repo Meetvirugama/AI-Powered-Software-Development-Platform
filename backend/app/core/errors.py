@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.secret_redaction import redact
+
 
 class ErrorCode:
     """Machine-readable error codes exposed by the public API."""
@@ -16,14 +18,36 @@ class ErrorCode:
     UNAUTHORIZED = "UNAUTHORIZED"
     FORBIDDEN = "FORBIDDEN"
     NOT_FOUND = "NOT_FOUND"
+    RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
     REPOSITORY_NOT_FOUND = "REPOSITORY_NOT_FOUND"
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    ANALYSIS_RUN_NOT_FOUND = "ANALYSIS_RUN_NOT_FOUND"
     INVALID_REQUEST = "INVALID_REQUEST"
+    UNSUPPORTED_TARGET = "UNSUPPORTED_TARGET"
+    PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+    CONFLICT = "CONFLICT"
+    BAD_REQUEST = "BAD_REQUEST"
     OAUTH_CONFIGURATION_ERROR = "OAUTH_CONFIGURATION_ERROR"
     OAUTH_STATE_INVALID = "OAUTH_STATE_INVALID"
     OAUTH_EXCHANGE_FAILED = "OAUTH_EXCHANGE_FAILED"
     GITHUB_PROFILE_FAILED = "GITHUB_PROFILE_FAILED"
+    GITHUB_API_ERROR = "GITHUB_API_ERROR"
+    ANALYSIS_FAILED = "ANALYSIS_FAILED"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+    # Week 3 Workflow & Governance Error Codes (Docs/week3.md §7.4)
+    TASK_NOT_FOUND = "TASK_NOT_FOUND"
+    APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    PLAN_VERSION_MISMATCH = "PLAN_VERSION_MISMATCH"
+    INVALID_STATE_TRANSITION = "INVALID_STATE_TRANSITION"
+    WORKSPACE_CREATION_FAILED = "WORKSPACE_CREATION_FAILED"
+    POLICY_VIOLATION = "POLICY_VIOLATION"
+    COMMAND_NOT_ALLOWED = "COMMAND_NOT_ALLOWED"
+    EXECUTION_TIMEOUT = "EXECUTION_TIMEOUT"
+    RETRY_BUDGET_EXHAUSTED = "RETRY_BUDGET_EXHAUSTED"
+    VERIFICATION_FAILED = "VERIFICATION_FAILED"
+    PUBLICATION_AUTHORIZATION_REQUIRED = "PUBLICATION_AUTHORIZATION_REQUIRED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
 
 
 class APIError(Exception):
@@ -39,14 +63,15 @@ class APIError(Exception):
     ) -> None:
         self.status_code = status_code
         self.code = code
-        self.message = message
+        self.message = redact(message)
         self.retryable = retryable
 
 
 def error_response(status_code: int, code: str, message: str, *, retryable: bool = False) -> JSONResponse:
+    safe_message = redact(message)
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message, "retryable": retryable}},
+        content={"error": {"code": code, "message": safe_message, "retryable": retryable}},
     )
 
 
@@ -65,12 +90,33 @@ async def http_exception_handler(_: Request, exc: StarletteHTTPException) -> JSO
     return error_response(exc.status_code, "HTTP_ERROR", message)
 
 
-async def validation_exception_handler(_: Request, __: RequestValidationError) -> JSONResponse:
-    return error_response(
-        status.HTTP_422_UNPROCESSABLE_ENTITY,
-        ErrorCode.INVALID_REQUEST,
-        "Request validation failed.",
-    )
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    _logger = logging.getLogger("app.errors")
+    try:
+        raw_errors = exc.errors()
+        # Log structured detail at DEBUG for backend observability (never exposes values)
+        _logger.debug(
+            "request_validation_failed",
+            extra={"error_count": len(raw_errors), "fields": [e.get("loc") for e in raw_errors]},
+        )
+        # Build safe field-path list: tuples like ("body", "target", "path") → "body.target.path"
+        failed_fields: list[str] = [
+            ".".join(str(part) for part in e.get("loc", ())) for e in raw_errors[:10]
+        ]
+    except Exception:
+        failed_fields = []
+
+    content: dict = {
+        "error": {
+            "code": ErrorCode.INVALID_REQUEST,
+            "message": "Request validation failed.",
+            "retryable": False,
+        }
+    }
+    if failed_fields:
+        content["error"]["details"] = {"invalid_fields": failed_fields}
+
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=content)
 
 
 async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:

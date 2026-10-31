@@ -435,9 +435,18 @@ class GitHubClient:
             "exp": now + (10 * 60),
             "iss": settings.github_app_id,
         }
+        pem_key = (
+            settings.github_app_private_key.strip()
+            .strip('"')
+            .strip("'")
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .strip()
+        )
         app_jwt = jose_jwt.encode(
             payload,
-            settings.github_app_private_key,
+            pem_key,
             algorithm="RS256",
         )
 

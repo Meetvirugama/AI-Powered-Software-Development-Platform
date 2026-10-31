@@ -84,8 +84,10 @@ class RRFFusion:
             top30 = fusion.fuse(vector_top30, lexical_top30)
             # top30[0] is the chunk with the highest RRF score
         """
-        if not result_lists:
+        if not result_lists or top_n <= 0:
             return []
+        if k <= 0:
+            raise ValueError(f"RRF smoothing constant k must be positive, got {k}")
 
         # Accumulate RRF scores across all source lists
         scores: dict[UUID, float] = defaultdict(float)
@@ -102,7 +104,11 @@ class RRFFusion:
         top_ids = sorted_ids[:top_n]
 
         fused: list[CodeChunk] = [
-            dataclasses.replace(chunk_map[cid], score=round(scores[cid], 6))
+            dataclasses.replace(
+                chunk_map[cid],
+                score=round(scores[cid], 6),
+                rrf_score=round(scores[cid], 6),
+            )
             for cid in top_ids
         ]
 

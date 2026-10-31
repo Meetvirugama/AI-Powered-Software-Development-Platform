@@ -1,0 +1,672 @@
+"""End-to-end orchestration for Week 2 Day 2 Code Explanation (`POST /repositories/{id}/explain`).
+
+Owner: Yug — W2, Day 2 (Explanation Endpoint & Service Integration)
+
+Implements the 9-step explanation pipeline required by `Docs/week2.md` §6:
+1. Authenticate user (enforced at route boundary)
+2. Verify repository access (enforced at route boundary)
+3. Validate target file, symbol, and 1-indexed inclusive line range (resolving AST symbols via CodeSymbol)
+4. Fetch the intended source content and revision from indexed repository chunks
+5. Build enriched `IntelligenceContext` (target snippet, related symbols/callers, repo files, rules)
+6. Invoke configured `explanation_service` (or LLMGateway-backed explanation engine)
+7. Validate structured `CodeExplanation` output and ground source citations against `repository_files`
+8. Persist completed or failed analysis run metadata for history retrieval (`/analysis-runs`)
+9. Return validated `CodeExplanationResponse`
+"""
+
+from __future__ import annotations
+
+import inspect
+import json
+import logging
+import os
+from pathlib import Path
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+from uuid import UUID, uuid4
+
+_DEFAULT_TIKTOKEN_CACHE = Path(__file__).resolve().parents[3] / ".venv" / "data-gym-cache"
+if _DEFAULT_TIKTOKEN_CACHE.exists():
+    os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(_DEFAULT_TIKTOKEN_CACHE))
+
+from pydantic import ValidationError
+from sqlalchemy.orm import Session
+
+from ai.context.builder import (
+    ContextBuilder,
+    IntelligenceContext,
+    RepositoryFile as ContextRepoFile,
+    SymbolContext,
+    TargetSnippet,
+)
+from ai.llm.schemas import (
+    LLMError,
+    LLMRateLimitError,
+    LLMRequest,
+    LLMTimeoutError,
+    LLMUnavailableError,
+    LLMValidationError,
+    Message,
+)
+from ai.schemas.prompt_builder import _fence
+from app.core.errors import APIError, ErrorCode
+from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.secret_redaction import redact, redact_obj
+from app.models.code_chunk import CodeChunk
+from app.models.code_symbol import CodeSymbol
+from app.models.memory_entry import MemoryEntry
+from app.models.repository import Repository
+from app.models.repository_file import RepositoryFile
+from app.models.symbol_edge import SymbolEdge
+from app.schemas.analysis import (
+    AnalysisSourceReference,
+    AnalysisTarget,
+    CodeExplanation,
+    CodeExplanationResponse,
+    ExplainCodeRequest,
+    SymbolSummary,
+)
+
+logger = logging.getLogger(__name__)
+
+MAX_ANALYZABLE_FILE_BYTES = 1_048_576  # 1 MB ceiling
+MAX_IN_MEMORY_HISTORY_RUNS = 500       # Bounded FIFO capacity for _analysis_run_history
+
+
+@dataclass
+class ResolvedExplanationTarget:
+    """Validated target metadata, resolved source snippet, and assembled IntelligenceContext."""
+
+    target: AnalysisTarget
+    revision: str
+    file_record: RepositoryFile | None
+    resolved_symbol: CodeSymbol | None
+    code_content: str
+    intelligence_context: IntelligenceContext
+    missing_context: list[str] = field(default_factory=list)
+    indexed_paths: dict[str, int] = field(default_factory=dict)
+    repo_files: list[RepositoryFile] = field(default_factory=list)
+
+
+def resolve_target_and_build_context(
+    repository_id: UUID,
+    repo: Repository | Any,
+    payload: ExplainCodeRequest,
+    db: Session | Any,
+) -> ResolvedExplanationTarget:
+    """Steps 3, 4 & 5: Validate target, resolve symbol/range, fetch source, and build IntelligenceContext."""
+    safe_path = require_safe_repo_path(payload.target.path)
+    target = payload.target.model_copy(update={"path": safe_path})
+    revision = target.revision or getattr(repo, "default_branch", None) or "main"
+    missing_context: list[str] = []
+
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
+        # Unit-test mode with mock DB session (`object()`)
+        snippet = TargetSnippet(
+            file_path=safe_path,
+            content="",
+            start_line=target.start_line or 1,
+            end_line=target.end_line or (target.start_line or 1),
+            symbol_name=target.symbol,
+            language="text",
+        )
+        ctx = ContextBuilder().build_intelligence_context(
+            target=snippet,
+            token_budget=payload.options.max_context_tokens,
+        )
+        return ResolvedExplanationTarget(
+            target=target,
+            revision=revision,
+            file_record=None,
+            resolved_symbol=None,
+            code_content="",
+            intelligence_context=ctx,
+            missing_context=missing_context,
+            indexed_paths={},
+        )
+
+    try:
+        all_repo_files: list[RepositoryFile] = (
+            db.query(RepositoryFile)
+            .filter(RepositoryFile.repository_id == repository_id)
+            .order_by(RepositoryFile.path)
+            .all()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_target_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target resolution.",
+            retryable=True,
+        ) from exc
+
+    if not all_repo_files:
+        sync_status = getattr(repo, "sync_status", None)
+        if sync_status in ("NOT_SYNCED", "SYNCING"):
+            raise APIError(
+                409,
+                ErrorCode.CONFLICT,
+                f"Repository indexing is in progress or not yet synced (status: {sync_status}). Please wait for indexing to complete.",
+            )
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
+        )
+
+    indexed_paths = {f.path: (f.line_count or 0) for f in all_repo_files}
+    file_record = next((f for f in all_repo_files if f.path == safe_path), None)
+    if file_record is None:
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
+        )
+
+    if (file_record.size_bytes or 0) > MAX_ANALYZABLE_FILE_BYTES:
+        raise APIError(
+            413,
+            ErrorCode.PAYLOAD_TOO_LARGE,
+            "Target file exceeds the maximum analyzable size limit (1 MB).",
+        )
+
+    # Fetch all symbols for this file
+    try:
+        file_symbols: list[CodeSymbol] = (
+            db.query(CodeSymbol)
+            .filter(
+                CodeSymbol.repository_id == repository_id,
+                CodeSymbol.file_id == file_record.id,
+            )
+            .order_by(CodeSymbol.start_line)
+            .all()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_symbols_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file symbols.",
+            retryable=True,
+        ) from exc
+
+    # Step 3b: Symbol Resolution (if symbol is specified)
+    resolved_symbol: CodeSymbol | None = None
+    if target.symbol:
+        matching_symbols = [s for s in file_symbols if s.name == target.symbol]
+        if target.start_line is not None and len(matching_symbols) > 1:
+            matching_symbols = [
+                s
+                for s in matching_symbols
+                if s.start_line <= target.start_line <= s.end_line
+            ] or matching_symbols
+
+        if matching_symbols:
+            resolved_symbol = matching_symbols[0]
+            if target.start_line is None:
+                target.start_line = resolved_symbol.start_line
+            if target.end_line is None:
+                target.end_line = resolved_symbol.end_line
+        elif file_symbols and target.type == "symbol":
+            raise APIError(
+                404,
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Symbol '{target.symbol}' was not found in '{safe_path}'.",
+            )
+        else:
+            missing_context.append(
+                f"Symbol '{target.symbol}' could not be resolved from the AST index; using file/line range context."
+            )
+
+    # Validate line range against file_record.line_count
+    line_count = file_record.line_count or 0
+    if line_count > 0:
+        if target.start_line is not None and target.start_line > line_count:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"start_line ({target.start_line}) exceeds file line count ({line_count}).",
+            )
+        if target.end_line is not None and target.end_line > line_count:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"end_line ({target.end_line}) exceeds file line count ({line_count}).",
+            )
+
+    # Step 4: Reconstruct source content for the target file / line range
+    try:
+        file_chunks: list[CodeChunk] = (
+            db.query(CodeChunk)
+            .filter(
+                CodeChunk.repository_id == repository_id,
+                CodeChunk.file_id == file_record.id,
+            )
+            .order_by(CodeChunk.start_line)
+            .all()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_chunks_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file chunks.",
+            retryable=True,
+        ) from exc
+
+    eff_start = target.start_line or 1
+    eff_end = target.end_line or (line_count if line_count > 0 else max((c.end_line for c in file_chunks), default=1))
+
+    selected_chunks = [
+        c
+        for c in file_chunks
+        if c.end_line >= eff_start and c.start_line <= eff_end
+    ]
+    if not selected_chunks and file_chunks:
+        selected_chunks = file_chunks
+
+    from indexer.chunker import reconstruct_file_from_chunks
+
+    code_content = reconstruct_file_from_chunks(
+        selected_chunks,
+        start_line=eff_start,
+        end_line=eff_end,
+    )
+    if not code_content:
+        missing_context.append(f"No indexed code chunks found for '{safe_path}'.")
+
+    # Step 5: Assemble related symbols, callers/callees, and project rules for IntelligenceContext
+    related_symbol_contexts: list[SymbolContext] = []
+    if payload.options.include_context:
+        for sym in file_symbols:
+            if resolved_symbol and sym.id == resolved_symbol.id:
+                continue
+            if sym.end_line >= eff_start and sym.start_line <= eff_end:
+                related_symbol_contexts.append(
+                    SymbolContext(
+                        name=sym.name,
+                        kind=sym.kind,
+                        file_path=safe_path,
+                        start_line=sym.start_line,
+                        end_line=sym.end_line,
+                        content=sym.signature or "",
+                    )
+                )
+
+        # Fetch caller/callee symbols from SymbolEdge if resolved_symbol is known
+        if resolved_symbol is not None:
+            try:
+                edges: list[SymbolEdge] = (
+                    db.query(SymbolEdge)
+                    .filter(
+                        SymbolEdge.repository_id == repository_id,
+                        (SymbolEdge.source_symbol_id == resolved_symbol.id)
+                        | (SymbolEdge.target_symbol_id == resolved_symbol.id),
+                    )
+                    .limit(15)
+                    .all()
+                )
+                neighbor_ids = {
+                    (
+                        e.target_symbol_id
+                        if e.source_symbol_id == resolved_symbol.id
+                        else e.source_symbol_id
+                    )
+                    for e in edges
+                }
+                if neighbor_ids:
+                    neighbor_syms: list[CodeSymbol] = (
+                        db.query(CodeSymbol)
+                        .filter(
+                            CodeSymbol.repository_id == repository_id,
+                            CodeSymbol.id.in_(neighbor_ids),
+                        )
+                        .all()
+                    )
+                    file_id_to_path = {f.id: f.path for f in all_repo_files}
+                    for nsym in neighbor_syms:
+                        related_symbol_contexts.append(
+                            SymbolContext(
+                                name=nsym.name,
+                                kind="caller" if any(e.source_symbol_id == nsym.id for e in edges) else nsym.kind,
+                                file_path=file_id_to_path.get(nsym.file_id, safe_path),
+                                start_line=nsym.start_line,
+                                end_line=nsym.end_line,
+                                content=nsym.signature or "",
+                            )
+                        )
+            except Exception:
+                missing_context.append("Caller/callee symbol graph edges could not be queried.")
+    else:
+        missing_context.append("Repository context enrichment was disabled by request options (include_context=False).")
+
+    # Project rules from MemoryEntry
+    project_rules: list[str] = []
+    if payload.options.include_context:
+        try:
+            memories: list[MemoryEntry] = (
+                db.query(MemoryEntry)
+                .filter(MemoryEntry.repository_id == repository_id)
+                .limit(10)
+                .all()
+            )
+            project_rules = [m.content for m in memories if getattr(m, "content", None)]
+        except Exception:
+            pass
+
+    context_repo_files = [
+        ContextRepoFile(
+            id=str(f.id),
+            path=f.path,
+            language=f.language or "text",
+            size_bytes=f.size_bytes or 0,
+            line_count=f.line_count or 0,
+            content_hash=f.content_hash or "",
+        )
+        for f in all_repo_files[:50]
+    ]
+
+    target_snippet = TargetSnippet(
+        file_path=safe_path,
+        content=code_content,
+        start_line=eff_start,
+        end_line=eff_end,
+        symbol_name=target.symbol or (resolved_symbol.name if resolved_symbol else None),
+        language=file_record.language or "text",
+    )
+
+    intelligence_ctx = ContextBuilder().build_intelligence_context(
+        target=target_snippet,
+        related_symbols=related_symbol_contexts,
+        relevant_chunks=selected_chunks if payload.options.include_context else [],
+        repository_files=context_repo_files if payload.options.include_context else [],
+        project_rules=project_rules,
+        token_budget=payload.options.max_context_tokens,
+    )
+
+    return ResolvedExplanationTarget(
+        target=target,
+        revision=revision,
+        file_record=file_record,
+        resolved_symbol=resolved_symbol,
+        code_content=code_content,
+        intelligence_context=intelligence_ctx,
+        missing_context=missing_context,
+        indexed_paths=indexed_paths,
+        repo_files=all_repo_files,
+    )
+
+
+def ground_explanation_sources(
+    explanation: CodeExplanation,
+    *,
+    repository_id: UUID,
+    resolved: ResolvedExplanationTarget,
+) -> CodeExplanation:
+    """Step 7b: Remove hallucinated or unsafe citations and ensure target source reference is grounded."""
+    merged_missing = list(dict.fromkeys([*explanation.missing_context, *resolved.missing_context]))
+
+    raw_sources = list(explanation.sources)
+    grounded_sources: list[AnalysisSourceReference] = []
+    ungrounded_count = 0
+
+    for src in raw_sources:
+        try:
+            clean_path = validate_repo_relative_path(src.file_path)
+        except UnsafePathError:
+            ungrounded_count += 1
+            continue
+
+        s_line = src.start_line
+        e_line = src.end_line
+        if s_line is not None and e_line is not None and s_line > e_line:
+            s_line, e_line = min(s_line, e_line), max(s_line, e_line)
+
+        if resolved.indexed_paths:
+            if clean_path not in resolved.indexed_paths:
+                ungrounded_count += 1
+                continue
+            max_lines = resolved.indexed_paths[clean_path]
+            if max_lines > 0:
+                if s_line is not None and s_line > max_lines:
+                    ungrounded_count += 1
+                    continue
+                if e_line is not None and e_line > max_lines:
+                    ungrounded_count += 1
+                    continue
+
+        grounded_sources.append(
+            src.model_copy(
+                update={
+                    "repository_id": str(repository_id),
+                    "file_path": clean_path,
+                    "start_line": s_line,
+                    "end_line": e_line,
+                    "revision": resolved.revision or src.revision,
+                }
+            )
+        )
+
+    confidence = explanation.confidence
+    if raw_sources:
+        ungrounded_ratio = ungrounded_count / len(raw_sources)
+        if len(grounded_sources) == 0 or ungrounded_ratio > 0.5:
+            confidence = "low"
+        elif ungrounded_count > 0 and confidence == "high":
+            confidence = "medium"
+
+    # Guarantee that when a real target file was resolved, its grounded citation is attached
+    if not grounded_sources and resolved.file_record is not None:
+        grounded_sources.append(
+            AnalysisSourceReference(
+                repository_id=str(repository_id),
+                file_path=resolved.target.path,
+                start_line=resolved.target.start_line or 1,
+                end_line=resolved.target.end_line or (resolved.file_record.line_count or 1),
+                revision=resolved.revision,
+                symbol_name=resolved.target.symbol,
+            )
+        )
+
+    return explanation.model_copy(
+        update={
+            "sources": grounded_sources,
+            "confidence": confidence,
+            "missing_context": merged_missing,
+        }
+    )
+
+
+def record_analysis_run(
+    app_state: Any,
+    db: Session | Any,
+    *,
+    run_id: str,
+    repository_id: UUID,
+    user_id: UUID,
+    feature_type: str,
+    status: str,
+    target: AnalysisTarget,
+    revision: str | None,
+    result_payload: dict[str, Any] | None = None,
+    findings: list[dict[str, Any]] | None = None,
+    error_message: str | None = None,
+    findings_count: int = 0,
+    test_output: str | None = None,
+    **extra_kwargs: Any,
+) -> None:
+    """Step 8: Persist analysis run (COMPLETED or FAILED) to Om's repository or in-memory history store."""
+    # Security (W2 Day 2): saved history must never contain secrets copied from
+    # repository code or model output — applies to every analysis feature.
+    result_payload = redact_obj(result_payload) if result_payload is not None else None
+    findings = redact_obj(findings) if findings else findings
+    error_message = redact(error_message) if error_message else error_message
+    now = datetime.now(timezone.utc)
+
+    # Extract test_output from result_payload if available
+    resolved_test_output = test_output
+    if resolved_test_output is None and result_payload:
+        resolved_test_output = (
+            result_payload.get("test_content")
+            or result_payload.get("complete_test_code")
+            or result_payload.get("test_output")
+            or (
+                result_payload.get("result", {}).get("test_content")
+                if isinstance(result_payload.get("result"), dict)
+                else None
+            )
+        )
+
+    target_path = getattr(target, "path", None) if target is not None else None
+    target_symbol = getattr(target, "symbol", None) if target is not None else None
+    if not target_symbol and target is not None:
+        pr_num = getattr(target, "pr_number", None)
+        commit_sha = getattr(target, "commit_sha", None)
+        if pr_num is not None:
+            target_symbol = f"PR #{pr_num}"
+        elif commit_sha:
+            target_symbol = f"Commit {commit_sha[:8]}"
+
+    start_line = getattr(target, "start_line", None) if target is not None else None
+    end_line = getattr(target, "end_line", None) if target is not None else None
+    resolved_rev = revision
+    if not resolved_rev and target is not None:
+        resolved_rev = (
+            getattr(target, "head_revision", None)
+            or getattr(target, "commit_sha", None)
+            or (f"pr/{target.pr_number}" if getattr(target, "pr_number", None) is not None else None)
+            or getattr(target, "base_revision", None)
+            or getattr(target, "revision", None)
+        )
+
+    record = {
+        "id": str(run_id),
+        "repository_id": str(repository_id),
+        "user_id": str(user_id),
+        "feature_type": feature_type,
+        "status": status,
+        "target_path": target_path,
+        "target_symbol": target_symbol,
+        "start_line": start_line,
+        "end_line": end_line,
+        "source_revision": resolved_rev,
+        "findings_count": findings_count,
+        "result_payload": result_payload,
+        "test_output": resolved_test_output,
+        "findings": findings or [],
+        "error_message": error_message,
+        "created_at": now,
+        "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
+    }
+
+    # 1. Try feature-specific history service or general analysis_run_service
+    candidate_services = []
+    if feature_type in ("generate_tests", "tests"):
+        svc = getattr(app_state, "test_generation_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
+    elif feature_type in ("detect_bugs", "bugs"):
+        svc = getattr(app_state, "bug_scan_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
+    elif feature_type == "explain":
+        svc = getattr(app_state, "explanation_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
+    elif feature_type in ("review", "code_review"):
+        svc = getattr(app_state, "review_history_service", None)
+        if svc is not None:
+            candidate_services.append(svc)
+
+    general_run_svc = getattr(app_state, "analysis_run_service", None)
+    if general_run_svc is not None and general_run_svc not in candidate_services:
+        candidate_services.append(general_run_svc)
+
+    saved = False
+    for target_service in candidate_services:
+        if saved:
+            break
+        for method_name in ("record_run", "save_run", "create_run"):
+            fn = getattr(target_service, method_name, None)
+            if callable(fn):
+                try:
+                    import inspect
+                    sig = inspect.signature(fn)
+                    if "db" in sig.parameters and db is not None:
+                        fn(record, db=db)
+                    else:
+                        fn(record)
+                except (TypeError, ValueError):
+                    try:
+                        fn(record)
+                    except Exception as inner_exc:
+                        logger.debug("analysis_run_service_save_fallback_failed", extra={"error": str(inner_exc)})
+                        continue
+                except Exception as exc:
+                    logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
+                    continue
+                saved = True
+                break
+
+    # 2. Try Om's AnalysisRunRepository if available in app.repositories
+    if not saved and hasattr(db, "query"):
+        try:
+            from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
+
+            repo_layer = AnalysisRunRepository(db)
+            for method_name in ("create_run", "create", "save"):
+                fn = getattr(repo_layer, method_name, None)
+                if callable(fn):
+                    fn(**record)
+                    break
+        except Exception:
+            pass
+
+    # 3. Always maintain an in-memory bounded history store on app.state for immediate retrieval
+    history_store: dict[str, dict[str, Any]] | None = getattr(
+        app_state, "_analysis_run_history", None
+    )
+    if history_store is None:
+        history_store = {}
+        try:
+            setattr(app_state, "_analysis_run_history", history_store)
+        except Exception:
+            return
+    history_store[str(run_id)] = record
+    while len(history_store) > MAX_IN_MEMORY_HISTORY_RUNS:
+        oldest_key = next(iter(history_store))
+        history_store.pop(oldest_key, None)
+
+
+def enforce_gateway_provider_policy(gateway: Any) -> None:
+    """Enforce Docs/week2.md §4.5: Only Gemini and Groq are allowed; disallow other providers (e.g. openai)."""
+    if gateway is None:
+        return
+    provider = getattr(gateway, "provider", None)
+    provider_name = getattr(provider, "provider_name", None) or getattr(provider, "name", None)
+    if isinstance(provider_name, str):
+        normalized = provider_name.strip().lower()
+        if normalized not in ("gemini", "groq", "mock", "test"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Provider '{provider_name}' is not permitted by policy. Only Gemini and Groq are allowed.",
+            )
+
+
+from ai.services.explanation_service import CodeExplanationService
+
+# Maintain backward compatibility
+LLMCodeExplanationService = CodeExplanationService

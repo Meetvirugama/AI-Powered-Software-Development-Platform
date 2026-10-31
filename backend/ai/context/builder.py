@@ -1,100 +1,200 @@
 """
-Context Builder — assembles retrieved code + memory + metadata into LLM prompt context.
+ContextBuilder — Assembles token-bounded AgentContext for repository-aware Q&A and intelligence.
 Owner: Meet — W1-12
 
-Day 1: AgentContext dataclass + builder skeleton.
-Day 6: full implementation — REPOSITORY DATA section, token counting, truncation.
-
-team_rules.md rule:
-    Repository content goes into a clearly-labelled REPOSITORY DATA: section —
-    never into the system prompt.
+Architecture Notice:
+This module acts as the canonical facade for the modularized `ai.context` package:
+- Dataclasses and schemas: `ai.context.models`
+- Token budgeting and estimation: `ai.context.token_budget`
+- Chat context and memory fitting: `ai.context.chat_context`
+- Intelligence context and symbol fitting: `ai.context.intelligence_context`
+- Untrusted prompt section formatting: `ai.context.renderers`
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+import logging
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
-if TYPE_CHECKING:
-    from ..retrieval.base import CodeChunk
+from ai.retrieval.base import CodeChunk
+from .chat_context import build_chat_context, dedup_memory
+from .intelligence_context import build_intelligence_context
+from .models import (
+    AgentContext,
+    ChatMessage,
+    ContextLimits,
+    ContextStatus,
+    IntelligenceContext,
+    IntelligenceContextRequest,
+    IntelligenceContextResponse,
+    MemoryEntry,
+    MissingContextInfo,
+    RepositoryFile,
+    SymbolContext,
+    TargetSnippet,
+)
+from .renderers import (
+    format_chunk as _format_chunk,
+    format_history_message as _format_history_message,
+    format_memory as _format_memory,
+    render_history_section,
+    render_intelligence_data,
+    render_related_files_section,
+    render_repository_data,
+)
+from .token_budget import (
+    _ENCODING_NAME,
+    _OVERHEAD_TOKENS,
+    _get_encoder,
+    count_tokens,
+    fit_history as _fit_history_budget,
+    fit_items as _fit_items_budget,
+)
 
+logger = logging.getLogger(__name__)
 
-@dataclass
-class MemoryEntry:
-    """A single project memory entry (architecture note, decision, rule, etc.)."""
-    id: str
-    content: str
-    type: str       # "architecture" | "decision" | "rule" | "task" | "failure"
-    created_at: str  # ISO 8601
-
-
-@dataclass
-class RepositoryFile:
-    """Lightweight file metadata — path, language, size."""
-    id: str
-    path: str
-    language: str
-    size_bytes: int
-    line_count: int
-
-
-@dataclass
-class ChatMessage:
-    """A single turn in the conversation history."""
-    role: str   # "user" | "assistant"
-    content: str
-
-
-@dataclass
-class AgentContext:
-    """
-    The fully assembled context passed to the LLM for repository Q&A.
-
-    Assembled by ContextBuilder.build() — never constructed ad-hoc.
-    """
-    code_chunks: list["CodeChunk"] = field(default_factory=list)
-    memory_chunks: list[MemoryEntry] = field(default_factory=list)
-    related_files: list[RepositoryFile] = field(default_factory=list)
-    recent_history: list[ChatMessage] = field(default_factory=list)
-    total_tokens: int = 0  # Set by builder after assembly
+__all__ = [
+    "AgentContext",
+    "ChatMessage",
+    "ContextBuilder",
+    "ContextLimits",
+    "ContextStatus",
+    "IntelligenceContext",
+    "IntelligenceContextRequest",
+    "IntelligenceContextResponse",
+    "MemoryEntry",
+    "MissingContextInfo",
+    "RepositoryFile",
+    "SymbolContext",
+    "TargetSnippet",
+    "_ENCODING_NAME",
+    "_OVERHEAD_TOKENS",
+    "_format_chunk",
+    "_format_history_message",
+    "_format_memory",
+    "_get_encoder",
+    "count_tokens",
+    "render_history_section",
+    "render_intelligence_data",
+    "render_related_files_section",
+    "render_repository_data",
+]
 
 
 class ContextBuilder:
     """
-    Assembles an AgentContext from retrieval results and memory.
+    Assembles a token-budget-aware AgentContext from retrieval results and memory.
 
-    Rules enforced:
-    - Repository content goes into REPOSITORY DATA: section only
-    - Memory entries are de-duplicated and sorted by recency
-    - Total context must not exceed the LLM context window limit (tracked via token count)
+    Key Responsibilities & Invariants:
+    1. System/Data Boundary: Repository code and memory live in untrusted user sections.
+    2. Memory Deduplication: Deduplicated by entry ID (last-write wins), sorted descending by recency.
+    3. Token Budgeting: Enforces max_context_tokens ceiling via tiktoken.
+    4. Truncation Order: History preserved newest-first; memory fitted next; ranked chunks fitted greedy.
     """
 
-    def __init__(self, max_context_tokens: int = 100_000) -> None:
+    _OVERHEAD_TOKENS: int = _OVERHEAD_TOKENS
+
+    def __init__(
+        self,
+        max_context_tokens: int = 100_000,
+        overhead_tokens: int = _OVERHEAD_TOKENS,
+        encoding_name: str = _ENCODING_NAME,
+    ) -> None:
+        if max_context_tokens <= 0:
+            raise ValueError(f"max_context_tokens must be positive, got {max_context_tokens}")
+        if overhead_tokens < 0:
+            raise ValueError(f"overhead_tokens cannot be negative, got {overhead_tokens}")
+
         self._max_tokens = max_context_tokens
+        self._overhead_tokens = overhead_tokens
+        self._encoding_name = encoding_name
+
+    @property
+    def max_tokens(self) -> int:
+        """Configured maximum token budget."""
+        return self._max_tokens
+
+    @property
+    def overhead_tokens(self) -> int:
+        """Static overhead tokens reserved for section headers and separators."""
+        return self._overhead_tokens
 
     def build(
         self,
-        chunks: list["CodeChunk"],
-        memory: list[MemoryEntry],
-        history: list[ChatMessage],
-        related_files: list[RepositoryFile] | None = None,
+        chunks: Sequence[CodeChunk] | None = None,
+        memory: Sequence[MemoryEntry] | None = None,
+        history: Sequence[ChatMessage | Mapping[str, Any] | Any] | None = None,
+        related_files: Sequence[RepositoryFile] | None = None,
     ) -> AgentContext:
-        """
-        Assemble context for an LLM call.
+        """Assemble token-bounded context for an LLM call."""
+        return build_chat_context(
+            max_tokens=self._max_tokens,
+            overhead_tokens=self._overhead_tokens,
+            chunks=chunks,
+            memory=memory,
+            history=history,
+            related_files=related_files,
+        )
 
-        Args:
-            chunks:        Reranked top-8 code chunks from RAG pipeline.
-            memory:        Relevant memory entries from project memory store.
-            history:       Last N conversation turns.
-            related_files: Optional file metadata for additional context.
+    def render_repository_data(self, ctx: AgentContext) -> str:
+        """Render the REPOSITORY DATA and MEMORY sections as a plain string."""
+        return render_repository_data(ctx)
 
-        Returns:
-            AgentContext ready to be serialised into a prompt by Dev's PromptBuilder.
-        """
-        # Day 6 implementation:
-        #   1. De-duplicate memory entries by id
-        #   2. Sort memory by created_at desc
-        #   3. Count tokens for each section using tiktoken
-        #   4. Truncate chunks / memory if total exceeds max_context_tokens
-        #   5. Set ctx.total_tokens
-        raise NotImplementedError("ContextBuilder.build() implemented on Day 6.")
+    def render_history_section(self, ctx: AgentContext) -> str:
+        """Render recent conversation history as formatted text turns."""
+        return render_history_section(ctx)
+
+    def render_related_files_section(self, ctx: AgentContext) -> str:
+        """Render repository file hierarchy summary if present."""
+        return render_related_files_section(ctx)
+
+    def build_intelligence_context(
+        self,
+        target: TargetSnippet,
+        related_symbols: Sequence[SymbolContext] | None = None,
+        relevant_chunks: Sequence[Any] | None = None,
+        repository_files: Sequence[RepositoryFile] | None = None,
+        project_rules: Sequence[str] | None = None,
+        token_budget: int = 10_000,
+        limits: ContextLimits | None = None,
+        revision: str | None = None,
+    ) -> IntelligenceContext:
+        """Build an enriched, token-bounded context for developer intelligence features."""
+        return build_intelligence_context(
+            target=target,
+            related_symbols=related_symbols,
+            relevant_chunks=relevant_chunks,
+            repository_files=repository_files,
+            project_rules=project_rules,
+            token_budget=token_budget,
+            limits=limits,
+            revision=revision,
+        )
+
+    def render_intelligence_data(self, ctx: IntelligenceContext) -> str:
+        """Render the complete intelligence context into structured prompt data sections."""
+        return render_intelligence_data(ctx)
+
+    # ------------------------------------------------------------------
+    # Backwards-compatibility internal static helper aliases
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dedup_memory(entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
+        return dedup_memory(entries)
+
+    @staticmethod
+    def _fit_history(
+        history: Sequence[ChatMessage],
+        budget: int,
+    ) -> tuple[int, list[ChatMessage]]:
+        return _fit_history_budget(history, budget, _format_history_message)
+
+    @staticmethod
+    def _fit_items(
+        items: Sequence[Any],
+        budget: int,
+        formatter: Callable[[Any], str],
+    ) -> tuple[int, list[Any]]:
+        return _fit_items_budget(items, budget, formatter)

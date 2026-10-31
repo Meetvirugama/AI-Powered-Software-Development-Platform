@@ -16,7 +16,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------------------
 # Source citation — points to a specific file + line range in the repository
 # ---------------------------------------------------------------------------
@@ -75,6 +74,17 @@ class RepositoryAnswer(BaseModel):
             "medium — some sources grounded or answer is general.\n"
             "low    — no sources grounded or answer is uncertain."
         ),
+    )
+    status: Literal[
+        "completed",
+        "no_match",
+        "index_not_ready",
+        "retrieval_degraded",
+        "provider_unavailable",
+        "invalid_output",
+    ] = Field(
+        default="completed",
+        description="Outcome status of the Q&A generation.",
     )
 
 

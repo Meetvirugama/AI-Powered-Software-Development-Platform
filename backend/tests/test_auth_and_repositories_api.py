@@ -20,6 +20,12 @@ class FakeRedis:
     def setex(self, key: str, _: int, __: str) -> None:
         self.blocklisted.add(key)
 
+    def delete(self, key: str) -> int:
+        if key in self.blocklisted:
+            self.blocklisted.remove(key)
+            return 1
+        return 0
+
     def rpush(self, *_: object) -> int:
         return 1
 
@@ -54,6 +60,66 @@ def test_github_login_redirects_with_a_csrf_state(monkeypatch) -> None:
     assert response.status_code == 307
     assert "state=" in response.headers["location"]
     assert "oauth_state=" in response.headers["set-cookie"]
+
+
+def test_github_callback_rejects_missing_state(monkeypatch) -> None:
+    _configure_auth(monkeypatch)
+    client = TestClient(app, raise_server_exceptions=False)
+    response = client.get("/api/v1/auth/github/callback?code=foo")
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "BAD_REQUEST"
+
+
+def test_github_callback_validates_redis_state(monkeypatch) -> None:
+    fake_redis = _configure_auth(monkeypatch)
+    fake_redis.blocklisted.add("oauth_state:valid-state")
+
+    async def mock_user(code: str):
+        return {"id": 1234, "login": "testuser", "email": "test@test.com", "avatar_url": None}
+
+    monkeypatch.setattr("app.api.v1.auth._github_user_for_code", mock_user)
+
+    class FakeUserRepo:
+        def __init__(self, session: object) -> None:
+            pass
+
+        def upsert_github_user(self, *args: object, **kwargs: object) -> object:
+            from app.models.user import User
+
+            u = User(login="testuser", github_id=1234)
+            u.id = "0e969876-16d2-4c9f-8fe1-a849f32fa605"
+            return u
+
+    monkeypatch.setattr("app.api.v1.auth.UserRepository", FakeUserRepo)
+    app.dependency_overrides[get_db] = lambda: object()
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        # 1. Missing cookie rejects even if state is in Redis
+        no_cookie_resp = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert no_cookie_resp.status_code == 400
+        assert no_cookie_resp.json()["error"]["code"] == "OAUTH_STATE_INVALID"
+
+        # 2. Valid cookie succeeds and consumes state
+        client.cookies.set("oauth_state", "valid-state")
+        response = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+
+        # 3. Replay attack rejects because state was atomically deleted from Redis
+        client.cookies.set("oauth_state", "valid-state")
+        replay_resp = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert replay_resp.status_code == 400
+        assert replay_resp.json()["error"]["code"] == "OAUTH_STATE_INVALID"
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_logout_blocklists_current_token(monkeypatch) -> None:

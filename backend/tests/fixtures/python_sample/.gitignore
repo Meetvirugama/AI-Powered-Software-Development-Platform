@@ -1,1 +1,6 @@
 ignored.py
+
+# node_modules/ is tracked here intentionally as a test fixture.
+# test_walker.py asserts that FileWalker skips it (SKIP_DIRS check).
+# The negation below overrides the root .gitignore so no force-add is needed.
+!node_modules/

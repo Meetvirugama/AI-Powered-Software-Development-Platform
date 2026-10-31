@@ -1,35 +1,93 @@
 import { useState } from 'react';
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+import { useSearchParams } from 'react-router-dom';
+import { Cpu, ShieldCheck, Terminal, Layers, AlertCircle } from 'lucide-react';
+import { API_BASE_URL } from '../services/api';
 
 export function Login() {
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [searchParams] = useSearchParams();
+  const errorParam = searchParams.get('error');
+  const redirectParam = searchParams.get('redirect');
 
   function handleGitHubLogin() {
     setIsRedirecting(true);
-    // Full browser navigation — the backend handles the OAuth exchange
-    // and sets the HTTP-only auth cookie. Do not use Axios here.
-    window.location.href = `${API_BASE}/auth/github/login`;
+    if (redirectParam && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('auth_redirect', redirectParam);
+    }
+    // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
+    window.location.href = `${API_BASE_URL}/auth/github/login`;
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-background">
-      <div className="w-full max-w-sm p-8 space-y-6 border rounded-xl shadow-lg bg-card">
-        <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-bold text-foreground">AI Dev Platform</h1>
-          <p className="text-sm text-muted-foreground">
-            Connect your GitHub account to get started.
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12 text-foreground">
+      <div className="w-full max-w-md space-y-6">
+        {/* Brand header */}
+        <div className="flex flex-col items-center text-center space-y-2">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary mb-2 shadow-sm">
+            <Cpu className="h-6 w-6" />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Code Intelligence
+          </h1>
+          <p className="text-xs uppercase font-mono tracking-wider text-muted-foreground">
+            Engineering Workspace
+          </p>
+          <p className="text-sm text-muted-foreground max-w-xs pt-1">
+            Grounded code intelligence, symbol graphs, and interactive repository conversation.
           </p>
         </div>
 
-        <button
-          onClick={handleGitHubLogin}
-          disabled={isRedirecting}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 font-semibold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
-        >
-          <GitHubIcon />
-          {isRedirecting ? 'Redirecting…' : 'Continue with GitHub'}
-        </button>
+        {/* Error notification if returned from failed OAuth */}
+        {errorParam && (
+          <div
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 p-3.5 text-xs text-destructive flex items-start gap-2.5"
+          >
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="font-semibold">Authentication failed</p>
+              <p className="text-muted-foreground mt-0.5">{errorParam}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Main login card */}
+        <div className="rounded-xl border border-border bg-card p-6 shadow-md space-y-5">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold text-foreground">Sign in to your workspace</h2>
+            <p className="text-xs text-muted-foreground">
+              Authenticate via GitHub OAuth to discover and index your repositories.
+            </p>
+          </div>
+
+          <button
+            onClick={handleGitHubLogin}
+            disabled={isRedirecting}
+            className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 text-sm font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 disabled:cursor-not-allowed transition-all shadow-sm"
+          >
+            <GitHubIcon />
+            {isRedirecting ? 'Connecting to GitHub…' : 'Continue with GitHub'}
+          </button>
+
+          <div className="pt-2 border-t border-border/60 space-y-2.5">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
+              <span>Strict cookie session · Tokens never stored in browser</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Terminal className="h-4 w-4 text-primary shrink-0" />
+              <span>Read-only repository access for AST parsing & search</span>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Layers className="h-4 w-4 text-muted-foreground shrink-0" />
+              <span>Multi-tenant repository isolation enforced by database</span>
+            </div>
+          </div>
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground select-none">
+          Antigravity & Claude Code workflow references · Week 1 Engine
+        </p>
       </div>
     </div>
   );

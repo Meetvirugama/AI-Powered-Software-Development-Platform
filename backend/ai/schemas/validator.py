@@ -49,12 +49,27 @@ class OutputValidator:
                      Optional — only needed if ``repair()`` will be called.
     """
 
-    def __init__(self, llm_gateway: "LLMGateway | None" = None) -> None:
+    def __init__(self, llm_gateway: LLMGateway | None = None) -> None:
         self._gateway = llm_gateway
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def clean_json_text(text: str) -> str:
+        """Strip markdown code fences (```json ... ```) or surrounding whitespace."""
+        if not text:
+            return ""
+        s = text.strip()
+        if s.startswith("```"):
+            lines = s.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            s = "\n".join(lines).strip()
+        return s
 
     def validate(
         self,
@@ -63,6 +78,8 @@ class OutputValidator:
     ) -> tuple[BaseModel | None, bool]:
         """
         Parse ``raw`` as JSON and validate against ``schema``.
+
+        Automatically strips markdown code fences if present.
 
         Args:
             raw:    Raw string from the LLM (should be valid JSON).
@@ -75,8 +92,9 @@ class OutputValidator:
         Note:
             This method never raises. Callers always check the bool flag.
         """
+        cleaned = self.clean_json_text(raw)
         try:
-            parsed: Any = json.loads(raw)
+            parsed: Any = json.loads(cleaned)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.debug(
                 "output_validation_failed",
@@ -97,6 +115,24 @@ class OutputValidator:
                 extra={"reason": "schema_validation_error", "schema": schema.__name__, "detail": str(exc)},
             )
             return None, False
+
+    def validate_or_raise(
+        self,
+        raw: str,
+        schema: type[BaseModel],
+    ) -> BaseModel:
+        """Parse and validate against ``schema``, raising LLMValidationError on failure.
+
+        Guarantees that invalid AI output never silently becomes a successful empty result.
+        """
+        from ai.llm.schemas import LLMValidationError
+
+        instance, ok = self.validate(raw, schema)
+        if not ok or instance is None:
+            raise LLMValidationError(
+                f"LLM output failed validation against schema '{schema.__name__}'."
+            )
+        return instance
 
     async def repair(
         self,
@@ -136,7 +172,7 @@ class OutputValidator:
                                 ``_MAX_REPAIR_ATTEMPTS`` attempts.
             RuntimeError:       If called without a configured ``llm_gateway``.
         """
-        from ai.llm.schemas import LLMRequest, Message, LLMValidationError
+        from ai.llm.schemas import LLMRequest, LLMValidationError, Message
 
         if self._gateway is None:
             raise RuntimeError(
@@ -146,18 +182,31 @@ class OutputValidator:
 
         current_raw = raw
         current_error = error
+        repair_model = getattr(
+            getattr(self._gateway, "provider", None),
+            "default_model",
+            None,
+        ) or getattr(self._gateway, "default_model", None)
+        if not repair_model or not isinstance(repair_model, str) or not repair_model.strip():
+            try:
+                from app.core.config import settings
+                repair_model = settings.active_chat_model
+            except Exception:
+                repair_model = "gemini-flash-lite-latest"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
+            bounded_raw = current_raw[:4000] if current_raw else ""
+            bounded_error = current_error[:500] if current_error else ""
             repair_prompt = (
                 f"Fix this JSON so it matches the required schema.\n"
                 f"Schema: {schema.__name__}\n"
-                f"Validation error: {current_error}\n"
-                f"Invalid JSON:\n{current_raw}\n\n"
+                f"Validation error: {bounded_error}\n"
+                f"Invalid JSON:\n{bounded_raw}\n\n"
                 f"Respond with ONLY the corrected JSON object. No explanation."
             )
 
             request = LLMRequest(
-                model="gpt-4o",
+                model=repair_model,
                 messages=[Message(role="user", content=repair_prompt)],
                 temperature=0.0,
                 max_tokens=1024,
@@ -179,7 +228,7 @@ class OutputValidator:
                 current_raw = repaired_raw
                 current_error = f"Still invalid after repair attempt {attempt}."
 
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "output_repair_llm_error",
                     extra={"attempt": attempt, "error": str(exc)},

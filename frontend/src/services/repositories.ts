@@ -12,7 +12,14 @@
  *   b) When the backend adds server-side pagination, only this file changes.
  */
 import { apiClient } from './api';
-import type { PaginatedRepositoryResponse, Repository } from '../types/api';
+import type {
+  PaginatedRepositoryResponse,
+  Repository,
+  RepositoryFile,
+  PaginatedRepositoryFileResponse,
+  RepositoryDependency,
+  RepositoryFileContent,
+} from '../types/api';
 
 export interface ListRepositoriesParams {
   page: number;
@@ -57,3 +64,109 @@ export async function getRepository(id: string): Promise<Repository> {
   const response = await apiClient.get<Repository>(`/repositories/${id}`);
   return response.data;
 }
+
+export interface GetRepositoryFilesParams {
+  page: number;
+  pageSize: number;
+  path?: string;
+}
+
+/**
+ * Fetch indexed files for a repository.
+ *
+ * GET /api/v1/repositories/:id/files
+ */
+export async function getRepositoryFiles(
+  id: string,
+  params: GetRepositoryFilesParams,
+): Promise<PaginatedRepositoryFileResponse> {
+  const response = await apiClient.get<PaginatedRepositoryFileResponse>(
+    `/repositories/${id}/files`,
+    {
+      params: {
+        page: params.page,
+        page_size: params.pageSize,
+        ...(params.path ? { path: params.path } : {}),
+      },
+    },
+  );
+  return response.data;
+}
+
+/**
+ * Look up an indexed repository file by exact path.
+ *
+ * GET /api/v1/repositories/:id/files/by-path?path=...
+ */
+export async function lookupRepositoryFileByPath(
+  id: string,
+  path: string,
+): Promise<RepositoryFile | null> {
+  try {
+    const response = await apiClient.get<RepositoryFile>(
+      `/repositories/${id}/files/by-path`,
+      { params: { path } },
+    );
+    return response.data;
+  } catch (err: unknown) {
+    const errorObj = err as { status?: number; response?: { status?: number } } | null;
+    if (errorObj?.status === 404 || errorObj?.response?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Fetch top-level dependencies for a repository.
+ *
+ * GET /api/v1/repositories/:id/dependencies
+ * Live backend parses package.json, requirements.txt, go.mod, Cargo.toml from indexed files.
+ */
+export async function getRepositoryDependencies(
+  id: string,
+): Promise<RepositoryDependency[]> {
+  const response = await apiClient.get<RepositoryDependency[]>(
+    `/repositories/${id}/dependencies`,
+  );
+  return response.data;
+}
+
+/**
+ * Trigger background synchronization for a repository.
+ *
+ * POST /api/v1/repositories/:id/sync
+ */
+export async function syncRepository(
+  id: string,
+  force: boolean = false,
+): Promise<{ job_id: string }> {
+  const url = force ? `/repositories/${id}/sync?force=true` : `/repositories/${id}/sync`;
+  const response = await apiClient.post<{ job_id: string }>(url);
+  return response.data;
+}
+
+/**
+ * Disconnect and remove a repository and its indexed data.
+ *
+ * DELETE /api/v1/repositories/:id
+ */
+export async function deleteRepository(id: string): Promise<void> {
+  await apiClient.delete(`/repositories/${id}`);
+}
+
+/**
+ * Fetch indexed content and symbols for a specific file.
+ *
+ * GET /api/v1/repositories/:repositoryId/files/:fileId/content
+ */
+export async function getRepositoryFileContent(
+  repositoryId: string,
+  fileId: string,
+): Promise<RepositoryFileContent> {
+  const response = await apiClient.get<RepositoryFileContent>(
+    `/repositories/${repositoryId}/files/${fileId}/content`,
+  );
+  return response.data;
+}
+

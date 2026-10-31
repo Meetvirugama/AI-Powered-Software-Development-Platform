@@ -21,11 +21,11 @@ team_rules.md:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .base import CodeChunk, Retriever
 
@@ -63,12 +63,22 @@ _VECTOR_SEARCH_SQL = text(
 )
 
 
-def _vec_to_pg_literal(vector: list[float]) -> str:
+def _vec_to_pg_literal(vector: list[float], expected_dim: int | None = None) -> str:
+    """Serialise a Python float list to the PostgreSQL vector literal format.
+
+    Validates that:
+    1. The vector is non-empty and has the expected dimension (if specified).
+    2. Every float value is finite (rejects NaN, +Inf, -Inf).
     """
-    Serialise a Python float list to the PostgreSQL vector literal format.
-    e.g. [0.1, 0.2, 0.3] → '[0.1,0.2,0.3]'
-    pgvector accepts this format when the value is cast to vector.
-    """
+    import math
+
+    if not vector:
+        raise ValueError("Vector cannot be empty.")
+    if expected_dim is not None and len(vector) != expected_dim:
+        raise ValueError(f"Vector dimension mismatch: expected {expected_dim}, got {len(vector)}")
+    for i, v in enumerate(vector):
+        if not math.isfinite(v):
+            raise ValueError(f"Vector contains non-finite value at index {i}: {v}")
     return "[" + ",".join(str(v) for v in vector) + "]"
 
 
@@ -86,6 +96,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         content_hash=row.content_hash,  # type: ignore[attr-defined]
         score=score,
         file_path=row.file_path or "",  # type: ignore[attr-defined]
+        vector_similarity=score,
     )
 
 
@@ -114,8 +125,8 @@ class VectorRetriever(Retriever):
 
     def __init__(
         self,
-        db: AsyncSession,
-        embedding_service: "EmbeddingService",
+        db: AsyncSession | async_sessionmaker[AsyncSession] | Any,
+        embedding_service: EmbeddingService,
     ) -> None:
         self._db = db
         self._embedding_service = embedding_service
@@ -148,26 +159,37 @@ class VectorRetriever(Retriever):
             EmbeddingError: If the embedding service fails after retries.
             SQLAlchemyError: If the database is unreachable.
         """
+        if not query or not query.strip() or top_k <= 0:
+            return []
+
+        repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
+
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
-        query_vec_literal = _vec_to_pg_literal(query_vector)
+        raw_dim = getattr(self._embedding_service, "dimension", None)
+        expected_dim = raw_dim if isinstance(raw_dim, int) else None
+        query_vec_literal = _vec_to_pg_literal(query_vector, expected_dim=expected_dim)
 
         # Step 2 — cosine distance search in pgvector
-        result = await self._db.execute(
-            _VECTOR_SEARCH_SQL,
-            {
-                "query_vec": query_vec_literal,
-                "repository_id": str(repository_id),
-                "top_k": top_k,
-            },
-        )
-        rows = result.fetchall()
+        params = {
+            "query_vec": query_vec_literal,
+            "repository_id": str(repo_uuid),
+            "top_k": top_k,
+        }
+        db_obj: Any = self._db
+        if hasattr(db_obj, "execute"):
+            result = await db_obj.execute(_VECTOR_SEARCH_SQL, params)
+            rows = result.fetchall()
+        else:
+            async with db_obj() as session:
+                result = await session.execute(_VECTOR_SEARCH_SQL, params)
+                rows = result.fetchall()
 
         if not rows:
             logger.debug(
                 "vector_retrieval_empty",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "query_preview": query[:80],
                 },
             )
@@ -177,13 +199,13 @@ class VectorRetriever(Retriever):
         chunks: list[CodeChunk] = []
         for row in rows:
             distance = float(row.distance)  # type: ignore[attr-defined]
-            score = max(0.0, 1.0 - distance)  # clamp to [0, 1]
+            score = max(0.0, min(1.0, 1.0 - distance))  # clamp to [0, 1]
             chunks.append(_row_to_chunk(row, score))
 
         logger.info(
             "vector_retrieval_complete",
             extra={
-                "repository_id": str(repository_id),
+                "repository_id": str(repo_uuid),
                 "query_preview": query[:80],
                 "top_k": top_k,
                 "returned": len(chunks),
@@ -192,3 +214,9 @@ class VectorRetriever(Retriever):
         )
 
         return chunks
+
+    async def aclose(self) -> None:
+        """Close embedding service resources if supported."""
+        if hasattr(self._embedding_service, "aclose") and callable(self._embedding_service.aclose):
+            await self._embedding_service.aclose()
+

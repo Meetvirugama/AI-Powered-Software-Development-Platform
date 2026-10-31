@@ -278,6 +278,24 @@ class PullRequestListRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Agent branch creation (Day 3)
+# ---------------------------------------------------------------------------
+
+class AgentBranchRequest(BaseModel):
+    """Request schema for creating an agent execution branch."""
+    task_id: str = Field(..., min_length=1, description="Task ID transitioning to EXECUTING")
+    base_branch: Optional[str] = Field(default=None, description="Optional base branch (defaults to repo default)")
+
+
+class AgentBranchResponse(BaseModel):
+    """Response schema for agent branch creation/reuse."""
+    branch_name: str
+    base_branch: str
+    base_sha: str
+    status: str
+
+
+# ---------------------------------------------------------------------------
 # Day 4: Commit Staging
 # ---------------------------------------------------------------------------
 
@@ -320,4 +338,5 @@ class PRMetadata(BaseModel):
     pr_number: Optional[int] = None
     pr_url: Optional[str] = None
     status: str = "prepared"
+
 

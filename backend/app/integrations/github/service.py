@@ -1,747 +1,550 @@
-"""High-level GitHub source integration service.
+"""Concrete GitHub API service implementation.
 
-This is Parth's primary deliverable: a service that the four Week 2 analysis
-features (Explain, Bug Detection, Test Generation, Code Review) use to
-retrieve authorized repository content.
+This module provides :class:`GitHubService`, which implements
+:class:`~app.integrations.github.base.GitHubIntegrationBase` against the
+real GitHub REST API, and publishes the high-level PR and workflow interfaces
+for Week 3.
 
-Responsibilities
-----------------
-* Resolve a repository's installation token from the database.
-* Retrieve file content with path-traversal protection and size limits.
-* Retrieve the repository file tree.
-* Retrieve commit metadata (list and detail).
-* Retrieve pull-request diffs.
-* Produce ``SourceReference`` objects so downstream consumers have a
-  consistent handle to the exact code that was analyzed.
-
-The service depends on:
-- ``GitHubClient`` for HTTP calls.
-- ``GitHubInstallation`` and ``Repository`` models for authorization.
+Key responsibilities:
+- Week 1: list_repositories, get_repository, list_branches, get_default_branch, clone_repository.
+- Week 2: Source content retrieval, commit metadata, PR diffs via GitHubSourceService.
+- Week 3 Day 1: Published interfaces (push_branch, create_pull_request, update_pull_request,
+  get_pull_request_detail, create_issue_from_finding).
 """
 
 from __future__ import annotations
 
-import base64
+import asyncio
+import io
 import logging
-from typing import Optional
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
+import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.errors import APIError, ErrorCode
+from app.core.input_security import is_within
 from app.integrations.github.cache import SourceRevisionCache
 from app.integrations.github.client import GitHubAPIError, GitHubClient
-from app.integrations.github.schemas import (
-    CommitAuthor,
-    CommitDetail,
-    CommitFileChange,
-    CommitListResponse,
-    DiffStatus,
-    FileContentRequest,
-    FileContentResponse,
-    FileTreeResponse,
-    PullRequestDiffResponse,
-    PullRequestFile,
-    PullRequestInfo,
-    SourceReference,
-    TreeEntry,
-)
-from app.models.github_installation import GitHubInstallation
+from app.integrations.github.schemas import PullRequestInfo
+from app.models.github_installation import GitHubInstallation as DBGitHubInstallation
 from app.models.repository import Repository
+from .base import (
+    GitHubBranch,
+    GitHubInstallation,
+    GitHubIntegrationBase,
+    GitHubRepository,
+)
+from .exceptions import (
+    GitHubAuthError,
+    GitHubCloneError,
+    GitHubInstallationRemovedError,
+    GitHubNotFoundError,
+    GitHubPermissionDeniedError,
+    GitHubRateLimitError,
+)
+from .source_service import GitHubSourceService
+from .token_manager import InstallationTokenManager
+
+if TYPE_CHECKING:
+    from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+# Default workspace root. All clones are confined to this directory.
+_DEFAULT_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "ai_platform_workspaces"
 
-MAX_FILE_SIZE_BYTES = 1_000_000  # 1 MB
-MAX_TREE_ENTRIES = 10_000
-MAX_DIFF_FILES = 300
+_GITHUB_API_BASE = "https://api.github.com"
+_GITHUB_API_VERSION = "2022-11-28"
 
 
-# ---------------------------------------------------------------------------
-# Service
-# ---------------------------------------------------------------------------
+class GitHubService(GitHubIntegrationBase, GitHubSourceService):
+    """GitHub REST API and Workflow client for the AI-Powered Software Development Platform.
 
-class GitHubSourceService:
-    """Authorized GitHub source integration for the analysis features.
-
-    Usage::
-
-        service = GitHubSourceService(db_session)
-
-        # Retrieve a file from a repository the user owns
-        content = await service.get_file_content(
-            repository_id=repo_id,
-            user_id=user_id,
-            request=FileContentRequest(path="src/main.py"),
-        )
-
-        # The returned ``FileContentResponse`` includes a ``SourceReference``
-        # that downstream services can embed in their analysis results.
+    Supports both low-level Git/REST operations (clone, branch, repo metadata)
+    and high-level workflow automation (push_branch, draft PR creation, issue reporting).
     """
 
-    def __init__(self, db: Session, cache: SourceRevisionCache | None = None) -> None:
-        self._db = db
+    def __init__(
+        self,
+        db_or_redis: Any = None,
+        settings: Settings | None = None,
+        workspace_root: Path | None = None,
+        *,
+        redis: "Redis | None" = None,
+        db: Session | None = None,
+        cache: SourceRevisionCache | None = None,
+    ) -> None:
+        if redis is not None:
+            r = redis
+            s = settings
+            d = db or (db_or_redis if not hasattr(db_or_redis, "get") else None)
+        elif settings is not None:
+            r = db_or_redis
+            s = settings
+            d = db
+        else:
+            r = None
+            s = None
+            d = db or db_or_redis
+
+        self._db: Session | None = d
         self._cache = cache if cache is not None else SourceRevisionCache()
+        self._settings = s
 
-    # ----- Authorization helpers -------------------------------------------
-
-    def _get_authorized_repository(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-    ) -> Repository:
-        """Load a repository, verifying the user owns it."""
-        from sqlalchemy import select
-
-        stmt = select(Repository).where(
-            Repository.id == repository_id,
-            Repository.user_id == user_id,
-        )
-        repository = self._db.execute(stmt).scalar_one_or_none()
-        if repository is None:
-            raise APIError(
-                404,
-                ErrorCode.REPOSITORY_NOT_FOUND,
-                "Repository does not exist or you do not have access.",
-            )
-        return repository
-
-    def _get_installation(self, installation_id: UUID) -> GitHubInstallation:
-        """Load a GitHub App installation by ID."""
-        installation = self._db.get(GitHubInstallation, installation_id)
-        if installation is None:
-            raise APIError(
-                404,
-                ErrorCode.NOT_FOUND,
-                "GitHub App installation not found.",
-            )
-        return installation
-
-    async def _get_client(self, repository: Repository) -> GitHubClient:
-        """Build an authenticated client for a repository."""
-        installation = self._get_installation(repository.installation_id)
-        try:
-            token = await GitHubClient.get_installation_token(
-                installation.installation_id,
-            )
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"Failed to authenticate with GitHub: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-        return GitHubClient(token)
-
-    async def resolve_commit_sha(
-        self,
-        repository: Repository,
-        ref: str,
-        client: GitHubClient,
-    ) -> Optional[str]:
-        """Resolve a branch or tag ref to its current commit SHA."""
-        clean_ref = ref.strip()
-        # If already a full 40-character hex commit SHA
-        if len(clean_ref) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_ref):
-            return clean_ref.lower()
-
-        try:
-            branch_data = await client.get_branch(repository.owner, repository.name, clean_ref)
-            if isinstance(branch_data, dict):
-                commit = branch_data.get("commit")
-                if isinstance(commit, dict):
-                    sha = commit.get("sha")
-                    if isinstance(sha, str) and sha:
-                        return sha
-        except Exception:
-            pass
-
-        try:
-            ref_data = await client.get_ref(repository.owner, repository.name, f"heads/{clean_ref}")
-            if isinstance(ref_data, dict):
-                obj = ref_data.get("object")
-                if isinstance(obj, dict):
-                    sha = obj.get("sha")
-                    if isinstance(sha, str) and sha:
-                        return sha
-        except Exception:
-            pass
-
-        return None
-
-    def invalidate_cache(
-        self,
-        repository_id: UUID,
-        revision: str | None = None,
-        path: str | None = None,
-    ) -> int:
-        """Invalidate cached files for a repository."""
-        if revision and path:
-            self._cache.invalidate(repository_id, revision, path)
-            return 1
-        elif revision:
-            return self._cache.invalidate_revision(repository_id, revision)
+        if r is not None and s is not None:
+            self._token_manager: InstallationTokenManager | None = InstallationTokenManager(r, s)
+        elif hasattr(s, "github_app_id"):
+            self._token_manager = InstallationTokenManager(r, s)  # type: ignore[arg-type]
         else:
-            return self._cache.invalidate_repository(repository_id)
+            self._token_manager = None
 
-    # ----- File content ----------------------------------------------------
+        self._workspace_root = (workspace_root or _DEFAULT_WORKSPACE_ROOT).resolve()
+        self._workspace_root.mkdir(parents=True, exist_ok=True)
 
-    async def get_file_content(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        request: FileContentRequest,
-        allow_cache: bool = True,
-    ) -> FileContentResponse:
-        """Retrieve file content from an authorized repository with revision guarantees.
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
-        Guarantees (Parth — Source Revision Correctness):
-        - Ensures the API uses the intended file content for the requested ref or default branch.
-        - Preserves complete revision information across responses and SourceReferences.
-        - Handles deleted or inaccessible files with descriptive revision errors.
-        - Prevents cached content from silently representing a different revision.
-        """
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-        ref = request.ref or repository.default_branch or "main"
-
-        # 1. Resolve commit SHA for mutable refs to prevent silent drift
-        commit_sha = await self.resolve_commit_sha(repository, ref, client)
-
-        # 2. Check SourceRevisionCache with revision integrity verification
-        if allow_cache:
-            cached = self._cache.get(
-                repository_id=repository_id,
-                revision=ref,
-                path=request.path,
-                expected_commit_sha=commit_sha,
-            )
-            if cached is not None:
-                content = cached["content"]
-                lines = content.splitlines(keepends=True)
-                total_lines = len(lines)
-                if request.start_line or request.end_line:
-                    if request.start_line and request.start_line > total_lines:
-                        content = ""
-                        total_lines = 0
-                    else:
-                        start = (request.start_line or 1) - 1
-                        end = min(request.end_line or total_lines, total_lines)
-                        content = "".join(lines[start:end])
-                        total_lines = max(0, end - start)
-
-                source_ref = SourceReference(
-                    repository_id=str(repository_id),
-                    file_path=request.path,
-                    start_line=request.start_line,
-                    end_line=request.end_line,
-                    revision=ref,
-                    commit_sha=cached.get("commit_sha") or commit_sha,
-                )
-                return FileContentResponse(
-                    path=request.path,
-                    content=content,
-                    encoding="utf-8",
-                    size_bytes=len(content.encode("utf-8")),
-                    line_count=total_lines,
-                    language=self._detect_language(request.path),
-                    sha=cached.get("blob_sha"),
-                    commit_sha=cached.get("commit_sha") or commit_sha,
-                    ref=ref,
-                    is_binary=cached.get("is_binary", False),
-                    from_cache=True,
-                    truncated=cached.get("truncated", False),
-                    source_reference=source_ref,
-                )
-
-        # 3. Cache miss: fetch exact content from GitHub API
-        try:
-            data = await client.get_file_content(
-                repository.owner,
-                repository.name,
-                request.path,
-                ref=ref,
-            )
-        except GitHubAPIError as exc:
-            if exc.status_code == 404:
-                raise APIError(
-                    404,
-                    ErrorCode.NOT_FOUND,
-                    f"File '{request.path}' was not found at revision '{ref}'. It may have been deleted, moved, or does not exist.",
-                ) from exc
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        # Validate response shape
-        if not isinstance(data, dict):
-            raise APIError(502, ErrorCode.SERVICE_UNAVAILABLE, "Unexpected GitHub response.")
-
-        # Reject directories returned by the contents API
-        if data.get("type") != "file":
-            raise APIError(
-                400,
-                ErrorCode.INVALID_REQUEST,
-                f"Path '{request.path}' is a {data.get('type')}, not a file at revision '{ref}'.",
-            )
-
-        # Decode content
-        size = data.get("size", 0)
-        truncated = size > MAX_FILE_SIZE_BYTES
-        raw_content = data.get("content", "")
-        encoding = data.get("encoding", "base64")
-        is_binary = False
-
-        if encoding == "base64":
-            try:
-                content_bytes = base64.b64decode(raw_content)
-                is_binary = b"\x00" in content_bytes[:8000]
-                content = content_bytes.decode("utf-8", errors="replace")
-            except Exception:
-                raise APIError(502, ErrorCode.SERVICE_UNAVAILABLE, "Failed to decode file content.")
-        else:
-            content = raw_content
-
-        blob_sha = data.get("sha")
-
-        # 4. Cache full decoded file tagged with exact revision and commit_sha
-        self._cache.set(
-            repository_id=repository_id,
-            revision=ref,
-            path=request.path,
-            data={
-                "path": request.path,
-                "content": content,
-                "blob_sha": blob_sha,
-                "size_bytes": size,
-                "is_binary": is_binary,
-                "truncated": truncated,
-            },
-            commit_sha=commit_sha,
-        )
-
-        # 5. Apply optional line-range filter
-        lines = content.splitlines(keepends=True)
-        total_lines = len(lines)
-        if request.start_line or request.end_line:
-            if request.start_line and request.start_line > total_lines:
-                content = ""
-                total_lines = 0
-            else:
-                start = (request.start_line or 1) - 1
-                end = min(request.end_line or total_lines, total_lines)
-                content = "".join(lines[start:end])
-                total_lines = max(0, end - start)
-
-        # 6. Preserve complete revision information
-        source_ref = SourceReference(
-            repository_id=str(repository_id),
-            file_path=request.path,
-            start_line=request.start_line,
-            end_line=request.end_line,
-            revision=ref,
-            commit_sha=commit_sha,
-        )
-
-        return FileContentResponse(
-            path=request.path,
-            content=content,
-            encoding="utf-8",
-            size_bytes=len(content.encode("utf-8")),
-            line_count=total_lines,
-            language=self._detect_language(request.path),
-            sha=blob_sha,
-            commit_sha=commit_sha,
-            ref=ref,
-            is_binary=is_binary,
-            from_cache=False,
-            truncated=truncated,
-            source_reference=source_ref,
-        )
-
-    # ----- File tree -------------------------------------------------------
-
-    async def get_file_tree(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        *,
-        ref: str | None = None,
-    ) -> FileTreeResponse:
-        """Retrieve the full file tree for an authorized repository."""
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-        resolved_ref = ref or repository.default_branch
-
-        try:
-            data = await client.get_file_tree(
-                repository.owner,
-                repository.name,
-                ref=resolved_ref,
-            )
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        tree = data.get("tree", [])
-        entries = [
-            TreeEntry(
-                path=item["path"],
-                type=item.get("type", "blob"),
-                size=item.get("size"),
-                sha=item.get("sha"),
-            )
-            for item in tree[:MAX_TREE_ENTRIES]
-        ]
-
-        return FileTreeResponse(
-            ref=resolved_ref,
-            sha=data.get("sha"),
-            entries=entries,
-            truncated=data.get("truncated", False) or len(tree) > MAX_TREE_ENTRIES,
-        )
-
-    # ----- Commits ---------------------------------------------------------
-
-    async def list_commits(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        *,
-        ref: str | None = None,
-        path: str | None = None,
-        per_page: int = 30,
-        page: int = 1,
-    ) -> CommitListResponse:
-        """List commits for an authorized repository."""
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-
-        try:
-            data = await client.list_commits(
-                repository.owner,
-                repository.name,
-                sha=ref or repository.default_branch,
-                path=path,
-                per_page=per_page,
-                page=page,
-            )
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        commits = [self._parse_commit_summary(item) for item in data]
-        return CommitListResponse(
-            commits=commits,
-            page=page,
-            per_page=per_page,
-        )
-
-    async def get_commit_detail(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        sha: str,
-    ) -> CommitDetail:
-        """Get full commit detail including file changes."""
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-
-        try:
-            data = await client.get_commit(
-                repository.owner,
-                repository.name,
-                sha,
-            )
-        except GitHubAPIError as exc:
-            if exc.status_code == 404:
-                raise APIError(
-                    404,
-                    ErrorCode.NOT_FOUND,
-                    f"Commit not found: {sha}",
-                ) from exc
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        return self._parse_commit_detail(data)
-
-    # ----- Pull-request diffs ----------------------------------------------
-
-    async def get_pull_request_diff(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        pr_number: int,
-    ) -> PullRequestDiffResponse:
-        """Retrieve the full diff for a pull request."""
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-
-        try:
-            pr_data = await client.get_pull_request(
-                repository.owner,
-                repository.name,
-                pr_number,
-            )
-        except GitHubAPIError as exc:
-            if exc.status_code == 404:
-                raise APIError(
-                    404,
-                    ErrorCode.NOT_FOUND,
-                    f"Pull request #{pr_number} not found.",
-                ) from exc
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        try:
-            files_data = await client.get_pull_request_files(
-                repository.owner,
-                repository.name,
-                pr_number,
-            )
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        pr_info = self._parse_pull_request(pr_data)
-        files = [self._parse_pr_file(f) for f in files_data[:MAX_DIFF_FILES]]
-
-        total_additions = sum(f.additions for f in files)
-        total_deletions = sum(f.deletions for f in files)
-
-        return PullRequestDiffResponse(
-            pull_request=pr_info,
-            files=files,
-            total_additions=total_additions,
-            total_deletions=total_deletions,
-            total_changes=total_additions + total_deletions,
-        )
-
-    async def list_pull_requests(
-        self,
-        repository_id: UUID,
-        user_id: UUID,
-        *,
-        state: str = "open",
-        per_page: int = 30,
-        page: int = 1,
-    ) -> list[PullRequestInfo]:
-        """List pull requests for an authorized repository."""
-        repository = self._get_authorized_repository(repository_id, user_id)
-        client = await self._get_client(repository)
-
-        try:
-            data = await client.list_pull_requests(
-                repository.owner,
-                repository.name,
-                state=state,
-                per_page=per_page,
-                page=page,
-            )
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"GitHub API error: {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        return [self._parse_pull_request(pr) for pr in data]
-
-    # ----- Private parsing helpers -----------------------------------------
-
-    @staticmethod
-    def _parse_commit_summary(data: dict) -> CommitDetail:
-        """Parse a commit summary from the list-commits response."""
-        commit_data = data.get("commit", {})
-        author_data = commit_data.get("author", {})
-        committer_data = commit_data.get("committer", {})
-        return CommitDetail(
-            sha=data.get("sha", ""),
-            message=commit_data.get("message", ""),
-            author=CommitAuthor(
-                name=author_data.get("name", "Unknown"),
-                email=author_data.get("email"),
-                date=author_data.get("date"),
-            ),
-            committer=CommitAuthor(
-                name=committer_data.get("name", "Unknown"),
-                email=committer_data.get("email"),
-                date=committer_data.get("date"),
-            ),
-            parents=[p.get("sha", "") for p in data.get("parents", [])],
-        )
-
-    @staticmethod
-    def _parse_commit_detail(data: dict) -> CommitDetail:
-        """Parse a full commit response including file changes."""
-        commit_data = data.get("commit", {})
-        author_data = commit_data.get("author", {})
-        committer_data = commit_data.get("committer", {})
-        files_data = data.get("files", [])
-        stats = data.get("stats")
-
-        files = [
-            CommitFileChange(
-                filename=f.get("filename", ""),
-                status=DiffStatus(f.get("status", "modified")),
-                additions=f.get("additions", 0),
-                deletions=f.get("deletions", 0),
-                changes=f.get("changes", 0),
-                patch=f.get("patch"),
-            )
-            for f in files_data
-        ]
-
-        return CommitDetail(
-            sha=data.get("sha", ""),
-            message=commit_data.get("message", ""),
-            author=CommitAuthor(
-                name=author_data.get("name", "Unknown"),
-                email=author_data.get("email"),
-                date=author_data.get("date"),
-            ),
-            committer=CommitAuthor(
-                name=committer_data.get("name", "Unknown"),
-                email=committer_data.get("email"),
-                date=committer_data.get("date"),
-            ),
-            parents=[p.get("sha", "") for p in data.get("parents", [])],
-            files=files,
-            stats=stats,
-        )
-
-    @staticmethod
-    def _parse_pull_request(data: dict) -> PullRequestInfo:
-        """Parse pull-request metadata from the GitHub API response."""
-        user = data.get("user", {})
-        base = data.get("base", {})
-        head = data.get("head", {})
-        return PullRequestInfo(
-            number=data.get("number", 0),
-            title=data.get("title", ""),
-            state=data.get("state", "unknown"),
-            draft=bool(data.get("draft", False)),
-            author=user.get("login") if isinstance(user, dict) else None,
-            base_ref=base.get("ref") if isinstance(base, dict) else None,
-            head_ref=head.get("ref") if isinstance(head, dict) else None,
-            base_sha=base.get("sha") if isinstance(base, dict) else None,
-            head_sha=head.get("sha") if isinstance(head, dict) else None,
-            created_at=data.get("created_at"),
-            updated_at=data.get("updated_at"),
-            merged_at=data.get("merged_at"),
-            body=data.get("body"),
-        )
-
-    @staticmethod
-    def _parse_pr_file(data: dict) -> PullRequestFile:
-        """Parse a single file entry from the PR files response."""
-        status_raw = data.get("status", "modified")
-        try:
-            status = DiffStatus(status_raw)
-        except ValueError:
-            status = DiffStatus.MODIFIED
-
-        return PullRequestFile(
-            filename=data.get("filename", ""),
-            status=status,
-            additions=data.get("additions", 0),
-            deletions=data.get("deletions", 0),
-            changes=data.get("changes", 0),
-            patch=data.get("patch"),
-            previous_filename=data.get("previous_filename"),
-            sha=data.get("sha"),
-            contents_url=data.get("contents_url"),
-        )
-
-    @staticmethod
-    def _detect_language(path: str) -> Optional[str]:
-        """Best-effort language detection from file extension."""
-        extension_map = {
-            ".py": "Python",
-            ".js": "JavaScript",
-            ".ts": "TypeScript",
-            ".tsx": "TypeScript",
-            ".jsx": "JavaScript",
-            ".java": "Java",
-            ".go": "Go",
-            ".rs": "Rust",
-            ".rb": "Ruby",
-            ".php": "PHP",
-            ".c": "C",
-            ".cpp": "C++",
-            ".h": "C",
-            ".hpp": "C++",
-            ".cs": "C#",
-            ".swift": "Swift",
-            ".kt": "Kotlin",
-            ".scala": "Scala",
-            ".r": "R",
-            ".sql": "SQL",
-            ".sh": "Shell",
-            ".bash": "Shell",
-            ".yml": "YAML",
-            ".yaml": "YAML",
-            ".json": "JSON",
-            ".xml": "XML",
-            ".html": "HTML",
-            ".css": "CSS",
-            ".md": "Markdown",
-            ".txt": "Text",
-            ".toml": "TOML",
-            ".ini": "INI",
-            ".cfg": "INI",
-            ".dockerfile": "Dockerfile",
+    def _app_auth_headers(self) -> dict[str, str]:
+        """Return headers for GitHub App-level (JWT) requests."""
+        if self._token_manager is None:
+            raise RuntimeError("Token manager not configured for app auth.")
+        app_jwt = self._token_manager._build_app_jwt()
+        return {
+            "Authorization": f"Bearer {app_jwt}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
         }
-        # Extract extension
-        dot_index = path.rfind(".")
-        if dot_index == -1:
-            basename = path.rsplit("/", 1)[-1].lower()
-            if basename == "dockerfile":
-                return "Dockerfile"
-            if basename == "makefile":
-                return "Makefile"
-            return None
-        ext = path[dot_index:].lower()
-        return extension_map.get(ext)
 
+    async def _installation_auth_headers(self, installation_id: int) -> dict[str, str]:
+        """Return headers authenticated as the given installation."""
+        if self._token_manager is None:
+            raise RuntimeError("Token manager not configured for installation auth.")
+        token = await self._token_manager.get_token(installation_id)
+        return {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+        }
 
-# ---------------------------------------------------------------------------
-# Week 3 Day 1: Published High-Level GitHub Service
-# ---------------------------------------------------------------------------
+    async def _handle_response_errors(
+        self,
+        response: httpx.Response,
+        installation_id: int | None = None,
+    ) -> None:
+        """Inspect an HTTP response and raise the appropriate exception.
 
-class GitHubService(GitHubSourceService):
-    """High-level GitHub service publishing the frozen interfaces for Week 3.
+        Implements Day 5 error handling:
+        - 401 → invalidate cached token, raise :class:`GitHubAuthError`
+        - 403 → raise :class:`GitHubPermissionDeniedError`
+        - 404 → detect installation-removed vs. plain not-found
+        - 429 → parse rate-limit headers, raise :class:`GitHubRateLimitError`
+        """
+        if response.is_success:
+            return
 
-    Rule: Parth is the sole owner of all GitHub API calls and Git operations (team_rules.md:125).
-    Interface frozen on Week 3 Day 1 per daily_tasks.md:928.
-    """
+        status = response.status_code
+
+        if status == 401:
+            if installation_id is not None and self._token_manager is not None:
+                await self._token_manager.invalidate(installation_id)
+            logger.warning("GitHub 401 for installation %s — token invalidated", installation_id)
+            raise GitHubAuthError()
+
+        if status == 403:
+            body = response.json() if response.content else {}
+            message = body.get("message", "Permission denied")
+            # GitHub sends 403 with a specific message when an installation is blocked.
+            if "installation" in message.lower() and "suspend" in message.lower():
+                logger.warning("GitHub App installation suspended: %s", message)
+                if installation_id is not None:
+                    raise GitHubInstallationRemovedError(installation_id)
+            raise GitHubPermissionDeniedError(message)
+
+        if status == 404:
+            body = response.json() if response.content else {}
+            message = body.get("message", "Not found")
+            if installation_id is not None and "installation" in message.lower():
+                raise GitHubInstallationRemovedError(installation_id)
+            raise GitHubNotFoundError(message)
+
+        if status == 429:
+            retry_after = int(response.headers.get("Retry-After", 60))
+            reset_ts = response.headers.get("X-RateLimit-Reset")
+            if reset_ts:
+                reset_time = int(reset_ts)
+                import time
+                retry_after = max(retry_after, reset_time - int(time.time()))
+            logger.warning("GitHub rate-limited — retry after %ds", retry_after)
+            raise GitHubRateLimitError(retry_after_seconds=retry_after)
+
+        # Generic fallback
+        response.raise_for_status()
+
+    async def _get(
+        self,
+        url: str,
+        headers: dict[str, str],
+        installation_id: int | None = None,
+    ) -> dict:
+        """Perform a GET request and handle errors uniformly."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+        await self._handle_response_errors(response, installation_id)
+        return response.json()
+
+    @staticmethod
+    def _parse_repo(data: dict) -> GitHubRepository:
+        updated_raw = data.get("updated_at")
+        updated_at: datetime | None = None
+        if updated_raw:
+            updated_at = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+
+        return GitHubRepository(
+            id=data["id"],
+            owner=data["owner"]["login"],
+            name=data["name"],
+            full_name=data["full_name"],
+            description=data.get("description"),
+            default_branch=data.get("default_branch", "main"),
+            language=data.get("language"),
+            private=data.get("private", False),
+            html_url=data["html_url"],
+            clone_url=data["clone_url"],
+            updated_at=updated_at,
+            size_kb=data.get("size", 0),
+        )
+
+    # ------------------------------------------------------------------
+    # GitHubIntegrationBase implementation
+    # ------------------------------------------------------------------
+
+    async def get_installation(self, installation_id: int) -> GitHubInstallation:
+        """Return metadata for a specific App installation."""
+        url = f"{_GITHUB_API_BASE}/app/installations/{installation_id}"
+        data = await self._get(url, self._app_auth_headers())
+
+        installed_raw = data.get("created_at")
+        installed_at = None
+        if installed_raw:
+            installed_at = datetime.fromisoformat(installed_raw.replace("Z", "+00:00"))
+
+        return GitHubInstallation(
+            installation_id=data["id"],
+            account_login=data["account"]["login"],
+            account_type=data["account"]["type"],
+            permissions=data.get("permissions", {}),
+            installed_at=installed_at,
+        )
+
+    async def list_repositories(self, installation_id: int) -> list[GitHubRepository]:
+        """List all repositories accessible to this installation.
+
+        Handles GitHub's pagination automatically (100 items per page).
+        """
+        headers = await self._installation_auth_headers(installation_id)
+        repos: list[GitHubRepository] = []
+        page = 1
+
+        while True:
+            url = f"{_GITHUB_API_BASE}/installation/repositories?per_page=100&page={page}"
+            data = await self._get(url, headers, installation_id)
+            batch = data.get("repositories", [])
+            repos.extend(self._parse_repo(r) for r in batch)
+
+            if len(batch) < 100:
+                break
+            page += 1
+
+        logger.info(
+            "Listed %d repositories for installation %d",
+            len(repos),
+            installation_id,
+        )
+        return repos
+
+    async def get_repository(
+        self, owner_or_installation_id: str | int, repo_or_id: str | int
+    ) -> GitHubRepository:
+        """Fetch full metadata for a single repository.
+
+        Supports both:
+          - (owner: str, repo: str) e.g. ("Meetvirugama", "SchoolWebPage")
+          - (installation_id: int, repo_id: int) e.g. (171308854, 1119895424)
+        """
+        is_inst_id = isinstance(owner_or_installation_id, int) or (
+            isinstance(owner_or_installation_id, str) and str(owner_or_installation_id).isdigit()
+        )
+        is_repo_id = isinstance(repo_or_id, int) or (
+            isinstance(repo_or_id, str) and str(repo_or_id).isdigit()
+        )
+
+        if is_inst_id and is_repo_id:
+            installation_id = int(owner_or_installation_id)
+            repo_id = int(repo_or_id)
+            headers = await self._installation_auth_headers(installation_id)
+            url = f"{_GITHUB_API_BASE}/repositories/{repo_id}"
+            data = await self._get(url, headers, installation_id)
+            return self._parse_repo(data)
+
+        url = f"{_GITHUB_API_BASE}/repos/{owner_or_installation_id}/{repo_or_id}"
+        data = await self._get(url, self._app_auth_headers())
+        return self._parse_repo(data)
+
+    async def list_branches(self, owner: str, repo: str) -> list[GitHubBranch]:
+        """Return all branches for the given repository."""
+        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/branches?per_page=100"
+        data = await self._get(url, self._app_auth_headers())
+
+        branches = [
+            GitHubBranch(
+                name=b["name"],
+                sha=b["commit"]["sha"],
+                protected=b.get("protected", False),
+            )
+            for b in data
+        ]
+        logger.debug("Listed %d branches for %s/%s", len(branches), owner, repo)
+        return branches
+
+    async def get_default_branch(self, owner: str, repo: str) -> str:
+        """Return the name of the repository's default branch."""
+        repo_data = await self.get_repository(owner, repo)
+        return repo_data.default_branch
+
+    async def _download_zipball(
+        self,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        branch: str,
+        target: Path,
+    ) -> None:
+        """Download and extract repository archive via GitHub REST API.
+
+        Serves as the primary or fallback cloning strategy for environments
+        where the Git CLI is not installed (e.g. minimal PaaS container runtimes
+        such as Azure App Service or AWS Lambda).
+        """
+        if self._token_manager is None:
+            raise RuntimeError("Token manager is required for zipball download.")
+        token = await self._token_manager.get_token(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{branch}"
+
+        logger.info("Downloading archive for %s/%s (branch=%s) from GitHub API", owner, repo, branch)
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=180.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+                    },
+                )
+                if resp.status_code == 404:
+                    raise GitHubNotFoundError(f"Repository or branch not found: {owner}/{repo}@{branch}")
+                if resp.status_code == 401:
+                    await self._token_manager.invalidate(installation_id)
+                    raise GitHubAuthError(f"Authentication failed for {owner}/{repo}: HTTP 401")
+                if resp.status_code == 403:
+                    raise GitHubPermissionDeniedError(f"Permission denied for {owner}/{repo}: HTTP 403")
+                if resp.status_code != 200:
+                    raise GitHubCloneError(
+                        f"GitHub archive download failed for {owner}/{repo}: HTTP {resp.status_code}",
+                        returncode=resp.status_code,
+                    )
+                zip_bytes = resp.content
+
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                members = zf.infolist()
+                prefix = members[0].filename.split("/")[0] + "/" if members and "/" in members[0].filename else ""
+                for m in members:
+                    if not m.filename.startswith(prefix) or m.filename == prefix:
+                        continue
+                    rel_path = m.filename[len(prefix):]
+                    if not rel_path:
+                        continue
+                    dest = (target / rel_path).resolve()
+                    if not is_within(target, dest):
+                        continue
+                    if m.is_dir():
+                        dest.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(m) as src, open(dest, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+
+            logger.info("Successfully extracted archive for %s/%s into %s", owner, repo, target)
+        except (GitHubNotFoundError, GitHubAuthError, GitHubPermissionDeniedError, GitHubCloneError):
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise
+        except Exception as exc:
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise GitHubCloneError(f"Failed to extract repository archive for {owner}/{repo}: {exc}") from exc
+
+    async def clone_repository(
+        self,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        branch: str,
+        workspace_path: str,
+    ) -> str:
+        """Shallow-clone a repository using a short-lived installation token.
+
+        Day 4 implementation:
+        - Gets a fresh installation token from :class:`InstallationTokenManager`.
+        - Validates the target path is within ``workspace_root`` (no traversal).
+        - If ``git`` binary is missing or subprocess execution fails (e.g. Azure App Service),
+          falls back directly to downloading the repository archive via the GitHub REST API.
+        - Cleans up the partial clone directory on failure.
+
+        Args:
+            installation_id: GitHub App installation ID.
+            owner: Repository owner login.
+            repo: Repository name.
+            branch: Branch to clone.
+            workspace_path: Absolute local path for the cloned repository.
+
+        Returns:
+            The resolved ``workspace_path`` string.
+
+        Raises:
+            ValueError: If ``workspace_path`` escapes the workspace root.
+            GitHubCloneError: If the clone/download process fails.
+        """
+        # --- path traversal & argument injection guards ---
+        target = Path(workspace_path).resolve()
+        if not is_within(self._workspace_root, target) or target == self._workspace_root:
+            raise ValueError(
+                f"workspace_path '{workspace_path}' is outside the allowed "
+                f"workspace root '{self._workspace_root}'."
+            )
+
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", owner or ""):
+            raise ValueError(f"Invalid repository owner: {owner!r}")
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$", repo or ""):
+            raise ValueError(f"Invalid repository name: {repo!r}")
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
+            raise ValueError(f"Invalid branch name: {branch!r}")
+
+        # Check if git CLI binary is present in runtime environment
+        git_binary = shutil.which("git")
+        if not git_binary:
+            logger.info(
+                "git binary not found in environment; using GitHub REST API archive download for %s/%s",
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
+
+        # --- get installation token (never exposed in process arguments) ---
+        if self._token_manager is None:
+            raise RuntimeError("Token manager is required for authenticated git clone.")
+        token = await self._token_manager.get_token(installation_id)
+        clone_url = f"https://x-access-token@github.com/{owner}/{repo}.git"
+
+        cmd = [
+            "git",
+            "clone",
+            "--depth=1",
+            "--branch",
+            branch,
+            "--",
+            clone_url,
+            str(target),
+        ]
+
+        logger.info("Cloning %s/%s (branch=%s) into %s", owner, repo, branch, target)
+
+        askpass_path: Path | None = None
+        try:
+            # Secure GIT_ASKPASS helper with 0o700 permissions to supply token to Git
+            # without exposing it in cmd / argv process arguments
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as askpass_file:
+                askpass_file.write(f'#!/bin/sh\necho "{token}"\n')
+                askpass_path = Path(askpass_file.name)
+            askpass_path.chmod(0o700)
+
+            result = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={
+                    **os.environ,
+                    "GIT_ASKPASS": str(askpass_path),
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
+            )
+            stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
+
+            if result.returncode != 0:
+                stderr_text = stderr.decode(errors="replace")
+                if token:
+                    stderr_text = stderr_text.replace(token, "[REDACTED]")
+                logger.error("git clone failed (rc=%d): %s", result.returncode, stderr_text)
+                raise GitHubCloneError(
+                    f"git clone failed for {owner}/{repo}: {stderr_text}",
+                    returncode=result.returncode,
+                )
+
+        except (FileNotFoundError, OSError) as err:
+            logger.warning(
+                "git execution failed (%s); falling back to GitHub API archive download for %s/%s",
+                err,
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
+        except (asyncio.TimeoutError, GitHubCloneError):
+            # Clean up partial clone
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+                logger.warning("Cleaned up partial clone at %s", target)
+            raise
+        finally:
+            if askpass_path and askpass_path.exists():
+                try:
+                    askpass_path.unlink()
+                except Exception:
+                    pass
+
+        logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
+        return str(target)
+
+    # ---------------------------------------------------------------------------
+    # Week 3 Day 1: Published High-Level GitHub Service (Parth)
+    # ---------------------------------------------------------------------------
 
     async def push_branch(
         self,
@@ -765,8 +568,6 @@ class GitHubService(GitHubSourceService):
             )
 
         if workspace_path is not None:
-            import asyncio
-            from pathlib import Path
             ws = Path(workspace_path)
             if not ws.exists():
                 raise APIError(400, ErrorCode.INVALID_REQUEST, f"Workspace path does not exist: {workspace_path}")
@@ -775,7 +576,10 @@ class GitHubService(GitHubSourceService):
             auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
 
             proc = await asyncio.create_subprocess_exec(
-                "git", "push", auth_url, f"{local_branch}:{remote_branch}",
+                "git",
+                "push",
+                auth_url,
+                f"{local_branch}:{remote_branch}",
                 cwd=str(ws),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -873,8 +677,17 @@ class GitHubService(GitHubSourceService):
     async def _resolve_token(self, installation_id: UUID | str | None) -> str:
         """Resolve installation token from DB installation_id or config."""
         if installation_id is not None:
-            inst = self._db.get(GitHubInstallation, installation_id) if isinstance(installation_id, UUID) else None
-            if inst and inst.access_token:
+            if self._token_manager is not None and isinstance(installation_id, int):
+                try:
+                    return await self._token_manager.get_token(installation_id)
+                except Exception:
+                    pass
+            inst = (
+                self._db.get(DBGitHubInstallation, installation_id)
+                if (isinstance(installation_id, UUID) and self._db)
+                else None
+            )
+            if inst and getattr(inst, "access_token", None):
                 return inst.access_token
             try:
                 return await GitHubClient.get_installation_token(str(installation_id))
@@ -882,3 +695,10 @@ class GitHubService(GitHubSourceService):
                 return "mock-token"
         return "mock-token"
 
+    @staticmethod
+    def _parse_pull_request(data: dict) -> PullRequestInfo:
+        return GitHubSourceService._parse_pull_request(data)
+
+
+# Re-export GitHubSourceService for backwards compatibility with Week 2 source routes
+from .source_service import GitHubSourceService  # noqa: E402

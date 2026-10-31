@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timezone
 from uuid import UUID
@@ -13,11 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.errors import APIError, ErrorCode
+from app.core.errors import APIError, ErrorCode, error_response
 from app.core.redis import get_redis
 from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
+from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.auth import AuthenticatedUser, TokenResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -43,30 +47,84 @@ def github_login() -> RedirectResponse:
             }
         )
     )
+    try:
+        redis_client = get_redis()
+        redis_client.setex(f"oauth_state:{state}", 600, "1")
+    except Exception as exc:
+        logger.warning("Could not persist oauth_state in Redis: %s", exc)
+
     redirect.set_cookie(
         "oauth_state",
         state,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.effective_cookie_samesite,
         max_age=600,
-        path="/api/v1/auth/github",
+        path="/",
     )
     return redirect
 
 
-@router.get("/github/callback", response_model=TokenResponse, summary="Complete GitHub OAuth login")
+@router.get("/github/callback", response_model=None, summary="Complete GitHub OAuth login or App Installation")
 async def github_callback(
     response: Response,
     request: Request,
-    code: str = Query(min_length=1),
-    state: str = Query(min_length=1),
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    installation_id: str | None = Query(default=None),
+    setup_action: str | None = Query(default=None),
     db: Session = Depends(get_db),
-) -> TokenResponse:
+):
     """Exchange GitHub's code, upsert the user, then issue a short-lived JWT."""
+    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+
+    if installation_id:
+        user_id_str = getattr(request.state, "user_id", None)
+        if user_id_str:
+            try:
+                user = UserRepository(db).get_by_id(UUID(user_id_str))
+                if user:
+                    GitHubInstallationRepository(db).upsert(
+                        user_id=user.id,
+                        installation_id=str(installation_id),
+                        account_login=user.login,
+                        permissions={},
+                    )
+            except Exception:
+                pass
+        return RedirectResponse(
+            url=f"{frontend_base}/app/repositories",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    if not code or not state:
+        raise APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
+
     expected_state = request.cookies.get("oauth_state")
+    # OAuth state must match the browser cookie (CSRF binding)
     if not expected_state or not secrets.compare_digest(state, expected_state):
-        raise APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+        err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+        err_resp = error_response(err.status_code, err.code, err.message)
+        err_resp.delete_cookie("oauth_state", path="/")
+        err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        return err_resp
+
+    # Atomically consume the state in Redis to enforce single-use
+    redis_client = get_redis()
+    if redis_client and hasattr(redis_client, "delete"):
+        try:
+            deleted = redis_client.delete(f"oauth_state:{state}")
+            if hasattr(redis_client, "exists") and deleted == 0:
+                # State was already consumed or expired in Redis
+                err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+                err_resp = error_response(err.status_code, err.code, err.message)
+                err_resp.delete_cookie("oauth_state", path="/")
+                err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
+                return err_resp
+        except APIError:
+            raise
+        except Exception as exc:
+            logger.warning("Could not consume oauth_state via Redis: %s", exc)
 
     github_user = await _github_user_for_code(code)
     github_id = github_user.get("id")
@@ -81,21 +139,42 @@ async def github_callback(
         github_user.get("avatar_url") if isinstance(github_user.get("avatar_url"), str) else None,
     )
     token, expires_in = create_access_token(str(user.id))
-    response.set_cookie(
+    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+    redirect = RedirectResponse(
+        url=f"{frontend_base}/auth/callback",
+        status_code=status.HTTP_302_FOUND,
+    )
+    redirect.set_cookie(
         get_settings().auth_cookie_name,
         token,
         httponly=True,
         secure=get_settings().cookie_secure,
-        samesite="lax",
+        samesite=get_settings().effective_cookie_samesite,
         max_age=expires_in,
         path="/",
     )
-    response.delete_cookie("oauth_state", path="/api/v1/auth/github")
-    return TokenResponse(
-        access_token=token,
-        expires_in=expires_in,
-        user=_user_response(user),
-    )
+    redirect.delete_cookie("oauth_state", path="/")
+    redirect.delete_cookie("oauth_state", path="/api/v1/auth/github")
+
+    if request.headers.get("accept") == "application/json":
+        response.set_cookie(
+            get_settings().auth_cookie_name,
+            token,
+            httponly=True,
+            secure=get_settings().cookie_secure,
+            samesite=get_settings().effective_cookie_samesite,
+            max_age=expires_in,
+            path="/",
+        )
+        response.delete_cookie("oauth_state", path="/")
+        response.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        return TokenResponse(
+            access_token=token,
+            expires_in=expires_in,
+            user=_user_response(user),
+        )
+
+    return redirect
 
 
 @router.get("/me", response_model=AuthenticatedUser, summary="Get the current authenticated user")

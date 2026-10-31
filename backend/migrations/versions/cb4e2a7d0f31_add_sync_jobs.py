@@ -18,20 +18,21 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    sync_job_status = sa.Enum("QUEUED", "RUNNING", "COMPLETED", "FAILED", name="syncjobstatus")
-    sync_job_status.create(op.get_bind(), checkfirst=True)
+    # Create enum via raw SQL to avoid SQLAlchemy 2.1.x DuplicateObject bug
+    op.execute("DO $$ BEGIN CREATE TYPE syncjobstatus AS ENUM ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;")
     op.create_table(
         "sync_jobs",
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("repository_id", sa.UUID(), nullable=False),
         sa.Column("user_id", sa.UUID(), nullable=False),
-        sa.Column("status", sync_job_status, nullable=False),
+        sa.Column("status", sa.String(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["repository_id"], ["repositories.id"]),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.execute("ALTER TABLE sync_jobs ALTER COLUMN status TYPE syncjobstatus USING status::syncjobstatus")
     op.create_index(op.f("ix_sync_jobs_repository_id"), "sync_jobs", ["repository_id"], unique=False)
     op.create_index(op.f("ix_sync_jobs_user_id"), "sync_jobs", ["user_id"], unique=False)
 

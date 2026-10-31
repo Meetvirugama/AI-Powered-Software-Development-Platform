@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .base import CodeChunk, Retriever
 
@@ -29,9 +30,10 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # SQL — PostgreSQL full-text search
 #
-# ts_rank() returns a float value in roughly [0, 1] range but can exceed 1.
-# We normalise by dividing by the max rank in the result set so scores
-# are always in [0, 1] and comparable with vector similarity scores for RRF.
+# Combines strict AND matches (boosted 2.0x) with OR fallback matches
+# (`regexp_replace(:tsquery, '&', '|', 'g')`) using cover-density ranking
+# (`ts_rank_cd`) so multi-word natural-language questions still retrieve
+# high-signal code chunks when not every conversational word appears in one chunk.
 # ---------------------------------------------------------------------------
 
 _LEXICAL_SEARCH_SQL = text(
@@ -48,17 +50,26 @@ _LEXICAL_SEARCH_SQL = text(
             end_line,
             content_hash,
             COALESCE(metadata->>'file_path', '') AS file_path,
-            ts_rank(
-                to_tsvector('english', content),
-                to_tsquery('english', :tsquery)
+            (
+                CASE
+                    WHEN to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
+                    THEN ts_rank_cd(to_tsvector('english', content), to_tsquery('english', :tsquery)) * 2.0
+                    ELSE ts_rank_cd(
+                        to_tsvector('english', content),
+                        to_tsquery('english', regexp_replace(:tsquery, '&', '|', 'g'))
+                    )
+                END
             ) AS rank
         FROM code_chunks
         WHERE
             repository_id = :repository_id
-            AND to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
+            AND (
+                to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
+                OR to_tsvector('english', content) @@ to_tsquery('english', regexp_replace(:tsquery, '&', '|', 'g'))
+            )
     ),
     max_rank AS (
-        SELECT COALESCE(MAX(rank), 1.0) AS max_r FROM ranked
+        SELECT COALESCE(NULLIF(MAX(rank), 0.0), 1.0) AS max_r FROM ranked
     )
     SELECT
         r.*,
@@ -116,6 +127,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         content_hash=row.content_hash,      # type: ignore[attr-defined]
         score=score,
         file_path=row.file_path or "",      # type: ignore[attr-defined]
+        lexical_rank=score,
     )
 
 
@@ -123,26 +135,11 @@ class LexicalRetriever(Retriever):
     """
     Retrieves code chunks using PostgreSQL full-text search (tsvector / tsquery).
 
-    Scores are ts_rank values normalised to [0, 1] so RRFFusion can
+    Scores are ts_rank_cd values normalised to [0, 1] so RRFFusion can
     combine them fairly with vector similarity scores.
-
-    Both VectorRetriever and LexicalRetriever return top-30 so RRFFusion
-    has enough candidates from each source.
-
-    Args:
-        db: SQLAlchemy AsyncSession — injected by the caller.
-
-    Example::
-
-        retriever = LexicalRetriever(db=session)
-        chunks = await retriever.retrieve(
-            query="where is authentication handled?",
-            repository_id=repo_id,
-            top_k=30,
-        )
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession | async_sessionmaker[AsyncSession] | Any) -> None:
         self._db = db
 
     async def retrieve(
@@ -151,32 +148,12 @@ class LexicalRetriever(Retriever):
         repository_id: UUID,
         top_k: int = 30,
     ) -> list[CodeChunk]:
-        """
-        Run a full-text search query against the ``code_chunks.content`` tsvector index.
+        """Run a full-text search query against the ``code_chunks.content`` tsvector index."""
+        if not query or not query.strip() or top_k <= 0:
+            return []
 
-        Steps:
-        1. Sanitize query into a safe tsquery expression (alphanumeric tokens
-           joined with ``&``). Returns [] gracefully if no tokens survive.
-        2. Execute SQL with ``to_tsquery`` + ``ts_rank`` against the GIN index
-           on ``code_chunks.content``.
-        3. Normalize ts_rank scores to [0, 1] via division by the max rank in
-           the result set (handled in the CTE).
-        4. Map each row to a typed ``CodeChunk``.
+        repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
 
-        Args:
-            query:         Natural-language or code query string.
-            repository_id: Scope results to this repository only.
-                           Enforced at SQL level — no cross-repo leakage.
-            top_k:         Maximum number of chunks to return (default 30 for RRF).
-
-        Returns:
-            List of ``CodeChunk`` sorted by descending ts_rank (best first).
-            Returns an empty list if no FTS matches are found or the query
-            contains no searchable tokens.
-
-        Raises:
-            SQLAlchemyError: If the database is unreachable.
-        """
         # Step 1 — sanitize to a valid tsquery expression
         try:
             tsquery = _sanitize_query(query)
@@ -184,28 +161,32 @@ class LexicalRetriever(Retriever):
             logger.warning(
                 "lexical_retrieval_skipped",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "reason": str(exc),
                 },
             )
             return []
 
         # Step 2 — execute FTS query against the GIN index
-        result = await self._db.execute(
-            _LEXICAL_SEARCH_SQL,
-            {
-                "tsquery": tsquery,
-                "repository_id": str(repository_id),
-                "top_k": top_k,
-            },
-        )
-        rows = result.fetchall()
+        params = {
+            "tsquery": tsquery,
+            "repository_id": str(repo_uuid),
+            "top_k": top_k,
+        }
+        db_obj: Any = self._db
+        if hasattr(db_obj, "execute"):
+            result = await db_obj.execute(_LEXICAL_SEARCH_SQL, params)
+            rows = result.fetchall()
+        else:
+            async with db_obj() as session:
+                result = await session.execute(_LEXICAL_SEARCH_SQL, params)
+                rows = result.fetchall()
 
         if not rows:
             logger.debug(
                 "lexical_retrieval_empty",
                 extra={
-                    "repository_id": str(repository_id),
+                    "repository_id": str(repo_uuid),
                     "query_preview": query[:80],
                     "tsquery": tsquery,
                 },
@@ -214,14 +195,14 @@ class LexicalRetriever(Retriever):
 
         # Step 3 — map rows to CodeChunk using the normalised rank as score
         chunks: list[CodeChunk] = [
-            _row_to_chunk(row, float(row.normalised_rank))  # type: ignore[attr-defined]
+            _row_to_chunk(row, max(0.0, min(1.0, float(row.normalised_rank))))  # type: ignore[attr-defined]
             for row in rows
         ]
 
         logger.info(
             "lexical_retrieval_complete",
             extra={
-                "repository_id": str(repository_id),
+                "repository_id": str(repo_uuid),
                 "query_preview": query[:80],
                 "tsquery": tsquery,
                 "top_k": top_k,
