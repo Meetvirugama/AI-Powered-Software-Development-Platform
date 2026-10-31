@@ -606,6 +606,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
 - ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
 - ✅ Dev: Validated task-intake schema separating requirements, assumptions, and constraints (`backend/app/schemas/task.py`, `backend/app/schemas/verification.py`, `backend/tests/test_dev_w3_day1_task_intake.py`)
+- ✅ Prit: Workspace & sandbox architecture audit, Git worktree verification, WorkspaceManager interface & resource limits (`Docs/workspace_sandbox_architecture_audit.md`, `backend/app/schemas/workspace.py`, `backend/sandbox/workspace_manager.py`, `backend/tests/test_prit_w3_d1_workspace.py`)
 - ✅ Om: Issue-to-task persistence relationships, workflow models, migration `b3c4d5e6f7a8`, and `TaskRepository` (13/13 tests passing)
 - ⬜ Sukun: GitHub issue creation security checks & token confidentiality
 - ⬜ Keval: Acceptance tests for issue creation from bug and review findings
@@ -613,8 +614,9 @@ This document breaks each day into specific, atomic tasks for every team member.
 ## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
 - ✅ Parth: Git diff line-range extraction, hunk parser & symbol-level blast radius input provider (`GitBranchService.get_diff_line_ranges()`, `GitHubSourceService.get_pull_request_diff_ranges()`, `GET /api/v1/repositories/{id}/source/diff-ranges`, `test_week3_day2_diff_and_blast_radius_input.py`)
+- ✅ Prit: Symbol-level blast radius engine, dependency impact analyzer, test discovery planner & pre-flight workspace validator (`Docs/task_planning_blast_radius_audit.md`, `backend/scanner/symbol_blast_radius.py`, `backend/scanner/task_test_planner.py`, `backend/scanner/workspace_preflight.py`, `backend/app/schemas/planner_context.py`, `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`)
 - ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
-- ⬜ Dev: `PlannerSchema` and step dependency validation
+- ✅ Dev: `PlannerSchema` and step dependency validation (`backend/app/schemas/plan.py`, `backend/tests/test_dev_w3_day2_planner_schema.py`)
 - ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
 - ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
 - ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
@@ -622,7 +624,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
 
-- ⬜ Prit: `WorkspaceManager` managing disposable `.workspaces/task-<id>/` with path traversal guards
+- ✅ Prit: `WorkspaceManager` execution start, human approval gate, lifecycle transitions, command allowlist runner, timeline events & Devu `ToolRouter` policy bridge (`Docs/workspace_execution_start_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/command_runner.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d3_workspace_execution.py`)
 - ✅ Parth: Task branch isolation creating `agent/task-<id>` from base revision (`GitBranchService.setup_task_branch_isolation()`, `resolve_base_revision()`, `create_isolated_task_workspace()`, `POST /api/v1/repositories/{id}/source/task-branch/isolate`, `test_week3_day3_task_branch_isolation.py`, `PR #149`)
 - ⬜ Devu: `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas
 - ⬜ Meet: Agent execution loop executing approved plan steps with loop detection

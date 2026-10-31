@@ -1,24 +1,26 @@
-"""AI Developer Intelligence Services.
+"""Standalone AI services for Developer Intelligence & Week 3 Workflow Automation."""
 
-Owner: Dev — Week 2 AI Analysis Engines
-Reference: Docs/week2.md §5 & §6
-
-Exports:
-- CodeExplanationService (Day 2)
-"""
-
-from __future__ import annotations
-
-from .bug_detection_engine import BugDetectionEngine
-from .code_review_engine import AICodeReviewEngine, CodeReviewEngine, LLMCodeReviewService
-from .explanation_service import CodeExplanationService
-from .test_generation_service import TestGenerationService
+from ai.services.bug_detection_engine import BugDetectionEngine
+from ai.services.code_review_engine import AICodeReviewEngine
+from ai.services.explanation_service import CodeExplanationService
+from ai.services.issue_task_adapter import (
+    IssueToTaskAdapter,
+    extract_safe_repo_paths,
+    fence_untrusted_issue_data,
+    format_issue_from_finding,
+)
+from ai.services.task_planner import PlanningOutcome, TaskPlanner
+from ai.services.test_generation_service import TestGenerationService
 
 __all__ = [
     "AICodeReviewEngine",
     "BugDetectionEngine",
     "CodeExplanationService",
-    "CodeReviewEngine",
-    "LLMCodeReviewService",
+    "IssueToTaskAdapter",
+    "PlanningOutcome",
+    "TaskPlanner",
     "TestGenerationService",
+    "extract_safe_repo_paths",
+    "fence_untrusted_issue_data",
+    "format_issue_from_finding",
 ]
