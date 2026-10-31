@@ -1,6 +1,6 @@
 """Task Intake & Lifecycle Schemas.
 
-Owner: Dev — Week 3 Day 1 Deliverable (Docs/daily_tasks.md line 608 & Docs/week3.md §7)
+Owner: Dev (Task Intake & Lifecycle) & Om (Persistence, Workflows & Recovery).
 Reference: Docs/week3.md §7.1 (Task Lifecycle), §7.2 (State Transitions), §7.3 (Common Task Response)
 
 Responsibilities:
@@ -9,6 +9,7 @@ Responsibilities:
 3. Validate repository-relative paths and prevent path traversal escapes.
 4. Provide structured source references connecting tasks to GitHub issues, bug findings, or reviews.
 5. Provide canonical task creation requests and task detail response models.
+6. Provide plan proposals, step models, approval payloads, and recovery checkpoint schemas.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -139,6 +140,11 @@ class TaskSourceReference(BaseModel):
         max_length=2048,
         description="HTTP URL for the imported GitHub issue.",
     )
+    url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="Direct URL alias for imported issue or finding.",
+    )
     finding_id: str | None = Field(
         default=None,
         max_length=128,
@@ -154,9 +160,9 @@ class TaskSourceReference(BaseModel):
         description="Git commit SHA from which the task branches.",
     )
 
-    @field_validator("issue_url")
+    @field_validator("issue_url", "url")
     @classmethod
-    def _validate_issue_url(cls, value: str | None) -> str | None:
+    def _validate_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
@@ -348,7 +354,157 @@ class TaskDetailResponse(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# 5. Workflow Automation, Plans, Approvals & Recovery Schemas
+# ---------------------------------------------------------------------------
+
+class TaskResponse(BaseModel):
+    """Canonical task response envelope for database and persistence operations."""
+
+    task_id: str
+    repository_id: str
+    user_id: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    status: str
+    source_type: str
+    source_id: Optional[str] = None
+    source_metadata: Optional[dict[str, Any]] = None
+    finding_id: Optional[str] = None
+    base_revision: str
+    plan_version: int
+    approved_plan_version: Optional[int] = None
+    repair_attempts_used: int
+    repair_attempts_max: int
+    context_summary: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    """Paginated task list envelope."""
+
+    tasks: List[TaskResponse]
+    total: int
+    offset: int
+    limit: int
+
+
+class TaskPlanStep(BaseModel):
+    """Single ordered step within an implementation plan."""
+
+    step_id: str = Field(..., description="Unique step identifier (e.g. step_1)")
+    description: str = Field(..., description="Clear explanation of the change to be made")
+    expected_files: List[str] = Field(default_factory=list, description="Files to inspect or modify")
+    verification: List[str] = Field(default_factory=list, description="Verification criteria for this step")
+
+
+class TaskPlanCreateRequest(BaseModel):
+    """Request to propose or revise an implementation plan."""
+
+    summary: str = Field(..., max_length=512, description="High-level plan summary")
+    problem_statement: Optional[str] = Field(None, description="Problem breakdown")
+    steps: List[TaskPlanStep] = Field(..., min_length=1, description="Ordered implementation steps")
+    expected_files: Optional[List[str]] = Field(None, description="All files expected to be changed")
+    tests_to_run: Optional[List[str]] = Field(None, description="Target tests to execute")
+    validation_strategy: Optional[str] = Field(None, description="Verification and safety strategy")
+    risks: Optional[List[str]] = Field(None, description="Identified risks or side effects")
+    base_revision: Optional[str] = Field(None, description="Target base revision")
+
+
+class TaskPlanResponse(BaseModel):
+    """Structured implementation plan response."""
+
+    plan_id: str
+    task_id: str
+    version: int
+    base_revision: str
+    summary: str
+    problem_statement: Optional[str] = None
+    steps: List[dict[str, Any]]
+    expected_files: Optional[List[str]] = None
+    tests_to_run: Optional[List[str]] = None
+    validation_strategy: Optional[str] = None
+    risks: Optional[List[str]] = None
+    status: str
+    created_at: Optional[str] = None
+
+
+class TaskApprovalRequest(BaseModel):
+    """Request to approve or reject a plan version."""
+
+    plan_version: int = Field(..., ge=1, description="The exact plan version being decided")
+    feedback: Optional[str] = Field(None, description="Optional feedback or rejection reason")
+
+
+class TaskApprovalResponse(BaseModel):
+    """Immutable task approval outcome."""
+
+    approval_id: str
+    task_id: str
+    plan_version: int
+    user_id: Optional[str] = None
+    decision: str
+    feedback: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskCheckpointResponse(BaseModel):
+    """Sanitized checkpoint for worker failure recovery."""
+
+    checkpoint_id: str
+    task_id: str
+    step_name: str
+    state_data: dict[str, Any]
+    recovery_instructions: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskEventResponse(BaseModel):
+    """Ordered event item for dashboard timeline."""
+
+    event_id: str
+    task_id: str
+    event_type: str
+    event_data: Optional[dict[str, Any]] = None
+    user_id: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class VerificationResultResponse(BaseModel):
+    """Independent verification check outcome."""
+
+    verification_id: str
+    task_id: str
+    verified_revision: str
+    status: str
+    checks: Optional[List[dict[str, Any]]] = None
+    blocking_findings: Optional[List[dict[str, Any]]] = None
+    warnings: Optional[List[dict[str, Any]]] = None
+    summary: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskPullRequestResponse(BaseModel):
+    """Created GitHub Draft PR details."""
+
+    pr_id: str
+    task_id: str
+    repository_id: str
+    pr_number: Optional[int] = None
+    pr_url: str
+    base_branch: str
+    head_branch: str
+    head_sha: str
+    is_draft: bool
+    title: str
+    body: Optional[str] = None
+    created_at: Optional[str] = None
+
+
 __all__ = [
+    # Dev (Intake & Lifecycle)
     "TaskAssumption",
     "TaskConstraint",
     "TaskConstraintType",
@@ -362,4 +518,16 @@ __all__ = [
     "TaskStatus",
     "VALID_TASK_TRANSITIONS",
     "can_transition",
+    # Om (Workflows & Recovery)
+    "TaskResponse",
+    "TaskListResponse",
+    "TaskPlanStep",
+    "TaskPlanCreateRequest",
+    "TaskPlanResponse",
+    "TaskApprovalRequest",
+    "TaskApprovalResponse",
+    "TaskCheckpointResponse",
+    "TaskEventResponse",
+    "VerificationResultResponse",
+    "TaskPullRequestResponse",
 ]
