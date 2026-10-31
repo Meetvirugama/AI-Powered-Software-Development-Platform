@@ -54,7 +54,7 @@ export function RepositoryReviewStudio() {
     if (!selectedFile || reviewMutation.isPending) return;
 
     reviewMutation.mutate({
-      target: activeTarget,
+      target: activeTarget as any,
     });
   }, [selectedFile, activeTarget, reviewMutation]);
 
@@ -203,7 +203,7 @@ export function RepositoryReviewStudio() {
             repositoryId={repoId}
             initialFeature="review"
             currentFilePath={selectedFile?.path}
-            onReopenReview={(review, target) => {
+            onReopenReview={(review: any, target?: any) => {
               setReviewResult(review);
               if (target) handleTargetChange(target);
               setActiveMobileTab('results');

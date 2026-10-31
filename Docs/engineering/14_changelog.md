@@ -751,4 +751,45 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/restricted_test_runner_bounded_repair_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/engineering/14_changelog.md`
 
+---
+
+### [W3-Day5] 2026-10-30 — Independent Diff Verification, Secret Leak Scanning, Authorized Git Push & Draft PR Preparation
+**Type:** Feature / Git Publication & Independent Verification  
+**Developer:** Prit  
+**Changes:**
+- `backend/sandbox/constants.py`:
+  - Added `PROTECTED_BRANCHES` (`main`, `master`, `develop`, `dev`, `release`, `production`, `prod`, `staging`).
+  - Added `CRITICAL_PROJECT_FILES` (`README.md`, `package.json`, `pyproject.toml`, `setup.py`, `requirements.txt`, `tsconfig.json`, `Cargo.toml`, `go.mod`, `pom.xml`, `Dockerfile`).
+  - Added `SECRET_SCAN_PATTERNS` regex detectors for OpenAI API keys, GitHub tokens, AWS access key IDs, Google API keys, private keys, and generic credential assignments.
+- `backend/sandbox/exceptions.py`:
+  - Added `WorkspaceDiffError`, `WorkspaceDiffValidationError`, `WorkspaceSecretLeakDetectedError`, `WorkspaceProtectedBranchError`, `WorkspaceCommitError`, `WorkspacePublicationUnauthorizedError`, `WorkspacePushError`, and `WorkspaceDraftPRError`.
+- `backend/app/schemas/workspace.py`:
+  - Added 8 new timeline event types: `DIFF_INSPECTED`, `DIFF_VALIDATED`, `DIFF_VALIDATION_FAILED`, `PUBLICATION_AUTHORIZED`, `CHANGES_COMMITTED`, `BRANCH_PUSHED`, `PR_CREATED`, and `PUBLICATION_FAILED`.
+  - Implemented `FileChangeType` (`MODIFIED`, `ADDED`, `DELETED`), `FileDiffHunk`, `FileDiffSummary`, `WorkspaceDiffRequest`, `WorkspaceDiffResult`, `SecretScanFinding`, `DiffValidationRequest`, `DiffValidationResult`, `WorkspaceCommitRequest`, `WorkspaceCommitResult`, `WorkspacePushRequest`, `WorkspacePushResult`, `WorkspaceDraftPRRequest`, and `WorkspaceDraftPRResult`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 5 diff verification, commit, push, and draft PR schemas.
+- `backend/sandbox/diff_verifier.py`:
+  - Implemented `WorkspaceDiffVerifier` providing unified and per-file diff extraction against base revisions, hunk-level diff parsing, task plan scope boundary validation, critical manifest deletion protection, and diff addition-level secret leak scanning.
+- `backend/sandbox/workspace_manager.py`:
+  - Bound `_diff_verifier = WorkspaceDiffVerifier()`.
+  - Implemented `get_workspace_diff()` emitting `DIFF_INSPECTED` timeline events.
+  - Implemented `validate_workspace_diff()` with scope verification, critical manifest protection, and addition-level secret scanning, emitting `DIFF_VALIDATED` or `DIFF_VALIDATION_FAILED`.
+  - Implemented `commit_task_changes()` enforcing protected branch guards, sanitized commit messages, `Task-ID` metadata trailers, and `CHANGES_COMMITTED` timeline events.
+  - Implemented `push_task_branch()` enforcing the mandatory human publication authorization gate (ADR-010, F37), protected branch guards, credential redaction, and `BRANCH_PUSHED` timeline events.
+  - Implemented `create_draft_pr()` guaranteeing unconditional Draft PR status (`is_draft=True`, zero auto-merge per ADR-010), automated Markdown task summary synthesis, and `PR_CREATED` timeline events.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Added canonical tool constants: `TOOL_INSPECT_DIFF`, `TOOL_VALIDATE_DIFF`, `TOOL_COMMIT_CHANGES`, `TOOL_PUSH_BRANCH`, `TOOL_CREATE_DRAFT_PR`.
+  - Added policy validation rules and execution dispatch for all 5 Day 5 tools.
+  - Registered all 5 tools with Devu's `ToolRouter` via `register_workspace_tools()`.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceDiffVerifier`, Day 5 constants, exceptions, and canonical tool constants.
+- `Docs/independent_verification_and_draft_pr_audit.md`:
+  - Authored comprehensive Week 3 Day 5 Architecture, Independent Diff Verification, Security Scanning, Git Push & Draft PR Preparation Audit Report.
+- `backend/tests/test_prit_w3_d5_verification_and_draft_pr.py`:
+  - 30 comprehensive unit and integration tests covering diff extraction, scope validation, manifest deletion protection, addition secret scanning, protected branch guards, publication authorization gates, commit creation, git push credential redaction, draft PR synthesis, timeline event emissions, and ToolRouter dispatch (100% pass rate).
+
+**Impact:** Provides verified, security-scanned, and human-authorized Git publication and Draft PR preparation for Dev's independent verifier, Parth's GitHub service, Yug's PR endpoints, and Dhramraj's PR status UI.
+
+**Related Docs:** `Docs/independent_verification_and_draft_pr_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
+
 
