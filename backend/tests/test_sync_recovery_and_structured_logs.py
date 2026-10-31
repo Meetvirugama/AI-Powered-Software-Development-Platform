@@ -319,3 +319,211 @@ def test_event_publication_failure_logs_structured_warning(monkeypatch, caplog):
         )
     finally:
         app.dependency_overrides.clear()
+
+
+def test_json_formatter_serializes_exceptions_and_extra_fields() -> None:
+    """Verify JsonFormatter outputs exception stack and extra fields in JSON."""
+    import logging
+    from app.core.logging import JsonFormatter
+
+    formatter = JsonFormatter()
+    logger = logging.getLogger("test.json.formatter")
+
+    record = None
+    try:
+        raise ValueError("Simulated failure for logging")
+    except ValueError:
+        import sys
+        record = logger.makeRecord(
+            name="test.logger",
+            level=logging.ERROR,
+            fn="test_file.py",
+            lno=42,
+            msg="database_connection_failed",
+            args=(),
+            exc_info=sys.exc_info(),
+            extra={"repo_id": "test-repo-123", "retry_count": 3},
+        )
+
+    formatted_json = formatter.format(record)
+    parsed = json.loads(formatted_json)
+
+    assert parsed["message"] == "database_connection_failed"
+    assert parsed["level"] == "ERROR"
+    assert parsed["repo_id"] == "test-repo-123"
+    assert parsed["retry_count"] == 3
+    assert "exception" in parsed
+    assert "Simulated failure for logging" in parsed["exception"]
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_loop_handles_idle_redis_timeout_without_warning(monkeypatch) -> None:
+    """Verify sync_worker_loop suppresses normal idle TimeoutError and does not log sync_worker_loop_error."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from app.services.sync_worker import sync_worker_loop
+
+    mock_redis = AsyncMock()
+    mock_redis.brpoplpush = AsyncMock(side_effect=RedisTimeoutError("Timeout reading from socket"))
+    monkeypatch.setattr("app.services.sync_worker.get_redis_async", AsyncMock(return_value=mock_redis))
+
+    captured_warnings = []
+    import app.services.sync_worker as sw_mod
+    orig_warn = sw_mod.logger.warning
+    monkeypatch.setattr(
+        sw_mod.logger,
+        "warning",
+        lambda msg, *a, **kw: (captured_warnings.append(str(msg)), orig_warn(msg, *a, **kw)),
+    )
+
+    task = asyncio.create_task(sync_worker_loop(app_or_service=MagicMock()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert mock_redis.brpoplpush.call_count >= 1
+    # Verify no loop error warning was emitted for idle timeout
+    assert not any("sync_worker_loop_error" in w for w in captured_warnings)
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_falls_back_when_git_missing(tmp_path: Path, monkeypatch) -> None:
+    """Verify clone_repository uses GitHub zipball download when git CLI is not installed."""
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = ws_root / "repo_target"
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+
+    # Simulate environment where git binary is not found in PATH
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    download_called = False
+
+    async def fake_download(installation_id, owner, repo, branch, target):
+        nonlocal download_called
+        download_called = True
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "app.py").write_text("print('extracted')")
+
+    monkeypatch.setattr(service, "_download_zipball", fake_download)
+
+    res = await service.clone_repository(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        workspace_path=str(target),
+    )
+
+    assert download_called is True
+    assert res == str(target.resolve())
+    assert (target / "app.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_falls_back_on_filenotfounderror(tmp_path: Path, monkeypatch) -> None:
+    """Verify clone_repository falls back to zipball download when subprocess raises FileNotFoundError."""
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = ws_root / "repo_target_2"
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/git")
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=FileNotFoundError(2, "No such file or directory")),
+    )
+
+    download_called = False
+
+    async def fake_download(installation_id, owner, repo, branch, target):
+        nonlocal download_called
+        download_called = True
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "index.ts").write_text("export const a = 1;")
+
+    monkeypatch.setattr(service, "_download_zipball", fake_download)
+
+    res = await service.clone_repository(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        workspace_path=str(target),
+    )
+
+    assert download_called is True
+    assert res == str(target.resolve())
+    assert (target / "index.ts").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_zipball_extracts_files_and_strips_prefix(tmp_path: Path, monkeypatch) -> None:
+    """Verify _download_zipball fetches zip archive, strips GitHub prefix, and extracts files safely."""
+    import io
+    import zipfile
+    import httpx
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = (ws_root / "extracted_repo").resolve()
+
+    # Build an in-memory zip resembling GitHub API zipball output
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w") as zf:
+        zf.writestr("octocat-hello-world-7d151c1/", "")
+        zf.writestr("octocat-hello-world-7d151c1/README.md", "# Hello World")
+        zf.writestr("octocat-hello-world-7d151c1/src/index.js", "console.log('hi');")
+    zip_bytes = buf.getvalue()
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+    monkeypatch.setattr(service._token_manager, "get_token", AsyncMock(return_value="mock_token"))
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, headers=None):
+            return httpx.Response(200, content=zip_bytes, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda **kwargs: FakeClient())
+
+    await service._download_zipball(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        target=target,
+    )
+
+    assert (target / "README.md").exists()
+    assert (target / "README.md").read_text() == "# Hello World"
+    assert (target / "src" / "index.js").exists()
+    assert (target / "src" / "index.js").read_text() == "console.log('hi');"
+

@@ -9,7 +9,6 @@ import {
   MessageSquare,
   FolderOpen,
   Trash2,
-  RotateCw,
 } from 'lucide-react';
 import type { Repository, SyncStatus } from '../../types/api';
 import { useSyncRepository, useDeleteRepository } from '../../hooks/useRepositories';
@@ -95,7 +94,7 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
 
   function handleSync(e: React.MouseEvent) {
     e.stopPropagation();
-    triggerSync(repo.id);
+    triggerSync({ id: repo.id, force: isFailed });
   }
 
   function handleDelete(e: React.MouseEvent) {
@@ -132,17 +131,6 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
             </span>
           )}
 
-          {/* Quick Re-sync button */}
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-40"
-            title="Re-sync repository"
-            aria-label={`Re-sync ${repo.name}`}
-          >
-            <RotateCw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin text-primary")} />
-          </button>
-
           {/* Quick Delete / Disconnect button */}
           <button
             onClick={(e) => {
@@ -178,18 +166,6 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
             {formatLastSynced(repo.last_synced_at)}
           </span>
         </div>
-
-        {/* If failed or not synced, show a direct inline sync button */}
-        {(isFailed || isNotSynced) && (
-          <button
-            onClick={handleSync}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors disabled:opacity-50"
-          >
-            <RefreshCw className={cn("h-3 w-3", isSyncing && "animate-spin")} />
-            {isFailed ? 'Retry' : 'Sync'}
-          </button>
-        )}
       </div>
 
       {/* Confirmation banner for deletion */}
@@ -218,7 +194,7 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
         </div>
       )}
 
-      {/* Action Buttons */}
+      {/* Action Buttons: strictly 2 consistent enterprise actions */}
       <div className="mt-auto flex gap-2 pt-1">
         <button
           onClick={() => navigate(`/app/repositories/${repo.id}`)}
@@ -229,31 +205,41 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
           View
         </button>
 
-        {isFailed || isNotSynced ? (
+        {isSyncing ? (
+          <button
+            disabled
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 px-3 py-2 text-xs font-medium text-amber-500 cursor-not-allowed opacity-90"
+            aria-label={`Syncing ${repo.name}`}
+          >
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            <span>Syncing…</span>
+          </button>
+        ) : isFailed ? (
           <button
             onClick={handleSync}
-            disabled={isSyncing}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-destructive px-3 py-2 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
+            aria-label={`Retry sync for ${repo.name}`}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Retry Sync</span>
+          </button>
+        ) : isNotSynced ? (
+          <button
+            onClick={handleSync}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
             aria-label={`Sync ${repo.name}`}
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} />
-            {isSyncing ? 'Syncing…' : isFailed ? 'Retry Sync' : 'Sync Now'}
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Sync Now</span>
           </button>
         ) : (
           <button
             onClick={() => navigate(`/app/repositories/${repo.id}/chat`)}
-            disabled={!isSynced}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isSynced
-                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                : "bg-muted text-muted-foreground cursor-not-allowed opacity-60"
-            )}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
             aria-label={`Ask about ${repo.name}`}
-            title={!isSynced ? "Sync repository first to use AI chat" : undefined}
           >
             <MessageSquare className="h-3.5 w-3.5" />
-            Ask AI
+            <span>Ask AI</span>
           </button>
         )}
       </div>
