@@ -202,8 +202,12 @@ export function useRepositoryDependencies(
  */
 export function useSyncRepository() {
   const queryClient = useQueryClient();
-  return useMutation<{ job_id: string }, ApiError, string>({
-    mutationFn: (id: string) => syncRepository(id),
+  return useMutation<{ job_id: string }, ApiError, string | { id: string; force?: boolean }>({
+    mutationFn: (param) => {
+      const id = typeof param === 'string' ? param : param.id;
+      const force = typeof param === 'string' ? false : Boolean(param.force);
+      return syncRepository(id, force);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
     },

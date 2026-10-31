@@ -26,6 +26,7 @@ from typing import Any
 from uuid import UUID
 
 from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy import select
 
 from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
 from ai.embeddings.service import EmbeddingService
@@ -293,6 +294,28 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
             gh_service = GitHubService(redis=redis, settings=get_settings())
         except Exception as exc:
             logger.warning("sync_worker_github_service_init_warning", extra={"error": str(exc)})
+
+    # Initial recovery: reconcile stale jobs and re-enqueue queued jobs into Redis
+    try:
+        with SessionLocal() as init_db:
+            reconcile_stale_sync_jobs(init_db, timeout_seconds=300)
+            pending_jobs = list(init_db.scalars(select(SyncJob).where(SyncJob.status == SyncJobStatus.QUEUED)).all())
+            for pj in pending_jobs:
+                p_repo = init_db.get(Repository, pj.repository_id)
+                if p_repo and hasattr(redis, "rpush"):
+                    p_load = {
+                        "job_id": str(pj.id),
+                        "repository_id": str(p_repo.id),
+                        "user_id": str(pj.user_id),
+                        "installation_id": str(p_repo.installation_id),
+                        "owner": p_repo.owner,
+                        "name": p_repo.name,
+                        "branch": p_repo.default_branch,
+                    }
+                    await redis.rpush("sync_jobs", json.dumps(p_load))
+                    logger.info("re_enqueued_pending_sync_job_at_startup", extra={"job_id": str(pj.id), "repo_id": str(p_repo.id)})
+    except Exception as init_err:
+        logger.warning("sync_worker_init_recovery_warning", extra={"error": str(init_err)})
 
     while True:
         try:
