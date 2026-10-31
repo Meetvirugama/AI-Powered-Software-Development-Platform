@@ -397,4 +397,48 @@ class BranchIsolationCheck(BaseModel):
     error_message: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# Week 3 Day 3: Task Branch Isolation & Base Revision Validation (F33 / W3-04)
+# ---------------------------------------------------------------------------
 
+class TaskBranchIsolationRequest(BaseModel):
+    """Request to isolate task branch agent/task-{id} from a specified base revision."""
+    task_id: UUID | str = Field(..., description="Task identifier for agent branch name (agent/task-{id})")
+    base_revision: Optional[str] = Field(
+        default=None,
+        description="Base branch, tag, or commit SHA from which the agent branch is created",
+    )
+    workspace_path: Optional[str] = Field(
+        default=None,
+        description="Optional local workspace directory path (.workspaces/task-{id}) to checkout the branch",
+    )
+    create_workspace: bool = Field(
+        default=False,
+        description="Whether to create the isolated workspace directory if it does not exist",
+    )
+
+
+class TaskBranchIsolationResponse(BaseModel):
+    """Result of task branch isolation across GitHub remote and local workspace."""
+    task_id: UUID
+    repository_id: UUID
+    branch_name: str
+    base_branch: str
+    base_sha: str
+    workspace_path: Optional[str] = None
+    is_isolated: bool = True
+    status: str = "isolated"  # "created" | "ready" | "isolated"
+
+
+class BaseRevisionValidationRequest(BaseModel):
+    """Request to validate existence and resolve commit SHA of a proposed base revision."""
+    base_revision: str = Field(..., min_length=1, description="Branch name or commit SHA to validate")
+
+
+class BaseRevisionValidationResponse(BaseModel):
+    """Result of base revision validation and SHA resolution."""
+    repository_id: UUID
+    base_revision: str
+    commit_sha: str
+    ref_type: str = "branch"  # "branch" | "commit" | "tag"
+    is_valid: bool = True

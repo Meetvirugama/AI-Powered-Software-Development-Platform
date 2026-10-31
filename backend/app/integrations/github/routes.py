@@ -32,6 +32,8 @@ from app.core.secret_redaction import redact_obj
 from app.integrations.github.schemas import (
     AgentBranchRequest,
     AgentBranchResponse,
+    BaseRevisionValidationRequest,
+    BaseRevisionValidationResponse,
     BranchIsolationCheck,
     CommitDetail,
     CommitListResponse,
@@ -43,6 +45,8 @@ from app.integrations.github.schemas import (
     PRMetadata,
     PullRequestDiffResponse,
     PullRequestInfo,
+    TaskBranchIsolationRequest,
+    TaskBranchIsolationResponse,
     TaskDiffRanges,
 )
 from app.integrations.github.service import GitHubSourceService
@@ -455,4 +459,57 @@ def verify_branch_isolation_endpoint(
         user_id=_request_user_id(request),
     )
     return BranchIsolationCheck.model_validate(redact_obj(check.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 3: Task Branch Isolation & Base Revision Validation (F33 / W3-04)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task-branch/isolate",
+    response_model=TaskBranchIsolationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Isolate task branch from base revision",
+    description="Creates or isolates agent/task-{id} from base revision on remote and/or workspace directory.",
+)
+async def isolate_task_branch_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskBranchIsolationRequest,
+    db: Session = Depends(get_db),
+) -> TaskBranchIsolationResponse:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    result = await service.setup_task_branch_isolation(
+        repository_id=repository_id,
+        task_id=payload.task_id,
+        base_revision=payload.base_revision,
+        workspace_path=payload.workspace_path,
+        user_id=_request_user_id(request),
+        create_workspace=payload.create_workspace,
+    )
+    return TaskBranchIsolationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
+
+
+@router.post(
+    "/{repository_id}/source/task-branch/validate-base",
+    response_model=BaseRevisionValidationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Validate base revision for task workspace",
+    description="Validates that a base revision (branch name or commit SHA) exists in the repository and resolves its commit SHA.",
+)
+async def validate_base_revision_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: BaseRevisionValidationRequest,
+    db: Session = Depends(get_db),
+) -> BaseRevisionValidationResponse:
+    service = GitHubSourceService(db)
+    result = await service.validate_base_revision(
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+        base_revision=payload.base_revision,
+    )
+    return BaseRevisionValidationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
 

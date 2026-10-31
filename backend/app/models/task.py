@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -67,6 +67,8 @@ class TaskSourceType(str, enum.Enum):
 
     GITHUB_ISSUE = "GITHUB_ISSUE"
     USER_REQUIREMENT = "USER_REQUIREMENT"
+    USER_PROMPT = "USER_PROMPT"
+    DIRECT = "DIRECT"
     BUG_FINDING = "BUG_FINDING"
     REVIEW_FINDING = "REVIEW_FINDING"
 
@@ -76,6 +78,7 @@ class TaskPlanStatus(str, enum.Enum):
 
     DRAFT = "DRAFT"
     PROPOSED = "PROPOSED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     SUPERSEDED = "SUPERSEDED"
@@ -171,6 +174,48 @@ class TaskEventType(str, enum.Enum):
 
 
 # ---------------------------------------------------------------------------
+# 0. GitHub Issue Model (Week 3 F31)
+# ---------------------------------------------------------------------------
+
+
+class GitHubIssue(TimestampedModel, Base):
+    """Persisted GitHub issue imported into or created from the platform (F31)."""
+
+    __tablename__ = "github_issues"
+
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
+    labels: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    author: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    origin_finding_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("analysis_findings.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    tasks: Mapped[List["Task"]] = relationship(
+        "Task",
+        back_populates="github_issue",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id",
+            "issue_number",
+            name="uq_github_issues_repo_issue_number",
+        ),
+        Index("ix_github_issues_repo_number", "repository_id", "issue_number"),
+    )
+
+
 # 1. Main Task Model
 # ---------------------------------------------------------------------------
 
@@ -228,6 +273,24 @@ class Task(TimestampedModel, Base):
     context_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Week 3 F31 & F32 extended fields
+    github_issue_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("github_issues.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    @property
+    def origin_finding_id(self) -> Optional[uuid.UUID]:
+        return self.finding_id
+
+    @origin_finding_id.setter
+    def origin_finding_id(self, val: Optional[uuid.UUID]) -> None:
+        self.finding_id = val
+    source_ref: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    requirements: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    assumptions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    constraints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+
     # Relationships
     finding: Mapped[Optional["AnalysisFinding"]] = relationship(
         "AnalysisFinding",
@@ -240,6 +303,10 @@ class Task(TimestampedModel, Base):
     user: Mapped[Optional["User"]] = relationship(
         "User",
         foreign_keys=[user_id],
+    )
+    github_issue: Mapped[Optional["GitHubIssue"]] = relationship(
+        "GitHubIssue",
+        back_populates="tasks",
     )
 
     plans: Mapped[List["TaskPlan"]] = relationship(
@@ -367,6 +434,22 @@ class TaskPlan(TimestampedModel, Base):
     validation_strategy: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     risks: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
 
+    # Week 3 F32 plan extensions
+    plan_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    assumptions: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    relevant_files: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    relevant_symbols: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    required_permissions: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    resource_budget: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    @property
+    def plan_version(self) -> int:
+        return self.version
+
+    @plan_version.setter
+    def plan_version(self, value: int) -> None:
+        self.version = value
+
     status: Mapped[str] = mapped_column(
         String(32),
         default=TaskPlanStatus.PROPOSED.value,
@@ -391,17 +474,40 @@ class TaskApproval(TimestampedModel, Base):
         index=True,
         nullable=False,
     )
+    plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("task_plans.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
     plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,
         nullable=True,
     )
+    plan_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    base_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     decision: Mapped[str] = mapped_column(String(32), nullable=False)  # APPROVED / REJECTED
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="approvals")
     user: Mapped[Optional["User"]] = relationship("User")
+
+    @property
+    def comment(self) -> Optional[str]:
+        return self.feedback
+
+    @comment.setter
+    def comment(self, val: Optional[str]) -> None:
+        self.feedback = val
+
+    @property
+    def approver_id(self) -> Optional[uuid.UUID]:
+        return self.user_id
+
+    @approver_id.setter
+    def approver_id(self, val: Optional[uuid.UUID]) -> None:
+        self.user_id = val
 
     __table_args__ = (
         Index("ix_task_approvals_task_plan", "task_id", "plan_version"),
@@ -596,6 +702,18 @@ class TaskEvent(TimestampedModel, Base):
     )
     event_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     event_data: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    to_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self.event_data or {}
+
+    @payload.setter
+    def payload(self, val: dict[str, Any]) -> None:
+        self.event_data = val
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,
@@ -604,6 +722,22 @@ class TaskEvent(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="events")
     user: Mapped[Optional["User"]] = relationship("User")
+
+    @property
+    def comment(self) -> Optional[str]:
+        return self.feedback
+
+    @comment.setter
+    def comment(self, val: Optional[str]) -> None:
+        self.feedback = val
+
+    @property
+    def approver_id(self) -> Optional[uuid.UUID]:
+        return self.user_id
+
+    @approver_id.setter
+    def approver_id(self, val: Optional[uuid.UUID]) -> None:
+        self.user_id = val
 
     __table_args__ = (
         Index("ix_task_events_task_created", "task_id", "created_at"),
@@ -665,3 +799,11 @@ __all__ = [
     "TaskEvent",
     "TaskPullRequest",
 ]
+
+# ---------------------------------------------------------------------------
+# Aliases for Week 3 Day 1 & Day 2 Compatibility
+# ---------------------------------------------------------------------------
+AgentTask = Task
+TaskPlanRecord = TaskPlan
+TaskApprovalRecord = TaskApproval
+TaskEventRecord = TaskEvent
