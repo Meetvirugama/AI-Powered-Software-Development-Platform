@@ -729,6 +729,10 @@ class WorkspaceManager:
         workspace_id = meta.workspace_id if meta else str(uuid4())
         status = meta.status if meta else WorkspaceStatus.NOT_CREATED
 
+        sanitized_payload = {
+            k: redact(str(v)) if isinstance(v, str) else v
+            for k, v in (payload or {}).items()
+        }
         event = WorkspaceExecutionEvent(
             event_id=str(uuid4()),
             task_id=task_id,
@@ -736,8 +740,8 @@ class WorkspaceManager:
             event_type=event_type,
             timestamp=datetime.now(timezone.utc).isoformat(),
             status=status,
-            message=message,
-            payload=payload or {},
+            message=redact(message),
+            payload=sanitized_payload,
         )
         self._timeline.setdefault(task_id, []).append(event)
         return event
@@ -1807,8 +1811,8 @@ class WorkspaceManager:
             sections.extend([
                 f"- **Outcome**: {status_badge}",
                 f"- **Framework**: `{latest_test.framework}`",
-                f"- **Tests**: `{latest_test.tests_passed}` passed, `{latest_test.tests_failed}` failed, `{latest_test.tests_skipped}` skipped",
-                f"- **Duration**: `{latest_test.duration_seconds:.2f}s`",
+                f"- **Tests**: `{getattr(latest_test, 'passed_count', getattr(latest_test, 'tests_passed', 0))}` passed, `{getattr(latest_test, 'failed_count', getattr(latest_test, 'tests_failed', 0))}` failed, `{getattr(latest_test, 'skipped_count', getattr(latest_test, 'tests_skipped', 0))}` skipped",
+                f"- **Duration**: `{(getattr(latest_test, 'duration_ms', 0.0) / 1000.0):.2f}s`",
             ])
         else:
             sections.append("- *No test run recorded for this task.*")
@@ -1919,7 +1923,7 @@ class WorkspaceManager:
                         failed_count += 1
                     elif prev_status == WorkspaceStatus.IN_USE:
                         is_stale = False
-                        if stale_timeout_seconds > 0:
+                        if stale_timeout_seconds >= 0:
                             ts_str = meta.last_active_at or meta.updated_at or meta.created_at
                             if ts_str:
                                 try:
@@ -1927,7 +1931,7 @@ class WorkspaceManager:
                                     if dt.tzinfo is None:
                                         dt = dt.replace(tzinfo=timezone.utc)
                                     age = (datetime.now(timezone.utc) - dt).total_seconds()
-                                    if age > stale_timeout_seconds:
+                                    if age >= stale_timeout_seconds:
                                         is_stale = True
                                 except Exception:
                                     is_stale = True

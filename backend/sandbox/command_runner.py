@@ -120,6 +120,8 @@ class WorkspaceCommandRunner:
             "WINDIR",
             "TEMP",
             "TMP",
+            "APPDATA",
+            "LOCALAPPDATA",
             "USERPROFILE",
             "HOMEPATH",
             "HOMEDRIVE",
@@ -171,12 +173,13 @@ class WorkspaceCommandRunner:
         )
 
         env = self.sanitize_environment(custom_env)
-
         exec_cmd = command
         if command == "python" and not shutil.which("python"):
             exec_cmd = shutil.which("python3") or sys.executable
 
         cmd_list = [exec_cmd, *args]
+        if command == "pytest" and not shutil.which("pytest"):
+            cmd_list = [sys.executable, "-m", "pytest", *args]
 
         try:
             with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:

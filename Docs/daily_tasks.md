@@ -665,6 +665,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 7 Final Integration & Live Demonstration
 
+- ✅ Prit: End-to-end sandbox lifecycle acceptance, Scenarios A through J verification, Week 2 intelligence integration, SLA benchmarking (<1s creation/recovery), zero secret leakage audit trail, and published final acceptance report (25/25 acceptance tests passing, 194/194 total Week 3 tests passing) (`Docs/week3_day7_workspace_acceptance_report.md`, `backend/tests/test_prit_w3_d7_acceptance.py`)
 - ⬜ All Leads: Execute full 17-step end-to-end acceptance demo on a real GitHub repository
 - ⬜ Verify complete chain: Finding -> GitHub Issue -> Task Plan -> Approval -> Edit -> Test & Repair -> Verify -> Draft PR
 - ⬜ Verify zero manual interventions between Plan Approval and Draft PR creation
