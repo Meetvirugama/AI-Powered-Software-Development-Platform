@@ -243,6 +243,27 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["code_review_service"] = False
         success = False
 
+    # Task Planner (Week 3 F32)
+    try:
+        if getattr(app.state, "task_planner", None) is None:
+            if llm_gateway is not None:
+                from ai.services.task_planner import TaskPlanner
+                app.state.task_planner = TaskPlanner(
+                    llm_gateway=llm_gateway,
+                    model=settings.gemini_chat_model,
+                )
+                app.state.service_readiness["task_planner"] = True
+                logger.info("task_planner_ready")
+            else:
+                app.state.service_readiness["task_planner"] = False
+        else:
+            app.state.service_readiness["task_planner"] = True
+    except Exception as exc:
+        logger.error("task_planner_init_failed", extra={"error": str(exc)})
+        app.state.task_planner = None
+        app.state.service_readiness["task_planner"] = False
+        success = False
+
     return success
 
 
@@ -323,6 +344,7 @@ async def lifespan(app: FastAPI):
         "bug_detection_service": False,
         "test_generation_service": False,
         "code_review_service": False,
+        "task_planner": False,
         "context_service": False,
         "history_services": False,
         "github_service": False,

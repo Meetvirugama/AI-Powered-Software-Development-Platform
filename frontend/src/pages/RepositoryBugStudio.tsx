@@ -4,6 +4,7 @@ import {
   ShieldAlert,
   RefreshCw,
   Bug,
+  PlusCircle,
 } from 'lucide-react';
 import { useRepositoryFiles } from '../hooks/useRepositories';
 import { useDetectBugs } from '../hooks/useAnalysis';
@@ -11,6 +12,7 @@ import { useStudioFile } from '../hooks/useStudioFile';
 import { CodeViewer } from '../components/explorer/CodeViewer';
 import { BugScannerView } from '../components/explorer/BugScannerView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
+import { CreateIssueModal, type FindingForIssue } from '../components/explorer/CreateIssueModal';
 import { StudioLayout } from '../components/studios/StudioLayout';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type { SourceReference, BugDetectionResponse } from '../types/analysis';
@@ -26,6 +28,7 @@ export function RepositoryBugStudio() {
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [bugResult, setBugResult] = useState<BugDetectionResponse | null>(null);
   const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
+  const [issueFinding, setIssueFinding] = useState<FindingForIssue | null>(null);
 
   const {
     selectedFile,
@@ -61,7 +64,7 @@ export function RepositoryBugStudio() {
     if (selectedFile && source.file_path && source.file_path !== selectedFile.path) {
       const targetFile = files.find((f) => f.path === source.file_path);
       if (targetFile) {
-        handleSelectFile(targetFile);
+        handleSelectFile(targetFile, { preserveResults: true });
         handleTargetChange({
           type: 'range',
           path: source.file_path,
@@ -73,121 +76,147 @@ export function RepositoryBugStudio() {
   };
 
   return (
-    <StudioLayout
-      files={files}
-      filesLoading={filesLoading}
-      selectedFile={selectedFile}
-      onSelectFile={handleSelectFile}
-      showFilePicker={showFilePicker}
-      onToggleFilePicker={setShowFilePicker}
-      activeTarget={activeTarget}
-      activeMobileTab={activeMobileTab}
-      onMobileTabChange={setActiveMobileTab}
-      onOpenHistory={() => setHistoryOpen(true)}
-      historyTitle="View scan history"
-      extraControls={
-        bugResult ? (
-          <div className="hidden sm:flex items-center gap-2 text-xs font-mono">
-            <span className="px-2 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/20 text-[11px]">
-              {bugResult.total_findings} {bugResult.total_findings === 1 ? 'finding' : 'findings'}
-            </span>
-          </div>
-        ) : undefined
-      }
-      actionButton={
-        <button
-          onClick={handleRunScan}
-          disabled={!selectedFile || bugMutation.isPending}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs font-medium transition-colors shadow-xs disabled:opacity-50"
-        >
-          {bugMutation.isPending ? (
-            <>
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              <span>Scanning...</span>
-            </>
-          ) : (
-            <>
-              <ShieldAlert className="h-3.5 w-3.5" />
-              <span>Scan for Bugs</span>
-            </>
-          )}
-        </button>
-      }
-      sourcePanel={
-        selectedFile ? (
-          <CodeViewer
-            repositoryId={repoId}
-            file={selectedFile}
-            activeTarget={activeTarget}
-            onTargetChange={handleTargetChange}
-            highlightedSource={activeSourceReference}
-            onClearHighlightedSource={() => setActiveSourceReference(null)}
-            onTriggerExplain={handleRunScan}
-            isAnalyzing={bugMutation.isPending}
-          />
-        ) : (
-          <div className="flex-1 flex items-center justify-center p-8 text-center text-muted-foreground text-xs">
-            Select a file to inspect its source code.
-          </div>
-        )
-      }
-      resultsPanel={
-        <div className="flex-1 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
-          {bugMutation.isPending ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
-              <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center text-destructive animate-pulse">
-                <ShieldAlert className="h-6 w-6 animate-spin" />
+    <>
+      <StudioLayout
+        files={files}
+        filesLoading={filesLoading}
+        selectedFile={selectedFile}
+        onSelectFile={handleSelectFile}
+        showFilePicker={showFilePicker}
+        onToggleFilePicker={setShowFilePicker}
+        activeTarget={activeTarget}
+        activeMobileTab={activeMobileTab}
+        onMobileTabChange={setActiveMobileTab}
+        onOpenHistory={() => setHistoryOpen(true)}
+        historyTitle="View scan history"
+        extraControls={
+          bugResult ? (
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:flex items-center gap-2 text-xs font-mono">
+                <span className="px-2 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/20 text-[11px]">
+                  {bugResult.total_findings} {bugResult.total_findings === 1 ? 'finding' : 'findings'}
+                </span>
               </div>
-              <h3 className="text-sm font-semibold text-foreground">Auditing code for bugs & security flaws...</h3>
-              <p className="text-xs text-muted-foreground max-w-sm">
-                Running static AST security rules combined with LLM vulnerability analysis.
-              </p>
+              {bugResult.findings.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIssueFinding(bugResult.findings[0])}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-xs font-semibold text-primary transition-colors"
+                  title="Create GitHub Issue & Task from top finding"
+                >
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Create Issue</span>
+                </button>
+              )}
             </div>
-          ) : bugMutation.isError ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-              <ErrorMessage
-                message={bugMutation.error instanceof Error ? bugMutation.error.message : 'Bug scan failed.'}
-              />
-              <button
-                onClick={handleRunScan}
-                className="mt-4 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium"
-              >
-                Retry Scan
-              </button>
-            </div>
-          ) : bugResult ? (
-            <div className="max-w-4xl w-full mx-auto space-y-4">
-              <BugScannerView
-                result={bugResult}
-                activeSourceReference={activeSourceReference}
-                onSelectSourceReference={handleSelectSourceReference}
-              />
-            </div>
+          ) : undefined
+        }
+        actionButton={
+          <button
+            onClick={handleRunScan}
+            disabled={!selectedFile || bugMutation.isPending}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-destructive hover:bg-destructive/90 text-destructive-foreground text-xs font-medium transition-colors shadow-xs disabled:opacity-50"
+          >
+            {bugMutation.isPending ? (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span>Scanning...</span>
+              </>
+            ) : (
+              <>
+                <ShieldAlert className="h-3.5 w-3.5" />
+                <span>Scan for Bugs</span>
+              </>
+            )}
+          </button>
+        }
+        sourcePanel={
+          selectedFile ? (
+            <CodeViewer
+              repositoryId={repoId}
+              file={selectedFile}
+              activeTarget={activeTarget}
+              onTargetChange={handleTargetChange}
+              highlightedSource={activeSourceReference}
+              onClearHighlightedSource={() => setActiveSourceReference(null)}
+              onTriggerExplain={handleRunScan}
+              isAnalyzing={bugMutation.isPending}
+            />
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground space-y-3">
-              <Bug className="h-10 w-10 opacity-30 text-destructive" />
-              <h3 className="text-sm font-semibold text-foreground">Ready to scan</h3>
-              <p className="text-xs max-w-sm">
-                Select a target file or range and click &quot;Scan for Bugs&quot; to detect potential bugs, antipatterns, and security risks.
-              </p>
+            <div className="flex-1 flex items-center justify-center p-8 text-center text-muted-foreground text-xs">
+              Select a file to inspect its source code.
             </div>
-          )}
-        </div>
-      }
-      historyDrawer={
-        <AnalysisHistoryDrawer
-          isOpen={historyOpen}
-          onClose={() => setHistoryOpen(false)}
-          repositoryId={repoId}
-          initialFeature="bugs"
-          onReopenBugs={(reopened) => {
-            setBugResult(reopened);
-            setActiveMobileTab('results');
-            setHistoryOpen(false);
-          }}
-        />
-      }
-    />
+          )
+        }
+        resultsPanel={
+          <div className="flex-1 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
+            {bugMutation.isPending ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
+                <div className="h-12 w-12 rounded-full bg-destructive/10 border border-destructive/20 flex items-center justify-center text-destructive animate-pulse">
+                  <ShieldAlert className="h-6 w-6 animate-spin" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground">Auditing code for bugs & security flaws...</h3>
+                <p className="text-xs text-muted-foreground max-w-sm">
+                  Running static AST security rules combined with LLM vulnerability analysis.
+                </p>
+              </div>
+            ) : bugMutation.isError ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                <ErrorMessage
+                  message={bugMutation.error instanceof Error ? bugMutation.error.message : 'Bug scan failed.'}
+                />
+                <button
+                  onClick={handleRunScan}
+                  className="mt-4 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium"
+                >
+                  Retry Scan
+                </button>
+              </div>
+            ) : bugResult ? (
+              <div className="max-w-4xl w-full mx-auto space-y-4">
+                <BugScannerView
+                  result={bugResult}
+                  activeSourceReference={activeSourceReference}
+                  onSelectSourceReference={handleSelectSourceReference}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground space-y-3">
+                <Bug className="h-10 w-10 opacity-30 text-destructive" />
+                <h3 className="text-sm font-semibold text-foreground">Ready to scan</h3>
+                <p className="text-xs max-w-sm">
+                  Select a target file or range and click &quot;Scan for Bugs&quot; to detect potential bugs, antipatterns, and security risks.
+                </p>
+              </div>
+            )}
+          </div>
+        }
+        historyDrawer={
+          <AnalysisHistoryDrawer
+            isOpen={historyOpen}
+            onClose={() => setHistoryOpen(false)}
+            repositoryId={repoId}
+            initialFeature="bugs"
+            currentFilePath={selectedFile?.path}
+            onReopenBugs={(reopened, target) => {
+              setBugResult(reopened);
+              if (target) handleTargetChange(target);
+              setActiveMobileTab('results');
+              setHistoryOpen(false);
+            }}
+          />
+        }
+      />
+
+      {/* Week 3 Day 1 (F31): Create GitHub Issue & Task Modal */}
+      <CreateIssueModal
+        isOpen={Boolean(issueFinding)}
+        onClose={() => setIssueFinding(null)}
+        repositoryId={repoId}
+        finding={issueFinding}
+        sourceType="BUG_FINDING"
+      />
+    </>
   );
 }
 

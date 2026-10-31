@@ -173,7 +173,11 @@ class WorkspaceCommandRunner:
         )
 
         env = self.sanitize_environment(custom_env)
-        cmd_list = [command, *args]
+        exec_cmd = command
+        if command == "python" and not shutil.which("python"):
+            exec_cmd = shutil.which("python3") or sys.executable
+
+        cmd_list = [exec_cmd, *args]
         if command == "pytest" and not shutil.which("pytest"):
             cmd_list = [sys.executable, "-m", "pytest", *args]
 
