@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,6 +12,7 @@ from app.models.base import TimestampedModel
 
 if TYPE_CHECKING:
     from app.models.analysis_run import AnalysisRun
+    from app.models.task import Task
 
 
 class AnalysisFinding(TimestampedModel, Base):
@@ -69,6 +70,10 @@ class AnalysisFinding(TimestampedModel, Base):
         "AnalysisRun",
         back_populates="findings",
     )
+    tasks: Mapped[List["Task"]] = relationship(
+        "Task",
+        back_populates="finding",
+    )
 
     @property
     def source_reference(self) -> dict[str, Any]:
@@ -84,6 +89,12 @@ class AnalysisFinding(TimestampedModel, Base):
 
     def to_dict(self) -> dict[str, Any]:
         """Convert model to dictionary compatible with BugFinding / ReviewFinding schemas."""
+        meta = self.finding_metadata or {}
+        prov = meta.get("provenance")
+        if not prov:
+            st = str(self.source_type or "").upper()
+            prov = "static_rule" if st == "STATIC" else ("combined" if st == "COMBINED" else "llm")
+
         return {
             "id": str(self.id),
             "analysis_run_id": str(self.analysis_run_id),
@@ -100,6 +111,11 @@ class AnalysisFinding(TimestampedModel, Base):
             "is_new_in_change": self.is_new_in_change,
             "source_type": self.source_type,
             "rule_id": self.rule_id,
+            "provenance": prov,
+            "rule_version": meta.get("rule_version"),
+            "model_version": meta.get("model_version"),
+            "deduplication_key": meta.get("deduplication_key"),
+            "evidence_hash": meta.get("evidence_hash"),
         }
 
     def __getitem__(self, key: str) -> Any:

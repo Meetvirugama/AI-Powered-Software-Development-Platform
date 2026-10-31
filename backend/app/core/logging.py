@@ -29,6 +29,42 @@ class JsonFormatter(logging.Formatter):
         }
         if request_id := request_id_context.get():
             payload["request_id"] = request_id
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            payload["exception"] = record.exc_text
+        if record.stack_info:
+            payload["stack_info"] = self.formatStack(record.stack_info)
+
+        # Include custom extra fields passed via extra={...}
+        standard_attrs = {
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "message",
+        }
+        for key, val in record.__dict__.items():
+            if key not in standard_attrs and not key.startswith("_"):
+                payload[key] = val
+
         return json.dumps(payload, default=str)
 
 
@@ -40,7 +76,10 @@ def configure_logging(level: str) -> None:
     # output or exception text into logs.
     handler.addFilter(SecretRedactingFilter())
     root_logger = logging.getLogger()
-    root_logger.handlers = [handler]
+    existing_capture_handlers = [
+        h for h in root_logger.handlers if "LogCaptureHandler" in type(h).__name__ or "capture" in type(h).__name__.lower()
+    ]
+    root_logger.handlers = [handler, *existing_capture_handlers]
     root_logger.setLevel(level.upper())
 
 

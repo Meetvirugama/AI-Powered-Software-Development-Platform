@@ -469,10 +469,23 @@ class TestRetrieve:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_retrieve_exception_returns_empty(self):
-        """Retriever errors are caught — the pipeline degrades gracefully."""
+    async def test_retrieve_exception_raises_retryable_503(self):
+        """B-08: Retriever errors raise retryable 503 APIError rather than masquerading as empty results."""
+        from app.core.errors import APIError
         mock_retriever = AsyncMock()
         mock_retriever.retrieve.side_effect = ConnectionError("DB down")
+        pipeline = RAGPipeline(retriever=mock_retriever)
+
+        with pytest.raises(APIError) as exc_info:
+            await pipeline._retrieve("query", uuid.uuid4())
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_retrieve_zero_matches_returns_empty_list(self):
+        """B-08: When retriever runs without error but finds 0 matches, return legitimate empty list."""
+        mock_retriever = AsyncMock()
+        mock_retriever.retrieve.return_value = []
         pipeline = RAGPipeline(retriever=mock_retriever)
 
         result = await pipeline._retrieve("query", uuid.uuid4())

@@ -42,6 +42,7 @@ Implements the complete Day 5 & Scenario D / E requirements from `Docs/week2.md`
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import inspect
 import json
 import logging
@@ -180,8 +181,17 @@ def _reconstruct_indexed_file(
             .all()
         )
         return "\n".join(c.content for c in chunks if c.content)
-    except Exception:
-        return ""
+    except Exception as exc:
+        logger.error(
+            "reconstruct_indexed_file_db_error",
+            extra={"repository_id": str(repository_id), "file_id": str(file_record.id), "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file content.",
+            retryable=True,
+        ) from exc
 
 
 async def resolve_review_target_and_build_context(
@@ -203,8 +213,8 @@ async def resolve_review_target_and_build_context(
     if target.path is not None:
         target.path = require_safe_repo_path(target.path)
 
-    # Lightweight unit-test mode when `db` is a mock `object()` without `.query`
-    if not hasattr(db, "query") and getattr(app_state, "github_source_service", None) is None:
+    # Lightweight unit-test mode when `db` is a mock without `.query`
+    if (getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query")) and getattr(app_state, "github_source_service", None) is None:
         mod_files: list[ModifiedFile] = []
         if target.type == "file" and target.path:
             mod_files.append(ModifiedFile(file_path=target.path, change_type="modified", content=""))
@@ -241,7 +251,7 @@ async def resolve_review_target_and_build_context(
 
     # Load indexed repository files from DB when available
     all_repo_files: list[RepositoryFile] = []
-    if hasattr(db, "query"):
+    if hasattr(db, "query") and not (getattr(db, "_is_mock_db", None) is True):
         try:
             all_repo_files = (
                 db.query(RepositoryFile)
@@ -249,8 +259,17 @@ async def resolve_review_target_and_build_context(
                 .order_by(RepositoryFile.path)
                 .all()
             )
-        except Exception:
-            all_repo_files = []
+        except Exception as exc:
+            logger.error(
+                "resolve_review_target_db_error",
+                extra={"repository_id": str(repository_id), "error": str(exc)},
+            )
+            raise APIError(
+                503,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                "Database service is temporarily unavailable during review target resolution.",
+                retryable=True,
+            ) from exc
 
     indexed_paths: dict[str, int] = {f.path: (f.line_count or 0) for f in all_repo_files}
     path_to_record: dict[str, RepositoryFile] = {f.path: f for f in all_repo_files}
@@ -271,14 +290,27 @@ async def resolve_review_target_and_build_context(
     if target.type == "file":
         safe_path = require_safe_repo_path(target.path or "")
         target.path = safe_path
-        file_rec = path_to_record.get(safe_path)
-        if all_repo_files and file_rec is None:
+        if not all_repo_files:
+            sync_status = getattr(repo, "sync_status", None)
+            if sync_status in ("NOT_SYNCED", "SYNCING"):
+                raise APIError(
+                    409,
+                    ErrorCode.CONFLICT,
+                    f"Repository indexing is in progress or not yet synced (status: {sync_status}). Please wait for indexing to complete.",
+                )
             raise APIError(
                 404,
                 ErrorCode.FILE_NOT_FOUND,
                 f"Target file '{safe_path}' was not found in the indexed repository.",
             )
-        if file_rec is not None and (file_rec.size_bytes or 0) > MAX_ANALYZABLE_FILE_BYTES:
+        file_rec = path_to_record.get(safe_path)
+        if file_rec is None:
+            raise APIError(
+                404,
+                ErrorCode.FILE_NOT_FOUND,
+                f"Target file '{safe_path}' was not found in the indexed repository.",
+            )
+        if (file_rec.size_bytes or 0) > MAX_ANALYZABLE_FILE_BYTES:
             raise APIError(
                 413,
                 ErrorCode.PAYLOAD_TOO_LARGE,
@@ -818,26 +850,56 @@ def normalize_and_ground_review_findings(
         if resolved.indexed_paths and clean_path not in resolved.allowed_paths:
             continue
 
+        s_line = finding.source_reference.start_line
+        e_line = finding.source_reference.end_line
+        if s_line is not None and e_line is not None and s_line > e_line:
+            s_line, e_line = min(s_line, e_line), max(s_line, e_line)
+
         # Security (W2 Day 5, Sukun): bound line references for EVERY target type
         # (file, commit, PR, diff), not only `file`, so the model cannot cite lines
         # that do not exist in the reviewed revision.
         max_lines = _max_known_line(resolved, clean_path)
         if max_lines > 0:
-            s_line = finding.source_reference.start_line
-            e_line = finding.source_reference.end_line
             if s_line is not None and s_line > max_lines:
                 continue
             if e_line is not None and e_line > max_lines:
                 continue
 
+        # 3. Provenance & metadata computation (B-16)
+        prov = finding.provenance or (
+            "static_rule" if finding.source_type == "STATIC" else ("combined" if finding.source_type == "COMBINED" else "llm")
+        )
+        ev_hash = finding.evidence_hash or (
+            hashlib.sha256(finding.evidence.strip().encode("utf-8")).hexdigest()[:16] if finding.evidence else None
+        )
+        dedup_key = finding.deduplication_key or f"{clean_path}:{s_line or 0}-{e_line or 0}:{str(finding.category).lower()}:{finding.rule_id or 'ai'}"
+        rule_ver = finding.rule_version or ("1.0.0" if finding.rule_id else None)
+
+        # 4. Severity inflation guard (B-16)
+        sev = finding.severity
+        if finding.source_type == "AI" and (finding.is_uncertain or finding.confidence == "low") and sev == "CRITICAL":
+            sev = "MEDIUM"
+
         updated_ref = finding.source_reference.model_copy(
             update={
                 "repository_id": str(repository_id),
                 "file_path": clean_path,
-                "revision": finding.source_reference.revision or resolved.revision,
+                "start_line": s_line,
+                "end_line": e_line,
+                "revision": resolved.revision or finding.source_reference.revision,
             }
         )
-        finding = sanitize_review_finding(finding.model_copy(update={"source_reference": updated_ref}))
+        finding = finding.model_copy(
+            update={
+                "source_reference": updated_ref,
+                "severity": sev,
+                "provenance": prov,
+                "evidence_hash": ev_hash,
+                "deduplication_key": dedup_key,
+                "rule_version": rule_ver,
+            }
+        )
+        finding = sanitize_review_finding(finding)
         grounded.append(finding)
 
     return grounded
@@ -855,6 +917,14 @@ def merge_and_rank_review_findings(
             continue
         matched_idx: int | None = None
         for idx, existing in enumerate(merged):
+            # Check exact deduplication_key match first
+            if (
+                existing.deduplication_key
+                and candidate.deduplication_key
+                and existing.deduplication_key == candidate.deduplication_key
+            ):
+                matched_idx = idx
+                break
             if (
                 existing.rule_id
                 and candidate.rule_id
@@ -883,24 +953,39 @@ def merge_and_rank_review_findings(
         else:
             pri = merged[matched_idx]
             sec = candidate
-            higher_sev: FindingSeverity = (
-                pri.severity
-                if SEVERITY_RANK.get(pri.severity, 0) >= SEVERITY_RANK.get(sec.severity, 0)
-                else sec.severity
-            )
             origins = {pri.source_type, sec.source_type}
             if origins == {"STATIC", "AI"} or "COMBINED" in origins:
                 m_source = "COMBINED"
+                m_prov = "combined"
                 m_conf = "high"
                 m_uncertain = False
+
+                # B-16 Guard: Never elevate severity solely because an LLM labels it high.
+                # If static rule categorized the defect as INFO or LOW, an LLM finding must not inflate it.
+                static_f = pri if pri.source_type == "STATIC" else (sec if sec.source_type == "STATIC" else None)
+                ai_f = pri if pri.source_type == "AI" else (sec if sec.source_type == "AI" else None)
+                if static_f and ai_f and static_f.severity in ("INFO", "LOW") and ai_f.severity in ("HIGH", "CRITICAL"):
+                    higher_sev = static_f.severity
+                else:
+                    higher_sev = (
+                        pri.severity
+                        if SEVERITY_RANK.get(pri.severity, 0) >= SEVERITY_RANK.get(sec.severity, 0)
+                        else sec.severity
+                    )
             else:
                 m_source = pri.source_type
+                m_prov = pri.provenance or ("static_rule" if m_source == "STATIC" else "llm")
                 m_conf = (
                     pri.confidence
                     if CONFIDENCE_RANK.get(pri.confidence, 0) >= CONFIDENCE_RANK.get(sec.confidence, 0)
                     else sec.confidence
                 )
                 m_uncertain = pri.is_uncertain and sec.is_uncertain
+                higher_sev = (
+                    pri.severity
+                    if SEVERITY_RANK.get(pri.severity, 0) >= SEVERITY_RANK.get(sec.severity, 0)
+                    else sec.severity
+                )
 
             if sec.evidence and sec.evidence not in pri.evidence:
                 m_evidence = f"{pri.evidence} | Corroborating evidence: {sec.evidence}"
@@ -909,24 +994,40 @@ def merge_and_rank_review_findings(
 
             s_lines = [x for x in (pri.source_reference.start_line, sec.source_reference.start_line) if x is not None]
             e_lines = [x for x in (pri.source_reference.end_line, sec.source_reference.end_line) if x is not None]
+            s_min = min(s_lines) if s_lines else None
+            e_max = max(e_lines) if e_lines else None
             m_ref = pri.source_reference.model_copy(
                 update={
-                    "start_line": min(s_lines) if s_lines else None,
-                    "end_line": max(e_lines) if e_lines else None,
+                    "start_line": s_min,
+                    "end_line": e_max,
                     "symbol_name": pri.source_reference.symbol_name or sec.source_reference.symbol_name,
+                    "revision": pri.source_reference.revision or sec.source_reference.revision,
                 }
             )
+
+            merged_hash = pri.evidence_hash or sec.evidence_hash
+            if not merged_hash and m_evidence:
+                merged_hash = hashlib.sha256(m_evidence.strip().encode("utf-8")).hexdigest()[:16]
+
+            rule_id = pri.rule_id or sec.rule_id
+            merged_dedup_key = f"{pri.source_reference.file_path}:{s_min or 0}-{e_max or 0}:{str(pri.category).lower()}:{rule_id or 'combined'}"
+
             merged[matched_idx] = sanitize_review_finding(
                 pri.model_copy(
                     update={
                         "severity": higher_sev,
                         "source_type": m_source,  # type: ignore[arg-type]
+                        "provenance": m_prov,
                         "confidence": m_conf,  # type: ignore[arg-type]
                         "is_uncertain": m_uncertain,
                         "is_new_in_change": pri.is_new_in_change or sec.is_new_in_change,
                         "evidence": m_evidence,
                         "suggested_fix": pri.suggested_fix or sec.suggested_fix,
-                        "rule_id": pri.rule_id or sec.rule_id,
+                        "rule_id": rule_id,
+                        "rule_version": pri.rule_version or sec.rule_version,
+                        "model_version": pri.model_version or sec.model_version,
+                        "deduplication_key": merged_dedup_key,
+                        "evidence_hash": merged_hash,
                         "source_reference": m_ref,
                     }
                 )

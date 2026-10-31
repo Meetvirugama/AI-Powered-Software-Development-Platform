@@ -80,7 +80,12 @@ class IncrementalIndexer:
         dialect = getattr(bind, "dialect", None)
         return getattr(dialect, "name", "") == "sqlite"
 
-    async def _execute(self, stmt: Any, params: dict[str, Any] | None = None) -> Any:
+    async def _execute(
+        self,
+        stmt: Any,
+        params: dict[str, Any] | None = None,
+        sess: Any = None,
+    ) -> Any:
         """Helper to run SQL across AsyncSession, sync Session, or sessionmaker."""
         bound_params = dict(params or {})
         if self._is_sqlite():
@@ -96,23 +101,25 @@ class IncrementalIndexer:
                 if bound_params.get("embedding") is None:
                     bound_params["embedding"] = json.dumps([0.0] * 768)
 
-        if hasattr(self._db, "execute"):
-            if inspect.iscoroutinefunction(self._db.execute):
-                return await self._db.execute(stmt, bound_params)
-            return self._db.execute(stmt, bound_params)
+        target_session = sess or self._db
+        if hasattr(target_session, "execute"):
+            if inspect.iscoroutinefunction(target_session.execute):
+                return await target_session.execute(stmt, bound_params)
+            return target_session.execute(stmt, bound_params)
         else:
-            async with self._db() as session:
+            async with target_session() as session:
                 res = await session.execute(stmt, bound_params)
                 await session.commit()
                 return res
 
-    async def _commit(self) -> None:
+    async def _commit(self, sess: Any = None) -> None:
         """Helper to commit transactions."""
-        if hasattr(self._db, "commit"):
-            if inspect.iscoroutinefunction(self._db.commit):
-                await self._db.commit()
+        target = sess or self._db
+        if hasattr(target, "commit"):
+            if inspect.iscoroutinefunction(target.commit):
+                await target.commit()
             else:
-                self._db.commit()
+                target.commit()
 
     async def sync(
         self,
@@ -121,12 +128,8 @@ class IncrementalIndexer:
         root_path: str = "",
     ) -> dict[str, int]:
         """
-        Incrementally index scanned repository files.
-
-        1. Fetch existing (path, content_hash) pairs from repository_files.
-        2. Compare with newly scanned files.
-        3. Skip unchanged files (hash match).
-        4. For changed/new files: delete old chunks & symbols, insert symbols, chunk symbols, redact secrets, embed, insert chunks.
+        Incrementally index scanned repository files within a single atomic session transaction.
+        (task2.md §1.7, P0.1, P0.2, P0.3)
         """
         logger.info(
             "Starting incremental sync for repo %s with %d files",
@@ -134,11 +137,48 @@ class IncrementalIndexer:
             len(scanned_files),
         )
 
+        session = None
+        is_managed_session = False
+        if hasattr(self._db, "execute"):
+            session = self._db
+        elif callable(self._db):
+            session = self._db()
+            is_managed_session = True
+
+        try:
+            return await self._run_sync(
+                session=session,
+                repository_id=repository_id,
+                scanned_files=scanned_files,
+                root_path=root_path,
+            )
+        except Exception:
+            if session is not None and hasattr(session, "rollback"):
+                if inspect.iscoroutinefunction(session.rollback):
+                    await session.rollback()
+                else:
+                    session.rollback()
+            raise
+        finally:
+            if is_managed_session and session is not None and hasattr(session, "close"):
+                if inspect.iscoroutinefunction(session.close):
+                    await session.close()
+                else:
+                    session.close()
+
+    async def _run_sync(
+        self,
+        session: Any,
+        repository_id: UUID,
+        scanned_files: list[Any],
+        root_path: str = "",
+    ) -> dict[str, int]:
+        """Internal worker executing indexing and deletion reconciliation inside the active transaction."""
         # 1. Fetch existing hashes from DB
         query = text(
             "SELECT path, content_hash, id FROM repository_files WHERE repository_id = :repo_id"
         )
-        result = await self._execute(query, {"repo_id": repository_id})
+        result = await self._execute(query, {"repo_id": repository_id}, sess=session)
         rows = result.fetchall() if hasattr(result, "fetchall") else []
 
         existing_files: dict[str, dict[str, Any]] = {
@@ -197,6 +237,7 @@ class IncrementalIndexer:
                 await self._execute(
                     text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
                     {"repo_id": repository_id, "file_id": file_id},
+                    sess=session,
                 )
                 await self._execute(
                     text(
@@ -205,10 +246,12 @@ class IncrementalIndexer:
                         "OR target_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id))"
                     ),
                     {"repo_id": repository_id, "file_id": file_id},
+                    sess=session,
                 )
                 await self._execute(
                     text("DELETE FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id"),
                     {"repo_id": repository_id, "file_id": file_id},
+                    sess=session,
                 )
 
                 # Update the record in repository_files
@@ -232,6 +275,7 @@ class IncrementalIndexer:
                         "language": language,
                         "file_id": file_id,
                     },
+                    sess=session,
                 )
             else:
                 file_id = uuid.uuid4()
@@ -252,6 +296,7 @@ class IncrementalIndexer:
                         "line_count": line_count,
                         "hash": new_hash,
                     },
+                    sess=session,
                 )
 
             # Extract symbols if language is supported and persist them to code_symbols
@@ -290,6 +335,7 @@ class IncrementalIndexer:
                                 "signature": redact(sym.signature) if sym.signature else None,
                                 "parent_id": parent_uuid,
                             },
+                            sess=session,
                         )
                         persisted_symbol_ids.add(sym_uuid)
                         all_extracted_symbols.append(sym)
@@ -328,14 +374,18 @@ class IncrementalIndexer:
                     )
                     vectors = []
 
-            if self.embedding_service is not None and not vectors:
-                logger.warning(
-                    "Skipping code_chunks persistence for file %s because embeddings could not be generated.",
-                    file_rel_path,
-                )
-                indexed_count += 1
-                await asyncio.sleep(0.05)
-                continue
+                # Validate embedding batch integrity (task2.md §1.7, P0.3):
+                # Reject incomplete batches, vector count mismatches, or malformed/empty vectors
+                if not vectors or len(vectors) != len(chunks) or any(v is None or len(v) == 0 for v in vectors):
+                    logger.error(
+                        "Embedding batch validation failed for %s: expected %d vectors, got %d. Skipping chunk persistence to prevent corrupted partial index.",
+                        file_rel_path,
+                        len(chunks),
+                        len(vectors) if vectors else 0,
+                    )
+                    indexed_count += 1
+                    await asyncio.sleep(0.05)
+                    continue
 
             # Insert chunks into code_chunks
             chunk_query = text(
@@ -356,6 +406,8 @@ class IncrementalIndexer:
                     "file_path": file_rel_path,
                     "language": language,
                     "chunk_type": chunk.chunk_type,
+                    "embedding_model": getattr(self.embedding_service, "model_name", "models/gemini-embedding-001"),
+                    "embedding_dim": len(vec) if vec is not None else (self.embedding_service.dimensions if self.embedding_service else 768),
                 }
 
                 await self._execute(
@@ -373,10 +425,50 @@ class IncrementalIndexer:
                         "hash": chunk.content_hash,
                         "metadata": json.dumps(metadata),
                     },
+                    sess=session,
                 )
 
             indexed_count += 1
             await asyncio.sleep(0.05)
+
+        # Reconcile removed/deleted files (task2.md §1.7, P0.2)
+        scanned_rel_paths = {
+            getattr(f, "path", str(f)).replace("\\", "/")
+            for f in scanned_files
+        }
+        removed_paths = set(existing_files.keys()) - scanned_rel_paths
+        reconciled_removed_count = 0
+        if removed_paths:
+            logger.info("Reconciling %d removed files from repo %s", len(removed_paths), repository_id)
+            for rm_path in removed_paths:
+                file_info = existing_files[rm_path]
+                file_id = file_info.get("file_id")
+                if file_id:
+                    await self._execute(
+                        text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
+                        {"repo_id": repository_id, "file_id": file_id},
+                        sess=session,
+                    )
+                    await self._execute(
+                        text(
+                            "DELETE FROM symbol_edges WHERE repository_id = :repo_id "
+                            "AND (source_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id) "
+                            "OR target_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id))"
+                        ),
+                        {"repo_id": repository_id, "file_id": file_id},
+                        sess=session,
+                    )
+                    await self._execute(
+                        text("DELETE FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id"),
+                        {"repo_id": repository_id, "file_id": file_id},
+                        sess=session,
+                    )
+                    await self._execute(
+                        text("DELETE FROM repository_files WHERE id = :file_id"),
+                        {"file_id": file_id},
+                        sess=session,
+                    )
+                    reconciled_removed_count += 1
 
         if all_extracted_symbols:
             try:
@@ -400,15 +492,17 @@ class IncrementalIndexer:
                             "target_id": edge.target_id,
                             "edge_type": edge.edge_type,
                         },
+                        sess=session,
                     )
             except Exception as edge_exc:
                 logger.debug("Symbol edge persistence skipped for repo %s: %s", repository_id, edge_exc)
 
-        await self._commit()
+        await self._commit(sess=session)
         logger.info(
-            "Incremental sync finished for repo %s: indexed=%d, skipped=%d",
+            "Incremental sync finished for repo %s: indexed=%d, skipped=%d, reconciled_removed=%d",
             repository_id,
             indexed_count,
             skipped_count,
+            reconciled_removed_count,
         )
-        return {"indexed": indexed_count, "skipped": skipped_count}
+        return {"indexed": indexed_count, "skipped": skipped_count, "reconciled_removed": reconciled_removed_count}

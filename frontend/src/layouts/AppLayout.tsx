@@ -17,8 +17,8 @@ export function AppLayout() {
   // Maintain the SSE connection for the duration of the authenticated session.
   useRealtimeRepositories();
 
-  const isChatRoute = location.pathname.endsWith('/chat');
-  const isDetailRoute = /^\/app\/repositories\/[^/]+$/.test(location.pathname);
+  // Check if we are inside any repository workspace studio
+  const isRepositoryWorkspace = location.pathname.includes('/repositories/');
 
 
   async function handleLogout() {
@@ -119,12 +119,8 @@ export function AppLayout() {
         {/* Content area */}
         <main className="flex-1 bg-background min-w-0 overflow-hidden flex flex-col h-full">
           <ErrorBoundary>
-            {isChatRoute ? (
-              <div className="h-full flex flex-col min-h-0">
-                <Outlet />
-              </div>
-            ) : isDetailRoute ? (
-              <div className="h-full flex flex-col min-h-0 p-3 sm:p-4 lg:p-5 overflow-hidden">
+            {isRepositoryWorkspace ? (
+              <div className="h-full flex flex-col min-h-0 overflow-hidden">
                 <Outlet />
               </div>
             ) : (

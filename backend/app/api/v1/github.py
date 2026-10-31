@@ -18,6 +18,7 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
 import httpx
+from pydantic import BaseModel
 from app.repositories.user_repository import UserRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.github_installation_repository import GitHubInstallationRepository
@@ -51,6 +52,7 @@ async def list_github_repositories(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     search: str = Query(default=""),
+    installation_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> PaginatedAvailableRepositoryResponse:
     """Return repositories accessible via the user's GitHub App installation."""
@@ -58,28 +60,45 @@ async def list_github_repositories(
 
     # Get user's GitHub installations
     installation_repo = GitHubInstallationRepository(db)
+    user = UserRepository(db).get_by_id(user_id)
+
+    # If installation_id passed in query params, ensure it is linked to this user
+    if installation_id and user:
+        try:
+            installation_repo.upsert(
+                user_id=user.id,
+                installation_id=str(installation_id).strip(),
+                account_login=user.login,
+                permissions={},
+            )
+        except Exception as exc:
+            logger.warning("query_installation_link_error", extra={"error": str(exc)})
+
     installations = installation_repo.list_by_user(user_id)
 
     # Auto-sync installations from GitHub App if not found in database
     github_service = getattr(request.app.state, "github_service", None)
     if not installations and github_service:
-        user = UserRepository(db).get_by_id(user_id)
         if user:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.get(
-                        "https://api.github.com/app/installations",
+                        "https://api.github.com/app/installations?per_page=100",
                         headers=github_service._app_auth_headers(),
                     )
                     if resp.is_success:
                         app_installs = resp.json()
                         for inst in app_installs:
-                            acc_login = inst.get("account", {}).get("login", "")
-                            if acc_login.lower() == user.login.lower():
+                            acc_login = (inst.get("account") or {}).get("login", "")
+                            acc_id = str(inst.get("target_id") or (inst.get("account") or {}).get("id") or "")
+                            if (
+                                (acc_login and acc_login.lower() == user.login.lower())
+                                or (user.github_id and acc_id == str(user.github_id))
+                            ):
                                 installation_repo.upsert(
                                     user_id=user.id,
                                     installation_id=str(inst["id"]),
-                                    account_login=acc_login,
+                                    account_login=acc_login or user.login,
                                     permissions=inst.get("permissions", {}),
                                 )
                         installations = installation_repo.list_by_user(user_id)
@@ -119,7 +138,7 @@ async def list_github_repositories(
                         )
                     )
             except Exception as exc:
-                logger.warning("github_list_repos_error", extra={"error": str(exc)})
+                logger.error("github_list_repos_error: %s", exc, exc_info=True)
     else:
         # Fallback: return connected repos as available (no GitHub App configured)
         for r in connected_repos:
@@ -269,6 +288,41 @@ async def connect_repository(
     )
 
 
+class LinkInstallationRequest(BaseModel):
+    installation_id: str
+
+
+@router.post("/installations/link", summary="Link a GitHub App installation to the authenticated user")
+async def link_github_installation(
+    body: LinkInstallationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Explicitly link an installation ID to the current authenticated user."""
+    user_id = _request_user_id(request)
+    user = UserRepository(db).get_by_id(user_id)
+    if not user:
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "User account not found.")
+
+    inst_id_clean = body.installation_id.strip()
+    if not inst_id_clean:
+        raise APIError(400, ErrorCode.BAD_REQUEST, "installation_id cannot be empty.")
+
+    installation_repo = GitHubInstallationRepository(db)
+    inst = installation_repo.upsert(
+        user_id=user.id,
+        installation_id=inst_id_clean,
+        account_login=user.login,
+        permissions={},
+    )
+    return {
+        "status": "linked",
+        "installation_id": inst.installation_id,
+        "user_id": str(user.id),
+        "account_login": inst.account_login,
+    }
+
+
 @router.get("/installation/callback", summary="GitHub App installation redirect callback")
 async def github_installation_callback(
     request: Request,
@@ -304,13 +358,20 @@ async def github_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Process incoming GitHub App webhook events with HMAC signature verification."""
+    """Process incoming GitHub App webhook events with HMAC signature verification, size checks, and deduplication."""
     import hashlib
     import hmac
     import json
+    import re
+    from app.core.redis import get_redis
+
+    MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024  # 5 MB
 
     settings = get_settings()
     body_bytes = await request.body()
+
+    if len(body_bytes) > MAX_WEBHOOK_BODY_BYTES:
+        raise APIError(413, ErrorCode.BAD_REQUEST, "Webhook payload exceeds maximum allowed size.")
 
     # Security Fix: Fail closed if webhook secret is not configured
     if not settings.github_webhook_secret:
@@ -333,12 +394,33 @@ async def github_webhook(
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid GitHub webhook signature.")
 
     event = request.headers.get("X-GitHub-Event", "ping")
+    delivery_id = request.headers.get("X-GitHub-Delivery")
+
+    # Validate delivery ID format if present and perform deduplication
+    if delivery_id:
+        if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", delivery_id):
+            raise APIError(400, ErrorCode.BAD_REQUEST, "Invalid X-GitHub-Delivery header.")
+        try:
+            r = get_redis()
+            if r and hasattr(r, "set"):
+                was_set = r.set(f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True)
+                if not was_set:
+                    logger.info("github_webhook_duplicate_delivery", extra={"delivery_id": delivery_id, "event": event})
+                    return {"status": "duplicate_delivery_ignored", "delivery_id": delivery_id}
+        except Exception as redis_exc:
+            logger.warning("webhook_dedup_redis_failed", extra={"error": str(redis_exc)})
+
+    logger.info("github_webhook_received", extra={"event": event, "delivery_id": delivery_id})
+
     if event == "ping":
         return {"status": "pong"}
 
     try:
         payload = json.loads(body_bytes.decode("utf-8"))
     except Exception:
+        return {"status": "ignored_bad_payload"}
+
+    if not isinstance(payload, dict):
         return {"status": "ignored_bad_payload"}
 
     action = payload.get("action")

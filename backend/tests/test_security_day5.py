@@ -149,7 +149,7 @@ class TestPromptInjection:
             "What does the README say?", uuid.uuid4(), [])
         request = llm.generate.call_args.args[0]
         assert INJECTION not in request.messages[0].content      # not in system
-        assert set(answer.model_dump()) == {"answer", "sources", "confidence"}  # data only
+        assert set(answer.model_dump()) in ({"answer", "sources", "confidence"}, {"answer", "sources", "confidence", "status"})  # data only
 
 # ---------------------------------------------------------------- 5. XSS
 RAW_HTML_SINKS = re.compile(

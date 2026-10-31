@@ -15,6 +15,7 @@ import { apiClient } from './api';
 import type {
   PaginatedRepositoryResponse,
   Repository,
+  RepositoryFile,
   PaginatedRepositoryFileResponse,
   RepositoryDependency,
   RepositoryFileContent,
@@ -67,6 +68,7 @@ export async function getRepository(id: string): Promise<Repository> {
 export interface GetRepositoryFilesParams {
   page: number;
   pageSize: number;
+  path?: string;
 }
 
 /**
@@ -84,10 +86,35 @@ export async function getRepositoryFiles(
       params: {
         page: params.page,
         page_size: params.pageSize,
+        ...(params.path ? { path: params.path } : {}),
       },
     },
   );
   return response.data;
+}
+
+/**
+ * Look up an indexed repository file by exact path.
+ *
+ * GET /api/v1/repositories/:id/files/by-path?path=...
+ */
+export async function lookupRepositoryFileByPath(
+  id: string,
+  path: string,
+): Promise<RepositoryFile | null> {
+  try {
+    const response = await apiClient.get<RepositoryFile>(
+      `/repositories/${id}/files/by-path`,
+      { params: { path } },
+    );
+    return response.data;
+  } catch (err: unknown) {
+    const errorObj = err as { status?: number; response?: { status?: number } } | null;
+    if (errorObj?.status === 404 || errorObj?.response?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -112,10 +139,10 @@ export async function getRepositoryDependencies(
  */
 export async function syncRepository(
   id: string,
+  force: boolean = false,
 ): Promise<{ job_id: string }> {
-  const response = await apiClient.post<{ job_id: string }>(
-    `/repositories/${id}/sync`,
-  );
+  const url = force ? `/repositories/${id}/sync?force=true` : `/repositories/${id}/sync`;
+  const response = await apiClient.post<{ job_id: string }>(url);
   return response.data;
 }
 

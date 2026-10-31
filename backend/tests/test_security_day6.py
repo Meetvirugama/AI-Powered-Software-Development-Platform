@@ -109,7 +109,8 @@ class TestRateLimiting:
             assert client.get("/api/v1/repositories", headers=auth_headers).status_code != 429
         assert limiter_store.counts == {}
 
-    def test_limiter_fails_open_when_redis_is_down(self, client, auth_headers, monkeypatch):
+    def test_limiter_fails_open_for_general_endpoints_when_redis_is_down(self, client, auth_headers, monkeypatch):
+        """General non-AI endpoints (e.g. repo sync) fail open during Redis outages to preserve availability."""
         class BrokenStore:
             def hit(self, key, window_seconds):
                 raise ConnectionError("redis down")
@@ -118,6 +119,49 @@ class TestRateLimiting:
         for _ in range(10):
             res = client.post(f"/api/v1/repositories/{uuid4()}/sync", headers=auth_headers)
             assert res.status_code != 429
+
+    def test_ai_endpoints_enforce_in_memory_fallback_during_redis_outage(self, client, auth_headers, monkeypatch):
+        """B-04: Expensive AI endpoints enforce bounded in-memory rate limiting when Redis is down."""
+        class BrokenStore:
+            def hit(self, key, window_seconds):
+                raise ConnectionError("redis timeout")
+
+        monkeypatch.setattr(rate_limit, "get_rate_limit_store", lambda: BrokenStore())
+        rate_limit._fallback_ai_store.reset()
+
+        repo_id = uuid4()
+        url = f"/api/v1/repositories/{repo_id}/chat"
+        body = {"question": "Where is auth?"}
+
+        # 30 allowed requests
+        for i in range(30):
+            res = client.post(url, json=body, headers=auth_headers)
+            assert res.status_code != 429, f"request {i + 1} was rate limited too early"
+            assert res.headers.get("X-RateLimit-Fallback") == "local-in-memory"
+
+        # 31st request exceeds limit -> 429 RATE_LIMITED
+        res = client.post(url, json=body, headers=auth_headers)
+        assert res.status_code == 429
+        assert res.json()["error"]["code"] == "RATE_LIMITED"
+        assert res.headers.get("X-RateLimit-Fallback") == "local-in-memory"
+        assert 1 <= int(res.headers["Retry-After"]) <= 60
+
+
+def test_bounded_in_memory_store_pruning():
+    """B-04: Test BoundedInMemoryRateLimitStore behavior, pruning, and bounding."""
+    from app.core.rate_limit import BoundedInMemoryRateLimitStore
+
+    store = BoundedInMemoryRateLimitStore(max_keys=10)
+    assert store.hit("k1", 60) == 1
+    assert store.hit("k1", 60) == 2
+
+    # Add 15 keys to trigger pruning
+    for i in range(15):
+        store.hit(f"k_temp_{i}", 60)
+
+    # Should not exceed max_keys
+    assert len(store._counts) <= 15
+
 
 
 def test_redis_store_uses_incr_and_expire():

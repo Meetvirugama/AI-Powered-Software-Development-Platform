@@ -1,16 +1,21 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Cpu, ShieldCheck, Terminal, Layers, AlertCircle } from 'lucide-react';
+import { API_BASE_URL } from '../services/api';
 
 export function Login() {
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [searchParams] = useSearchParams();
   const errorParam = searchParams.get('error');
+  const redirectParam = searchParams.get('redirect');
 
   function handleGitHubLogin() {
     setIsRedirecting(true);
+    if (redirectParam && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('auth_redirect', redirectParam);
+    }
     // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
-    window.location.href = `/api/v1/auth/github/login`;
+    window.location.href = `${API_BASE_URL}/auth/github/login`;
   }
 
   return (

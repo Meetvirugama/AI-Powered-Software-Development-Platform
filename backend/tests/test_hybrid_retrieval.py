@@ -685,3 +685,108 @@ class TestHybridRetrieverRerankerWiring:
         assert results[0].score == 0.99
         mock_reranker.rerank.assert_called_once()
 
+
+class TestHybridRetrieverGracefulDegradationAndFailureDistinction:
+    """Quality and failure tests for B-08 (distinguishing empty results from retrieval failures)."""
+
+    @pytest.mark.asyncio
+    async def test_both_retrievers_failing_raises_retrieval_unavailable_error(self):
+        """When both vector and lexical backends fail, an explicit RetrievalUnavailableError must be raised."""
+        from ai.retrieval.base import RetrievalUnavailableError
+        from ai.retrieval.hybrid import HybridRetriever
+
+        mock_vector = AsyncMock()
+        mock_vector.retrieve.side_effect = ConnectionError("pgvector unreachable")
+        mock_lexical = AsyncMock()
+        mock_lexical.retrieve.side_effect = RuntimeError("PostgreSQL FTS connection pool exhausted")
+
+        hybrid = HybridRetriever(
+            vector_retriever=mock_vector,
+            lexical_retriever=mock_lexical,
+        )
+
+        repo_id = uuid.uuid4()
+        with pytest.raises(RetrievalUnavailableError) as exc_info:
+            await hybrid.retrieve("authentication service", repo_id)
+
+        assert "both vector and lexical search failed" in str(exc_info.value).lower()
+        assert exc_info.value.repo_id == str(repo_id)
+        assert isinstance(exc_info.value.vector_error, ConnectionError)
+        assert isinstance(exc_info.value.lexical_error, RuntimeError)
+
+    @pytest.mark.asyncio
+    async def test_both_retrievers_succeeding_with_no_matches_returns_empty_list(self):
+        """When both backends succeed without error but find 0 matching chunks, return legitimate empty list."""
+        from ai.retrieval.hybrid import HybridRetriever
+
+        mock_vector = AsyncMock()
+        mock_vector.retrieve.return_value = []
+        mock_lexical = AsyncMock()
+        mock_lexical.retrieve.return_value = []
+
+        hybrid = HybridRetriever(
+            vector_retriever=mock_vector,
+            lexical_retriever=mock_lexical,
+        )
+
+        results = await hybrid.retrieve("query with zero hits", uuid.uuid4())
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_query_varieties_exact_symbol_natural_language_typo_identifier(self):
+        """Test exact symbol, natural language, typo, and identifier-only queries across hybrid retrieval."""
+        from ai.retrieval.hybrid import HybridRetriever
+
+        repo_id = uuid.uuid4()
+        queries = [
+            "UserRepository.get_by_id",       # exact symbol
+            "How does user authentication work?",  # natural language
+            "authentcate usr paswrd",         # typo
+            "jwt_secret_key",                 # identifier-only
+        ]
+
+        mock_vector = AsyncMock()
+        mock_lexical = AsyncMock()
+        hybrid = HybridRetriever(
+            vector_retriever=mock_vector,
+            lexical_retriever=mock_lexical,
+        )
+
+        for q in queries:
+            c_v = _make_chunk(content=f"vector for {q}", score=0.85)
+            c_l = _make_chunk(content=f"lexical for {q}", score=0.75)
+            mock_vector.retrieve.return_value = [c_v]
+            mock_lexical.retrieve.return_value = [c_l]
+
+            res = await hybrid.retrieve(q, repo_id, top_k=2)
+            assert len(res) == 2
+            mock_vector.retrieve.assert_awaited_with(query=q, repository_id=repo_id, top_k=30)
+            mock_lexical.retrieve.assert_awaited_with(query=q, repository_id=repo_id, top_k=30)
+
+    @pytest.mark.asyncio
+    async def test_cross_repository_isolation_enforced(self):
+        """Retrieval must strictly isolate requests to the requested repository UUID."""
+        from ai.retrieval.hybrid import HybridRetriever
+
+        repo1 = uuid.uuid4()
+        repo2 = uuid.uuid4()
+
+        mock_vector = AsyncMock()
+        mock_vector.retrieve.return_value = []
+        mock_lexical = AsyncMock()
+        mock_lexical.retrieve.return_value = []
+
+        hybrid = HybridRetriever(
+            vector_retriever=mock_vector,
+            lexical_retriever=mock_lexical,
+        )
+
+        await hybrid.retrieve("query repo1", repo1)
+        assert mock_vector.retrieve.call_args.kwargs["repository_id"] == repo1
+        assert mock_lexical.retrieve.call_args.kwargs["repository_id"] == repo1
+
+        await hybrid.retrieve("query repo2", repo2)
+        assert mock_vector.retrieve.call_args.kwargs["repository_id"] == repo2
+        assert mock_lexical.retrieve.call_args.kwargs["repository_id"] == repo2
+
+

@@ -21,6 +21,10 @@ export interface FileTreeProps {
   selectedFile: RepositoryFile | null;
   onSelectFile: (file: RepositoryFile) => void;
   className?: string;
+  totalFiles?: number;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
 }
 
 interface TreeNode {
@@ -54,6 +58,10 @@ export function FileTree({
   selectedFile,
   onSelectFile,
   className,
+  totalFiles,
+  hasMore,
+  isLoadingMore,
+  onLoadMore,
 }: FileTreeProps) {
   const [filter, setFilter] = useState('');
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
@@ -251,6 +259,43 @@ export function FileTree({
           treeData.map((node) => renderNode(node, 0))
         )}
       </div>
+
+      {/* File count and Load More footer (F-02) */}
+      {!isLoading && !isError && files.length > 0 && (
+        <div className="p-2 border-t border-border/60 bg-background/50 shrink-0 flex flex-col gap-1.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center justify-between">
+            <span>
+              Files: <strong className="text-foreground">{files.length}</strong>
+              {totalFiles !== undefined && totalFiles > files.length && (
+                <span> / {totalFiles}</span>
+              )}
+            </span>
+            {totalFiles !== undefined && totalFiles > files.length ? (
+              <span className="text-[10px] bg-amber-500/10 text-amber-500 px-1.5 py-0.5 rounded font-medium border border-amber-500/20">
+                {totalFiles - files.length} more
+              </span>
+            ) : (
+              <span className="text-[10px] text-muted-foreground/60">All loaded</span>
+            )}
+          </div>
+          {hasMore && onLoadMore && (
+            <button
+              onClick={onLoadMore}
+              disabled={isLoadingMore}
+              className="w-full py-1 px-2 text-xs rounded bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              {isLoadingMore ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  <span>Loading files...</span>
+                </>
+              ) : (
+                <span>Load more files (+500)</span>
+              )}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

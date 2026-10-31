@@ -75,6 +75,17 @@ class RepositoryAnswer(BaseModel):
             "low    — no sources grounded or answer is uncertain."
         ),
     )
+    status: Literal[
+        "completed",
+        "no_match",
+        "index_not_ready",
+        "retrieval_degraded",
+        "provider_unavailable",
+        "invalid_output",
+    ] = Field(
+        default="completed",
+        description="Outcome status of the Q&A generation.",
+    )
 
 
 # ---------------------------------------------------------------------------

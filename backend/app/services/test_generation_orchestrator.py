@@ -610,6 +610,7 @@ def validate_and_sanitize_generated_tests(
         )
 
     deduped_warnings = list(dict.fromkeys(warnings))
+    val_stage = "generated and statically validated" if final_syntax_valid else "syntax validation failed"
     return result.model_copy(
         update={
             "proposed_test_path": safe_test_path,
@@ -618,6 +619,12 @@ def validate_and_sanitize_generated_tests(
             "assumptions_and_warnings": deduped_warnings,
             "syntax_valid": final_syntax_valid,
             "validation_errors": merged_val_errors,
+            "validation_stage": val_stage,
+            "schema_valid": True,
+            "code_syntactically_valid": final_syntax_valid,
+            "framework_recognized": result.detected_framework in ("pytest", "unittest", "jest"),
+            "execution_attempted": False,
+            "execution_status": "NOT_EXECUTED",
             "sources": grounded_sources,
         }
     )
