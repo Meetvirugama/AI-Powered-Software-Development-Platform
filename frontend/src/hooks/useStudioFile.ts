@@ -4,6 +4,11 @@
  * Consolidates the identical file-selection pattern that previously existed
  * in RepositoryExplainStudio, RepositoryBugStudio, RepositoryTestStudio,
  * and RepositoryReviewStudio (~30 duplicate lines each).
+ *
+ * BUG-W3-05 Fix:
+ * `handleSelectFile` accepts an optional `{ preserveResults?: boolean }` flag
+ * so cross-file source reference navigation in BugScannerView / ExplanationResultView
+ * switches the code viewer file without wiping the active analysis result!
  */
 
 import { useState, useMemo } from 'react';
@@ -18,6 +23,10 @@ export interface TargetRange {
   symbol?: string | null;
 }
 
+export interface SelectFileOptions {
+  preserveResults?: boolean;
+}
+
 export interface UseStudioFileReturn {
   /** The currently selected repository file, or null if none loaded yet. */
   selectedFile: RepositoryFile | null;
@@ -30,10 +39,10 @@ export interface UseStudioFileReturn {
   /** Show or hide the file picker popover. */
   setShowFilePicker: (visible: boolean) => void;
   /**
-   * Called when the user selects a file in the file picker.
+   * Called when the user selects a file in the file picker or via citation click.
    * Resets target range, updates the URL search param, and hides the picker.
    */
-  handleSelectFile: (file: RepositoryFile) => void;
+  handleSelectFile: (file: RepositoryFile, options?: SelectFileOptions) => void;
   /**
    * Called when the code viewer emits a new range selection.
    * Narrows the analysis target to the specified lines or symbol.
@@ -107,7 +116,7 @@ export function useStudioFile(
     [selectedFile, targetRange]
   );
 
-  const handleSelectFile = (file: RepositoryFile) => {
+  const handleSelectFile = (file: RepositoryFile, options?: SelectFileOptions) => {
     setFileOverride({ repoId, file });
     setTargetRange({});
     setSearchParams((prev) => {
@@ -116,7 +125,9 @@ export function useStudioFile(
       return next;
     });
     setShowFilePicker(false);
-    onFileChange?.();
+    if (!options?.preserveResults) {
+      onFileChange?.();
+    }
   };
 
   const handleTargetChange = (target: AnalysisTarget) => {

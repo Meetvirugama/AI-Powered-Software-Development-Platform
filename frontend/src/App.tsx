@@ -26,6 +26,9 @@ const RepositoryTestStudio = lazy(() =>
 const RepositoryReviewStudio = lazy(() =>
   import('./pages/RepositoryReviewStudio').then((m) => ({ default: m.RepositoryReviewStudio }))
 );
+const RepositoryTaskStudio = lazy(() =>
+  import('./pages/RepositoryTaskStudio').then((m) => ({ default: m.RepositoryTaskStudio }))
+);
 const NotFound = lazy(() => import('./pages/NotFound').then((m) => ({ default: m.NotFound })));
 const Tasks = lazy(() => import('./pages/Tasks').then((m) => ({ default: m.Tasks })));
 const CreateTask = lazy(() => import('./pages/CreateTask').then((m) => ({ default: m.CreateTask })));
@@ -66,6 +69,7 @@ export function App() {
                   <Route path="bugs" element={<RepositoryBugStudio />} />
                   <Route path="tests" element={<RepositoryTestStudio />} />
                   <Route path="review" element={<RepositoryReviewStudio />} />
+                  <Route path="tasks" element={<RepositoryTaskStudio />} />
                 </Route>
               </Route>
             </Route>

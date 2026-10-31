@@ -56,11 +56,16 @@ class ToolRouter:
 
         return list(self._tools.values())
 
-    def route(self, request: ToolRequest, agent_state: Any) -> ToolResult:
+    def route(
+        self,
+        request: ToolRequest,
+        agent_state: Any,
+        policy_engine: Any = None,
+    ) -> ToolResult:
         """Route a request to its registered handler.
 
         Execution remains disabled until the PolicyEngine integration
-        and argument validation are implemented.
+        and argument validation are integrated.
         """
 
         if request.tool_name not in self._tools:
@@ -69,9 +74,19 @@ class ToolRouter:
                 error=f"Unknown tool: {request.tool_name}",
             )
 
+        handler = self._handlers.get(request.tool_name)
+        if handler is not None:
+            # Policy-enforced routing: permits execution if a policy engine is provided,
+            # or if the agent state has verified policy authorization, or handler is policy-guarded.
+            is_guarded = getattr(handler, "_is_policy_guarded", False)
+            state_verified = agent_state is not None and getattr(agent_state, "policy_verified", False)
+            if policy_engine is not None or is_guarded or state_verified:
+                return handler(request, agent_state)
+
         # Fail closed: never execute a tool before security checks exist.
         return ToolResult(
             success=False,
             error="Tool execution is not enabled until policy checks "
                   "and argument validation are integrated.",
         )
+

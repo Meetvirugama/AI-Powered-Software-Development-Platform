@@ -2,29 +2,45 @@
  * Typed API Service Layer for Week 3 Tasks, Structured Planning & Approvals.
  *
  * Uses the centralized apiClient instance from './api'.
- * All 13 endpoints are strictly typed with types from '../types/task'.
+ * Strictly typed with types from '../types/task'.
  */
 
-import { apiClient } from './api';
+import { apiClient, AI_ANALYSIS_TIMEOUT_MS } from './api';
 import type {
+  CreateIssueFromFindingPayload,
+  CreateTaskPayload,
+  GitHubIssueItem,
+  GitHubIssueListResponse,
+  ImportIssuePayload,
+  IssueImportRequest,
+  IssueImportResponse,
+  PlanApprovalRequest,
+  PlanGenerateRequest,
+  PlanRejectionRequest,
+  TaskApproval,
   TaskCreateRequest,
+  TaskDetail,
   TaskDetailResponse,
+  TaskDiffRanges,
+  TaskEvent,
+  TaskEventListResponse,
   TaskListFilterParams,
   TaskListResponse,
   TaskPlan,
-  PlanGenerateRequest,
-  PlanApprovalRequest,
-  PlanRejectionRequest,
-  TaskEventListResponse,
   TaskTestResultsResponse,
   VerificationResult,
-  IssueImportRequest,
-  IssueImportResponse,
-  GitHubIssueListResponse,
   WorkspaceMetadata,
-  TaskDiffRanges,
   WorkspaceRepairBudgetStatus,
 } from '../types/task';
+
+export type {
+  CreateTaskPayload,
+  GitHubIssueItem,
+  GitHubIssueListResponse,
+  ImportIssuePayload,
+  TaskApproval,
+  TaskEvent,
+};
 
 // ============================================================================
 // Task Intake & Detail Service Functions
@@ -46,6 +62,13 @@ export async function listTasks(params?: TaskListFilterParams): Promise<TaskList
 export async function getTask(taskId: string): Promise<TaskDetailResponse> {
   const response = await apiClient.get<TaskDetailResponse>(`/tasks/${taskId}`);
   return response.data;
+}
+
+/**
+ * Alias for getTask to support both caller conventions.
+ */
+export async function getTaskDetail(taskId: string): Promise<TaskDetail> {
+  return getTask(taskId);
 }
 
 /**
@@ -80,7 +103,9 @@ export async function generateTaskPlan(
   taskId: string,
   payload?: PlanGenerateRequest
 ): Promise<TaskPlan> {
-  const response = await apiClient.post<TaskPlan>(`/tasks/${taskId}/plan`, payload || {});
+  const response = await apiClient.post<TaskPlan>(`/tasks/${taskId}/plan`, payload || {}, {
+    timeout: AI_ANALYSIS_TIMEOUT_MS,
+  });
   return response.data;
 }
 
@@ -91,8 +116,8 @@ export async function generateTaskPlan(
 export async function approveTaskPlan(
   taskId: string,
   payload: PlanApprovalRequest
-): Promise<TaskDetailResponse> {
-  const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/approve`, payload);
+): Promise<any> {
+  const response = await apiClient.post<any>(`/tasks/${taskId}/approve`, payload);
   return response.data;
 }
 
@@ -103,13 +128,13 @@ export async function approveTaskPlan(
 export async function rejectTaskPlan(
   taskId: string,
   payload: PlanRejectionRequest
-): Promise<TaskDetailResponse> {
-  const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/reject`, payload);
+): Promise<any> {
+  const response = await apiClient.post<any>(`/tasks/${taskId}/reject`, payload);
   return response.data;
 }
 
 /**
- * Dispatch task for workspace execution. Prohibited in Day 1/2 UI workflows.
+ * Dispatch task for workspace execution.
  * POST /api/v1/tasks/:taskId/execute
  */
 export async function executeTask(
@@ -118,6 +143,13 @@ export async function executeTask(
 ): Promise<TaskDetailResponse> {
   const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/execute`, payload || {});
   return response.data;
+}
+
+/**
+ * Alias for executeTask to support both caller conventions.
+ */
+export async function executeApprovedTask(taskId: string): Promise<TaskDetail> {
+  return executeTask(taskId);
 }
 
 /**
@@ -178,13 +210,27 @@ export async function getTaskRepairBudget(taskId: string): Promise<WorkspaceRepa
 /**
  * Retrieve chronological stream of lifecycle and audit events for a task.
  * GET /api/v1/tasks/:taskId/events
+ *
+ * Normalizes array vs { items, total } responses so that callers can use
+ * either `eventsRes.items` or iterate over `eventsRes` directly as an array.
  */
 export async function getTaskEvents(
   taskId: string,
   params?: { limit?: number; since?: string }
 ): Promise<TaskEventListResponse> {
-  const response = await apiClient.get<TaskEventListResponse>(`/tasks/${taskId}/events`, { params });
-  return response.data;
+  const response = await apiClient.get<any>(`/tasks/${taskId}/events`, { params });
+  const raw = response.data;
+  if (Array.isArray(raw)) {
+    const list = [...raw] as any;
+    list.items = raw;
+    list.total = raw.length;
+    return list as TaskEventListResponse;
+  }
+  const items = Array.isArray(raw?.items) ? raw.items : [];
+  const list = [...items] as any;
+  list.items = items;
+  list.total = typeof raw?.total === 'number' ? raw.total : items.length;
+  return list as TaskEventListResponse;
 }
 
 /**
@@ -230,11 +276,33 @@ export async function importGitHubIssue(
  */
 export async function listRepositoryIssues(
   repositoryId: string,
-  params?: { state?: 'open' | 'closed' | 'all'; page?: number; page_size?: number }
-): Promise<GitHubIssueListResponse> {
-  const response = await apiClient.get<GitHubIssueListResponse>(
+  params?: { state?: 'open' | 'closed' | 'all'; page?: number; page_size?: number; syncRemote?: boolean }
+): Promise<any> {
+  const response = await apiClient.get<any>(
     `/repositories/${repositoryId}/issues`,
-    { params }
+    {
+      params: {
+        state: params?.state ?? 'all',
+        page: params?.page,
+        page_size: params?.page_size,
+        sync_remote: params?.syncRemote ?? false,
+      },
+    }
+  );
+  return response.data;
+}
+
+/**
+ * Create a new GitHub issue from a bug/review finding.
+ * POST /api/v1/repositories/:repositoryId/issues
+ */
+export async function createGitHubIssue(
+  repositoryId: string,
+  payload: CreateIssueFromFindingPayload
+): Promise<IssueImportResponse> {
+  const response = await apiClient.post<IssueImportResponse>(
+    `/repositories/${repositoryId}/issues`,
+    payload
   );
   return response.data;
 }

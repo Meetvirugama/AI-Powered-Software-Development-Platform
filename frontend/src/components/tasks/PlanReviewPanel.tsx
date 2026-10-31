@@ -421,7 +421,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                     <div>
                       <span className="font-medium text-muted-foreground">Automated Tests:</span>
                       <ul className="list-disc list-inside mt-0.5 space-y-0.5">
-                        {plan.validation_strategy.automated_tests.map((t, i) => (
+                        {plan.validation_strategy.automated_tests.map((t: string, i: number) => (
                           <li key={i} className="font-mono text-[11px]">{t}</li>
                         ))}
                       </ul>

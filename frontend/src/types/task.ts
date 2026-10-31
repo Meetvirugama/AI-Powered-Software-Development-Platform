@@ -75,12 +75,13 @@ export function canTransition(current: TaskStatus, target: TaskStatus): boolean 
 // 2. Task Source Reference (VERIFIED: backend/app/schemas/task.py:121-177)
 // ============================================================================
 
-export type TaskSourceType = 'GITHUB_ISSUE' | 'BUG_FINDING' | 'REVIEW_FINDING' | 'USER_PROMPT';
+export type TaskSourceType = 'GITHUB_ISSUE' | 'BUG_FINDING' | 'REVIEW_FINDING' | 'USER_PROMPT' | string;
 
 export interface TaskSourceReference {
   type: TaskSourceType;
   issue_number?: number | null;
   issue_url?: string | null;
+  url?: string | null;
   finding_id?: string | null;
   repository_id?: string | null;
   base_revision?: string | null;
@@ -141,6 +142,7 @@ export interface TaskCreateRequest {
 }
 
 export type TaskIntakePayload = TaskCreateRequest;
+export type CreateTaskPayload = TaskCreateRequest;
 
 export interface TaskDetailResponse {
   task_id: string;
@@ -149,12 +151,33 @@ export interface TaskDetailResponse {
   description: string;
   status: TaskStatus;
   source: TaskSourceReference;
+  source_type?: TaskSourceType;
   requirements: TaskRequirement[];
   assumptions: TaskAssumption[];
   constraints: TaskConstraint[];
   base_revision: string | null;
   plan_version: number;
   approved_plan_version: number | null;
+  repair_attempts_used: number;
+  repair_attempts_max: number;
+  latest_plan?: TaskPlan | null;
+  approvals?: TaskApproval[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type TaskDetail = TaskDetailResponse;
+
+export interface TaskSummary {
+  task_id: string;
+  repository_id: string;
+  title: string;
+  status: TaskStatus;
+  source_type?: TaskSourceType;
+  source: TaskSourceReference;
+  base_revision?: string | null;
+  plan_version: number;
+  approved_plan_version?: number | null;
   repair_attempts_used: number;
   repair_attempts_max: number;
   created_at: string;
@@ -169,9 +192,11 @@ export interface TaskListResponse {
   total_pages?: number;
 }
 
+export type PaginatedTaskListResponse = TaskListResponse;
+
 export interface TaskListFilterParams {
   repository_id?: string;
-  status?: TaskStatus;
+  status?: TaskStatus | string;
   search?: string;
   page?: number;
   page_size?: number;
@@ -182,7 +207,18 @@ export interface TaskListFilterParams {
 // Marked provisional until merged into origin/main backend schemas.
 // ============================================================================
 
-export type PlanStepType = 'inspect' | 'edit' | 'create' | 'test' | 'verify' | 'refactor' | 'command';
+export type PlanStepType =
+  | 'inspect'
+  | 'edit'
+  | 'create'
+  | 'delete'
+  | 'test'
+  | 'verify'
+  | 'refactor'
+  | 'command';
+
+export type PlanStepActionType = PlanStepType;
+
 export type PlanStepRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 export interface PlanStep {
@@ -190,8 +226,11 @@ export interface PlanStep {
   title?: string;
   description: string;
   step_type?: PlanStepType;
+  action_type?: string;
   expected_files: string[];
+  target_files?: string[];
   dependencies?: string[];
+  depends_on?: string[];
   verification: string[];
   risk_level?: PlanStepRiskLevel;
   rollback_hint?: string;
@@ -199,10 +238,12 @@ export interface PlanStep {
 }
 
 export interface PlanRisk {
-  risk_id: string;
+  id?: string;
+  risk_id?: string;
   description: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
   mitigation: string;
+  affected_files?: string[];
 }
 
 export interface ValidationStrategy {
@@ -212,26 +253,37 @@ export interface ValidationStrategy {
   rollback_plan?: string;
 }
 
-export type TaskPlanStatus = 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED';
+export type TaskPlanStatus = 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | string;
+
+export interface PlanResourceBudget {
+  tokens?: number;
+  max_tokens?: number;
+  max_repair_attempts?: number;
+  max_files_modified?: number;
+  timeout_seconds?: number;
+}
 
 export interface TaskPlan {
+  plan_id?: string;
   task_id: string;
   plan_version: number;
   base_revision: string;
+  plan_hash?: string;
   summary: string;
   problem_statement?: string;
-  assumptions: string[];
-  unresolved_questions: string[];
-  relevant_files: string[];
+  assumptions: string[] | TaskAssumption[];
+  unresolved_questions?: string[];
+  relevant_files?: string[];
+  relevant_symbols?: string[];
   steps: PlanStep[];
-  expected_files_to_modify: string[];
-  tests_to_add: string[];
-  validation_strategy: string | ValidationStrategy;
-  risks: string[] | PlanRisk[];
+  expected_files?: string[];
+  expected_files_to_modify?: string[];
+  tests_to_run?: string[];
+  tests_to_add?: string[];
+  validation_strategy: string | ValidationStrategy | any;
+  risks?: string[] | PlanRisk[] | any;
   required_permissions?: string[];
-  resource_budget?: {
-    tokens?: number;
-  };
+  resource_budget?: PlanResourceBudget;
   status: TaskPlanStatus;
   approved_by?: string | null;
   approved_at?: string | null;
@@ -243,16 +295,21 @@ export interface TaskPlan {
 export interface PlanGenerateRequest {
   regenerate?: boolean;
   prompt_instructions?: string;
+  revision_notes?: string;
+  base_revision?: string;
+  custom_plan?: any;
 }
 
 export interface PlanApprovalRequest {
-  plan_version: number;
+  plan_version?: number;
   notes?: string;
+  comment?: string;
+  base_revision?: string;
   approved_by?: string;
 }
 
 export interface PlanRejectionRequest {
-  plan_version: number;
+  plan_version?: number;
   reason?: string;
   rejected_by?: string;
 }
@@ -268,15 +325,31 @@ export interface PlanApproval {
   created_at: string;
 }
 
+export interface TaskApproval {
+  id?: string;
+  approval_id?: string;
+  task_id: string;
+  plan_version: number;
+  decision: 'APPROVED' | 'REJECTED';
+  notes?: string;
+  comment?: string;
+  user_id?: string;
+  created_at: string;
+}
+
 // ============================================================================
 // 6. Chronological Events & Timeline (PROVISIONAL: origin/yug & Docs/week3.md §6 F38)
 // ============================================================================
 
 export interface TaskEvent {
-  id: string;
-  task_id: string;
+  id?: string;
+  event_id?: string;
+  task_id?: string;
   event_type: string;
-  description: string;
+  summary?: string;
+  description?: string;
+  from_status?: string | null;
+  to_status?: string | null;
   details?: Record<string, unknown>;
   created_at: string;
   user_id?: string | null;
@@ -303,6 +376,8 @@ export interface GitHubIssue {
   is_imported?: boolean;
 }
 
+export type GitHubIssueItem = GitHubIssue;
+
 export interface GitHubIssueListResponse {
   items: GitHubIssue[];
   total: number;
@@ -312,13 +387,31 @@ export interface GitHubIssueListResponse {
 
 export interface IssueImportRequest {
   issue_number: number;
+  title?: string;
+  source_type?: string;
 }
+
+export type ImportIssuePayload = IssueImportRequest;
 
 export interface IssueImportResponse {
   task_id: string;
   source: TaskSourceReference;
   title: string;
   status: TaskStatus;
+  issue?: {
+    issue_number: number;
+    html_url?: string;
+    [key: string]: any;
+  };
+}
+
+export interface CreateIssueFromFindingPayload {
+  title: string;
+  body: string;
+  labels?: string[];
+  finding_id?: string;
+  source_type?: TaskSourceType;
+  create_task?: boolean;
 }
 
 // ============================================================================
@@ -369,6 +462,12 @@ export interface TaskTestResultsResponse {
   repair_attempts_used: number;
   repair_attempts_max: number;
   repair_history?: RepairAttemptRecord[];
+  status?: TestOutcomeStatus;
+  passed?: number;
+  failed?: number;
+  errors?: number;
+  duration_ms?: number;
+  output?: string;
 }
 
 export type VerificationCheckStatus = 'PASSED' | 'FAILED' | 'SKIPPED' | 'UNAVAILABLE' | 'COMPLETED';
@@ -379,6 +478,7 @@ export interface VerificationFinding {
   id: string;
   severity: FindingSeverity;
   category: string;
+  title: string;
   message: string;
   file_path?: string | null;
   line_number?: number | null;

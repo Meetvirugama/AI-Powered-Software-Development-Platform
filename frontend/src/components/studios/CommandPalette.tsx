@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   FlaskConical,
   FileCheck,
+  ListTodo,
   Search,
   FileCode,
   X,
@@ -53,6 +54,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId: string; onClose: () 
     if (location.pathname.includes('/bugs')) return `/app/repositories/${repoId}/bugs`;
     if (location.pathname.includes('/tests')) return `/app/repositories/${repoId}/tests`;
     if (location.pathname.includes('/review')) return `/app/repositories/${repoId}/review`;
+    if (location.pathname.includes('/tasks')) return `/app/repositories/${repoId}/tasks`;
     if (location.pathname.includes('/chat')) return `/app/repositories/${repoId}/chat`;
     return `/app/repositories/${repoId}/explain`;
   }, [location.pathname, repoId]);
@@ -122,6 +124,17 @@ function CommandPaletteModal({ repoId, onClose }: { repoId: string; onClose: () 
         icon: FileCheck,
         action: () => {
           navigate(`/app/repositories/${repoId}/review`);
+          onClose();
+        },
+      },
+      {
+        id: 'studio-tasks',
+        type: 'studio',
+        title: 'Agent Tasks Studio',
+        subtitle: 'Import GitHub issues, generate execution plans, and approve runs',
+        icon: ListTodo,
+        action: () => {
+          navigate(`/app/repositories/${repoId}/tasks`);
           onClose();
         },
       },
