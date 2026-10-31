@@ -1,3 +1,5 @@
+"""Database models package."""
+
 from app.models.base import TimestampedModel
 from app.models.user import User
 from app.models.github_installation import GitHubInstallation
@@ -12,16 +14,21 @@ from app.models.pull_request import PullRequest
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus, AnalysisFeature
 from app.models.analysis_finding import AnalysisFinding
 from app.models.task import (
+    AgentTask,
     ApprovalDecision,
     ExecutionStatus,
+    GitHubIssue,
     RepairResult,
     Task,
     TaskApproval,
+    TaskApprovalRecord,
     TaskCheckpoint,
     TaskEvent,
+    TaskEventRecord,
     TaskEventType,
     TaskExecution,
     TaskPlan,
+    TaskPlanRecord,
     TaskPlanStatus,
     TaskPullRequest,
     TaskSourceType,
@@ -41,10 +48,11 @@ __all__ = [
     "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus",
     "MemoryEntry", "MemoryType", "MemoryStatus", "PullRequest",
     "AnalysisRun", "AnalysisRunStatus", "AnalysisFeature", "AnalysisFinding",
+    "GitHubIssue", "AgentTask", "TaskPlanRecord", "TaskApprovalRecord", "TaskEventRecord",
     "Task", "TaskStatus", "TaskSourceType", "TaskPlan", "TaskPlanStatus",
     "TaskApproval", "ApprovalDecision", "Workspace", "WorkspaceStatus",
     "TaskExecution", "ExecutionStatus", "ToolInvocation", "ToolInvocationStatus",
-    "TestRun", "TestRunStatus", "RepairAttempt", "RepairResult",
+    "TestRun", "TestRunStatus", "RepairResult",
     "VerificationResult", "VerificationStatus", "TaskCheckpoint",
     "TaskEvent", "TaskEventType", "TaskPullRequest",
 ]

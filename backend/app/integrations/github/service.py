@@ -40,8 +40,10 @@ from app.integrations.github.client import GitHubAPIError, GitHubClient
 from app.integrations.github.schemas import PullRequestInfo
 from app.models.github_installation import GitHubInstallation as DBGitHubInstallation
 from app.models.repository import Repository
+from app.core.secret_redaction import redact
 from .base import (
     GitHubBranch,
+    GitHubIssueData,
     GitHubInstallation,
     GitHubIntegrationBase,
     GitHubRepository,
@@ -67,6 +69,7 @@ _DEFAULT_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "ai_platform_workspaces"
 
 _GITHUB_API_BASE = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
+_SAFE_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 
 
 class GitHubService(GitHubIntegrationBase, GitHubSourceService):
@@ -116,6 +119,35 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_owner_and_repo(owner: str, repo: str) -> tuple[str, str]:
+        clean_owner = (owner or "").strip()
+        clean_repo = (repo or "").strip()
+        if not _SAFE_OWNER_REPO_RE.match(clean_owner):
+            raise ValueError(f"Invalid repository owner: {owner!r}")
+        if not _SAFE_OWNER_REPO_RE.match(clean_repo):
+            raise ValueError(f"Invalid repository name: {repo!r}")
+        return clean_owner, clean_repo
+
+    async def _resolve_headers(self, installation_id: int | None = None) -> dict[str, str]:
+        """Return installation auth headers when  is supplied, else App JWT headers."""
+        if installation_id is not None:
+            return await self._installation_auth_headers(int(installation_id))
+        return self._app_auth_headers()
+
+    async def _post(
+        self,
+        url: str,
+        headers: dict[str, str],
+        json_body: dict[str, Any],
+        installation_id: int | None = None,
+    ) -> Any:
+        """Perform a POST request and handle errors uniformly."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, headers=headers, json=json_body)
+        await self._handle_response_errors(response, installation_id)
+        return response.json()
 
     def _app_auth_headers(self) -> dict[str, str]:
         """Return headers for GitHub App-level (JWT) requests."""
@@ -687,6 +719,146 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         return await client.compare_commits(owner, repo, base, head)
+
+    async def create_task_branch(
+        self,
+        owner: str,
+        repo: str,
+        task_id: UUID | str,
+        base_revision: str | None = None,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Create an isolated task branch agent/task-{id} from base_revision (F33 / W3-04)."""
+        import re
+        from app.services.git_branch import format_agent_branch_name
+
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        branch_name = format_agent_branch_name(task_id)
+
+        # Rule 563: Reject collision with protected branches
+        if branch_name.lower() in {"main", "master", "develop", "production", "staging"}:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Task branch {branch_name} conflicts with protected branch.")
+
+        # Resolve base revision
+        source_ref = (base_revision or "main").strip()
+        sha: str | None = None
+        if re.match(r"^[0-9a-fA-F]{7,64}$", source_ref):
+            commit = await client.get_commit(owner, repo, source_ref)
+            sha = commit.get("sha", source_ref)
+        else:
+            clean_b = source_ref.removeprefix("refs/heads/")
+            branch = await client.get_branch(owner, repo, clean_b)
+            sha = branch.get("commit", {}).get("sha")
+
+        if not sha:
+            raise APIError(500, ErrorCode.INTERNAL_SERVER_ERROR, f"Could not determine SHA for base {source_ref}")
+
+        created_ref = await client.create_branch(owner, repo, branch_name, sha)
+        return {"branch_name": branch_name, "base_branch": source_ref, "base_sha": sha, "ref": created_ref}
+
+    # ------------------------------------------------------------------
+    # Week 3 Day 1 (F31): GitHub Issue Integration
+    # ------------------------------------------------------------------
+
+    async def create_issue(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str = "",
+        labels: list[str] | None = None,
+        installation_id: int | None = None,
+    ) -> GitHubIssueData:
+        """Create a GitHub issue using GitHub App tokens (Parth W3 Day 1 — F31)."""
+        clean_owner, clean_repo = self._validate_owner_and_repo(owner, repo)
+        safe_title = redact((title or "").strip())
+        if not safe_title:
+            raise ValueError("Issue title must not be empty.")
+        safe_body = redact(body or "")
+        safe_labels = [
+            redact(str(lbl).strip()) for lbl in (labels or []) if str(lbl).strip()
+        ]
+
+        headers = await self._resolve_headers(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{clean_owner}/{clean_repo}/issues"
+        payload: dict[str, Any] = {
+            "title": safe_title,
+            "body": safe_body,
+        }
+        if safe_labels:
+            payload["labels"] = safe_labels
+
+        data = await self._post(url, headers, payload, installation_id)
+        return self._parse_issue(data)
+
+    async def get_issue(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+        installation_id: int | None = None,
+    ) -> GitHubIssueData:
+        """Retrieve a single GitHub issue by number using GitHub App tokens (F31)."""
+        clean_owner, clean_repo = self._validate_owner_and_repo(owner, repo)
+        if not isinstance(issue_number, int) or isinstance(issue_number, bool) or issue_number < 1:
+            raise ValueError("issue_number must be a positive integer.")
+
+        headers = await self._resolve_headers(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{clean_owner}/{clean_repo}/issues/{issue_number}"
+        data = await self._get(url, headers, installation_id)
+        return self._parse_issue(data)
+
+    async def list_issues(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        state: str = "open",
+        installation_id: int | None = None,
+    ) -> list[GitHubIssueData]:
+        """List issues for a repository (filtering out pull requests returned by GitHub's issues endpoint)."""
+        clean_owner, clean_repo = self._validate_owner_and_repo(owner, repo)
+        safe_state = state if state in ("open", "closed", "all") else "open"
+
+        headers = await self._resolve_headers(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{clean_owner}/{clean_repo}/issues?state={safe_state}&per_page=50"
+        data = await self._get(url, headers, installation_id)
+        if not isinstance(data, list):
+            return []
+        parsed = [self._parse_issue(item) for item in data if isinstance(item, dict)]
+        return [issue for issue in parsed if not issue.is_pull_request]
+
+    @staticmethod
+    def _parse_issue(data: dict[str, Any]) -> GitHubIssueData:
+        created_raw = data.get("created_at")
+        updated_raw = data.get("updated_at")
+        created_at = datetime.fromisoformat(created_raw.replace("Z", "+00:00")) if created_raw else None
+        updated_at = datetime.fromisoformat(updated_raw.replace("Z", "+00:00")) if updated_raw else None
+
+        raw_labels = data.get("labels", []) or []
+        labels: list[str] = []
+        for lbl in raw_labels:
+            if isinstance(lbl, dict) and lbl.get("name"):
+                labels.append(redact(str(lbl["name"])))
+            elif isinstance(lbl, str):
+                labels.append(redact(lbl))
+
+        user_obj = data.get("user")
+        author = user_obj.get("login") if isinstance(user_obj, dict) else None
+
+        return GitHubIssueData(
+            number=data.get("number", 0),
+            title=redact(data.get("title", "")),
+            body=redact(data.get("body", "")),
+            state=data.get("state", "open"),
+            html_url=data.get("html_url", ""),
+            labels=labels,
+            author=author,
+            created_at=created_at,
+            updated_at=updated_at,
+            is_pull_request="pull_request" in data,
+        )
 
     async def _resolve_token(self, installation_id: UUID | str | None) -> str:
         """Resolve installation token from DB installation_id or config."""
