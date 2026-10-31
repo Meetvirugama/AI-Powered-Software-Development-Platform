@@ -626,7 +626,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ✅ Prit: `WorkspaceManager` execution start, human approval gate, lifecycle transitions, command allowlist runner, timeline events & Devu `ToolRouter` policy bridge (`Docs/workspace_execution_start_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/command_runner.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d3_workspace_execution.py`)
 - ✅ Parth: Task branch isolation creating `agent/task-<id>` from base revision (`GitBranchService.setup_task_branch_isolation()`, `resolve_base_revision()`, `create_isolated_task_workspace()`, `POST /api/v1/repositories/{id}/source/task-branch/isolate`, `test_week3_day3_task_branch_isolation.py`, `PR #149`)
-- ⬜ Devu: `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas
+- ✅ Devu: Policy-enforced `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas (`backend/agent/tools/router.py`, `backend/tests/test_tool_router.py`)
 - ⬜ Meet: Agent execution loop executing approved plan steps with loop detection
 - ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
 - ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs
@@ -637,7 +637,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Prit: Restricted test runner (`WorkspaceTestRunner`) executing `pytest` or `npm test` with timeout, 100 KB output bounds, failure classification, bounded 3-attempt auto-repair loop, duplicate patch rejection, and ToolRouter integration (`Docs/restricted_test_runner_bounded_repair_audit.md`, `backend/sandbox/test_runner.py`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d4_restricted_test_runner.py`)
 - ⬜ Devu: Command allowlist enforcement and argument validation
 - ⬜ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts
-- ⬜ Dev: Failure traceback diagnosis and repair patch validation
+- ✅ Dev: Failure traceback diagnosis and repair patch validation (`backend/app/schemas/repair.py`, `backend/app/services/repair_service.py`, `backend/tests/test_dev_w3_day4_repair.py`)
 - ⬜ Yug: Test and repair progress APIs and failure reporting
 - ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
 - ⬜ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling

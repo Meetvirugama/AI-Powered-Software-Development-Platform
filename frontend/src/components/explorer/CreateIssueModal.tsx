@@ -188,7 +188,7 @@ export function CreateIssueModal({
               <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-1 text-xs">
                 <h4 className="font-semibold text-emerald-300 text-sm">
-                  GitHub Issue #{createdResult.issue.issue_number} & Task Created
+                  GitHub Issue #{createdResult.issue?.issue_number} & Task Created
                 </h4>
                 <p className="text-muted-foreground">
                   The finding has been published as an issue and normalized into task{' '}
@@ -201,15 +201,17 @@ export function CreateIssueModal({
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-2">
-              <a
-                href={createdResult.issue.html_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-xs font-mono text-primary hover:underline"
-              >
-                <span>View Issue #{createdResult.issue.issue_number} on GitHub</span>
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
+              {createdResult.issue?.html_url && (
+                <a
+                  href={createdResult.issue.html_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-xs font-mono text-primary hover:underline"
+                >
+                  <span>View Issue #{createdResult.issue.issue_number} on GitHub</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              )}
 
               <div className="flex items-center gap-2">
                 <button
