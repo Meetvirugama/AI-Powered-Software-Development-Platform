@@ -9,6 +9,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import type { TaskDetailResponse } from '../../types/task';
+import { isExecutionActive, TaskStatus } from '../../types/task';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { cn } from '../../lib/utils';
 
@@ -84,7 +85,19 @@ export function TaskCard({ task, className }: TaskCardProps) {
             )}
           </div>
 
-          <TaskStatusBadge status={task.status} />
+          <div className="flex items-center gap-1.5">
+            {isExecutionActive(task.status) && (
+              <span
+                data-testid={`active-execution-badge-${task.task_id}`}
+                className="inline-flex items-center gap-1 bg-sky-500/10 text-sky-400 border border-sky-500/30 px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold"
+                title="Task execution is active in workspace sandbox"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-ping" />
+                <span>{task.status === TaskStatus.EXECUTING ? 'Executing' : task.status.replace(/_/g, ' ')}</span>
+              </span>
+            )}
+            <TaskStatusBadge status={task.status} />
+          </div>
         </div>
 
         {/* Task Title (link to detail) */}
@@ -132,7 +145,13 @@ export function TaskCard({ task, className }: TaskCardProps) {
           {/* Repair attempts indicator if used */}
           {task.repair_attempts_used > 0 && (
             <span
-              className="inline-flex items-center gap-1 text-amber-400 font-mono text-[11px]"
+              data-testid={`repair-budget-indicator-${task.task_id}`}
+              className={cn(
+                'inline-flex items-center gap-1 font-mono text-[11px]',
+                task.repair_attempts_used >= task.repair_attempts_max
+                  ? 'text-rose-400 font-semibold'
+                  : 'text-amber-400'
+              )}
               title={`Repair attempts: ${task.repair_attempts_used} of ${task.repair_attempts_max}`}
             >
               <Wrench className="h-3 w-3 shrink-0" />

@@ -11,6 +11,8 @@ import { http, HttpResponse } from 'msw';
 import {
   TaskStatus,
   canTransition,
+  canCancelTask,
+  WorkspaceStatus,
   type TaskCreateRequest,
   type TaskDetailResponse,
   type TaskListResponse,
@@ -24,6 +26,9 @@ import {
   type IssueImportResponse,
   type TaskTestResultsResponse,
   type VerificationResult,
+  type WorkspaceMetadata,
+  type TaskDiffRanges,
+  type WorkspaceRepairBudgetStatus,
 } from '../../types/task';
 
 // ============================================================================
@@ -38,6 +43,10 @@ interface MockDatabase {
   tests: Map<string, TaskTestResultsResponse>;
   verifications: Map<string, VerificationResult>;
   issues: Map<string, GitHubIssue[]>;
+  workspaces: Map<string, WorkspaceMetadata>;
+  diffs: Map<string, TaskDiffRanges>;
+  repairBudgets: Map<string, WorkspaceRepairBudgetStatus>;
+  scenarioTasks: Map<string, TaskDetailResponse>;
 }
 
 const DEFAULT_REPO_ID = 'repo-1';
@@ -50,6 +59,10 @@ function createInitialSeedData(): MockDatabase {
   const tests = new Map<string, TaskTestResultsResponse>();
   const verifications = new Map<string, VerificationResult>();
   const issues = new Map<string, GitHubIssue[]>();
+  const workspaces = new Map<string, WorkspaceMetadata>();
+  const diffs = new Map<string, TaskDiffRanges>();
+  const repairBudgets = new Map<string, WorkspaceRepairBudgetStatus>();
+  const scenarioTasks = new Map<string, TaskDetailResponse>();
 
   // Seed 1: Task in PENDING_APPROVAL state (Ready for human review & approval)
   const task1: TaskDetailResponse = {
@@ -698,7 +711,731 @@ function createInitialSeedData(): MockDatabase {
     },
   ]);
 
-  return { tasks, plans, approvals, events, tests, verifications, issues };
+  // --------------------------------------------------------------------------
+  // Seed Workspaces, Diffs and Repair Budgets for Existing Tasks
+  // --------------------------------------------------------------------------
+
+  // task-seed-5: Active execution workspace and diff
+  workspaces.set(task5.task_id, {
+    workspace_id: 'ws-seed-5',
+    task_id: task5.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'e5f6a1b2c3d4',
+    branch_name: 'agent/task-seed-5',
+    workspace_path: '/sandboxes/task-seed-5',
+    status: WorkspaceStatus.IN_USE,
+    isolation_type: 'git_worktree',
+    resource_limits: {
+      timeout_seconds: 60,
+      max_disk_bytes: 524288000,
+      max_file_size_bytes: 5242880,
+      max_files_modified: 50,
+      network_egress_allowed: false,
+    },
+    created_at: '2026-10-29T11:30:00.000Z',
+    updated_at: '2026-10-29T11:45:00.000Z',
+  });
+
+  diffs.set(task5.task_id, {
+    task_id: task5.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_branch: 'main',
+    head_branch: 'agent/task-seed-5',
+    total_files_changed: 1,
+    total_additions: 12,
+    total_deletions: 2,
+    files: [
+      {
+        file_path: 'backend/app/db/indexes.sql',
+        status: 'modified',
+        additions: 12,
+        deletions: 2,
+        patch:
+          '@@ -45,2 +45,12 @@\n-CREATE INDEX idx_vec ON embeddings (vector);\n+CREATE INDEX idx_vec_hnsw ON embeddings USING hnsw (vector vector_cosine_ops)\n+WITH (m = 16, ef_construction = 64);',
+        diff_ranges: [{ start_line: 45, end_line: 57, change_type: 'modified' }],
+      },
+    ],
+  });
+
+  // task-seed-7: Stopped workspace and exhausted repair budget
+  workspaces.set(task7.task_id, {
+    workspace_id: 'ws-seed-7',
+    task_id: task7.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: '0a1b2c3d4e5f',
+    branch_name: 'agent/task-seed-7',
+    workspace_path: '/sandboxes/task-seed-7',
+    status: WorkspaceStatus.STOPPED,
+    isolation_type: 'git_worktree',
+    created_at: '2026-10-25T16:10:00.000Z',
+    updated_at: '2026-10-25T17:30:00.000Z',
+    cleaned_at: '2026-10-25T17:30:00.000Z',
+  });
+
+  repairBudgets.set(task7.task_id, {
+    task_id: task7.task_id,
+    repair_attempts_used: 3,
+    repair_attempts_max: 3,
+    is_budget_exhausted: true,
+    is_eligible_for_repair: false,
+    last_attempt_at: '2026-10-25T17:30:00.000Z',
+    history: [
+      {
+        attempt_number: 1,
+        task_id: task7.task_id,
+        timestamp: '2026-10-25T16:30:00.000Z',
+        patch_summary: 'Add SIGTERM signal traps in entrypoint script',
+        patch_hash: 'patch-001',
+        workspace_revision: 'rev-001',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+      {
+        attempt_number: 2,
+        task_id: task7.task_id,
+        timestamp: '2026-10-25T17:00:00.000Z',
+        patch_summary: 'Increase container stop timeout to 15s',
+        patch_hash: 'patch-002',
+        workspace_revision: 'rev-002',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+      {
+        attempt_number: 3,
+        task_id: task7.task_id,
+        timestamp: '2026-10-25T17:25:00.000Z',
+        patch_summary: 'Prune orphaned container network namespaces',
+        patch_hash: 'patch-003',
+        workspace_revision: 'rev-003',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+    ],
+  });
+
+  // --------------------------------------------------------------------------
+  // Deterministic Scenarios (Docs/week3.md §11 & Day 3/4 Workflow Requirements)
+  // --------------------------------------------------------------------------
+
+  // Scenario 1: Approved task starting execution
+  const taskExecApproved: TaskDetailResponse = {
+    task_id: 'task-exec-approved',
+    repository_id: DEFAULT_REPO_ID,
+    title: 'Ready for Execution Start',
+    description: 'Approved task ready to start execution and allocate workspace sandbox.',
+    status: TaskStatus.APPROVED,
+    source: { type: 'USER_PROMPT', repository_id: DEFAULT_REPO_ID, base_revision: 'base-rev-1' },
+    requirements: [
+      {
+        id: 'req-1',
+        description: 'Verify execution start transitions task to WORKSPACE_SETUP.',
+        category: 'functional',
+        target_files: ['src/core/engine.py'],
+        acceptance_criteria: ['Workspace created with status READY or CREATING.'],
+      },
+    ],
+    assumptions: [],
+    constraints: [],
+    base_revision: 'base-rev-1',
+    plan_version: 1,
+    approved_plan_version: 1,
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+    created_at: '2026-10-20T09:00:00.000Z',
+    updated_at: '2026-10-20T09:15:00.000Z',
+  };
+  scenarioTasks.set(taskExecApproved.task_id, taskExecApproved);
+  const planExecApproved: TaskPlan = {
+    task_id: taskExecApproved.task_id,
+    plan_version: 1,
+    base_revision: 'base-rev-1',
+    summary: 'Plan for approved execution test.',
+    assumptions: [],
+    unresolved_questions: [],
+    relevant_files: ['src/core/engine.py'],
+    steps: [
+      {
+        step_id: 'step-1',
+        title: 'Initial step',
+        description: 'Modify engine.py',
+        step_type: 'edit',
+        expected_files: ['src/core/engine.py'],
+        verification: ['pytest'],
+      },
+    ],
+    expected_files_to_modify: ['src/core/engine.py'],
+    tests_to_add: [],
+    validation_strategy: 'Automated tests',
+    risks: [],
+    status: 'APPROVED',
+  };
+  const taskExecApprovedPlans = new Map<number, TaskPlan>();
+  taskExecApprovedPlans.set(1, planExecApproved);
+  plans.set(taskExecApproved.task_id, taskExecApprovedPlans);
+  events.set(taskExecApproved.task_id, [
+    {
+      id: 'evt-ea-1',
+      task_id: taskExecApproved.task_id,
+      event_type: 'PLAN_APPROVED',
+      description: 'Plan approved by reviewer.',
+      created_at: '2026-10-20T09:15:00.000Z',
+    },
+  ]);
+
+  // Scenario 2: Workspace setup in progress
+  const taskExecSetup: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-setup',
+    title: 'Workspace Setup In Progress',
+    status: TaskStatus.WORKSPACE_SETUP,
+    updated_at: '2026-10-20T09:20:00.000Z',
+  };
+  scenarioTasks.set(taskExecSetup.task_id, taskExecSetup);
+  workspaces.set(taskExecSetup.task_id, {
+    workspace_id: 'ws-setup-1',
+    task_id: taskExecSetup.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-setup',
+    status: WorkspaceStatus.CREATING,
+    isolation_type: 'git_worktree',
+    created_at: '2026-10-20T09:20:00.000Z',
+    updated_at: '2026-10-20T09:20:00.000Z',
+  });
+  events.set(taskExecSetup.task_id, [
+    {
+      id: 'evt-es-1',
+      task_id: taskExecSetup.task_id,
+      event_type: 'WORKSPACE_SETUP',
+      description: 'Allocating isolated Git worktree workspace.',
+      created_at: '2026-10-20T09:20:00.000Z',
+    },
+  ]);
+
+  // Scenario 3: Workspace ready and branch available
+  const taskExecReady: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-ready',
+    title: 'Workspace Ready and Branch Available',
+    status: TaskStatus.WORKSPACE_SETUP,
+    updated_at: '2026-10-20T09:25:00.000Z',
+  };
+  scenarioTasks.set(taskExecReady.task_id, taskExecReady);
+  workspaces.set(taskExecReady.task_id, {
+    workspace_id: 'ws-ready-1',
+    task_id: taskExecReady.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-ready',
+    workspace_path: '/sandboxes/task-exec-ready',
+    status: WorkspaceStatus.READY,
+    isolation_type: 'git_worktree',
+    resource_limits: {
+      timeout_seconds: 60,
+      max_disk_bytes: 524288000,
+      max_file_size_bytes: 5242880,
+      max_files_modified: 50,
+      network_egress_allowed: false,
+    },
+    created_at: '2026-10-20T09:20:00.000Z',
+    updated_at: '2026-10-20T09:25:00.000Z',
+  });
+  events.set(taskExecReady.task_id, [
+    {
+      id: 'evt-er-1',
+      task_id: taskExecReady.task_id,
+      event_type: 'WORKSPACE_ALLOCATED',
+      description: 'Workspace worktree ready on branch agent/task-exec-ready.',
+      created_at: '2026-10-20T09:25:00.000Z',
+    },
+    {
+      id: 'evt-er-2',
+      task_id: taskExecReady.task_id,
+      event_type: 'BRANCH_SETUP',
+      description: 'Checked out agent/task-exec-ready at base revision base-rev-1.',
+      created_at: '2026-10-20T09:25:00.000Z',
+    },
+  ]);
+
+  // Scenario 4: Workspace creation failure
+  const taskExecFailedWs: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-failed-ws',
+    title: 'Workspace Allocation Failed',
+    status: TaskStatus.FAILED,
+    updated_at: '2026-10-20T09:30:00.000Z',
+  };
+  scenarioTasks.set(taskExecFailedWs.task_id, taskExecFailedWs);
+  workspaces.set(taskExecFailedWs.task_id, {
+    workspace_id: 'ws-fail-1',
+    task_id: taskExecFailedWs.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-failed-ws',
+    status: WorkspaceStatus.FAILED,
+    error_message: 'Failed to create Git worktree: permission denied or disk quota exceeded.',
+    created_at: '2026-10-20T09:20:00.000Z',
+    updated_at: '2026-10-20T09:30:00.000Z',
+  });
+  events.set(taskExecFailedWs.task_id, [
+    {
+      id: 'evt-ef-1',
+      task_id: taskExecFailedWs.task_id,
+      event_type: 'WORKSPACE_CREATION_FAILED',
+      description: 'Failed to create Git worktree: permission denied or disk quota exceeded.',
+      created_at: '2026-10-20T09:30:00.000Z',
+    },
+  ]);
+
+  // Scenario 5: Execution in progress
+  const taskExecInProgress: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-in-progress',
+    title: 'Execution In Progress',
+    status: TaskStatus.EXECUTING,
+    updated_at: '2026-10-20T09:45:00.000Z',
+  };
+  scenarioTasks.set(taskExecInProgress.task_id, taskExecInProgress);
+  workspaces.set(taskExecInProgress.task_id, {
+    workspace_id: 'ws-in-progress-1',
+    task_id: taskExecInProgress.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-in-progress',
+    workspace_path: '/sandboxes/task-exec-in-progress',
+    status: WorkspaceStatus.IN_USE,
+    created_at: '2026-10-20T09:30:00.000Z',
+    updated_at: '2026-10-20T09:45:00.000Z',
+  });
+  events.set(taskExecInProgress.task_id, [
+    {
+      id: 'evt-eip-1',
+      task_id: taskExecInProgress.task_id,
+      event_type: 'EXECUTION_STARTED',
+      description: 'Automated workspace tool operations in progress.',
+      created_at: '2026-10-20T09:45:00.000Z',
+    },
+  ]);
+
+  // Scenario 6: Execution cancellation
+  const taskExecCancelled: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-cancelled',
+    title: 'Execution Cancelled by User',
+    status: TaskStatus.CANCELLED,
+    updated_at: '2026-10-20T09:50:00.000Z',
+  };
+  scenarioTasks.set(taskExecCancelled.task_id, taskExecCancelled);
+  workspaces.set(taskExecCancelled.task_id, {
+    workspace_id: 'ws-cancelled-1',
+    task_id: taskExecCancelled.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-cancelled',
+    workspace_path: '/sandboxes/task-exec-cancelled',
+    status: WorkspaceStatus.STOPPED,
+    created_at: '2026-10-20T09:30:00.000Z',
+    updated_at: '2026-10-20T09:50:00.000Z',
+    cleaned_at: '2026-10-20T09:50:00.000Z',
+  });
+  events.set(taskExecCancelled.task_id, [
+    {
+      id: 'evt-ec-1',
+      task_id: taskExecCancelled.task_id,
+      event_type: 'TASK_CANCELLED',
+      description: 'Task execution cancelled by user.',
+      created_at: '2026-10-20T09:50:00.000Z',
+    },
+  ]);
+
+  // Scenario 7: Actual file modifications and diff hunks
+  const taskExecDiff: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-diff',
+    title: 'Code Modifications and Diff Inspection',
+    status: TaskStatus.EXECUTING,
+    updated_at: '2026-10-20T10:00:00.000Z',
+  };
+  scenarioTasks.set(taskExecDiff.task_id, taskExecDiff);
+  workspaces.set(taskExecDiff.task_id, {
+    workspace_id: 'ws-diff-1',
+    task_id: taskExecDiff.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-diff',
+    workspace_path: '/sandboxes/task-exec-diff',
+    status: WorkspaceStatus.IN_USE,
+    created_at: '2026-10-20T09:30:00.000Z',
+    updated_at: '2026-10-20T10:00:00.000Z',
+  });
+  diffs.set(taskExecDiff.task_id, {
+    task_id: taskExecDiff.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_branch: 'main',
+    head_branch: 'agent/task-exec-diff',
+    total_files_changed: 2,
+    total_additions: 15,
+    total_deletions: 4,
+    files: [
+      {
+        file_path: 'src/analyzer/ast_walker.py',
+        status: 'modified',
+        additions: 10,
+        deletions: 4,
+        patch:
+          '@@ -12,4 +12,10 @@\n- old_call()\n+ new_bounded_call(depth=4)\n+ assert token_budget < 20000',
+        diff_ranges: [{ start_line: 12, end_line: 22, change_type: 'modified' }],
+      },
+      {
+        file_path: 'tests/test_ast_walker.py',
+        status: 'added',
+        additions: 5,
+        deletions: 0,
+        patch: '@@ -0,0 +1,5 @@\n+def test_depth_cap():\n+    assert True',
+        diff_ranges: [{ start_line: 1, end_line: 5, change_type: 'added' }],
+      },
+    ],
+  });
+  events.set(taskExecDiff.task_id, [
+    {
+      id: 'evt-ed-1',
+      task_id: taskExecDiff.task_id,
+      event_type: 'CODE_MODIFICATION',
+      description: 'Applied patch to src/analyzer/ast_walker.py.',
+      created_at: '2026-10-20T10:00:00.000Z',
+    },
+  ]);
+
+  // Scenario 8: Successful test execution
+  const taskExecTestsPass: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-tests-pass',
+    title: 'Successful Test Execution',
+    status: TaskStatus.TESTING,
+    updated_at: '2026-10-20T10:10:00.000Z',
+  };
+  scenarioTasks.set(taskExecTestsPass.task_id, taskExecTestsPass);
+  tests.set(taskExecTestsPass.task_id, {
+    task_id: taskExecTestsPass.task_id,
+    runs: [
+      {
+        attempt: 1,
+        command: 'pytest tests/test_ast_walker.py',
+        status: 'PASSED',
+        exit_code: 0,
+        duration_ms: 1250,
+        tests_total: 10,
+        tests_passed: 10,
+        tests_failed: 0,
+        framework: 'pytest',
+        stdout: '================ 10 passed in 1.25s ================',
+        output_summary: '10 passed in 1.25s',
+        executed_at: '2026-10-20T10:10:00.000Z',
+      },
+    ],
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+  });
+  events.set(taskExecTestsPass.task_id, [
+    {
+      id: 'evt-tp-1',
+      task_id: taskExecTestsPass.task_id,
+      event_type: 'TESTS_EXECUTED',
+      description: 'pytest tests/test_ast_walker.py completed: 10 passed.',
+      created_at: '2026-10-20T10:10:00.000Z',
+    },
+  ]);
+
+  // Scenario 9: Assertion failure eligible for repair
+  const taskExecTestsFailRepairable: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-tests-fail-repairable',
+    title: 'Assertion Failure Eligible for Self-Repair',
+    status: TaskStatus.TESTING,
+    updated_at: '2026-10-20T10:15:00.000Z',
+  };
+  scenarioTasks.set(taskExecTestsFailRepairable.task_id, taskExecTestsFailRepairable);
+  tests.set(taskExecTestsFailRepairable.task_id, {
+    task_id: taskExecTestsFailRepairable.task_id,
+    runs: [
+      {
+        attempt: 1,
+        command: 'pytest tests/test_token_budget.py',
+        status: 'FAILED',
+        classification: 'TEST_FAILURE',
+        is_repair_eligible: true,
+        exit_code: 1,
+        duration_ms: 850,
+        tests_total: 10,
+        tests_passed: 9,
+        tests_failed: 1,
+        framework: 'pytest',
+        stderr: 'AssertionError: token count 25000 exceeded max budget 20000',
+        output_summary: 'FAILED tests/test_token_budget.py::test_cap - AssertionError: 25000 > 20000',
+        executed_at: '2026-10-20T10:15:00.000Z',
+      },
+    ],
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+  });
+  events.set(taskExecTestsFailRepairable.task_id, [
+    {
+      id: 'evt-tr-1',
+      task_id: taskExecTestsFailRepairable.task_id,
+      event_type: 'TESTS_EXECUTED',
+      description: 'pytest tests/test_token_budget.py completed: 9 passed, 1 failed.',
+      created_at: '2026-10-20T10:15:00.000Z',
+    },
+  ]);
+
+  // Scenario 10: Infrastructure failure not eligible for repair
+  const taskExecTestsFailInfra: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-tests-fail-infra',
+    title: 'Infrastructure Failure (Not Repair Eligible)',
+    status: TaskStatus.FAILED,
+    updated_at: '2026-10-20T10:20:00.000Z',
+  };
+  scenarioTasks.set(taskExecTestsFailInfra.task_id, taskExecTestsFailInfra);
+  tests.set(taskExecTestsFailInfra.task_id, {
+    task_id: taskExecTestsFailInfra.task_id,
+    runs: [
+      {
+        attempt: 1,
+        command: 'pytest',
+        status: 'FAILED',
+        classification: 'INFRASTRUCTURE_ERROR',
+        is_repair_eligible: false,
+        exit_code: 2,
+        duration_ms: 320,
+        tests_total: 0,
+        tests_passed: 0,
+        tests_failed: 0,
+        error_count: 1,
+        framework: 'pytest',
+        stderr: 'Traceback (most recent call last):\nModuleNotFoundError: No module named pytest_cov',
+        output_summary: 'ModuleNotFoundError: No module named pytest_cov',
+        executed_at: '2026-10-20T10:20:00.000Z',
+      },
+    ],
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+  });
+  events.set(taskExecTestsFailInfra.task_id, [
+    {
+      id: 'evt-ti-1',
+      task_id: taskExecTestsFailInfra.task_id,
+      event_type: 'TEST_INFRASTRUCTURE_FAILURE',
+      description: 'Runner crashed with exit code 2 (missing dependency).',
+      created_at: '2026-10-20T10:20:00.000Z',
+    },
+  ]);
+
+  // Scenario 11: Timeout not eligible for repair
+  const taskExecTestsTimeout: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-tests-timeout',
+    title: 'Test Timeout Failure (Not Repair Eligible)',
+    status: TaskStatus.FAILED,
+    updated_at: '2026-10-20T10:25:00.000Z',
+  };
+  scenarioTasks.set(taskExecTestsTimeout.task_id, taskExecTestsTimeout);
+  tests.set(taskExecTestsTimeout.task_id, {
+    task_id: taskExecTestsTimeout.task_id,
+    runs: [
+      {
+        attempt: 1,
+        command: 'pytest --timeout=30',
+        status: 'TIMEOUT',
+        timed_out: true,
+        classification: 'TIMEOUT',
+        is_repair_eligible: false,
+        exit_code: 124,
+        duration_ms: 30000,
+        tests_total: 5,
+        tests_passed: 2,
+        tests_failed: 1,
+        skipped_count: 2,
+        framework: 'pytest',
+        stderr: 'Command timed out after 30.0 seconds.',
+        output_summary: 'Test execution timed out after 30.0 seconds.',
+        executed_at: '2026-10-20T10:25:00.000Z',
+      },
+    ],
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+  });
+  events.set(taskExecTestsTimeout.task_id, [
+    {
+      id: 'evt-to-1',
+      task_id: taskExecTestsTimeout.task_id,
+      event_type: 'EXECUTION_TIMED_OUT',
+      description: 'Execution exceeded 30 second limit.',
+      created_at: '2026-10-20T10:25:00.000Z',
+    },
+  ]);
+
+  // Scenario 12: Repair attempt history
+  const taskExecRepairHistory: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-repair-history',
+    title: 'Bounded Repair Attempt History',
+    status: TaskStatus.REPAIRING,
+    repair_attempts_used: 2,
+    repair_attempts_max: 3,
+    updated_at: '2026-10-20T10:30:00.000Z',
+  };
+  scenarioTasks.set(taskExecRepairHistory.task_id, taskExecRepairHistory);
+  repairBudgets.set(taskExecRepairHistory.task_id, {
+    task_id: taskExecRepairHistory.task_id,
+    repair_attempts_used: 2,
+    repair_attempts_max: 3,
+    is_budget_exhausted: false,
+    is_eligible_for_repair: true,
+    last_attempt_at: '2026-10-20T10:25:00.000Z',
+    history: [
+      {
+        attempt_number: 1,
+        task_id: taskExecRepairHistory.task_id,
+        timestamp: '2026-10-20T10:15:00.000Z',
+        patch_summary: 'Initial recursion depth limit patch',
+        patch_hash: 'hash-001',
+        workspace_revision: 'rev-001',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+      {
+        attempt_number: 2,
+        task_id: taskExecRepairHistory.task_id,
+        timestamp: '2026-10-20T10:25:00.000Z',
+        patch_summary: 'Updated token counter boundary condition',
+        patch_hash: 'hash-002',
+        workspace_revision: 'rev-002',
+        test_status_before: 'FAILED',
+        test_status_after: 'PASSED',
+        success: true,
+      },
+    ],
+  });
+  events.set(taskExecRepairHistory.task_id, [
+    {
+      id: 'evt-rh-1',
+      task_id: taskExecRepairHistory.task_id,
+      event_type: 'REPAIR_ATTEMPT',
+      description: 'Repair attempt 1 completed.',
+      created_at: '2026-10-20T10:15:00.000Z',
+    },
+    {
+      id: 'evt-rh-2',
+      task_id: taskExecRepairHistory.task_id,
+      event_type: 'REPAIR_ATTEMPT',
+      description: 'Repair attempt 2 completed.',
+      created_at: '2026-10-20T10:25:00.000Z',
+    },
+  ]);
+
+  // Scenario 13: Retry budget exhausted after three attempts
+  const taskExecBudgetExhausted: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-budget-exhausted',
+    title: 'Retry Budget Exhausted',
+    status: TaskStatus.FAILED,
+    repair_attempts_used: 3,
+    repair_attempts_max: 3,
+    updated_at: '2026-10-20T10:30:00.000Z',
+  };
+  scenarioTasks.set(taskExecBudgetExhausted.task_id, taskExecBudgetExhausted);
+  workspaces.set(taskExecBudgetExhausted.task_id, {
+    workspace_id: 'ws-exhausted-1',
+    task_id: taskExecBudgetExhausted.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'base-rev-1',
+    branch_name: 'agent/task-exec-budget-exhausted',
+    workspace_path: '/sandboxes/task-exec-budget-exhausted',
+    status: WorkspaceStatus.STOPPED,
+    created_at: '2026-10-20T09:30:00.000Z',
+    updated_at: '2026-10-20T10:30:00.000Z',
+    cleaned_at: '2026-10-20T10:30:00.000Z',
+  });
+  repairBudgets.set(taskExecBudgetExhausted.task_id, {
+    task_id: taskExecBudgetExhausted.task_id,
+    repair_attempts_used: 3,
+    repair_attempts_max: 3,
+    is_budget_exhausted: true,
+    is_eligible_for_repair: false,
+    last_attempt_at: '2026-10-20T10:30:00.000Z',
+    history: [
+      {
+        attempt_number: 1,
+        task_id: taskExecBudgetExhausted.task_id,
+        timestamp: '2026-10-20T10:15:00.000Z',
+        patch_summary: 'Initial attempt',
+        patch_hash: 'hash-ex-1',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+      {
+        attempt_number: 2,
+        task_id: taskExecBudgetExhausted.task_id,
+        timestamp: '2026-10-20T10:20:00.000Z',
+        patch_summary: 'Second attempt',
+        patch_hash: 'hash-ex-2',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+      {
+        attempt_number: 3,
+        task_id: taskExecBudgetExhausted.task_id,
+        timestamp: '2026-10-20T10:30:00.000Z',
+        patch_summary: 'Third attempt',
+        patch_hash: 'hash-ex-3',
+        test_status_before: 'FAILED',
+        test_status_after: 'FAILED',
+        success: false,
+      },
+    ],
+  });
+  events.set(taskExecBudgetExhausted.task_id, [
+    {
+      id: 'evt-rbe-1',
+      task_id: taskExecBudgetExhausted.task_id,
+      event_type: 'RETRY_BUDGET_EXHAUSTED',
+      description: 'Repair attempts ceiling (3/3) reached. Auto-repair terminated.',
+      created_at: '2026-10-20T10:30:00.000Z',
+    },
+  ]);
+
+  // Scenario 14: Empty and unavailable telemetry
+  const taskExecEmptyTelemetry: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-exec-telemetry-empty',
+    title: 'Empty and Unavailable Telemetry',
+    status: TaskStatus.CREATED,
+    repair_attempts_used: 0,
+    repair_attempts_max: 3,
+    updated_at: '2026-10-20T10:35:00.000Z',
+  };
+  scenarioTasks.set(taskExecEmptyTelemetry.task_id, taskExecEmptyTelemetry);
+
+  return {
+    tasks,
+    plans,
+    approvals,
+    events,
+    tests,
+    verifications,
+    issues,
+    workspaces,
+    diffs,
+    repairBudgets,
+    scenarioTasks,
+  };
 }
 
 let db = createInitialSeedData();
@@ -739,6 +1476,10 @@ export function getMockStore(): MockDatabase {
 // ============================================================================
 // Helper Validation Functions
 // ============================================================================
+
+export function getTaskFromStore(taskId: string): TaskDetailResponse | undefined {
+  return db.tasks.get(taskId) || db.scenarioTasks?.get(taskId);
+}
 
 function isPathUnsafe(path: string): boolean {
   if (!path || typeof path !== 'string') return true;
@@ -923,6 +1664,11 @@ export const taskHandlers = [
 
     let items = Array.from(db.tasks.values());
 
+    if (search) {
+      const scenarioItems = Array.from(db.scenarioTasks?.values() || []);
+      items = [...items, ...scenarioItems];
+    }
+
     if (repoId) {
       items = items.filter((t) => t.repository_id === repoId);
     }
@@ -962,7 +1708,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.get('*/api/v1/tasks/:taskId', ({ params }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -985,7 +1731,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.post('*/api/v1/tasks/:taskId/plan', async ({ params, request }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1088,7 +1834,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.get('*/api/v1/tasks/:taskId/plan', ({ params, request }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1161,7 +1907,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.post('*/api/v1/tasks/:taskId/approve', async ({ params, request }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1268,7 +2014,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.post('*/api/v1/tasks/:taskId/reject', async ({ params, request }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1371,7 +2117,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.post('*/api/v1/tasks/:taskId/execute', ({ params }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1417,6 +2163,29 @@ export const taskHandlers = [
     task.status = TaskStatus.WORKSPACE_SETUP;
     task.updated_at = now;
 
+    // Allocate workspace in mock store
+    const branchName = `agent/task-${taskId.replace(/^task-/, '')}`;
+    const workspace: WorkspaceMetadata = {
+      workspace_id: `ws-${taskId}`,
+      task_id: taskId,
+      repository_id: task.repository_id,
+      base_revision: task.base_revision || 'a1b2c3d4e5f6',
+      branch_name: branchName,
+      workspace_path: `/sandboxes/${taskId}`,
+      status: WorkspaceStatus.CREATING,
+      isolation_type: 'git_worktree',
+      resource_limits: {
+        timeout_seconds: 60,
+        max_disk_bytes: 524288000,
+        max_file_size_bytes: 5242880,
+        max_files_modified: 50,
+        network_egress_allowed: false,
+      },
+      created_at: now,
+      updated_at: now,
+    };
+    db.workspaces.set(taskId, workspace);
+
     const taskEvents = db.events.get(taskId) || [];
     taskEvents.push({
       id: nextEventId(),
@@ -1431,11 +2200,174 @@ export const taskHandlers = [
   }),
 
   // --------------------------------------------------------------------------
+  // 8B. POST /api/v1/tasks/:taskId/cancel — Cancel Active or Pending Task
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/cancel', ({ params }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    if (!canCancelTask(task.status)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_STATE_TRANSITION',
+            message: `Task in terminal status '${task.status}' cannot be cancelled.`,
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    const now = new Date().toISOString();
+    task.status = TaskStatus.CANCELLED;
+    task.updated_at = now;
+
+    // Update workspace if exists
+    const ws = db.workspaces.get(taskId);
+    if (ws) {
+      ws.status = WorkspaceStatus.STOPPED;
+      ws.updated_at = now;
+      ws.cleaned_at = now;
+    }
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'TASK_CANCELLED',
+      description: 'Task cancelled by user.',
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(task, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 8C. GET /api/v1/tasks/:taskId/workspace — Workspace Metadata
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/workspace', ({ params }) => {
+    const taskId = String(params.taskId);
+    const workspace = db.workspaces.get(taskId);
+
+    if (!workspace) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'WORKSPACE_NOT_FOUND',
+            message: `Workspace for task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(workspace, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 8D. GET /api/v1/tasks/:taskId/diff & Repository-scoped Diff Telemetry
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/diff', ({ params }) => {
+    const taskId = String(params.taskId);
+    const diff = db.diffs.get(taskId);
+
+    if (!diff) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'DIFF_NOT_FOUND',
+            message: `Diff telemetry for task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(diff, { status: 200 });
+  }),
+
+  http.get('*/api/v1/repositories/:repositoryId/source/diff-ranges/task/:taskId', ({ params }) => {
+    const taskId = String(params.taskId);
+    const diff = db.diffs.get(taskId);
+
+    if (!diff) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'DIFF_NOT_FOUND',
+            message: `Diff telemetry for task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(diff, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 8E. GET /api/v1/tasks/:taskId/repair-budget — Repair Budget Status
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/repair-budget', ({ params }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    const budget = db.repairBudgets.get(taskId);
+
+    if (budget) {
+      return HttpResponse.json(budget, { status: 200 });
+    }
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    // Default derived from task
+    const used = task.repair_attempts_used ?? 0;
+    const max = task.repair_attempts_max ?? 3;
+    const defaultBudget: WorkspaceRepairBudgetStatus = {
+      task_id: taskId,
+      repair_attempts_used: used,
+      repair_attempts_max: max,
+      is_budget_exhausted: used >= max,
+      is_eligible_for_repair: used < max,
+      last_attempt_at: task.updated_at,
+    };
+    return HttpResponse.json(defaultBudget, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
   // 9. GET /api/v1/tasks/:taskId/events — Chronological Timeline Events
   // --------------------------------------------------------------------------
   http.get('*/api/v1/tasks/:taskId/events', ({ params, request }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1481,7 +2413,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.get('*/api/v1/tasks/:taskId/tests', ({ params }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(
@@ -1511,7 +2443,7 @@ export const taskHandlers = [
   // --------------------------------------------------------------------------
   http.get('*/api/v1/tasks/:taskId/verification', ({ params }) => {
     const taskId = String(params.taskId);
-    const task = db.tasks.get(taskId);
+    const task = getTaskFromStore(taskId);
 
     if (!task) {
       return HttpResponse.json(

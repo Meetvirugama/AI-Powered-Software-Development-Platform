@@ -325,7 +325,15 @@ export interface IssueImportResponse {
 // 8. Test Telemetry & Independent Verification (VERIFIED: backend/app/schemas/verification.py)
 // ============================================================================
 
-export type TestRunStatus = 'PASSED' | 'FAILED' | 'ERROR' | 'TIMEOUT';
+export type TestRunStatus =
+  | 'PASSED'
+  | 'FAILED'
+  | 'ERROR'
+  | 'TIMEOUT'
+  | 'UNSUPPORTED_FRAMEWORK'
+  | 'SKIPPED'
+  | 'NOT_RUN'
+  | 'UNAVAILABLE';
 
 export interface TestRunItem {
   attempt: number;
@@ -334,9 +342,24 @@ export interface TestRunItem {
   exit_code: number;
   duration_ms: number;
   tests_total: number;
+  total_count?: number;
   tests_passed: number;
+  passed_count?: number;
   tests_failed: number;
-  output_summary: string;
+  failed_count?: number;
+  tests_skipped?: number;
+  skipped_count?: number;
+  error_count?: number;
+  framework?: string;
+  classification?: TestFailureClassification | string;
+  is_repair_eligible?: boolean;
+  failed_test_names?: string[];
+  failure_details?: Record<string, any>;
+  workspace_revision?: string;
+  stdout?: string;
+  stderr?: string;
+  timed_out?: boolean;
+  output_summary?: string;
   executed_at: string;
 }
 
@@ -345,6 +368,7 @@ export interface TaskTestResultsResponse {
   runs: TestRunItem[];
   repair_attempts_used: number;
   repair_attempts_max: number;
+  repair_history?: RepairAttemptRecord[];
 }
 
 export type VerificationCheckStatus = 'PASSED' | 'FAILED' | 'SKIPPED' | 'UNAVAILABLE' | 'COMPLETED';
@@ -380,4 +404,152 @@ export interface VerificationResult {
   warnings: VerificationFinding[];
   pr_summary: string;
   created_at: string;
+}
+
+// ============================================================================
+// 9. Workspace & Execution Lifecycle (VERIFIED: backend/app/schemas/workspace.py)
+// ============================================================================
+
+export const WorkspaceStatus = {
+  NOT_CREATED: 'NOT_CREATED',
+  CREATING: 'CREATING',
+  READY: 'READY',
+  IN_USE: 'IN_USE',
+  STOPPED: 'STOPPED',
+  FAILED: 'FAILED',
+  CLEANUP_PENDING: 'CLEANUP_PENDING',
+  CLEANED: 'CLEANED',
+} as const;
+
+export type WorkspaceStatus = (typeof WorkspaceStatus)[keyof typeof WorkspaceStatus];
+
+export interface WorkspaceResourceLimits {
+  timeout_seconds?: number;
+  max_disk_bytes?: number;
+  max_file_size_bytes?: number;
+  max_files_modified?: number;
+  network_egress_allowed?: boolean;
+}
+
+export interface WorkspaceMetadata {
+  workspace_id: string;
+  task_id: string;
+  repository_id: string;
+  base_revision: string;
+  branch_name: string;
+  workspace_path?: string;
+  status: WorkspaceStatus;
+  isolation_type?: 'git_worktree' | 'directory_copy' | string;
+  resource_limits?: WorkspaceResourceLimits;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string | null;
+  stopped_at?: string | null;
+  cleaned_at?: string | null;
+  error_message?: string | null;
+}
+
+// ============================================================================
+// 10. Code Changes & Git Diff Telemetry (VERIFIED: backend/app/integrations/github/schemas.py)
+// ============================================================================
+
+export type DiffChangeStatus = 'added' | 'removed' | 'modified' | 'renamed' | 'unchanged';
+
+export interface LineRange {
+  start_line: number;
+  end_line: number;
+  change_type?: string;
+}
+
+export interface FileDiffRange {
+  file_path: string;
+  status: DiffChangeStatus;
+  diff_ranges?: LineRange[];
+  additions: number;
+  deletions: number;
+  patch?: string | null;
+}
+
+export interface TaskDiffRanges {
+  task_id: string;
+  repository_id?: string | null;
+  base_branch?: string;
+  head_branch?: string;
+  files: FileDiffRange[];
+  total_files_changed: number;
+  total_additions: number;
+  total_deletions: number;
+}
+
+// ============================================================================
+// 11. Test Runner & Bounded Self-Repair (VERIFIED: backend/sandbox/test_runner.py & schemas/workspace.py)
+// ============================================================================
+
+export type TestOutcomeStatus =
+  | 'PASSED'
+  | 'FAILED'
+  | 'ERROR'
+  | 'TIMEOUT'
+  | 'UNSUPPORTED_FRAMEWORK'
+  | 'AMBIGUOUS'
+  | 'NO_TESTS_FOUND'
+  | 'SKIPPED'
+  | 'NOT_RUN'
+  | 'UNAVAILABLE';
+
+export type TestFailureClassification =
+  | 'NONE'
+  | 'TEST_FAILURE'
+  | 'INFRASTRUCTURE_ERROR'
+  | 'TIMEOUT'
+  | 'SECURITY_VIOLATION';
+
+export interface RepairAttemptRecord {
+  attempt_number: number;
+  task_id: string;
+  timestamp: string;
+  patch_summary: string;
+  patch_hash?: string | null;
+  workspace_revision?: string | null;
+  test_status_before?: TestOutcomeStatus | string | null;
+  test_status_after?: TestOutcomeStatus | string | null;
+  success: boolean;
+}
+
+export interface WorkspaceRepairBudgetStatus {
+  task_id: string;
+  repair_attempts_used: number;
+  repair_attempts_max: number;
+  is_budget_exhausted: boolean;
+  is_eligible_for_repair: boolean;
+  last_attempt_at?: string | null;
+  history?: RepairAttemptRecord[];
+}
+
+// ============================================================================
+// 12. Lifecycle Helpers
+// ============================================================================
+
+/**
+ * Check if the task is actively running execution, testing, or self-repair.
+ */
+export function isExecutionActive(status: TaskStatus): boolean {
+  return (
+    status === TaskStatus.WORKSPACE_SETUP ||
+    status === TaskStatus.EXECUTING ||
+    status === TaskStatus.TESTING ||
+    status === TaskStatus.REPAIRING
+  );
+}
+
+/**
+ * Check if task is in a state eligible for cancellation.
+ * Terminal states (CANCELLED, FAILED, DRAFT_PR_CREATED) cannot be cancelled.
+ */
+export function canCancelTask(status: TaskStatus): boolean {
+  return (
+    status !== TaskStatus.CANCELLED &&
+    status !== TaskStatus.FAILED &&
+    status !== TaskStatus.DRAFT_PR_CREATED
+  );
 }

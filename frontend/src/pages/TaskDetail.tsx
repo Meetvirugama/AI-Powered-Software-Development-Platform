@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   ChevronLeft,
   FolderGit2,
@@ -10,12 +12,21 @@ import {
   Wrench,
   Clock,
   RefreshCw,
+  Play,
+  Slash,
+  AlertTriangle,
 } from 'lucide-react';
-import { useTask } from '../hooks/useTasks';
+import { useTask, useExecuteTask, useCancelTask, useTaskPlan, taskKeys } from '../hooks/useTasks';
+import { TaskStatus, isExecutionActive, canCancelTask } from '../types/task';
+import type { ApiError } from '../types/api';
 import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
 import { PlanReviewPanel } from '../components/tasks/PlanReviewPanel';
 import { ApprovalHistoryPanel } from '../components/tasks/ApprovalHistoryPanel';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
+import { WorkspacePanel } from '../components/tasks/WorkspacePanel';
+import { CodeChangesPanel } from '../components/tasks/CodeChangesPanel';
+import { TestExecutionPanel } from '../components/tasks/TestExecutionPanel';
+import { RepairBudgetTracker } from '../components/tasks/RepairBudgetTracker';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { cn } from '../lib/utils';
@@ -45,6 +56,49 @@ export function TaskDetail() {
     refetch,
     isFetching,
   } = useTask(taskId);
+
+  const queryClient = useQueryClient();
+
+  const [executionError, setExecutionError] = useState<ApiError | null>(null);
+  const [cancelError, setCancelError] = useState<ApiError | null>(null);
+
+  const executeMutation = useExecuteTask(task?.task_id || '');
+  const cancelMutation = useCancelTask(task?.task_id || '');
+  const { data: plan } = useTaskPlan(task?.task_id, task?.plan_version);
+
+  function handleManualRefresh() {
+    refetch();
+    if (task?.task_id) {
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(task.task_id) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(task.task_id) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.diff(task.task_id) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.tests(task.task_id) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(task.task_id) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.plan(task.task_id) });
+    }
+  }
+
+  async function handleStartExecution() {
+    if (!task || task.status !== TaskStatus.APPROVED) return;
+    setExecutionError(null);
+    setCancelError(null);
+    try {
+      await executeMutation.mutateAsync({});
+    } catch (err) {
+      setExecutionError(err as ApiError);
+    }
+  }
+
+  async function handleCancelTask() {
+    if (!task || !canCancelTask(task.status)) return;
+    setExecutionError(null);
+    setCancelError(null);
+    try {
+      await cancelMutation.mutateAsync();
+    } catch (err) {
+      setCancelError(err as ApiError);
+    }
+  }
 
   if (isLoading) {
     return (
@@ -96,7 +150,7 @@ export function TaskDetail() {
       {/* ------------------------------------------------------------------ */}
       {/* 1. Header & Navigation                                              */}
       {/* ------------------------------------------------------------------ */}
-      <div>
+      <div className="space-y-4">
         <div className="flex items-center justify-between gap-4 mb-2">
           <Link
             to="/app/tasks"
@@ -108,7 +162,7 @@ export function TaskDetail() {
 
           <button
             type="button"
-            onClick={() => refetch()}
+            onClick={handleManualRefresh}
             disabled={isFetching}
             className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors"
             title="Refresh task"
@@ -165,7 +219,107 @@ export function TaskDetail() {
               )}
             </p>
           </div>
+
+          {/* Execution & Lifecycle Controls Toolbar */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {task.status === TaskStatus.APPROVED && (
+              <button
+                type="button"
+                data-testid="start-execution-button"
+                disabled={executeMutation.isPending}
+                onClick={handleStartExecution}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                {executeMutation.isPending ? (
+                  <>
+                    <LoadingSpinner size="sm" label="Starting execution..." />
+                    <span>Starting Execution...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5" />
+                    <span>Start Execution</span>
+                  </>
+                )}
+              </button>
+            )}
+
+            {canCancelTask(task.status) && (
+              <button
+                type="button"
+                data-testid="cancel-task-button"
+                disabled={cancelMutation.isPending}
+                onClick={handleCancelTask}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-md border border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                {cancelMutation.isPending ? (
+                  <>
+                    <LoadingSpinner size="sm" label="Cancelling task..." />
+                    <span>Cancelling...</span>
+                  </>
+                ) : (
+                  <>
+                    <Slash className="h-3.5 w-3.5" />
+                    <span>Cancel Task</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Server Error Alert for Execution or Cancellation */}
+        {(executionError || cancelError) && (
+          <div
+            data-testid="execution-error-alert"
+            className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+              <span>
+                {executionError?.message ||
+                  cancelError?.message ||
+                  'Action could not be executed due to server error.'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setExecutionError(null);
+                setCancelError(null);
+              }}
+              className="text-xs text-rose-400 hover:text-rose-200 font-medium underline ml-3"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Active Execution Indicator Banner */}
+        {isExecutionActive(task.status) && (
+          <div
+            data-testid="active-execution-indicator"
+            className="rounded-md border border-sky-500/30 bg-sky-500/10 p-3.5 text-xs text-sky-200 flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2.5">
+              <RefreshCw className="h-4 w-4 text-sky-400 animate-spin shrink-0" />
+              <div>
+                <span className="font-semibold text-sky-300">
+                  {task.status === TaskStatus.WORKSPACE_SETUP && 'Workspace Setup in Progress'}
+                  {task.status === TaskStatus.EXECUTING && 'Task Execution Active'}
+                  {task.status === TaskStatus.TESTING && 'Test Execution in Progress'}
+                  {task.status === TaskStatus.REPAIRING && 'Bounded Self-Repair Active'}
+                </span>
+                <p className="text-[11px] text-sky-300/80">
+                  The task is active inside the isolated sandbox. Polling for real-time progress and telemetry.
+                </p>
+              </div>
+            </div>
+            <span className="font-mono text-[11px] bg-sky-500/20 px-2.5 py-0.5 rounded text-sky-200 uppercase font-bold border border-sky-500/30">
+              {task.status.replace(/_/g, ' ')}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* ------------------------------------------------------------------ */}
@@ -328,6 +482,7 @@ export function TaskDetail() {
       </div>
 
       {/* ------------------------------------------------------------------ */}
+      {/* ------------------------------------------------------------------ */}
       {/* 3. Structured Plan Review & Approval Panel                         */}
       {/* ------------------------------------------------------------------ */}
       <PlanReviewPanel task={task} />
@@ -338,7 +493,36 @@ export function TaskDetail() {
       <ApprovalHistoryPanel taskId={task.task_id} task={task} />
 
       {/* ------------------------------------------------------------------ */}
-      {/* 5. Chronological Event Timeline                                    */}
+      {/* 5. Isolated Workspace Sandbox Panel                                */}
+      {/* ------------------------------------------------------------------ */}
+      <WorkspacePanel taskId={task.task_id} />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 6. Code Changes & Diff Telemetry Panel                             */}
+      {/* ------------------------------------------------------------------ */}
+      <CodeChangesPanel
+        taskId={task.task_id}
+        repositoryId={task.repository_id}
+        plannedTargetFiles={task.requirements.flatMap((r) => r.target_files || [])}
+        plannedExpectedFiles={plan?.expected_files_to_modify || []}
+      />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 7. Bounded Self-Repair Budget Tracker                              */}
+      {/* ------------------------------------------------------------------ */}
+      <RepairBudgetTracker
+        taskId={task.task_id}
+        repairAttemptsUsed={task.repair_attempts_used}
+        repairAttemptsMax={task.repair_attempts_max}
+      />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 8. Test Execution Telemetry Panel                                  */}
+      {/* ------------------------------------------------------------------ */}
+      <TestExecutionPanel taskId={task.task_id} />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 9. Chronological Event Timeline                                    */}
       {/* ------------------------------------------------------------------ */}
       <ExecutionTimeline taskId={task.task_id} />
     </div>

@@ -7,9 +7,11 @@ import {
   XCircle,
   FolderGit2,
   Play,
+  Pause,
   TestTube2,
   Wrench,
   ShieldCheck,
+  ShieldAlert,
   Send,
   UploadCloud,
   GitPullRequest,
@@ -17,6 +19,9 @@ import {
   Slash,
   Clock,
   Activity,
+  GitBranch,
+  GitCommit,
+  Terminal,
 } from 'lucide-react';
 import { useTaskEvents } from '../../hooks/useTasks';
 import type { TaskEvent } from '../../types/task';
@@ -26,6 +31,7 @@ import { cn } from '../../lib/utils';
 
 export interface ExecutionTimelineProps {
   taskId: string;
+  events?: TaskEvent[];
   className?: string;
 }
 
@@ -76,11 +82,32 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         textClass: 'text-rose-400',
       };
     case 'WORKSPACE_SETUP':
+    case 'WORKSPACE_ALLOCATED':
+    case 'WORKSPACE_CREATED':
       return {
         icon: <FolderGit2 className="h-3.5 w-3.5" />,
         bgClass: 'bg-sky-500/10 border-sky-500/20',
         textClass: 'text-sky-400',
       };
+    case 'WORKSPACE_CREATION_FAILED':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-red-500/10 border-red-500/20',
+        textClass: 'text-red-400',
+      };
+    case 'BASE_REVISION_VERIFIED':
+      return {
+        icon: <GitCommit className="h-3.5 w-3.5" />,
+        bgClass: 'bg-sky-500/10 border-sky-500/20',
+        textClass: 'text-sky-400',
+      };
+    case 'BRANCH_SETUP':
+      return {
+        icon: <GitBranch className="h-3.5 w-3.5" />,
+        bgClass: 'bg-sky-500/10 border-sky-500/20',
+        textClass: 'text-sky-400',
+      };
+    case 'EXECUTION_STARTED':
     case 'EXECUTING':
     case 'CODE_MODIFICATION':
       return {
@@ -88,6 +115,44 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         bgClass: 'bg-blue-500/10 border-blue-500/20',
         textClass: 'text-blue-400',
       };
+    case 'EXECUTION_PAUSED':
+      return {
+        icon: <Pause className="h-3.5 w-3.5" />,
+        bgClass: 'bg-amber-500/10 border-amber-500/20',
+        textClass: 'text-amber-400',
+      };
+    case 'EXECUTION_RESUMED':
+      return {
+        icon: <Play className="h-3.5 w-3.5" />,
+        bgClass: 'bg-blue-500/10 border-blue-500/20',
+        textClass: 'text-blue-400',
+      };
+    case 'EXECUTION_STOPPED':
+      return {
+        icon: <Slash className="h-3.5 w-3.5" />,
+        bgClass: 'bg-zinc-500/10 border-zinc-500/20',
+        textClass: 'text-zinc-400',
+      };
+    case 'EXECUTION_BLOCKED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-amber-500/10 border-amber-500/20',
+        textClass: 'text-amber-400',
+      };
+    case 'EXECUTION_TIMED_OUT':
+    case 'TEST_TIMEOUT':
+      return {
+        icon: <Clock className="h-3.5 w-3.5" />,
+        bgClass: 'bg-orange-500/10 border-orange-500/20',
+        textClass: 'text-orange-400',
+      };
+    case 'TOOL_INVOCATION':
+      return {
+        icon: <Terminal className="h-3.5 w-3.5" />,
+        bgClass: 'bg-indigo-500/10 border-indigo-500/20',
+        textClass: 'text-indigo-400',
+      };
+    case 'TESTS_STARTED':
     case 'TESTING':
     case 'TESTS_EXECUTED':
       return {
@@ -95,12 +160,45 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         bgClass: 'bg-cyan-500/10 border-cyan-500/20',
         textClass: 'text-cyan-400',
       };
+    case 'TESTS_PASSED':
+      return {
+        icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'TESTS_FAILED':
+      return {
+        icon: <XCircle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'TEST_INFRASTRUCTURE_FAILURE':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-amber-500/10 border-amber-500/20',
+        textClass: 'text-amber-400',
+      };
     case 'REPAIRING':
     case 'REPAIR_ATTEMPT':
+    case 'REPAIR_ATTEMPT_STARTED':
+    case 'REPAIR_ATTEMPT_COMPLETED':
       return {
         icon: <Wrench className="h-3.5 w-3.5" />,
         bgClass: 'bg-orange-500/10 border-orange-500/20',
         textClass: 'text-orange-400',
+      };
+    case 'RETRY_BUDGET_EXHAUSTED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'TASK_CANCELLED':
+    case 'CANCELLED':
+      return {
+        icon: <Slash className="h-3.5 w-3.5" />,
+        bgClass: 'bg-zinc-500/10 border-zinc-500/20',
+        textClass: 'text-zinc-400',
       };
     case 'VERIFYING':
     case 'VERIFICATION_COMPLETED':
@@ -133,25 +231,21 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         bgClass: 'bg-red-500/10 border-red-500/20',
         textClass: 'text-red-400',
       };
-    case 'CANCELLED':
-      return {
-        icon: <Slash className="h-3.5 w-3.5" />,
-        bgClass: 'bg-zinc-500/10 border-zinc-500/20',
-        textClass: 'text-zinc-400',
-      };
     default:
       return {
-        icon: <Clock className="h-3.5 w-3.5" />,
+        icon: <Activity className="h-3.5 w-3.5" />,
         bgClass: 'bg-accent border-border',
         textClass: 'text-muted-foreground',
       };
   }
 }
 
-export function ExecutionTimeline({ taskId, className }: ExecutionTimelineProps) {
-  const { data: eventsData, isLoading, isError, error, refetch } = useTaskEvents(taskId);
+export function ExecutionTimeline({ taskId, events: passedEvents, className }: ExecutionTimelineProps) {
+  const { data: eventsData, isLoading, isError, error, refetch } = useTaskEvents(taskId, undefined, {
+    enabled: passedEvents === undefined,
+  });
 
-  const events: TaskEvent[] = eventsData?.items || [];
+  const events: TaskEvent[] = passedEvents !== undefined ? passedEvents : (eventsData?.items || []);
 
   return (
     <div

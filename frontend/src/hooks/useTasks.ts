@@ -16,27 +16,35 @@ import {
   approveTaskPlan,
   rejectTaskPlan,
   executeTask,
+  cancelTask,
+  getTaskWorkspace,
+  getTaskDiff,
+  getTaskRepairBudget,
   getTaskEvents,
   getTaskTests,
   getTaskVerification,
   importGitHubIssue,
   listRepositoryIssues,
 } from '../services/tasks';
-import type {
-  TaskCreateRequest,
-  TaskDetailResponse,
-  TaskListFilterParams,
-  TaskListResponse,
-  TaskPlan,
-  PlanGenerateRequest,
-  PlanApprovalRequest,
-  PlanRejectionRequest,
-  TaskEventListResponse,
-  TaskTestResultsResponse,
-  VerificationResult,
-  IssueImportRequest,
-  IssueImportResponse,
-  GitHubIssueListResponse,
+import {
+  isExecutionActive,
+  type TaskCreateRequest,
+  type TaskDetailResponse,
+  type TaskListFilterParams,
+  type TaskListResponse,
+  type TaskPlan,
+  type PlanGenerateRequest,
+  type PlanApprovalRequest,
+  type PlanRejectionRequest,
+  type TaskEventListResponse,
+  type TaskTestResultsResponse,
+  type VerificationResult,
+  type IssueImportRequest,
+  type IssueImportResponse,
+  type GitHubIssueListResponse,
+  type WorkspaceMetadata,
+  type TaskDiffRanges,
+  type WorkspaceRepairBudgetStatus,
 } from '../types/task';
 import type { ApiError } from '../types/api';
 
@@ -53,6 +61,10 @@ export const taskKeys = {
   plans: () => [...taskKeys.all, 'plan'] as const,
   plan: (taskId: string, version?: number) =>
     [...taskKeys.all, 'detail', taskId, 'plan', version] as const,
+  workspace: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'workspace'] as const,
+  diff: (taskId: string, repositoryId?: string) =>
+    [...taskKeys.all, 'detail', taskId, 'diff', repositoryId] as const,
+  repairBudget: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'repairBudget'] as const,
   events: (taskId: string, params?: { limit?: number; since?: string }) =>
     [...taskKeys.all, 'detail', taskId, 'events', params] as const,
   tests: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'tests'] as const,
@@ -72,11 +84,26 @@ export const taskKeys = {
  */
 export function useTasks(
   filters?: TaskListFilterParams,
-  options?: { enabled?: boolean; refetchInterval?: number | false }
+  options?: {
+    enabled?: boolean;
+    refetchInterval?: number | false | ((query: { state: { data?: TaskListResponse } }) => number | false);
+  }
 ) {
   return useQuery<TaskListResponse, ApiError>({
     queryKey: taskKeys.list(filters),
     queryFn: () => listTasks(filters),
+    refetchInterval: (query) => {
+      if (options?.refetchInterval !== undefined) {
+        return typeof options.refetchInterval === 'function'
+          ? options.refetchInterval(query)
+          : options.refetchInterval;
+      }
+      const items = query.state.data?.items;
+      if (items && items.some((t) => isExecutionActive(t.status))) {
+        return 3000;
+      }
+      return false;
+    },
     ...options,
   });
 }
@@ -84,11 +111,29 @@ export function useTasks(
 /**
  * Hook to retrieve a single task by ID.
  */
-export function useTask(taskId: string | undefined, options?: { enabled?: boolean }) {
+export function useTask(
+  taskId: string | undefined,
+  options?: {
+    enabled?: boolean;
+    refetchInterval?: number | false | ((query: { state: { data?: TaskDetailResponse } }) => number | false);
+  }
+) {
   return useQuery<TaskDetailResponse, ApiError>({
     queryKey: taskKeys.detail(taskId || ''),
     queryFn: () => getTask(taskId!),
     enabled: Boolean(taskId) && (options?.enabled ?? true),
+    refetchInterval: (query) => {
+      if (options?.refetchInterval !== undefined) {
+        return typeof options.refetchInterval === 'function'
+          ? options.refetchInterval(query)
+          : options.refetchInterval;
+      }
+      const status = query.state.data?.status;
+      if (status && isExecutionActive(status)) {
+        return 3000;
+      }
+      return false;
+    },
   });
 }
 
@@ -140,6 +185,50 @@ export function useTaskVerification(taskId: string | undefined, options?: { enab
   return useQuery<VerificationResult, ApiError>({
     queryKey: taskKeys.verification(taskId || ''),
     queryFn: () => getTaskVerification(taskId!),
+    enabled: Boolean(taskId) && (options?.enabled ?? true),
+  });
+}
+
+/**
+ * Hook to retrieve isolated workspace metadata for a task.
+ */
+export function useTaskWorkspace(
+  taskId: string | undefined,
+  options?: { enabled?: boolean; refetchInterval?: number | false }
+) {
+  return useQuery<WorkspaceMetadata, ApiError>({
+    queryKey: taskKeys.workspace(taskId || ''),
+    queryFn: () => getTaskWorkspace(taskId!),
+    enabled: Boolean(taskId) && (options?.enabled ?? true),
+    refetchInterval: options?.refetchInterval,
+  });
+}
+
+/**
+ * Hook to retrieve code changes and git diff telemetry for a task.
+ */
+export function useTaskDiff(
+  taskId: string | undefined,
+  repositoryId?: string,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<TaskDiffRanges, ApiError>({
+    queryKey: taskKeys.diff(taskId || '', repositoryId),
+    queryFn: () => getTaskDiff(taskId!, repositoryId),
+    enabled: Boolean(taskId) && (options?.enabled ?? true),
+  });
+}
+
+/**
+ * Hook to retrieve server-authoritative repair budget status.
+ */
+export function useTaskRepairBudget(
+  taskId: string | undefined,
+  options?: { enabled?: boolean }
+) {
+  return useQuery<WorkspaceRepairBudgetStatus, ApiError>({
+    queryKey: taskKeys.repairBudget(taskId || ''),
+    queryFn: () => getTaskRepairBudget(taskId!),
     enabled: Boolean(taskId) && (options?.enabled ?? true),
   });
 }
@@ -253,7 +342,9 @@ export function useRejectPlan(taskId: string) {
 }
 
 /**
- * Mutation hook to dispatch workspace execution (for backend/integration test verification).
+ * Mutation hook to dispatch workspace execution.
+ * Available only when task.status === TaskStatus.APPROVED.
+ * Invalidates task detail, events, workspace, and list queries upon success.
  */
 export function useExecuteTask(taskId: string) {
   const queryClient = useQueryClient();
@@ -264,6 +355,32 @@ export function useExecuteTask(taskId: string) {
       queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.diff(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.tests(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(taskId) });
+      queryClient.setQueryData(taskKeys.detail(taskId), updatedTask);
+    },
+  });
+}
+
+/**
+ * Mutation hook to cancel an active or pending task.
+ * Invalidates task detail, events, workspace, and list queries upon success.
+ */
+export function useCancelTask(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskDetailResponse, ApiError, void>({
+    mutationFn: () => cancelTask(taskId),
+    onSuccess: (updatedTask) => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.diff(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.tests(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(taskId) });
       queryClient.setQueryData(taskKeys.detail(taskId), updatedTask);
     },
   });

@@ -21,6 +21,9 @@ import type {
   IssueImportRequest,
   IssueImportResponse,
   GitHubIssueListResponse,
+  WorkspaceMetadata,
+  TaskDiffRanges,
+  WorkspaceRepairBudgetStatus,
 } from '../types/task';
 
 // ============================================================================
@@ -114,6 +117,57 @@ export async function executeTask(
   payload?: { dry_run?: boolean }
 ): Promise<TaskDetailResponse> {
   const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/execute`, payload || {});
+  return response.data;
+}
+
+/**
+ * Cancel an active or pending task.
+ * POST /api/v1/tasks/:taskId/cancel
+ */
+export async function cancelTask(taskId: string): Promise<TaskDetailResponse> {
+  const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/cancel`);
+  return response.data;
+}
+
+/**
+ * Retrieve isolated workspace metadata for a task.
+ * GET /api/v1/tasks/:taskId/workspace
+ */
+export async function getTaskWorkspace(taskId: string): Promise<WorkspaceMetadata> {
+  const response = await apiClient.get<WorkspaceMetadata>(`/tasks/${taskId}/workspace`);
+  return response.data;
+}
+
+/**
+ * Retrieve code modifications and git diff telemetry for a task.
+ * Supports repository-scoped diff route with fallback to task-centric route.
+ */
+export async function getTaskDiff(
+  taskId: string,
+  repositoryId?: string
+): Promise<TaskDiffRanges> {
+  if (repositoryId) {
+    try {
+      const response = await apiClient.get<TaskDiffRanges>(
+        `/repositories/${repositoryId}/source/diff-ranges/task/${taskId}`
+      );
+      return response.data;
+    } catch {
+      // Fallback to task-centric route
+      const fallback = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
+      return fallback.data;
+    }
+  }
+  const response = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
+  return response.data;
+}
+
+/**
+ * Retrieve server-authoritative repair budget status.
+ * GET /api/v1/tasks/:taskId/repair-budget
+ */
+export async function getTaskRepairBudget(taskId: string): Promise<WorkspaceRepairBudgetStatus> {
+  const response = await apiClient.get<WorkspaceRepairBudgetStatus>(`/tasks/${taskId}/repair-budget`);
   return response.data;
 }
 
