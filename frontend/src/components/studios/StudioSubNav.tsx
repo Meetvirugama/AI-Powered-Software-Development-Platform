@@ -11,12 +11,11 @@ import {
   RefreshCw,
   GitBranch,
   CheckCircle2,
-  Clock,
   Search,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { Repository } from '../../types/api';
-import { useSyncRepository, syncProgressFromStatus } from '../../hooks/useRepositories';
+import { useSyncRepository } from '../../hooks/useRepositories';
 
 interface StudioSubNavProps {
   repository?: Repository;
@@ -30,7 +29,6 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
   const syncMutation = useSyncRepository();
 
   const syncStatus = repository?.sync_status;
-  const syncProgress = syncProgressFromStatus(syncStatus ?? 'NOT_SYNCED');
   const isSyncing = syncStatus === 'SYNCING' || syncMutation.isPending;
 
   const repoName = repository?.name ?? repository?.full_name?.split('/')[1] ?? (isLoading ? 'Loading...' : 'Repository');
@@ -130,36 +128,56 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
             </button>
           )}
 
-          {syncStatus && (
-            <div className="hidden md:flex items-center gap-1.5 text-xs text-muted-foreground">
-              {syncStatus === 'SYNCED' ? (
-                <span className="inline-flex items-center gap-1 text-emerald-500 font-mono text-[11px]">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  Indexed
-                </span>
-              ) : isSyncing ? (
-                <span className="inline-flex items-center gap-1.5 text-amber-500 font-mono text-[11px]">
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                  {syncProgress.label}
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 text-muted-foreground font-mono text-[11px]">
-                  <Clock className="h-3.5 w-3.5" />
-                  {syncProgress.label}
-                </span>
-              )}
+          {/* Canonical Index / Sync Status & Action */}
+          {isSyncing ? (
+            <div
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs font-medium"
+              title="Repository synchronization in progress"
+            >
+              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              <span>Syncing…</span>
             </div>
+          ) : syncStatus === 'SYNCED' ? (
+            <div className="flex items-center gap-1.5">
+              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[11px] font-mono font-medium">
+                <CheckCircle2 className="h-3 w-3" />
+                Indexed
+              </span>
+              <button
+                onClick={() => syncMutation.mutate(repoId)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors shadow-2xs"
+                title="Trigger repository re-index"
+                aria-label="Re-index repository"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Sync</span>
+              </button>
+            </div>
+          ) : syncStatus === 'FAILED' ? (
+            <div className="flex items-center gap-1.5">
+              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-destructive/10 border border-destructive/20 text-destructive text-[11px] font-medium">
+                Failed
+              </span>
+              <button
+                onClick={() => syncMutation.mutate(repoId)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors shadow-2xs"
+                title="Retry repository sync"
+                aria-label="Retry sync"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Retry</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => syncMutation.mutate(repoId)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-2xs"
+              title="Start repository indexing"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>Sync</span>
+            </button>
           )}
-
-          <button
-            onClick={() => syncMutation.mutate(repoId)}
-            disabled={isSyncing}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-foreground disabled:opacity-50 transition-colors shadow-xs"
-            title="Trigger repository re-index"
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', isSyncing && 'animate-spin text-primary')} />
-            <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Sync'}</span>
-          </button>
         </div>
       </div>
 

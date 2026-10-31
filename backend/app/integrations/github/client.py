@@ -115,6 +115,16 @@ class GitHubClient:
                             rate_limited=True,
                         )
 
+                if response.status_code == 429:
+                    retry_after = response.headers.get("retry-after", "")
+                    reset_time = response.headers.get("x-ratelimit-reset", "")
+                    raise GitHubAPIError(
+                        f"GitHub API rate limit exceeded (HTTP 429). Retry-After: {retry_after or reset_time}s.",
+                        status_code=429,
+                        retryable=True,
+                        rate_limited=True,
+                    )
+
                 if response.status_code == 404:
                     raise GitHubAPIError(
                         f"Resource not found: {path}",
@@ -275,7 +285,46 @@ class GitHubClient:
             params=params,
         )
 
-    # ----- Week 3 F31: Issues ----------------------------------------------
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+        draft: bool = True,
+    ) -> dict[str, Any]:
+        """Create a pull request on GitHub (defaults to Draft PR)."""
+        payload = {
+            "title": title,
+            "head": head,
+            "base": base,
+            "body": body,
+            "draft": draft,
+        }
+        return await self._request("POST", f"/repos/{owner}/{repo}/pulls", json_body=payload)
+
+    async def update_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str | None = None,
+        title: str | None = None,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing pull request on GitHub."""
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if title is not None:
+            payload["title"] = title
+        if state is not None:
+            payload["state"] = state
+        return await self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{pr_number}", json_body=payload)
+
+    # ----- Week 3 F31 & F-23: Issues ---------------------------------------
 
     async def create_issue(
         self,
@@ -284,14 +333,17 @@ class GitHubClient:
         title: str,
         body: str = "",
         labels: list[str] | None = None,
+        assignees: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Create a new GitHub issue in `owner/repo` with secret-redacted title and body."""
+        """Create a new GitHub issue in `owner/repo` (e.g. from AI code review finding F-23 or F31)."""
         payload: dict[str, Any] = {
             "title": redact(title.strip()),
             "body": redact(body or ""),
         }
         if labels:
             payload["labels"] = [redact(str(lbl).strip()) for lbl in labels if str(lbl).strip()]
+        if assignees:
+            payload["assignees"] = assignees
         return await self._request(
             "POST",
             f"/repos/{owner}/{repo}/issues",
@@ -402,9 +454,18 @@ class GitHubClient:
             "exp": now + (10 * 60),
             "iss": settings.github_app_id,
         }
+        pem_key = (
+            settings.github_app_private_key.strip()
+            .strip('"')
+            .strip("'")
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .strip()
+        )
         app_jwt = jose_jwt.encode(
             payload,
-            settings.github_app_private_key,
+            pem_key,
             algorithm="RS256",
         )
 

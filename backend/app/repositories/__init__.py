@@ -7,17 +7,25 @@ from app.repositories.memory_repository import MemoryRepository
 from app.repositories.pull_request_repository import PullRequestRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.symbol_edge_repository import SymbolEdgeRepository
-from app.repositories.task_repository import TaskRepository
+from app.repositories.task_repository import (
+    InvalidStateTransitionError,
+    PlanNotFoundError,
+    TaskNotFoundError,
+    TaskRepository,
+)
 from app.repositories.user_repository import UserRepository
 
 __all__ = [
     "AnalysisRunRepository",
     "ChunkRepository",
     "CodeSymbolRepository",
+    "InvalidStateTransitionError",
     "MemoryRepository",
+    "PlanNotFoundError",
     "PullRequestRepository",
     "RepositoryRepository",
     "SymbolEdgeRepository",
+    "TaskNotFoundError",
     "TaskRepository",
     "UserRepository",
 ]

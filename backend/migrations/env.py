@@ -31,7 +31,7 @@ import app.models
 custom_url = config.get_main_option("sqlalchemy.url")
 if not custom_url or "driver://user:pass" in custom_url:
     settings = get_settings()
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
@@ -71,15 +71,19 @@ def run_migrations_online() -> None:
     In this scenario we need to create an Engine
     and associate a connection with the context, or reuse a provided connection.
     """
+    version_table_schema = config.get_main_option("version_table_schema", None)
+    connect_args = {}
+    if version_table_schema:
+        connect_args["options"] = f"-c search_path={version_table_schema},public"
+
     connectable = config.attributes.get("connection", None)
     if connectable is None:
         connectable = engine_from_config(
             config.get_section(config.config_ini_section, {}),
             prefix="sqlalchemy.",
             poolclass=pool.NullPool,
+            connect_args=connect_args,
         )
-
-    version_table_schema = config.get_main_option("version_table_schema", None)
 
     if hasattr(connectable, "connect"):
         with connectable.connect() as connection:

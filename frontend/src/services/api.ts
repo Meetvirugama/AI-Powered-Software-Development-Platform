@@ -9,7 +9,7 @@ import type { ApiError } from '../types/api';
  * The frontend never stores or reads the token value directly — `withCredentials: true`
  * ensures the browser sends the cookie on every request automatically.
  */
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '');
 
 export const DEFAULT_TIMEOUT_MS = 30000;
 export const AI_ANALYSIS_TIMEOUT_MS = 120000;
@@ -95,9 +95,11 @@ apiClient.interceptors.response.use(
  *
  * Preserves status, request_id, validation details, cancellation and timeout specifics.
  */
-export function normaliseError(error: AxiosError | any): ApiError {
+export function normaliseError(error: unknown): ApiError {
+  const err = error as (AxiosError & { code?: string; message?: string; response?: { status?: number; data?: Record<string, unknown>; headers?: Record<string, string> } }) | undefined;
+
   // Handle cancellation separately from genuine network errors (F-10)
-  if (axios.isCancel(error) || error?.code === 'ERR_CANCELED') {
+  if (axios.isCancel(err) || err?.code === 'ERR_CANCELED') {
     return {
       code: 'REQUEST_CANCELLED',
       message: 'Request was cancelled.',
@@ -107,7 +109,7 @@ export function normaliseError(error: AxiosError | any): ApiError {
   }
 
   // Handle request timeouts (F-04)
-  if (error?.code === 'ECONNABORTED' || (typeof error?.message === 'string' && error.message.toLowerCase().includes('timeout'))) {
+  if (err?.code === 'ECONNABORTED' || (typeof err?.message === 'string' && err.message.toLowerCase().includes('timeout'))) {
     return {
       code: 'REQUEST_TIMEOUT',
       message: 'Analysis request timed out — please check Analysis History before retrying.',
@@ -116,12 +118,12 @@ export function normaliseError(error: AxiosError | any): ApiError {
     };
   }
 
-  const status = error?.response?.status as number | undefined;
-  const data = error?.response?.data as Record<string, unknown> | undefined;
+  const status = err?.response?.status as number | undefined;
+  const data = err?.response?.data as Record<string, unknown> | undefined;
   const envelope = data?.error as (Partial<ApiError> & { details?: Record<string, unknown> | unknown[] }) | undefined;
 
   const requestId =
-    (error?.response?.headers?.['x-request-id'] as string) ||
+    (err?.response?.headers?.['x-request-id'] as string) ||
     (typeof data?.request_id === 'string' ? data.request_id : undefined) ||
     (typeof envelope?.requestId === 'string' ? envelope.requestId : undefined);
 
@@ -133,7 +135,7 @@ export function normaliseError(error: AxiosError | any): ApiError {
       retryable: envelope.retryable ?? (status ? status >= 500 : false),
       status,
       requestId,
-      details: envelope.details ?? (data?.details as any),
+      details: envelope.details ?? (data?.details as Record<string, unknown> | unknown[] | undefined),
     };
   }
 
@@ -161,7 +163,7 @@ export function normaliseError(error: AxiosError | any): ApiError {
       retryable: false,
       status,
       requestId,
-      details: data?.detail as any,
+      details: data?.detail as Record<string, unknown> | unknown[] | undefined,
     };
   }
   if (status === 429) {
@@ -191,7 +193,7 @@ export function normaliseError(error: AxiosError | any): ApiError {
       requestId,
     };
   }
-  if (error?.code === 'ERR_NETWORK') {
+  if (err?.code === 'ERR_NETWORK') {
     return {
       code: 'NETWORK_ERROR',
       message: 'Network error. Please check your connection.',
@@ -202,7 +204,7 @@ export function normaliseError(error: AxiosError | any): ApiError {
 
   return {
     code: 'UNKNOWN_ERROR',
-    message: error?.message || 'An unknown error occurred.',
+    message: err?.message || 'An unknown error occurred.',
     retryable: false,
     status,
     requestId,

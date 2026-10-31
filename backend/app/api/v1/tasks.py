@@ -133,9 +133,9 @@ def _serialize_approval_record(record: TaskApprovalRecord, task: AgentTask) -> T
     payload = {
         "approval_id": str(record.id),
         "task_id": str(record.task_id),
-        "plan_id": str(record.plan_id),
+        "plan_id": str(record.plan_id) if record.plan_id else "",
         "plan_version": record.plan_version,
-        "approver_id": str(record.approver_id),
+        "approver_id": str(record.approver_id) if record.approver_id else "",
         "decision": record.decision,
         "comment": redact(record.comment) if record.comment else None,
         "base_revision": record.base_revision,

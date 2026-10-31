@@ -2,8 +2,6 @@ import { useState, useMemo, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   FileCheck,
-  History,
-  FolderOpen,
   RefreshCw,
   ShieldCheck,
   PlusCircle,
@@ -15,22 +13,23 @@ import { CodeViewer } from '../components/explorer/CodeViewer';
 import { CodeReviewView } from '../components/explorer/CodeReviewView';
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { CreateIssueModal, type FindingForIssue } from '../components/explorer/CreateIssueModal';
-import { TargetFilePicker } from '../components/studios/TargetFilePicker';
+import { StudioLayout } from '../components/studios/StudioLayout';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
-import type {
-  SourceReference,
-  ReviewReportResponse,
-} from '../types/analysis';
+import type { SourceReference, ReviewReportResponse } from '../types/analysis';
 
 export function RepositoryReviewStudio() {
   const { id } = useParams<{ id: string }>();
 
   const repoId = id ?? '';
-  // H-2: increased from 100 to 500
   const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
-  // H-1: shared hook replaces ~30 lines of duplicated state
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
+  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
+  const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
+  const [issueFinding, setIssueFinding] = useState<FindingForIssue | null>(null);
+
   const {
     selectedFile,
     activeTarget,
@@ -43,33 +42,26 @@ export function RepositoryReviewStudio() {
     setReviewResult(null);
   });
 
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [reviewResult, setReviewResult] = useState<ReviewReportResponse | null>(null);
-  const [issueFinding, setIssueFinding] = useState<FindingForIssue | null>(null);
-
   // Review mutation
   const reviewMutation = useReviewCode(repoId, {
     onSuccess: (data) => {
       setReviewResult(data);
+      setActiveMobileTab('results');
     },
   });
 
   const handleRunReview = useCallback(() => {
-    if (reviewMutation.isPending) return;
-    if (!selectedFile) return;
+    if (!selectedFile || reviewMutation.isPending) return;
 
     reviewMutation.mutate({
-      target: {
-        type: 'file',
-        path: selectedFile.path,
-      },
+      target: activeTarget,
     });
-  }, [selectedFile, reviewMutation]);
+  }, [selectedFile, activeTarget, reviewMutation]);
 
   const handleSelectSourceReference = useCallback(
     (source: SourceReference) => {
       setActiveSourceReference(source);
+      setActiveMobileTab('source');
       if (source.file_path && selectedFile && source.file_path !== selectedFile.path) {
         const targetFile = files.find((f) => f.path === source.file_path);
         if (targetFile) {
@@ -87,52 +79,43 @@ export function RepositoryReviewStudio() {
   );
 
   return (
-    <div className="flex flex-col h-full w-full overflow-hidden bg-background">
-      {/* Studio Header Toolbar */}
-      <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <button
-            onClick={() => setShowFilePicker(!showFilePicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
-            title="Switch target file"
-          >
-            <FolderOpen className="h-3.5 w-3.5 text-primary" />
-            <span className="truncate max-w-[200px]">{selectedFile?.path ?? 'Select File'}</span>
-          </button>
-
-          {reviewResult?.report && (
-            <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[11px] font-mono">
-              <ShieldCheck className="h-3 w-3" />
-              <span>Risk: {reviewResult.report.risk_level}</span>
-              <span className="text-muted-foreground/60">·</span>
-              <span>{reviewResult.report.total_findings} findings</span>
+    <>
+      <StudioLayout
+        files={files}
+        filesLoading={filesLoading}
+        selectedFile={selectedFile}
+        onSelectFile={handleSelectFile}
+        showFilePicker={showFilePicker}
+        onToggleFilePicker={setShowFilePicker}
+        activeTarget={activeTarget}
+        activeMobileTab={activeMobileTab}
+        onMobileTabChange={setActiveMobileTab}
+        onOpenHistory={() => setHistoryOpen(true)}
+        historyTitle="View review history"
+        extraControls={
+          reviewResult?.report ? (
+            <div className="flex items-center gap-2">
+              <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[11px] font-mono">
+                <ShieldCheck className="h-3 w-3" />
+                <span>Risk: {reviewResult.report.risk_level}</span>
+                <span className="text-muted-foreground/60">·</span>
+                <span>{reviewResult.report.total_findings} findings</span>
+              </div>
+              {reviewResult.report.findings && reviewResult.report.findings.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIssueFinding(reviewResult.report.findings[0])}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-xs font-semibold text-primary transition-colors"
+                  title="Create GitHub Issue & Task from top finding"
+                >
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Create Issue</span>
+                </button>
+              )}
             </div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          {reviewResult?.report?.findings && reviewResult.report.findings.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setIssueFinding(reviewResult.report.findings[0])}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-primary/40 bg-primary/10 hover:bg-primary/20 text-xs font-semibold text-primary transition-colors"
-              title="Create GitHub Issue & Task from top review finding"
-            >
-              <PlusCircle className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Create Issue</span>
-            </button>
-          )}
-
-          <button
-            onClick={() => setHistoryOpen(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-            title="View review history"
-            aria-label="View review history"
-          >
-            <History className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">History</span>
-          </button>
-
+          ) : undefined
+        }
+        actionButton={
           <button
             onClick={handleRunReview}
             disabled={!selectedFile || reviewMutation.isPending}
@@ -150,33 +133,9 @@ export function RepositoryReviewStudio() {
               </>
             )}
           </button>
-        </div>
-      </div>
-
-      {/* H-3 Fix: fixed positioning with backdrop */}
-      {showFilePicker && (
-        <>
-          <div
-            className="fixed inset-0 z-20"
-            onClick={() => setShowFilePicker(false)}
-            aria-hidden="true"
-          />
-          <div className="fixed left-4 top-24 z-30 w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <TargetFilePicker
-              files={files}
-              isLoading={filesLoading}
-              selectedFile={selectedFile}
-              onSelectFile={handleSelectFile}
-            />
-          </div>
-        </>
-      )}
-
-      {/* 2-Pane Split Studio Canvas */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
-        {/* Left Pane: Code Viewer */}
-        <div className="w-1/2 min-w-[360px] h-full border-r border-border flex flex-col min-h-0 overflow-hidden bg-background">
-          {selectedFile ? (
+        }
+        sourcePanel={
+          selectedFile ? (
             <CodeViewer
               repositoryId={repoId}
               file={selectedFile}
@@ -191,74 +150,67 @@ export function RepositoryReviewStudio() {
             <div className="flex-1 flex items-center justify-center p-8 text-center text-muted-foreground text-xs">
               Select a file to inspect its source code.
             </div>
-          )}
-        </div>
-
-        {/* Right Pane: Code Review Findings Canvas */}
-        <div className="flex-1 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
-          {reviewMutation.isPending ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
-              <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
-                <FileCheck className="h-6 w-6 animate-spin" />
-              </div>
-              <h3 className="text-sm font-semibold text-foreground">Performing comprehensive code review...</h3>
-              <p className="text-xs text-muted-foreground max-w-sm">
-                Analyzing maintainability, performance bottlenecks, design pattern compliance, and testability.
-              </p>
-            </div>
-          ) : reviewMutation.isError ? (
-            <div className="p-4">
-              <ErrorMessage
-                error={reviewMutation.error}
-              />
-            </div>
-          ) : reviewResult ? (
-            <div className="space-y-4">
-              <CodeReviewView
-                result={reviewResult}
-                activeSourceReference={activeSourceReference}
-                onSelectSourceReference={handleSelectSourceReference}
-                repositoryId={repoId}
-              />
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center max-w-md mx-auto space-y-4">
-              <div className="h-12 w-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-xs">
-                <FileCheck className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-semibold text-foreground tracking-tight">Code Review & Quality Auditor</h3>
-                <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                  Perform automated peer reviews on source files or branches. Receive categorized feedback on performance, security, maintainability, and architectural standards.
+          )
+        }
+        resultsPanel={
+          <div className="flex-1 min-w-0 h-full flex flex-col min-h-0 overflow-y-auto bg-card/30 p-4 lg:p-6">
+            {reviewMutation.isPending ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-3">
+                <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
+                  <FileCheck className="h-6 w-6 animate-spin" />
+                </div>
+                <h3 className="text-sm font-semibold text-foreground">Analyzing code quality & patterns...</h3>
+                <p className="text-xs text-muted-foreground max-w-sm">
+                  Synthesizing AST syntax metrics, complexity factors, and LLM architectural patterns.
                 </p>
               </div>
-
-              <div className="w-full pt-2">
+            ) : reviewMutation.isError ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                <ErrorMessage
+                  message={reviewMutation.error instanceof Error ? reviewMutation.error.message : 'Code review failed.'}
+                />
                 <button
                   onClick={handleRunReview}
-                  disabled={!selectedFile}
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium rounded-md bg-primary hover:bg-primary/90 text-primary-foreground transition-colors shadow-xs"
+                  className="mt-4 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium"
                 >
-                  <FileCheck className="h-3.5 w-3.5" />
-                  <span>Review Current File ({selectedFile?.path.split('/').pop() ?? 'None'})</span>
+                  Retry Review
                 </button>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* History Drawer */}
-      <AnalysisHistoryDrawer
-        isOpen={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-        repositoryId={repoId}
-        initialFeature="review"
-        currentFilePath={selectedFile?.path}
-        onReopenReview={(review) => {
-          setReviewResult(review);
-          setHistoryOpen(false);
-        }}
+            ) : reviewResult ? (
+              <div className="max-w-4xl w-full mx-auto space-y-4">
+                <CodeReviewView
+                  result={reviewResult}
+                  activeSourceReference={activeSourceReference}
+                  onSelectSourceReference={handleSelectSourceReference}
+                  repositoryId={repoId}
+                />
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-muted-foreground space-y-3">
+                <FileCheck className="h-10 w-10 opacity-30 text-primary" />
+                <h3 className="text-sm font-semibold text-foreground">Ready for Review</h3>
+                <p className="text-xs max-w-sm">
+                  Select a target file and trigger an intelligent architectural code review.
+                </p>
+              </div>
+            )}
+          </div>
+        }
+        historyDrawer={
+          <AnalysisHistoryDrawer
+            isOpen={historyOpen}
+            onClose={() => setHistoryOpen(false)}
+            repositoryId={repoId}
+            initialFeature="review"
+            currentFilePath={selectedFile?.path}
+            onReopenReview={(review, target) => {
+              setReviewResult(review);
+              if (target) handleTargetChange(target);
+              setActiveMobileTab('results');
+              setHistoryOpen(false);
+            }}
+          />
+        }
       />
 
       {/* Week 3 Day 1 (F31): Create GitHub Issue & Task Modal */}
@@ -269,7 +221,7 @@ export function RepositoryReviewStudio() {
         finding={issueFinding}
         sourceType="REVIEW_FINDING"
       />
-    </div>
+    </>
   );
 }
 
