@@ -15,17 +15,21 @@ Key responsibilities (Days 3–5 of Parth's Week 1 plan):
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
+from app.core.input_security import is_within
 from .base import (
     GitHubBranch,
     GitHubInstallation,
@@ -284,6 +288,79 @@ class GitHubService(GitHubIntegrationBase):
         repo_data = await self.get_repository(owner, repo)
         return repo_data.default_branch
 
+    async def _download_zipball(
+        self,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        branch: str,
+        target: Path,
+    ) -> None:
+        """Download and extract repository archive via GitHub REST API.
+
+        Serves as the primary or fallback cloning strategy for environments
+        where the Git CLI is not installed (e.g. minimal PaaS container runtimes
+        such as Azure App Service or AWS Lambda).
+        """
+        token = await self._token_manager.get_token(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{branch}"
+
+        logger.info("Downloading archive for %s/%s (branch=%s) from GitHub API", owner, repo, branch)
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=180.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+                    },
+                )
+                if resp.status_code == 404:
+                    raise GitHubNotFoundError(f"Repository or branch not found: {owner}/{repo}@{branch}")
+                if resp.status_code == 401:
+                    await self._token_manager.invalidate(installation_id)
+                    raise GitHubAuthError(f"Authentication failed for {owner}/{repo}: HTTP 401")
+                if resp.status_code == 403:
+                    raise GitHubPermissionDeniedError(f"Permission denied for {owner}/{repo}: HTTP 403")
+                if resp.status_code != 200:
+                    raise GitHubCloneError(
+                        f"GitHub archive download failed for {owner}/{repo}: HTTP {resp.status_code}",
+                        returncode=resp.status_code,
+                    )
+                zip_bytes = resp.content
+
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                members = zf.infolist()
+                prefix = members[0].filename.split("/")[0] + "/" if members and "/" in members[0].filename else ""
+                for m in members:
+                    if not m.filename.startswith(prefix) or m.filename == prefix:
+                        continue
+                    rel_path = m.filename[len(prefix):]
+                    if not rel_path:
+                        continue
+                    dest = (target / rel_path).resolve()
+                    if not is_within(target, dest):
+                        continue
+                    if m.is_dir():
+                        dest.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(m) as src, open(dest, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+
+            logger.info("Successfully extracted archive for %s/%s into %s", owner, repo, target)
+        except (GitHubNotFoundError, GitHubAuthError, GitHubPermissionDeniedError, GitHubCloneError):
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise
+        except Exception as exc:
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise GitHubCloneError(f"Failed to extract repository archive for {owner}/{repo}: {exc}") from exc
+
     async def clone_repository(
         self,
         installation_id: int,
@@ -296,9 +373,9 @@ class GitHubService(GitHubIntegrationBase):
 
         Day 4 implementation:
         - Gets a fresh installation token from :class:`InstallationTokenManager`.
-        - Builds an authenticated HTTPS clone URL (token embedded, not persisted).
-        - Runs ``git clone --depth=1 --branch=<branch>``.
         - Validates the target path is within ``workspace_root`` (no traversal).
+        - If ``git`` binary is missing or subprocess execution fails (e.g. Azure App Service),
+          falls back directly to downloading the repository archive via the GitHub REST API.
         - Cleans up the partial clone directory on failure.
 
         Args:
@@ -313,12 +390,9 @@ class GitHubService(GitHubIntegrationBase):
 
         Raises:
             ValueError: If ``workspace_path`` escapes the workspace root.
-            GitHubCloneError: If the ``git clone`` process fails.
+            GitHubCloneError: If the clone/download process fails.
         """
         # --- path traversal & argument injection guards ---
-        import re
-        from app.core.input_security import is_within
-
         target = Path(workspace_path).resolve()
         if not is_within(self._workspace_root, target) or target == self._workspace_root:
             raise ValueError(
@@ -333,9 +407,26 @@ class GitHubService(GitHubIntegrationBase):
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
             raise ValueError(f"Invalid branch name: {branch!r}")
 
-        # --- get installation token (never touches disk) ---
+        # Check if git CLI binary is present in runtime environment
+        git_binary = shutil.which("git")
+        if not git_binary:
+            logger.info(
+                "git binary not found in environment; using GitHub REST API archive download for %s/%s",
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
+
+        # --- get installation token (never exposed in process arguments) ---
         token = await self._token_manager.get_token(installation_id)
-        auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+        clone_url = f"https://x-access-token@github.com/{owner}/{repo}.git"
 
         cmd = [
             "git",
@@ -344,19 +435,30 @@ class GitHubService(GitHubIntegrationBase):
             "--branch",
             branch,
             "--",
-            auth_url,
+            clone_url,
             str(target),
         ]
 
         logger.info("Cloning %s/%s (branch=%s) into %s", owner, repo, branch, target)
 
+        askpass_path: Path | None = None
         try:
+            # Secure GIT_ASKPASS helper with 0o700 permissions to supply token to Git
+            # without exposing it in cmd / argv process arguments
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as askpass_file:
+                askpass_file.write(f'#!/bin/sh\necho "{token}"\n')
+                askpass_path = Path(askpass_file.name)
+            askpass_path.chmod(0o700)
+
             result = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                # Strip token from env-level git configs if any
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env={
+                    **os.environ,
+                    "GIT_ASKPASS": str(askpass_path),
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
             )
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
 
@@ -369,12 +471,34 @@ class GitHubService(GitHubIntegrationBase):
                     f"git clone failed for {owner}/{repo}: {stderr_text}",
                     returncode=result.returncode,
                 )
+
+        except (FileNotFoundError, OSError) as err:
+            logger.warning(
+                "git execution failed (%s); falling back to GitHub API archive download for %s/%s",
+                err,
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
         except (asyncio.TimeoutError, GitHubCloneError):
             # Clean up partial clone
             if target.exists():
                 shutil.rmtree(target, ignore_errors=True)
                 logger.warning("Cleaned up partial clone at %s", target)
             raise
+        finally:
+            if askpass_path and askpass_path.exists():
+                try:
+                    askpass_path.unlink()
+                except Exception:
+                    pass
 
         logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
         return str(target)

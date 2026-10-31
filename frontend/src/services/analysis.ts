@@ -33,13 +33,20 @@ import type {
  * @param payload The validated target and execution options.
  * @returns The structured explanation response envelope.
  */
+export interface AnalysisRequestOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+}
+
 export async function explainCode(
   repositoryId: string,
-  payload: ExplainCodeRequest
+  payload: ExplainCodeRequest,
+  options?: AnalysisRequestOptions
 ): Promise<CodeExplanationResponse> {
   const response = await apiClient.post<CodeExplanationResponse>(
     `/repositories/${repositoryId}/explain`,
-    payload
+    payload,
+    { signal: options?.signal, timeout: options?.timeout }
   );
   return response.data;
 }
@@ -51,15 +58,18 @@ export async function explainCode(
  *
  * @param repositoryId The UUID of the authorized repository.
  * @param payload Target, options, and engine flags.
+ * @param options Request options including optional cancellation signal and timeout.
  * @returns The structured bug detection response envelope.
  */
 export async function detectBugs(
   repositoryId: string,
-  payload: BugDetectionRequest
+  payload: BugDetectionRequest,
+  options?: AnalysisRequestOptions
 ): Promise<BugDetectionResponse> {
   const response = await apiClient.post<BugDetectionResponse>(
     `/repositories/${repositoryId}/detect-bugs`,
-    payload
+    payload,
+    { signal: options?.signal, timeout: options?.timeout }
   );
   return response.data;
 }
@@ -71,15 +81,18 @@ export async function detectBugs(
  *
  * @param repositoryId The UUID of the authorized repository.
  * @param payload Target, options, and optional framework override.
+ * @param options Request options including optional cancellation signal and timeout.
  * @returns The structured test generation response envelope.
  */
 export async function generateTests(
   repositoryId: string,
-  payload: TestGenerationRequest
+  payload: TestGenerationRequest,
+  options?: AnalysisRequestOptions
 ): Promise<TestGenerationResponse> {
   const response = await apiClient.post<TestGenerationResponse>(
     `/repositories/${repositoryId}/generate-tests`,
-    payload
+    payload,
+    { signal: options?.signal, timeout: options?.timeout }
   );
   return response.data;
 }
@@ -89,16 +102,20 @@ export async function generateTests(
  *
  * Calls POST /api/v1/repositories/{repository_id}/review
  *
+ * @param repositoryId The UUID of the authorized repository.
  * @param payload Review target (file, commit, pr, or diff) and options.
+ * @param options Request options including optional cancellation signal and timeout.
  * @returns The structured review report response envelope.
  */
 export async function reviewCode(
   repositoryId: string,
-  payload: CodeReviewRequest
+  payload: CodeReviewRequest,
+  options?: AnalysisRequestOptions
 ): Promise<ReviewReportResponse> {
   const response = await apiClient.post<ReviewReportResponse>(
     `/repositories/${repositoryId}/review`,
-    payload
+    payload,
+    { signal: options?.signal, timeout: options?.timeout }
   );
   return response.data;
 }

@@ -1,7 +1,7 @@
 """add workflow automation tables
 
 Revision ID: b3c4d5e6f7a8
-Revises: a1b2c3d4e5f6
+Revises: b627460d74e0
 Create Date: 2026-10-26
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "b3c4d5e6f7a8"
-down_revision: Union[str, Sequence[str], None] = "a1b2c3d4e5f6"
+down_revision: Union[str, Sequence[str], None] = "b627460d74e0"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -223,6 +223,18 @@ def detect_repository_test_framework(
     )
 
     ext = os.path.splitext(target_path)[1].lower()
+    static_extensions = {
+        ".html", ".htm", ".css", ".scss", ".sass", ".less",
+        ".md", ".markdown", ".txt", ".json", ".xml", ".yaml", ".yml",
+        ".svg", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf"
+    }
+    if ext in static_extensions:
+        raise APIError(
+            400,
+            ErrorCode.UNSUPPORTED_TARGET,
+            f"File '{target_path}' ({ext}) is a static markup or document file, not a testable code module. Unit test generation is supported for Python (.py), TypeScript (.ts, .tsx), and JavaScript (.js, .jsx) files.",
+        )
+
     is_python_target = ext == ".py" or raw_detection.language == "Python"
     is_js_ts_target = ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs") or raw_detection.language in (
         "TypeScript",
@@ -598,6 +610,7 @@ def validate_and_sanitize_generated_tests(
         )
 
     deduped_warnings = list(dict.fromkeys(warnings))
+    val_stage = "generated and statically validated" if final_syntax_valid else "syntax validation failed"
     return result.model_copy(
         update={
             "proposed_test_path": safe_test_path,
@@ -606,6 +619,12 @@ def validate_and_sanitize_generated_tests(
             "assumptions_and_warnings": deduped_warnings,
             "syntax_valid": final_syntax_valid,
             "validation_errors": merged_val_errors,
+            "validation_stage": val_stage,
+            "schema_valid": True,
+            "code_syntactically_valid": final_syntax_valid,
+            "framework_recognized": result.detected_framework in ("pytest", "unittest", "jest"),
+            "execution_attempted": False,
+            "execution_status": "NOT_EXECUTED",
             "sources": grounded_sources,
         }
     )

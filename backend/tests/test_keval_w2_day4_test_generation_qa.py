@@ -239,3 +239,80 @@ def test_generate_tests_security_rejects_unsafe_paths():
         warning = check_generated_test_path(path, "pytest")
         assert warning is not None
 
+
+def test_generated_test_validation_truthfulness_and_sandbox_boundary():
+    """B-15: Report validation stages separately; never claim 'verified passing' without execution."""
+    import uuid
+    from scanner.framework_detector import FrameworkDetectionResult
+    from app.services.test_generation_orchestrator import (
+        ResolvedExplanationTarget,
+        validate_and_sanitize_generated_tests,
+    )
+    from app.schemas.analysis import AnalysisTarget, TestGenerationResult
+
+    repo_id = uuid.uuid4()
+    resolved = ResolvedExplanationTarget(
+        target=AnalysisTarget(type="file", path="src/calculator.py"),
+        revision="rev_test_123",
+        file_record=None,
+        resolved_symbol=None,
+        code_content="def add(a, b): return a + b\n",
+        intelligence_context=None,  # type: ignore[arg-type]
+        indexed_paths={"src/calculator.py": 10},
+    )
+
+    detection = FrameworkDetectionResult(
+        framework="pytest",
+        language="Python",
+        is_supported=True,
+        status="CONFIRMED",
+    )
+
+    # 1. Valid syntax candidate: truthful static validation stage
+    raw_valid = TestGenerationResult(
+        detected_framework="pytest",
+        proposed_test_path="tests/test_calculator.py",
+        test_content="def test_add():\n    assert 1 + 1 == 2\n",
+        covered_scenarios=[],
+        syntax_valid=True,
+    )
+
+    sanitized = validate_and_sanitize_generated_tests(
+        raw_valid,
+        repository_id=repo_id,
+        resolved=resolved,
+        detection=detection,
+        default_proposed_path="tests/test_calculator.py",
+    )
+
+    assert sanitized.syntax_valid is True
+    assert sanitized.code_syntactically_valid is True
+    assert sanitized.validation_stage == "generated and statically validated"
+    assert sanitized.execution_attempted is False
+    assert sanitized.execution_status == "NOT_EXECUTED"
+    assert sanitized.framework_recognized is True
+
+    # 2. Syntax-invalid candidate: explicitly marked failed, not executed
+    raw_invalid = TestGenerationResult(
+        detected_framework="pytest",
+        proposed_test_path="tests/test_calculator.py",
+        test_content="def test_broken(:\n    assert True\n",
+        covered_scenarios=[],
+        syntax_valid=True,
+    )
+
+    sanitized_invalid = validate_and_sanitize_generated_tests(
+        raw_invalid,
+        repository_id=repo_id,
+        resolved=resolved,
+        detection=detection,
+        default_proposed_path="tests/test_calculator.py",
+    )
+
+    assert sanitized_invalid.syntax_valid is False
+    assert sanitized_invalid.code_syntactically_valid is False
+    assert sanitized_invalid.validation_stage == "syntax validation failed"
+    assert sanitized_invalid.execution_attempted is False
+    assert sanitized_invalid.execution_status == "NOT_EXECUTED"
+
+

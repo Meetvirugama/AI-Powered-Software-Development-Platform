@@ -53,8 +53,11 @@ class Message(BaseModel):
         if isinstance(obj, Mapping):
             return cls.from_dict(obj)
         role = getattr(obj, "role", "user")
+        safe_role: Literal["system", "user", "assistant"] = (
+            role if role in ("system", "user", "assistant") else "user"
+        )
         content = getattr(obj, "content", "")
-        return cls(role=role, content=str(content))
+        return cls(role=safe_role, content=str(content))
 
 
 # ---------------------------------------------------------------------------
@@ -76,8 +79,8 @@ class LLMRequest(BaseModel):
 
     model: str = Field(..., description="Provider model identifier, e.g. 'gpt-4o'")
     messages: list[Message]
-    temperature: float = Field(0.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(2048, ge=1)
+    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=2048, ge=1)
     response_schema: type[BaseModel] | None = Field(
         default=None,
         description="Optional Pydantic schema to enforce and validate JSON output.",
