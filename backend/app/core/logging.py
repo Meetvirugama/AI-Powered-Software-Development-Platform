@@ -29,6 +29,42 @@ class JsonFormatter(logging.Formatter):
         }
         if request_id := request_id_context.get():
             payload["request_id"] = request_id
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            payload["exception"] = record.exc_text
+        if record.stack_info:
+            payload["stack_info"] = self.formatStack(record.stack_info)
+
+        # Include custom extra fields passed via extra={...}
+        standard_attrs = {
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "message",
+        }
+        for key, val in record.__dict__.items():
+            if key not in standard_attrs and not key.startswith("_"):
+                payload[key] = val
+
         return json.dumps(payload, default=str)
 
 

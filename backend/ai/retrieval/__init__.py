@@ -5,7 +5,7 @@ Owner: Meet — W1-12
 
 from __future__ import annotations
 
-from .base import CodeChunk, Retriever
+from .base import CodeChunk, RetrievalUnavailableError, Retriever
 from .fusion import RRFFusion
 from .hybrid import HybridRetriever
 from .lexical import LexicalRetriever
@@ -20,6 +20,7 @@ __all__ = [
     "LexicalRetriever",
     "RAGPipeline",
     "RRFFusion",
+    "RetrievalUnavailableError",
     "Retriever",
     "VectorRetriever",
 ]

@@ -208,6 +208,10 @@ def test_sse_event_filter_blocks_cross_tenant_user_events() -> None:
 
     broadcast_event = json.dumps({"type": "system.notice", "data": {}})
     assert _should_deliver_event(broadcast_event, user_b) is True
+    # Fail-closed protection
+    assert _should_deliver_event("{malformed_json_event", user_a) is False
+    assert _should_deliver_event("not_even_json", user_a) is False
+    assert _should_deliver_event("123", user_a) is False
 
 
 @pytest.mark.asyncio

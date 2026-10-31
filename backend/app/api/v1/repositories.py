@@ -17,12 +17,21 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis
+from app.api.v1.dependencies import (
+    get_owned_repository,
+    get_request_user_id as _request_user_id,
+)
+from app.services.repository_metadata_service import extract_repository_dependencies
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.repositories.repository_repository import RepositoryRepository
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
+
+
+def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
+    return get_owned_repository(repository_id, request, db, repo_cls=RepositoryRepository)
 from app.schemas.repository import (
     CodeSymbolResponse,
     PaginatedResponse,
@@ -138,10 +147,15 @@ def get_repository(repository_id: UUID, request: Request, db: Session = Depends(
 
 
 @router.post("/{repository_id}/sync", response_model=SyncJobResponse, status_code=status.HTTP_202_ACCEPTED, summary="Queue repository synchronization")
-def sync_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> SyncJobResponse:
+def sync_repository(
+    repository_id: UUID,
+    request: Request,
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> SyncJobResponse:
     user_id = _request_user_id(request)
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
-    job = service.request_sync(repository_id, user_id)
+    job = service.request_sync(repository_id, user_id, force=force)
     try:
         get_redis().publish(
             "platform_events",
@@ -209,7 +223,7 @@ async def search_repository(
 
     import asyncio
 
-    await asyncio.to_thread(_owned_repository, repository_id, request, db)
+    _owned_repository(repository_id, request, db)
     pipeline = get_rag_pipeline(request)
     try:
         chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
@@ -335,159 +349,7 @@ def list_symbols(
     return PaginatedResponse(page=page, page_size=page_size, total=total, items=[_symbol_response(item) for item in symbols])
 
 
-def _extract_dependencies(repository_id: UUID, db: Session) -> list[RepositoryDependencyResponse]:
-    """Parse top-level dependency manifests indexed for this repository."""
-    if not hasattr(db, "query"):
-        return []
-
-    try:
-        manifest_files = (
-            db.query(RepositoryFile)
-            .filter(
-                RepositoryFile.repository_id == repository_id,
-                or_(
-                    RepositoryFile.path.endswith("package.json"),
-                    RepositoryFile.path.endswith("requirements.txt"),
-                    RepositoryFile.path.endswith("Pipfile"),
-                    RepositoryFile.path.endswith("pyproject.toml"),
-                    RepositoryFile.path.endswith("go.mod"),
-                    RepositoryFile.path.endswith("Cargo.toml"),
-                ),
-            )
-            .all()
-        )
-
-        if not manifest_files:
-            return []
-
-        manifest_ids = [f.id for f in manifest_files]
-        all_manifest_chunks = (
-            db.query(CodeChunk.file_id, CodeChunk.content)
-            .filter(
-                CodeChunk.repository_id == repository_id,
-                CodeChunk.file_id.in_(manifest_ids),
-            )
-            .order_by(CodeChunk.file_id, CodeChunk.start_line)
-            .all()
-        )
-        chunks_by_file: dict[UUID, list[str]] = {}
-        for f_id, c_text in all_manifest_chunks:
-            if c_text:
-                chunks_by_file.setdefault(f_id, []).append(c_text)
-
-        dependencies: list[RepositoryDependencyResponse] = []
-        for file in manifest_files:
-            content = "\n".join(chunks_by_file.get(file.id, []))
-            if file.path.endswith("package.json"):
-                try:
-                    data = json.loads(content)
-                    deps = data.get("dependencies", {})
-                    dev_deps = data.get("devDependencies", {})
-                    for name, ver in deps.items():
-                        dependencies.append(RepositoryDependencyResponse(name=name, version=str(ver), ecosystem="npm"))
-                    for name, ver in dev_deps.items():
-                        dependencies.append(RepositoryDependencyResponse(name=name, version=str(ver), ecosystem="npm"))
-                except Exception:
-                    pass
-            elif file.path.endswith("requirements.txt"):
-                for line in content.splitlines():
-                    line = line.strip()
-                    if not line or line.startswith(("#", "-", "http://", "https://")):
-                        continue
-                    match = re.match(r"^([A-Za-z0-9_\-\.]+)(?:([<>=!~]+.*))?$", line)
-                    if match:
-                        name, ver = match.groups()
-                        dependencies.append(
-                            RepositoryDependencyResponse(
-                                name=name,
-                                version=ver.strip() if ver else "*",
-                                ecosystem="pip",
-                            )
-                        )
-            elif file.path.endswith("go.mod"):
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith("require "):
-                        parts = line.split()
-                        if len(parts) >= 3:
-                            dependencies.append(RepositoryDependencyResponse(name=parts[1], version=parts[2], ecosystem="gomod"))
-                    elif not line.startswith("//") and len(line.split()) == 2:
-                        parts = line.split()
-                        if "." in parts[0] or "/" in parts[0]:
-                            dependencies.append(RepositoryDependencyResponse(name=parts[0], version=parts[1], ecosystem="gomod"))
-            elif file.path.endswith("Cargo.toml"):
-                in_deps = False
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith("[dependencies"):
-                        in_deps = True
-                        continue
-                    elif line.startswith("["):
-                        in_deps = False
-                    if in_deps and "=" in line and not line.startswith("#"):
-                        parts = line.split("=", 1)
-                        name = parts[0].strip()
-                        ver = parts[1].strip().strip('"').strip("'")
-                        dependencies.append(RepositoryDependencyResponse(name=name, version=ver, ecosystem="cargo"))
-            elif file.path.endswith("pyproject.toml"):
-                try:
-                    import tomllib
-
-                    toml_data = tomllib.loads(content)
-                    proj_deps = toml_data.get("project", {}).get("dependencies", [])
-                    for spec in proj_deps:
-                        m = re.match(r"^([A-Za-z0-9_\-\.]+)(?:\[[^\]]*\])?\s*(.*)$", str(spec).strip())
-                        if m:
-                            pkg_name, pkg_ver = m.groups()
-                            dependencies.append(
-                                RepositoryDependencyResponse(
-                                    name=pkg_name,
-                                    version=pkg_ver.strip() or "*",
-                                    ecosystem="pip",
-                                )
-                            )
-                    poetry_deps = toml_data.get("tool", {}).get("poetry", {}).get("dependencies", {})
-                    if isinstance(poetry_deps, dict):
-                        for pkg_name, pkg_spec in poetry_deps.items():
-                            if pkg_name.lower() == "python":
-                                continue
-                            ver_str = (
-                                pkg_spec.get("version", "*")
-                                if isinstance(pkg_spec, dict)
-                                else str(pkg_spec)
-                            )
-                            dependencies.append(
-                                RepositoryDependencyResponse(
-                                    name=pkg_name,
-                                    version=ver_str,
-                                    ecosystem="pip",
-                                )
-                            )
-                except Exception:
-                    pass
-            elif file.path.endswith("Pipfile"):
-                section = ""
-                for raw_ln in content.splitlines():
-                    ln = raw_ln.strip()
-                    if not ln or ln.startswith("#"):
-                        continue
-                    if ln.startswith("[") and ln.endswith("]"):
-                        section = ln[1:-1].strip().lower()
-                        continue
-                    if section in ("packages", "dev-packages") and "=" in ln:
-                        pkg_name, pkg_val = ln.split("=", 1)
-                        pkg_name = pkg_name.strip().strip('"').strip("'")
-                        pkg_val = pkg_val.strip().strip('"').strip("'")
-                        dependencies.append(
-                            RepositoryDependencyResponse(
-                                name=pkg_name,
-                                version=pkg_val or "*",
-                                ecosystem="pip",
-                            )
-                        )
-        return dependencies
-    except Exception:
-        return []
+_extract_dependencies = extract_repository_dependencies
 
 
 @router.get(
@@ -502,22 +364,7 @@ def list_dependencies(
 ) -> list[RepositoryDependencyResponse]:
     """Return top-level dependencies discovered in repository manifest files."""
     _owned_repository(repository_id, request, db)
-    return _extract_dependencies(repository_id, db)
-
-
-def _request_user_id(request: Request) -> UUID:
-    try:
-        return UUID(request.state.user_id)
-    except (AttributeError, ValueError) as exc:
-        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
-
-
-def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
-    user_id = _request_user_id(request)
-    repository = RepositoryRepository(db).get_for_user(repository_id, user_id)
-    if repository is None:
-        raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository does not exist or you do not have access.")
-    return repository
+    return extract_repository_dependencies(repository_id, db)
 
 
 def _repository_response(

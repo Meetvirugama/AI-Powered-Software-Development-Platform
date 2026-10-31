@@ -43,6 +43,8 @@ export interface ListAvailableRepositoriesParams {
    * Empty string means no filter.
    */
   search: string;
+  /** Optional installation ID to ensure linkage. */
+  installationId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +123,7 @@ function adaptResponse(raw: RawDiscoveryResponse): PaginatedAvailableRepositoryR
 export async function listAvailableRepositories(
   params: ListAvailableRepositoriesParams,
 ): Promise<PaginatedAvailableRepositoryResponse> {
-  const { page, pageSize, search } = params;
+  const { page, pageSize, search, installationId } = params;
 
   const queryParams: Record<string, string | number> = {
     page,
@@ -131,6 +133,10 @@ export async function listAvailableRepositories(
   // Only include `search` when non-empty to avoid sending `search=` to the backend.
   if (search.trim()) {
     queryParams.search = search.trim();
+  }
+
+  if (installationId && installationId.trim()) {
+    queryParams.installation_id = installationId.trim();
   }
 
   const response = await apiClient.get<RawDiscoveryResponse>('/github/repositories', {

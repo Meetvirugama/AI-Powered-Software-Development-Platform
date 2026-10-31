@@ -90,6 +90,25 @@ def test_gemini_chat_model_default_is_flash_lite() -> None:
     assert s.gemini_chat_model == "gemini-flash-lite-latest"
 
 
+def test_invalid_samesite_rejected() -> None:
+    """Settings must reject unsupported COOKIE_SAMESITE values."""
+    with pytest.raises(ValidationError, match="Invalid COOKIE_SAMESITE"):
+        Settings(_env_file=None, cookie_samesite="invalid_mode")
+
+
+def test_samesite_none_requires_secure_cookie() -> None:
+    """Settings must reject COOKIE_SAMESITE=none if COOKIE_SECURE is False."""
+    with pytest.raises(ValidationError, match="COOKIE_SECURE must be True when COOKIE_SAMESITE is 'none'"):
+        Settings(_env_file=None, cookie_samesite="none", cookie_secure=False)
+
+
+def test_invalid_pool_size_rejected() -> None:
+    """Settings must reject non-positive DB_POOL_SIZE."""
+    with pytest.raises(ValidationError, match="DB_POOL_SIZE must be greater than 0"):
+        Settings(_env_file=None, db_pool_size=0)
+
+
+
 def test_gemini_chat_model_can_be_overridden() -> None:
     """F-15: Model configuration can be overridden by environment or kwargs."""
     s = Settings(_env_file=None, gemini_chat_model="custom-model-v2")

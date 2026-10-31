@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -9,6 +10,8 @@ from app.models.repository import Repository, SyncStatus
 from app.models.repository_file import RepositoryFile
 from app.models.code_symbol import CodeSymbol
 from app.models.sync_job import SyncJob, SyncJobStatus
+
+logger = logging.getLogger(__name__)
 
 
 class RepositoryRepository:
@@ -126,10 +129,13 @@ class RepositoryRepository:
         return list(self.session.scalars(stmt).all())
 
     def delete(self, repo_id: uuid.UUID) -> bool:
-        """Delete a repository and all related dependent records."""
+        """Atomically delete a repository and all related dependent records without swallowing errors."""
         repo = self.get_by_id(repo_id)
         if not repo:
             return False
+
+        from app.models.analysis_finding import AnalysisFinding
+        from app.models.analysis_run import AnalysisRun
         from app.models.code_chunk import CodeChunk
         from app.models.code_symbol import CodeSymbol
         from app.models.symbol_edge import SymbolEdge
@@ -140,24 +146,19 @@ class RepositoryRepository:
         from sqlalchemy import delete
 
         try:
-            from app.models.analysis_finding import AnalysisFinding
-            from app.models.analysis_run import AnalysisRun
             self.session.execute(delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_id))
             self.session.execute(delete(AnalysisRun).where(AnalysisRun.repository_id == repo_id))
-        except Exception:
-            pass
-
-        try:
             self.session.execute(delete(PullRequest).where(PullRequest.repository_id == repo_id))
-        except Exception:
-            pass
-
-        self.session.execute(delete(CodeChunk).where(CodeChunk.repository_id == repo_id))
-        self.session.execute(delete(SymbolEdge).where(SymbolEdge.repository_id == repo_id))
-        self.session.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repo_id))
-        self.session.execute(delete(RepositoryFile).where(RepositoryFile.repository_id == repo_id))
-        self.session.execute(delete(SyncJob).where(SyncJob.repository_id == repo_id))
-        self.session.execute(delete(MemoryEntry).where(MemoryEntry.repository_id == repo_id))
-        self.session.delete(repo)
-        self.session.commit()
-        return True
+            self.session.execute(delete(CodeChunk).where(CodeChunk.repository_id == repo_id))
+            self.session.execute(delete(SymbolEdge).where(SymbolEdge.repository_id == repo_id))
+            self.session.execute(delete(CodeSymbol).where(CodeSymbol.repository_id == repo_id))
+            self.session.execute(delete(RepositoryFile).where(RepositoryFile.repository_id == repo_id))
+            self.session.execute(delete(SyncJob).where(SyncJob.repository_id == repo_id))
+            self.session.execute(delete(MemoryEntry).where(MemoryEntry.repository_id == repo_id))
+            self.session.delete(repo)
+            self.session.commit()
+            return True
+        except Exception as exc:
+            self.session.rollback()
+            logger.error("repository_deletion_failed", extra={"repo_id": str(repo_id), "error": str(exc)})
+            raise

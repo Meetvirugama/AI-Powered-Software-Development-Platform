@@ -1,4 +1,4 @@
-import { Navigate, Outlet } from 'react-router-dom';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 
@@ -15,6 +15,7 @@ import { LoadingSpinner } from '../components/shared/LoadingSpinner';
  */
 export function ProtectedRoute() {
   const { isAuthenticated, isLoading, sessionError, retrySessionCheck } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -29,7 +30,9 @@ export function ProtectedRoute() {
       <div className="flex flex-col items-center justify-center min-h-screen gap-4 bg-background p-6 text-center">
         <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-sm space-y-4">
           <h2 className="text-lg font-semibold text-foreground">Session Verification Failed</h2>
-          <p className="text-sm text-muted-foreground">{sessionError}</p>
+          <p className="text-sm text-muted-foreground">
+            We could not verify your session. Please check your connection and try again.
+          </p>
           <div className="flex items-center justify-center gap-3 pt-2">
             <button
               onClick={() => retrySessionCheck()}
@@ -50,6 +53,12 @@ export function ProtectedRoute() {
   }
 
   if (!isAuthenticated) {
+    if (typeof sessionStorage !== 'undefined') {
+      const fullPath = location.pathname + location.search;
+      if (fullPath.startsWith('/app')) {
+        sessionStorage.setItem('auth_redirect', fullPath);
+      }
+    }
     return <Navigate to="/login" replace />;
   }
 
