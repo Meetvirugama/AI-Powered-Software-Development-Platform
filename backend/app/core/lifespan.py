@@ -5,7 +5,9 @@ Encapsulates startup, graceful shutdown, background reconciliation, and dependen
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -349,8 +351,25 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("startup_sync_reconciliation_failed", extra={"error": str(exc)})
 
-    # Background sync worker runs as an independent worker process (app.workers.sync_worker)
+    # ── Background Sync Worker Task ──────────────────────────────────────────
+    sync_worker_task = None
+    if "PYTEST_CURRENT_TEST" not in os.environ and not getattr(settings, "disable_embedded_sync_worker", False):
+        try:
+            from app.services.sync_worker import sync_worker_loop
+
+            sync_worker_task = asyncio.create_task(sync_worker_loop(app))
+            logger.info("sync_worker_task_started")
+        except Exception as exc:
+            logger.warning("sync_worker_task_failed", extra={"error": str(exc)})
+
     yield
+
+    if sync_worker_task:
+        sync_worker_task.cancel()
+        try:
+            await sync_worker_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     # Clean shutdown of infrastructure
     try:

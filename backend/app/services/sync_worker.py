@@ -17,13 +17,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy import select
 
 from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
 from ai.embeddings.service import EmbeddingService
@@ -33,6 +36,7 @@ from app.core.redis import get_redis_async
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
+from app.services.repository_sync import reconcile_stale_sync_jobs
 from indexer.incremental import IncrementalIndexer
 from scanner.walker import FileWalker
 
@@ -152,7 +156,7 @@ async def process_sync_job(
 
         # Notify connected frontend clients via Redis pub/sub
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -195,7 +199,7 @@ async def process_sync_job(
                 db.commit()
 
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -272,11 +276,8 @@ async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) 
 
 async def sync_worker_loop(app_or_service: Any = None) -> None:
     """Continuously poll Redis `sync_jobs` queue and process sync jobs asynchronously."""
-    import time
-    from app.services.repository_sync import reconcile_stale_sync_jobs
-
     logger.info("sync_worker_loop_started")
-    redis = await get_redis_async()
+    redis: Any = await get_redis_async()
     last_sweep_time = time.monotonic()
 
     # Resolve GitHubService
@@ -293,6 +294,28 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
             gh_service = GitHubService(redis=redis, settings=get_settings())
         except Exception as exc:
             logger.warning("sync_worker_github_service_init_warning", extra={"error": str(exc)})
+
+    # Initial recovery: reconcile stale jobs and re-enqueue queued jobs into Redis
+    try:
+        with SessionLocal() as init_db:
+            reconcile_stale_sync_jobs(init_db, timeout_seconds=300)
+            pending_jobs = list(init_db.scalars(select(SyncJob).where(SyncJob.status == SyncJobStatus.QUEUED)).all())
+            for pj in pending_jobs:
+                p_repo = init_db.get(Repository, pj.repository_id)
+                if p_repo and hasattr(redis, "rpush"):
+                    p_load = {
+                        "job_id": str(pj.id),
+                        "repository_id": str(p_repo.id),
+                        "user_id": str(pj.user_id),
+                        "installation_id": str(p_repo.installation_id),
+                        "owner": p_repo.owner,
+                        "name": p_repo.name,
+                        "branch": p_repo.default_branch,
+                    }
+                    await redis.rpush("sync_jobs", json.dumps(p_load))
+                    logger.info("re_enqueued_pending_sync_job_at_startup", extra={"job_id": str(pj.id), "repo_id": str(p_repo.id)})
+    except Exception as init_err:
+        logger.warning("sync_worker_init_recovery_warning", extra={"error": str(init_err)})
 
     while True:
         try:
@@ -319,16 +342,41 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
 
             # Dequeue with reliable queue hand-off
             raw_data = None
-            if hasattr(redis, "brpoplpush"):
-                raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=2)
-            elif hasattr(redis, "rpoplpush"):
-                raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
-                if not raw_data:
-                    await asyncio.sleep(0.5)
-            else:
-                item = await redis.blpop("sync_jobs", timeout=2)
-                if item:
-                    _, raw_data = item
+            try:
+                if hasattr(redis, "brpoplpush"):
+                    raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=1)
+                elif hasattr(redis, "rpoplpush"):
+                    raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                    if not raw_data:
+                        await asyncio.sleep(1.0)
+                else:
+                    item = await redis.blpop("sync_jobs", timeout=1)
+                    if item:
+                        _, raw_data = item
+            except (RedisTimeoutError, asyncio.TimeoutError):
+                # Idle polling timeout with no jobs is normal; proceed cleanly
+                raw_data = None
+            except Exception:
+                # Fallback for Redis providers (like Upstash) where BRPOPLPUSH may be disallowed
+                try:
+                    if hasattr(redis, "rpoplpush"):
+                        raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                        if not raw_data:
+                            await asyncio.sleep(1.0)
+                    else:
+                        item = await redis.blpop("sync_jobs", timeout=1)
+                        if item:
+                            _, raw_data = item
+                except (RedisTimeoutError, asyncio.TimeoutError):
+                    raw_data = None
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "sync_worker_dequeue_error: %s",
+                        fallback_exc,
+                        exc_info=True,
+                        extra={"error": str(fallback_exc)},
+                    )
+                    await asyncio.sleep(2.0)
 
             if raw_data:
                 decoded = raw_data.decode("utf-8") if isinstance(raw_data, bytes) else str(raw_data)
@@ -347,10 +395,12 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
                             await redis.lrem("sync_jobs:processing", 1, raw_data)
                         except Exception as lrem_exc:
                             logger.warning("sync_worker_ack_lrem_warning", extra={"error": str(lrem_exc)})
+            else:
+                await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             logger.info("sync_worker_loop_cancelled")
             break
         except Exception as exc:
-            logger.warning("sync_worker_loop_error", extra={"error": str(exc)})
-            await asyncio.sleep(2)
+            logger.warning("sync_worker_loop_error: %s", exc, exc_info=True, extra={"error": str(exc)})
+            await asyncio.sleep(2.0)

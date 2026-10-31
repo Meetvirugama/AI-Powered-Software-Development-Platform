@@ -139,10 +139,10 @@ export async function getRepositoryDependencies(
  */
 export async function syncRepository(
   id: string,
+  force: boolean = false,
 ): Promise<{ job_id: string }> {
-  const response = await apiClient.post<{ job_id: string }>(
-    `/repositories/${id}/sync`,
-  );
+  const url = force ? `/repositories/${id}/sync?force=true` : `/repositories/${id}/sync`;
+  const response = await apiClient.post<{ job_id: string }>(url);
   return response.data;
 }
 

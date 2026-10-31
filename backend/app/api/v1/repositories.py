@@ -147,10 +147,15 @@ def get_repository(repository_id: UUID, request: Request, db: Session = Depends(
 
 
 @router.post("/{repository_id}/sync", response_model=SyncJobResponse, status_code=status.HTTP_202_ACCEPTED, summary="Queue repository synchronization")
-def sync_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> SyncJobResponse:
+def sync_repository(
+    repository_id: UUID,
+    request: Request,
+    force: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> SyncJobResponse:
     user_id = _request_user_id(request)
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
-    job = service.request_sync(repository_id, user_id)
+    job = service.request_sync(repository_id, user_id, force=force)
     try:
         get_redis().publish(
             "platform_events",
