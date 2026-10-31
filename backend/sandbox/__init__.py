@@ -25,16 +25,24 @@ from sandbox.exceptions import (
     WorkspaceCommandError,
     WorkspaceCommandTimeoutError,
     WorkspaceCreationError,
+    WorkspaceDuplicateRepairPatchError,
     WorkspaceError,
     WorkspaceFileError,
     WorkspaceLimitExceededError,
     WorkspacePathEscapeError,
     WorkspacePolicyViolationError,
+    WorkspaceRepairBudgetExhaustedError,
     WorkspaceStaleApprovalError,
     WorkspaceStateError,
+    WorkspaceTestExecutionError,
+    WorkspaceUnsupportedFrameworkError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
+from sandbox.test_runner import (
+    MAX_REPAIR_ATTEMPTS,
+    WorkspaceTestRunner,
+)
 from sandbox.tool_policy_bridge import (
     CANONICAL_WORKSPACE_TOOLS,
     TOOL_DELETE_FILE,
@@ -42,6 +50,8 @@ from sandbox.tool_policy_bridge import (
     TOOL_LIST_FILES,
     TOOL_PATCH_FILE,
     TOOL_READ_FILE,
+    TOOL_RECORD_REPAIR,
+    TOOL_RUN_TESTS,
     TOOL_WRITE_FILE,
     WorkspaceToolPolicyBridge,
     register_workspace_tools,
@@ -60,6 +70,7 @@ __all__ = [
     "DISALLOWED_COMMAND_TOKENS",
     "FORBIDDEN_FILE_PATTERNS",
     "MAX_COMMAND_OUTPUT_BYTES",
+    "MAX_REPAIR_ATTEMPTS",
     "MAX_TIMEOUT_SECONDS",
     "PROTECTED_SYSTEM_PREFIXES",
     "SENSITIVE_ENV_VARS",
@@ -68,6 +79,8 @@ __all__ = [
     "TOOL_LIST_FILES",
     "TOOL_PATCH_FILE",
     "TOOL_READ_FILE",
+    "TOOL_RECORD_REPAIR",
+    "TOOL_RUN_TESTS",
     "TOOL_WRITE_FILE",
     "WorkspaceAuthorizationError",
     "WorkspaceCleanupError",
@@ -75,6 +88,7 @@ __all__ = [
     "WorkspaceCommandRunner",
     "WorkspaceCommandTimeoutError",
     "WorkspaceCreationError",
+    "WorkspaceDuplicateRepairPatchError",
     "WorkspaceError",
     "WorkspaceFileError",
     "WorkspaceLimitExceededError",
@@ -82,10 +96,14 @@ __all__ = [
     "WorkspacePathEscapeError",
     "WorkspacePathGuard",
     "WorkspacePolicyViolationError",
+    "WorkspaceRepairBudgetExhaustedError",
     "WorkspaceResourceMonitor",
     "WorkspaceStaleApprovalError",
     "WorkspaceStateError",
+    "WorkspaceTestExecutionError",
+    "WorkspaceTestRunner",
     "WorkspaceToolPolicyBridge",
+    "WorkspaceUnsupportedFrameworkError",
     "register_workspace_tools",
 ]
 

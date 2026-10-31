@@ -53,8 +53,6 @@ class TaskTestPlanner:
             norm_paths = [p.replace("\\", "/").lower() for p in file_paths]
             if any(p.endswith((".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx", ".test.js", ".spec.js")) for p in norm_paths):
                 return "jest"
-            if any(p.endswith(("_test.go", "test.java")) for p in norm_paths):
-                return "pytest"
             if any("pytest" in p or "conftest.py" in p or "pytest.ini" in p for p in norm_paths):
                 return "pytest"
 
@@ -143,9 +141,9 @@ class TaskTestPlanner:
 
         for sym in repo_symbols:
             f_path = norm_paths.get(sym.file_id, "")
-            if f_path in test_file_paths_set or "test" in f_path.lower():
+            if f_path in test_file_paths_set:
                 s_name = sym.name.lower()
-                if s_name.startswith("test_") or s_name.startswith("test") or sym.kind == "method":
+                if s_name.startswith("test"):
                     existing_test_cases.add(sym.name)
 
         return sorted(matched_test_files), sorted(existing_test_cases)
@@ -173,7 +171,7 @@ class TaskTestPlanner:
         for sym in directly_modified:
             # Check if any existing test case mentions this symbol
             sym_clean = sym.name.lower().lstrip("_")
-            covered = any(sym_clean in tc for tc in existing_cases_lower)
+            covered = bool(sym_clean) and any(sym_clean in tc for tc in existing_cases_lower)
 
             if not covered:
                 untested_symbols.append(sym.name)
@@ -184,7 +182,7 @@ class TaskTestPlanner:
                 src_base = os.path.basename(src_path)
                 src_stem, src_ext = os.path.splitext(src_base)
 
-                if framework == "jest" or src_ext in (".ts", ".tsx", ".js", ".jsx"):
+                if src_ext.lower() in (".ts", ".tsx", ".js", ".jsx"):
                     if src_dir:
                         suggested_file = f"{src_dir}/__tests__/{src_stem}.test{src_ext}"
                     else:
@@ -265,7 +263,13 @@ class TaskTestPlanner:
         repo_root: Path | str | None = None,
     ) -> TestExecutionPlan:
         """Build canonical TestExecutionPlan connecting blast radius to test execution."""
-        framework = self.detect_framework(repo_root=repo_root, file_paths=list(file_paths.values()))
+        js_exts = (".ts", ".tsx", ".js", ".jsx")
+        affected_is_js = any(a.lower().endswith(js_exts) for a in affected_files)
+        scoped_paths = [
+            p for p in file_paths.values()
+            if p.lower().endswith(js_exts) == affected_is_js
+        ] if affected_files else list(file_paths.values())
+        framework = self.detect_framework(repo_root=repo_root, file_paths=scoped_paths)
         existing_files, existing_cases = self.discover_existing_tests(
             affected_files=affected_files,
             repo_symbols=repo_symbols,

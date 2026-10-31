@@ -322,6 +322,14 @@ class WorkspaceExecutionEventType(str, Enum):
     EXECUTION_FAILED = "EXECUTION_FAILED"
     CLEANUP_INITIATED = "CLEANUP_INITIATED"
     CLEANUP_COMPLETED = "CLEANUP_COMPLETED"
+    TESTS_STARTED = "TESTS_STARTED"
+    TESTS_PASSED = "TESTS_PASSED"
+    TESTS_FAILED = "TESTS_FAILED"
+    TEST_INFRASTRUCTURE_FAILURE = "TEST_INFRASTRUCTURE_FAILURE"
+    TEST_TIMEOUT = "TEST_TIMEOUT"
+    REPAIR_ATTEMPT_STARTED = "REPAIR_ATTEMPT_STARTED"
+    REPAIR_ATTEMPT_COMPLETED = "REPAIR_ATTEMPT_COMPLETED"
+    REPAIR_BUDGET_EXHAUSTED = "REPAIR_BUDGET_EXHAUSTED"
 
 
 class WorkspaceExecutionEvent(BaseModel):
@@ -352,7 +360,7 @@ class WorkspaceStartExecutionRequest(BaseModel):
         description="Base revision SHA at approval time for stale-check.",
     )
     task_status: str = Field(
-        default="APPROVED",
+        ...,
         description="Current task status (must be APPROVED to enter execution).",
     )
 
@@ -414,7 +422,113 @@ class WorkspaceToolPolicyResult(BaseModel):
     violation_reason: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# 9. Test Runner & Bounded Repair Schemas (F35, Docs/week3.md §6, §8 Day 4)
+# ---------------------------------------------------------------------------
+
+class TestOutcomeStatus(str, Enum):
+    """Normalized test execution outcome."""
+
+    __test__ = False
+
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    ERROR = "ERROR"
+    TIMEOUT = "TIMEOUT"
+    UNSUPPORTED_FRAMEWORK = "UNSUPPORTED_FRAMEWORK"
+    AMBIGUOUS = "AMBIGUOUS"
+    NO_TESTS_FOUND = "NO_TESTS_FOUND"
+
+
+class TestFailureClassification(str, Enum):
+    """Classification of failure for repair eligibility checks."""
+
+    __test__ = False
+
+    NONE = "NONE"
+    TEST_FAILURE = "TEST_FAILURE"  # Assertion error, failing test case -> Eligible for repair
+    INFRASTRUCTURE_ERROR = "INFRASTRUCTURE_ERROR"  # Missing dependency, syntax error, runner crash -> Not eligible
+    TIMEOUT = "TIMEOUT"  # Exceeded time budget -> Not eligible
+    SECURITY_VIOLATION = "SECURITY_VIOLATION"  # Prohibited command or flag -> Not eligible
+
+
+class WorkspaceTestExecutionRequest(BaseModel):
+    """Request payload to execute tests inside the task workspace."""
+
+    task_id: str = Field(..., min_length=1, description="Task identifier.")
+    framework: str | None = Field(default=None, description="Explicit test framework (pytest, unittest, jest).")
+    test_path: str | None = Field(default=None, description="Optional target test file or directory path.")
+    arguments: list[str] = Field(default_factory=list, description="Additional permitted arguments for test runner.")
+    timeout_seconds: int | None = Field(default=None, ge=1, le=300, description="Execution timeout.")
+    environment: dict[str, str] = Field(default_factory=dict, description="Custom environment variables.")
+
+
+class WorkspaceTestExecutionResult(BaseModel):
+    """Comprehensive test outcome record including counts, logs, and classification."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    task_id: str
+    workspace_id: str | None = None
+    success: bool
+    status: TestOutcomeStatus
+    classification: TestFailureClassification = TestFailureClassification.NONE
+    is_repair_eligible: bool = False
+    framework: str = "pytest"
+    command: str = "pytest"
+    arguments: list[str] = Field(default_factory=list)
+    exit_code: int = 0
+    duration_ms: float = 0.0
+    passed_count: int = 0
+    failed_count: int = 0
+    skipped_count: int = 0
+    error_count: int = 0
+    total_count: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    failed_test_names: list[str] = Field(default_factory=list)
+    failure_details: list[str] = Field(default_factory=list)
+    timed_out: bool = False
+    error: str | None = None
+    workspace_revision: str | None = None
+    executed_at: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+class RepairAttemptRecord(BaseModel):
+    """Historical audit record of a self-repair attempt."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    attempt_number: int = Field(..., ge=1, le=3, description="1-indexed repair attempt number (max 3).")
+    task_id: str
+    timestamp: str = Field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    patch_summary: str = Field(..., description="Summary of applied code patch.")
+    patch_hash: str | None = Field(default=None, description="Hash of the patch to prevent duplicate cycles.")
+    workspace_revision: str | None = Field(default=None, description="Git commit/worktree SHA after patch.")
+    test_status_before: TestOutcomeStatus | None = None
+    test_status_after: TestOutcomeStatus | None = None
+    success: bool = False
+
+
+class WorkspaceRepairBudgetStatus(BaseModel):
+    """Current repair budget status for a task."""
+
+    task_id: str
+    repair_attempts_used: int = Field(default=0, ge=0, description="Number of repair attempts used so far.")
+    repair_attempts_max: int = Field(default=3, description="Hard ceiling of task-level repair attempts (ADR-010).")
+    is_budget_exhausted: bool = False
+    is_eligible_for_repair: bool = True
+    last_attempt_at: str | None = None
+
+
 __all__ = [
+    "RepairAttemptRecord",
+    "TestFailureClassification",
+    "TestOutcomeStatus",
     "VALID_WORKSPACE_TRANSITIONS",
     "WorkspaceCleanupResult",
     "WorkspaceCommandRequest",
@@ -431,10 +545,13 @@ __all__ = [
     "WorkspaceFileWriteResult",
     "WorkspaceIsolationType",
     "WorkspaceMetadata",
+    "WorkspaceRepairBudgetStatus",
     "WorkspaceResourceLimits",
     "WorkspaceStartExecutionRequest",
     "WorkspaceStartExecutionResult",
     "WorkspaceStatus",
+    "WorkspaceTestExecutionRequest",
+    "WorkspaceTestExecutionResult",
     "WorkspaceToolPolicyRequest",
     "WorkspaceToolPolicyResult",
     "can_transition_workspace",

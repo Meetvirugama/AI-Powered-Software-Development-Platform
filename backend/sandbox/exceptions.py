@@ -53,3 +53,19 @@ class WorkspaceCommandTimeoutError(WorkspaceCommandError):
 class WorkspacePolicyViolationError(WorkspaceError):
     """Raised when an agent tool request violates security policy."""
 
+
+class WorkspaceTestExecutionError(WorkspaceError):
+    """Raised when test execution fails or encounters infrastructure errors."""
+
+
+class WorkspaceUnsupportedFrameworkError(WorkspaceTestExecutionError):
+    """Raised when an unsupported or missing test framework is requested."""
+
+
+class WorkspaceRepairBudgetExhaustedError(WorkspaceError):
+    """Raised when the maximum 3-attempt repair budget is exhausted per ADR-010."""
+
+
+class WorkspaceDuplicateRepairPatchError(WorkspaceError):
+    """Raised when an identical failed repair patch is repeatedly applied."""
+

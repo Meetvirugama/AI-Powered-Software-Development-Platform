@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -72,6 +73,10 @@ class WorkspaceCommandRunner:
         # Check for null bytes or control characters
         if "\x00" in raw_cmd:
             raise WorkspacePolicyViolationError("Command executable cannot contain null bytes.")
+
+        # Check for path separators (bare executable name only)
+        if "/" in raw_cmd or "\\" in raw_cmd:
+            raise WorkspacePolicyViolationError("Command must be a bare executable name, not a path.")
 
         # Extract base executable name (strip any leading path or extension)
         base_exec = Path(raw_cmd).stem.lower()
@@ -128,23 +133,15 @@ class WorkspaceCommandRunner:
         }
 
         for k, v in os.environ.items():
-            upper_k = k.upper()
-            if upper_k in SENSITIVE_ENV_VARS:
-                continue
-            if any(term in upper_k for term in ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY", "CREDENTIAL")):
-                continue
-            if upper_k in safe_keys or not any(s in upper_k for s in SENSITIVE_ENV_VARS):
+            if k.upper() in safe_keys:
                 env[k] = v
 
-        # Add / override custom env vars (sanitizing values)
+        # Add / override custom env vars (sanitizing values against safe overridable keys)
         if custom_env:
+            overridable = {"NODE_ENV", "LANG", "LC_ALL", "PYTHONUNBUFFERED"}
             for ck, cv in custom_env.items():
-                upper_ck = ck.upper()
-                if upper_ck in SENSITIVE_ENV_VARS:
-                    continue
-                if any(term in upper_ck for term in ("SECRET", "TOKEN", "PASSWORD", "PRIVATE_KEY")):
-                    continue
-                env[ck] = str(cv)
+                if ck.upper() in overridable:
+                    env[ck] = str(cv)
 
         return env
 
@@ -182,39 +179,50 @@ class WorkspaceCommandRunner:
         cmd_list = [exec_cmd, *args]
 
         try:
-            proc = subprocess.run(
-                cmd_list,
-                cwd=str(workspace_root.resolve()),
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout,
-            )
-            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+                proc = subprocess.Popen(
+                    cmd_list,
+                    cwd=str(workspace_root.resolve()),
+                    env=env,
+                    stdout=out_file,
+                    stderr=err_file,
+                )
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                    raise
 
-            # Bound output sizes to prevent runaway log storage
-            stdout = proc.stdout or ""
-            if len(stdout.encode("utf-8")) > self._max_output_bytes:
-                stdout = stdout[: self._max_output_bytes] + "\n... [TRUNCATED: output exceeded size limit]"
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
 
-            stderr = proc.stderr or ""
-            if len(stderr.encode("utf-8")) > self._max_output_bytes:
-                stderr = stderr[: self._max_output_bytes] + "\n... [TRUNCATED: error output exceeded size limit]"
+                out_file.seek(0)
+                raw_out = out_file.read(self._max_output_bytes + 1)
+                is_out_truncated = len(raw_out) > self._max_output_bytes
+                stdout = raw_out[: self._max_output_bytes].decode("utf-8", errors="ignore")
+                if is_out_truncated:
+                    stdout += "\n... [TRUNCATED: output exceeded size limit]"
 
-            # Redact secrets from output
-            stdout_clean = redact(stdout)
-            stderr_clean = redact(stderr)
+                err_file.seek(0)
+                raw_err = err_file.read(self._max_output_bytes + 1)
+                is_err_truncated = len(raw_err) > self._max_output_bytes
+                stderr = raw_err[: self._max_output_bytes].decode("utf-8", errors="ignore")
+                if is_err_truncated:
+                    stderr += "\n... [TRUNCATED: error output exceeded size limit]"
 
-            return WorkspaceCommandResult(
-                success=proc.returncode == 0,
-                command=command,
-                exit_code=proc.returncode,
-                stdout=stdout_clean,
-                stderr=stderr_clean,
-                duration_ms=duration_ms,
-                timed_out=False,
-            )
+                # Redact secrets from output
+                stdout_clean = redact(stdout)
+                stderr_clean = redact(stderr)
+
+                return WorkspaceCommandResult(
+                    success=proc.returncode == 0,
+                    command=command,
+                    exit_code=proc.returncode,
+                    stdout=stdout_clean,
+                    stderr=stderr_clean,
+                    duration_ms=duration_ms,
+                    timed_out=False,
+                )
 
         except subprocess.TimeoutExpired as exc:
             duration_ms = (time.perf_counter() - start_time) * 1000.0

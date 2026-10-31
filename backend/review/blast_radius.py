@@ -1,7 +1,7 @@
 """Identify repository files affected by changes to other files."""
 
 from collections import deque
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from scanner.import_tracker import FileImportMap

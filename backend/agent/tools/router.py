@@ -76,11 +76,8 @@ class ToolRouter:
 
         handler = self._handlers.get(request.tool_name)
         if handler is not None:
-            # Policy-enforced routing: permits execution if a policy engine is provided,
-            # or if the agent state has verified policy authorization, or handler is policy-guarded.
-            is_guarded = getattr(handler, "_is_policy_guarded", False)
-            state_verified = agent_state is not None and getattr(agent_state, "policy_verified", False)
-            if policy_engine is not None or is_guarded or state_verified:
+            # Policy-enforced routing: permits execution only when the handler is explicitly policy-guarded
+            if getattr(handler, "_is_policy_guarded", False) is True:
                 return handler(request, agent_state)
 
         # Fail closed: never execute a tool before security checks exist.

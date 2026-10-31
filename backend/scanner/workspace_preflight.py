@@ -90,8 +90,12 @@ class WorkspaceBaseValidator:
         4. Detects language and framework from workspace files.
         5. Verifies workspace status is eligible for planning (READY or IN_USE).
         """
-        w_path = Path(workspace_path).resolve()
         errors: list[str] = []
+        try:
+            w_path = self._path_guard.validate_workspace_root(workspace_path)
+        except Exception as exc:
+            w_path = Path(workspace_path).resolve()
+            errors.append(f"Workspace root validation failed: {exc}")
 
         # Check directory existence
         if not w_path.exists() or not w_path.is_dir():
@@ -120,7 +124,7 @@ class WorkspaceBaseValidator:
                     errors.append(f"Target file validation failed for '{t_file}': {exc}")
 
         # Detect language and framework
-        primary_lang = "python"
+        primary_lang = "unknown"
         framework = "pytest"
 
         if w_path.exists():
@@ -149,5 +153,5 @@ class WorkspaceBaseValidator:
             test_framework=framework,
             target_files_verified=verified_files,
             errors=errors,
-            resource_limits_checked=True,
+            resource_limits_checked=False,
         )
