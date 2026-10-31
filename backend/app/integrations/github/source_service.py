@@ -722,6 +722,7 @@ class GitHubSourceService:
             number=data.get("number", 0),
             title=redact(data.get("title", "")),
             state=data.get("state", "unknown"),
+            draft=bool(data.get("draft", False)),
             author=user.get("login") if isinstance(user, dict) else None,
             base_ref=base.get("ref") if isinstance(base, dict) else None,
             head_ref=head.get("ref") if isinstance(head, dict) else None,
