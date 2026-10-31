@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Optional
 from uuid import UUID
 
@@ -39,16 +40,23 @@ class RevisionMismatchError(Exception):
 
 
 class SourceRevisionCache:
-    """Revision-safe cache for repository source code.
+    """Revision-safe cache for repository source code with bounded memory TTL and capacity.
 
     Ensures that content from commit A is never returned when commit B is
     requested, even if the file path is identical.
     """
 
-    def __init__(self, redis_client: Any = None, default_ttl_seconds: int = 3600) -> None:
+    def __init__(
+        self,
+        redis_client: Any = None,
+        default_ttl_seconds: int = 3600,
+        max_memory_entries: int = 1000,
+    ) -> None:
         self._memory_cache: dict[str, dict[str, Any]] = {}
+        self._memory_expires: dict[str, float] = {}
         self._redis = redis_client
         self._default_ttl = default_ttl_seconds
+        self._max_memory_entries = max_memory_entries
 
     @staticmethod
     def build_key(repository_id: UUID | str, revision: str, path: str) -> str:
@@ -88,8 +96,15 @@ class SourceRevisionCache:
         """
         key = self.build_key(repository_id, revision, path)
 
-        # 1. Try Memory Cache
-        entry = self._memory_cache.get(key)
+        # 1. Try Memory Cache with TTL validation
+        now = time.monotonic()
+        exp = self._memory_expires.get(key)
+        if exp is not None and now > exp:
+            self._memory_cache.pop(key, None)
+            self._memory_expires.pop(key, None)
+            entry = None
+        else:
+            entry = self._memory_cache.get(key)
 
         # 2. Try Redis if not found in memory
         if entry is None and self._redis is not None:
@@ -99,8 +114,13 @@ class SourceRevisionCache:
                     if isinstance(raw, bytes):
                         raw = raw.decode("utf-8")
                     entry = json.loads(raw)
-                    # Populate memory cache
+                    # Populate memory cache with TTL
+                    if len(self._memory_cache) >= self._max_memory_entries and key not in self._memory_cache:
+                        oldest = next(iter(self._memory_cache))
+                        self._memory_cache.pop(oldest, None)
+                        self._memory_expires.pop(oldest, None)
                     self._memory_cache[key] = entry
+                    self._memory_expires[key] = now + self._default_ttl
             except Exception as exc:
                 logger.warning("Redis cache read failed for key %s: %s", key, exc)
 
@@ -150,6 +170,7 @@ class SourceRevisionCache:
         """
         key = self.build_key(repository_id, revision, path)
         ttl = ttl_seconds if ttl_seconds is not None else self._default_ttl
+        now = time.monotonic()
 
         # Ensure revision metadata is explicitly attached to the entry
         entry = dict(data)
@@ -158,8 +179,14 @@ class SourceRevisionCache:
             entry["commit_sha"] = commit_sha
         entry["cached_at_revision"] = revision
 
-        # 1. Store in memory
+        # 1. Store in memory with capacity bounds
+        if len(self._memory_cache) >= self._max_memory_entries and key not in self._memory_cache:
+            oldest = next(iter(self._memory_cache))
+            self._memory_cache.pop(oldest, None)
+            self._memory_expires.pop(oldest, None)
+
         self._memory_cache[key] = entry
+        self._memory_expires[key] = now + ttl
 
         # 2. Store in Redis
         if self._redis is not None:
@@ -175,7 +202,12 @@ class SourceRevisionCache:
             immutable_key = self.build_key(repository_id, commit_sha, path)
             immutable_entry = dict(entry)
             immutable_entry["revision"] = commit_sha
+            if len(self._memory_cache) >= self._max_memory_entries and immutable_key not in self._memory_cache:
+                oldest = next(iter(self._memory_cache))
+                self._memory_cache.pop(oldest, None)
+                self._memory_expires.pop(oldest, None)
             self._memory_cache[immutable_key] = immutable_entry
+            self._memory_expires[immutable_key] = now + ttl
             if self._redis is not None:
                 try:
                     self._redis.setex(immutable_key, ttl, json.dumps(immutable_entry))
@@ -191,6 +223,7 @@ class SourceRevisionCache:
         """Invalidate a specific cached file at a specific revision."""
         key = self.build_key(repository_id, revision, path)
         self._memory_cache.pop(key, None)
+        self._memory_expires.pop(key, None)
         if self._redis is not None:
             try:
                 self._redis.delete(key)

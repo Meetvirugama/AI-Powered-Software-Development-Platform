@@ -550,6 +550,9 @@ def test_github_webhook_fails_closed_in_production_when_secret_unset(
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("JWT_SECRET", "production-test-key-32-chars-long-valid")
+    monkeypatch.setenv("COOKIE_SECURE", "true")
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://prod.example.com")
     get_settings.cache_clear()
 
     app.dependency_overrides[get_db] = lambda: object()

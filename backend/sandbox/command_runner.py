@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -172,7 +174,12 @@ class WorkspaceCommandRunner:
         )
 
         env = self.sanitize_environment(custom_env)
-        cmd_list = [command, *args]
+
+        exec_cmd = command
+        if command == "python" and not shutil.which("python"):
+            exec_cmd = shutil.which("python3") or sys.executable
+
+        cmd_list = [exec_cmd, *args]
 
         try:
             proc = subprocess.run(
