@@ -86,7 +86,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval / Prit | P0 | IN PROGRESS | Prit: `WorkspaceDiffVerifier` diff extraction, approved scope validation, addition-level secret scanner & manifest deletion protection DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/diff_verifier.py`, 30/30 tests passed); Dev: AI code review |
 | W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug / Prit | P0 | IN PROGRESS | Prit: Authorized git commit & push, protected branch guards, draft PR preparation with structured task summary & ToolRouter dispatch DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`); Parth: GitHub draft PR API |
 | W3-10 | Task Dashboard, Progress & Timeline UI (F38) | Dhramraj | P0 | TODO | Live task progress, timeline events, side-by-side diff |
-| W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug | P0 | TODO | Task state recovery, idempotent operations, audit trails |
+| W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug / Prit | P0 | IN PROGRESS | Prit: Workspace crash/restart recovery, stale revision divergence detection, verification diff immutability, orphan collection & task concurrency locking DONE (`Docs/reliability_security_and_failure_recovery_audit.md`, 32/32 tests passed); Om/Yug: DB checkpoints |
 | W3-12 | Security Attack Matrix & Release Sign-off (F40) | Sukun / Keval | P0 | TODO | Prompt-injection attacks, path traversal, full E2E demo |
 
 ---

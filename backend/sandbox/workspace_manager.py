@@ -15,10 +15,13 @@ Key Capabilities:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,9 +32,13 @@ from app.core.config import PROJECT_ROOT
 from app.core.secret_redaction import redact
 from app.services.git_branch import format_agent_branch_name
 from app.schemas.workspace import (
+    DiffImmutabilityCheckRequest,
+    DiffImmutabilityCheckResult,
     DiffValidationRequest,
     DiffValidationResult,
     RepairAttemptRecord,
+    StaleRevisionCheckRequest,
+    StaleRevisionCheckResult,
     TestFailureClassification,
     TestOutcomeStatus,
     WorkspaceCleanupResult,
@@ -43,6 +50,7 @@ from app.schemas.workspace import (
     WorkspaceCreateResult,
     WorkspaceDiffRequest,
     WorkspaceDiffResult,
+    WorkspaceDiskUsageResult,
     WorkspaceDraftPRRequest,
     WorkspaceDraftPRResult,
     WorkspaceExecutionEvent,
@@ -53,10 +61,14 @@ from app.schemas.workspace import (
     WorkspaceFileReadResult,
     WorkspaceFileWriteRequest,
     WorkspaceFileWriteResult,
+    WorkspaceInvariantCheckResult,
     WorkspaceIsolationType,
     WorkspaceMetadata,
+    WorkspaceOrphanCleanupResult,
     WorkspacePushRequest,
     WorkspacePushResult,
+    WorkspaceRecoveryRecord,
+    WorkspaceRecoveryResult,
     WorkspaceRepairBudgetStatus,
     WorkspaceResourceLimits,
     WorkspaceStartExecutionRequest,
@@ -67,7 +79,15 @@ from app.schemas.workspace import (
     can_transition_workspace,
 )
 from sandbox.command_runner import WorkspaceCommandRunner
-from sandbox.constants import DEFAULT_WORKSPACE_SUBDIR, PROTECTED_BRANCHES
+from sandbox.constants import (
+    DEFAULT_MAX_ORPHAN_AGE_SECONDS,
+    DEFAULT_MAX_WORKSPACE_FILES,
+    DEFAULT_WORKSPACE_SUBDIR,
+    MAX_TASK_LOCK_TIMEOUT_SECONDS,
+    PROTECTED_BRANCHES,
+    RECOVERY_STALE_TIMEOUT_SECONDS,
+    SECRET_SCAN_PATTERNS,
+)
 from sandbox.diff_verifier import WorkspaceDiffVerifier
 from sandbox.exceptions import (
     WorkspaceAuthorizationError,
@@ -75,22 +95,29 @@ from sandbox.exceptions import (
     WorkspaceCommandError,
     WorkspaceCommandTimeoutError,
     WorkspaceCommitError,
+    WorkspaceConcurrentOperationError,
     WorkspaceCreationError,
+    WorkspaceDiffDivergedError,
     WorkspaceDiffError,
     WorkspaceDiffValidationError,
+    WorkspaceDiskQuotaExceededError,
     WorkspaceDraftPRError,
     WorkspaceDuplicateRepairPatchError,
     WorkspaceError,
     WorkspaceFileError,
+    WorkspaceInvariantViolationError,
     WorkspaceLimitExceededError,
     WorkspacePathEscapeError,
     WorkspacePolicyViolationError,
+    WorkspacePostVerificationMutationError,
     WorkspaceProtectedBranchError,
     WorkspacePublicationUnauthorizedError,
     WorkspacePushError,
+    WorkspaceRecoveryError,
     WorkspaceRepairBudgetExhaustedError,
     WorkspaceSecretLeakDetectedError,
     WorkspaceStaleApprovalError,
+    WorkspaceStaleRevisionError,
     WorkspaceStateError,
     WorkspaceTestExecutionError,
     WorkspaceUnsupportedFrameworkError,
@@ -124,6 +151,8 @@ class WorkspaceManager:
         self._test_history: dict[str, list[WorkspaceTestExecutionResult]] = {}
         self._diff_verifier = WorkspaceDiffVerifier()
         self._repo_roots: dict[str, Path] = {}
+        self._task_locks: dict[str, threading.Lock] = {}
+        self._global_lock = threading.Lock()
 
     @property
     def base_directory(self) -> Path:
@@ -205,6 +234,7 @@ class WorkspaceManager:
             metadata.isolation_type = isolation_used
             metadata.status = WorkspaceStatus.READY
             metadata.updated_at = datetime.now(timezone.utc).isoformat()
+            self._save_metadata_file(metadata)
             self._monitors[task_id] = WorkspaceResourceMonitor(workspace_path, limits)
 
             # Record initial timeline events (Docs/week3.md §8 Day 3)
@@ -348,6 +378,7 @@ class WorkspaceManager:
 
         meta.status = new_status
         meta.updated_at = datetime.now(timezone.utc).isoformat()
+        self._save_metadata_file(meta)
         return meta
 
     # -----------------------------------------------------------------------
@@ -1793,3 +1824,612 @@ class WorkspaceManager:
             ])
 
         return "\n".join(sections)
+
+    # -----------------------------------------------------------------------
+    # Week 3 Day 6 — Reliability, Security, and Failure Recovery (Docs/week3.md §8 Day 6)
+    # -----------------------------------------------------------------------
+
+    def _save_metadata_file(self, metadata: WorkspaceMetadata) -> None:
+        """Persist metadata.json into the workspace directory for crash recovery."""
+        try:
+            ws_path = Path(metadata.workspace_path)
+            if ws_path.exists() and ws_path.is_dir():
+                (ws_path / "metadata.json").write_text(
+                    metadata.model_dump_json(indent=2),
+                    encoding="utf-8",
+                )
+        except Exception as exc:
+            logger.warning("Failed to save workspace metadata.json: %s", exc)
+
+    def get_task_lock(self, task_id: str) -> threading.Lock:
+        """Acquire or create task-level mutex lock for serialized execution."""
+        with self._global_lock:
+            if task_id not in self._task_locks:
+                self._task_locks[task_id] = threading.Lock()
+            return self._task_locks[task_id]
+
+    def sanitize_log(self, text: str) -> str:
+        """Scrub sensitive credentials, tokens, and API keys from text or log messages."""
+        if not text:
+            return ""
+        scrubbed = redact(text)
+        for name, pattern in SECRET_SCAN_PATTERNS:
+            scrubbed = pattern.sub(f"[REDACTED_{name.upper().replace(' ', '_')}]", scrubbed)
+        return scrubbed
+
+    def recover_workspaces(
+        self,
+        auto_reconcile: bool = True,
+        stale_timeout_seconds: int = RECOVERY_STALE_TIMEOUT_SECONDS,
+    ) -> WorkspaceRecoveryResult:
+        """Discover and reconstruct workspace state across worker restarts or crashes (Docs/week3.md §8 Day 6).
+        
+        Scans base directory for orphaned or in-flight workspaces and reconciles their state.
+        """
+        records: list[WorkspaceRecoveryRecord] = []
+        total_scanned = 0
+        recovered_count = 0
+        failed_count = 0
+        unmodified_count = 0
+
+        if not self._base_dir.exists():
+            return WorkspaceRecoveryResult(
+                total_scanned=0,
+                recovered_count=0,
+                failed_count=0,
+                unmodified_count=0,
+                records=[],
+            )
+
+        for item in self._base_dir.iterdir():
+            if not item.is_dir() or not item.name.startswith("task-"):
+                continue
+
+            total_scanned += 1
+            meta_file = item / "metadata.json"
+            if not meta_file.exists():
+                meta_file = item / "workspace_metadata.json"
+            if not meta_file.exists():
+                failed_count += 1
+                continue
+
+            try:
+                data = json.loads(meta_file.read_text(encoding="utf-8"))
+                meta = WorkspaceMetadata(**data)
+                task_id = meta.task_id
+                prev_status = meta.status
+                recovered_status = prev_status
+                details = "Workspace metadata loaded from disk"
+
+                if auto_reconcile:
+                    if prev_status == WorkspaceStatus.CREATING:
+                        # Interrupted during creation -> mark FAILED
+                        meta.status = WorkspaceStatus.FAILED
+                        meta.error_message = "Creation interrupted by worker crash or restart."
+                        meta.updated_at = datetime.now(timezone.utc).isoformat()
+                        recovered_status = WorkspaceStatus.FAILED
+                        details = "Worker interrupted during creation; marked FAILED."
+                        self.record_timeline_event(
+                            task_id=task_id,
+                            event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
+                            message=details,
+                            payload={"previous_status": prev_status.value},
+                        )
+                        self._save_metadata_file(meta)
+                        failed_count += 1
+                    elif prev_status == WorkspaceStatus.IN_USE:
+                        is_stale = False
+                        if stale_timeout_seconds > 0:
+                            ts_str = meta.last_active_at or meta.updated_at or meta.created_at
+                            if ts_str:
+                                try:
+                                    dt = datetime.fromisoformat(ts_str)
+                                    if dt.tzinfo is None:
+                                        dt = dt.replace(tzinfo=timezone.utc)
+                                    age = (datetime.now(timezone.utc) - dt).total_seconds()
+                                    if age > stale_timeout_seconds:
+                                        is_stale = True
+                                except Exception:
+                                    is_stale = True
+                            else:
+                                is_stale = True
+
+                        if is_stale:
+                            meta.status = WorkspaceStatus.STOPPED
+                            meta.updated_at = datetime.now(timezone.utc).isoformat()
+                            recovered_status = WorkspaceStatus.STOPPED
+                            details = "Interrupted active execution halted safely at STOPPED."
+                            self.record_timeline_event(
+                                task_id=task_id,
+                                event_type=WorkspaceExecutionEventType.WORKER_CRASH_RECOVERED,
+                                message=details,
+                                payload={"previous_status": prev_status.value},
+                            )
+                            self._save_metadata_file(meta)
+                            recovered_count += 1
+                        else:
+                            unmodified_count += 1
+                    else:
+                        unmodified_count += 1
+
+                self._workspaces[task_id] = meta
+                self._monitors[task_id] = WorkspaceResourceMonitor(item, meta.resource_limits)
+
+                records.append(
+                    WorkspaceRecoveryRecord(
+                        task_id=task_id,
+                        previous_status=prev_status,
+                        recovered_status=recovered_status,
+                        details=details,
+                    )
+                )
+            except Exception as exc:
+                failed_count += 1
+                logger.warning("Failed to recover workspace from '%s': %s", item, exc)
+
+        return WorkspaceRecoveryResult(
+            total_scanned=total_scanned,
+            recovered_count=recovered_count,
+            failed_count=failed_count,
+            unmodified_count=unmodified_count,
+            records=records,
+        )
+
+    def reconcile_workspace(self, task_id: str) -> WorkspaceRecoveryRecord:
+        """Reconcile an individual workspace state across worker restarts."""
+        meta = self._workspaces.get(task_id)
+        if not meta:
+            # Check directory by task_id slug or metadata.json inspection
+            found_meta: WorkspaceMetadata | None = None
+            if self._base_dir.exists():
+                for item in self._base_dir.iterdir():
+                    if not item.is_dir() or not item.name.startswith("task-"):
+                        continue
+                    meta_file = item / "metadata.json"
+                    if not meta_file.exists():
+                        meta_file = item / "workspace_metadata.json"
+                    if meta_file.exists():
+                        try:
+                            data = json.loads(meta_file.read_text(encoding="utf-8"))
+                            candidate = WorkspaceMetadata(**data)
+                            if candidate.task_id == task_id or item.name == task_id or item.name == f"task-{task_id}":
+                                found_meta = candidate
+                                break
+                        except Exception:
+                            continue
+            if found_meta:
+                meta = found_meta
+                self._workspaces[task_id] = meta
+            else:
+                raise WorkspaceRecoveryError(f"Cannot reconcile: No workspace found for task '{task_id}'.")
+
+        prev_status = meta.status
+        recovered_status = prev_status
+        details = "Reconciled workspace state."
+
+        if prev_status == WorkspaceStatus.CREATING:
+            meta.status = WorkspaceStatus.FAILED
+            meta.error_message = "Creation interrupted by worker crash or restart."
+            meta.updated_at = datetime.now(timezone.utc).isoformat()
+            recovered_status = WorkspaceStatus.FAILED
+            details = "Interrupted creation marked FAILED."
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
+                message=details,
+                payload={"previous_status": prev_status.value},
+            )
+            self._save_metadata_file(meta)
+
+        return WorkspaceRecoveryRecord(
+            task_id=task_id,
+            previous_status=prev_status,
+            recovered_status=recovered_status,
+            details=details,
+        )
+
+    def detect_stale_base_revision(
+        self,
+        task_id: str,
+        current_remote_head_sha: str | None = None,
+        remote_name: str = "origin",
+        base_branch: str = "main",
+    ) -> StaleRevisionCheckResult:
+        """Detect whether repository base revision has drifted or been superseded on remote."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+
+        base_rev = (meta.base_revision or "").strip().lower()
+        remote_sha = (current_remote_head_sha or "").strip().lower()
+        commits_behind = 0
+
+        # If remote_sha not given directly, query git
+        if not remote_sha:
+            try:
+                # 1. Fetch remote tracking branch
+                self.command_runner.execute_raw_command(
+                    ["git", "fetch", remote_name, base_branch],
+                    cwd=Path(meta.workspace_path),
+                )
+                # 2. Parse remote tracking head
+                res_parse = self.command_runner.execute_raw_command(
+                    ["git", "rev-parse", f"{remote_name}/{base_branch}"],
+                    cwd=Path(meta.workspace_path),
+                )
+                if res_parse.exit_code == 0 and res_parse.stdout.strip():
+                    remote_sha = res_parse.stdout.strip().lower()
+            except Exception as exc:
+                logger.warning("Failed to fetch remote branch: %s", exc)
+
+        if not remote_sha:
+            remote_sha = base_rev
+
+        # Calculate commits behind if remote_sha exists and differs or queried
+        if remote_sha and remote_sha != base_rev:
+            try:
+                res_count = self.command_runner.execute_raw_command(
+                    ["git", "rev-list", "--count", f"{base_rev}..{remote_sha}"],
+                    cwd=Path(meta.workspace_path),
+                )
+                if res_count.exit_code == 0 and res_count.stdout.strip().isdigit():
+                    commits_behind = int(res_count.stdout.strip())
+                else:
+                    commits_behind = 1
+            except Exception:
+                commits_behind = 1
+        else:
+            commits_behind = 0
+
+        is_stale = (commits_behind > 0)
+        if is_stale:
+            remediation = f"Rebase workspace feature branch onto latest {remote_name}/{base_branch} before proceeding."
+            msg = (
+                f"Stale base revision detected for task '{task_id}': workspace was created from "
+                f"revision '{base_rev[:7]}', but remote HEAD has advanced to '{remote_sha[:7]}' "
+                f"({commits_behind} commits behind {remote_name}/{base_branch})."
+            )
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.STALE_REVISION_DETECTED,
+                message=msg,
+                payload={
+                    "workspace_base_revision": base_rev,
+                    "current_remote_sha": remote_sha,
+                    "commits_behind": commits_behind,
+                },
+            )
+        else:
+            remediation = None
+            msg = f"Base revision '{base_rev[:7]}' is up-to-date with remote HEAD."
+
+        return StaleRevisionCheckResult(
+            task_id=task_id,
+            is_stale=is_stale,
+            workspace_base_revision=meta.base_revision,
+            current_base_revision=meta.base_revision,
+            current_remote_sha=remote_sha,
+            commits_behind=commits_behind,
+            remote_head=remote_sha if is_stale else None,
+            remediation_suggestion=remediation,
+            message=msg,
+        )
+
+    def assert_not_stale(
+        self,
+        task_id: str,
+        current_remote_head_sha: str | None = None,
+        remote_name: str = "origin",
+        base_branch: str = "main",
+    ) -> None:
+        """Verify workspace base revision is not stale; raise WorkspaceStaleRevisionError if drifted."""
+        res = self.detect_stale_base_revision(
+            task_id,
+            current_remote_head_sha=current_remote_head_sha,
+            remote_name=remote_name,
+            base_branch=base_branch,
+        )
+        if res.is_stale:
+            base_rev_display = res.workspace_base_revision or res.current_base_revision
+            behind_str = f" ({res.commits_behind} commits behind {remote_name}/{base_branch})" if res.commits_behind else ""
+            raise WorkspaceStaleRevisionError(
+                f"Workspace base revision '{base_rev_display}' is stale{behind_str}: {res.message}. {res.remediation_suggestion or ''}"
+            )
+
+    def compute_verification_diff_hash(self, task_id: str, base_revision: str | None = None) -> str:
+        """Compute SHA-256 fingerprint of the current workspace unified diff for immutability tracking."""
+        diff_res = self.get_workspace_diff(task_id, base_revision=base_revision)
+        raw_diff = diff_res.raw_diff or ""
+        diff_hash = hashlib.sha256(raw_diff.encode("utf-8")).hexdigest()
+        meta = self._workspaces.get(task_id)
+        if meta:
+            meta.verification_diff_hash = diff_hash
+            self._save_metadata_file(meta)
+        return diff_hash
+
+    def verify_diff_immutability(
+        self,
+        task_id: str,
+        expected_diff_hash: str | None = None,
+        expected_hash: str | None = None,
+    ) -> DiffImmutabilityCheckResult:
+        """Verify that workspace changes have not mutated after independent verification has passed."""
+        meta = self.get_workspace(task_id)
+        expected = (expected_diff_hash or expected_hash or (meta.verification_diff_hash if meta else None) or "").strip().lower()
+        current_hash = self.compute_verification_diff_hash(task_id)
+        current_clean = current_hash.strip().lower()
+
+        is_imm = (current_clean == expected) if expected else True
+        err_msg = None
+        if not is_imm:
+            err_msg = (
+                f"Diff immutability violation detected for task '{task_id}': "
+                f"expected diff hash '{expected[:12]}', but found '{current_clean[:12]}'. "
+                "Workspace was modified after independent verification."
+            )
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.POST_VERIFICATION_MUTATION_DETECTED,
+                message=err_msg,
+                payload={
+                    "expected_diff_hash": expected,
+                    "current_diff_hash": current_clean,
+                },
+            )
+
+        msg = f"Diff immutability verified for task '{task_id}' (hash: {current_clean[:12]})." if is_imm else (err_msg or "")
+        return DiffImmutabilityCheckResult(
+            task_id=task_id,
+            immutable=is_imm,
+            is_immutable=is_imm,
+            expected_diff_hash=expected,
+            current_diff_hash=current_hash,
+            verified_diff_hash=expected,
+            message=msg,
+            error_message=err_msg,
+        )
+
+    def cleanup_orphaned_workspaces(
+        self,
+        max_age_seconds: int = DEFAULT_MAX_ORPHAN_AGE_SECONDS,
+        dry_run: bool = False,
+    ) -> WorkspaceOrphanCleanupResult:
+        """Safely sweep and clean abandoned or orphaned workspaces older than max_age_seconds."""
+        start_time = time.perf_counter()
+        total_scanned = 0
+        cleaned_count = 0
+        failed_count = 0
+        cleaned_ids: list[str] = []
+        candidate_paths: list[str] = []
+        now = time.time()
+
+        if not self._base_dir.exists():
+            return WorkspaceOrphanCleanupResult(duration_ms=0.0)
+
+        for item in self._base_dir.iterdir():
+            if not item.is_dir() or not item.name.startswith("task-"):
+                continue
+
+            total_scanned += 1
+            raw_name = item.name
+            task_id = raw_name.removeprefix("task-")
+            try:
+                mtime = item.stat().st_mtime
+                age_seconds = now - mtime
+
+                # Check if this directory corresponds to any active workspace in memory
+                meta = None
+                for w in self._workspaces.values():
+                    try:
+                        if Path(w.workspace_path).resolve() == item.resolve():
+                            meta = w
+                            break
+                    except Exception:
+                        pass
+                if not meta:
+                    meta = self._workspaces.get(task_id) or self._workspaces.get(raw_name)
+
+                # If still not found in memory, try reading metadata.json from disk
+                if not meta:
+                    meta_file = item / "metadata.json"
+                    if not meta_file.exists():
+                        meta_file = item / "workspace_metadata.json"
+                    if meta_file.exists():
+                        try:
+                            m_data = json.loads(meta_file.read_text(encoding="utf-8"))
+                            m_obj = WorkspaceMetadata(**m_data)
+                            meta = self._workspaces.get(m_obj.task_id) or m_obj
+                        except Exception:
+                            pass
+
+                is_active = meta and meta.status in (
+                    WorkspaceStatus.CREATING,
+                    WorkspaceStatus.IN_USE,
+                    WorkspaceStatus.INITIALIZING,
+                    WorkspaceStatus.READY,
+                )
+
+                if is_active:
+                    continue
+
+                is_terminal = meta and meta.status in (
+                    WorkspaceStatus.CLEANED,
+                    WorkspaceStatus.FAILED,
+                    WorkspaceStatus.STOPPED,
+                )
+
+                is_orphan = (meta is None and age_seconds >= max_age_seconds) or (is_terminal and age_seconds >= max_age_seconds)
+
+                if is_orphan:
+                    candidate_paths.append(item.name)
+                    if not dry_run:
+                        if meta and meta.task_id in self._workspaces:
+                            self.cleanup_workspace(meta.task_id, force=True)
+                        else:
+                            self._safe_remove_dir(item)
+                        cleaned_count += 1
+                        cleaned_ids.append(task_id)
+            except Exception as exc:
+                failed_count += 1
+                logger.warning("Failed to sweep orphaned workspace '%s': %s", item, exc)
+
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+        if cleaned_ids and not dry_run:
+            for tid in cleaned_ids:
+                if tid in self._workspaces:
+                    self.record_timeline_event(
+                        task_id=tid,
+                        event_type=WorkspaceExecutionEventType.ORPHANED_WORKSPACES_CLEANED,
+                        message="Orphaned workspace cleaned during automated sweep.",
+                        payload={"duration_ms": duration_ms},
+                    )
+
+        return WorkspaceOrphanCleanupResult(
+            total_scanned=total_scanned,
+            cleaned_count=cleaned_count,
+            failed_count=failed_count,
+            cleaned_task_ids=cleaned_ids,
+            candidate_paths=candidate_paths,
+            duration_ms=duration_ms,
+        )
+
+    def validate_workspace_invariants(self, task_id: str) -> WorkspaceInvariantCheckResult:
+        """Validate all core lifecycle, filesystem, security, and approval invariants."""
+        violations: list[str] = []
+        meta = self.get_workspace(task_id)
+
+        if not meta:
+            violations.append(f"Workspace record missing for task '{task_id}'.")
+            return WorkspaceInvariantCheckResult(
+                task_id=task_id,
+                valid=False,
+                violations=violations,
+            )
+
+        # 1. Path confinement invariant
+        ws_path = Path(meta.workspace_path)
+        try:
+            ws_path.resolve().relative_to(self._base_dir.resolve())
+        except ValueError:
+            violations.append(f"Workspace path '{ws_path}' escapes base directory '{self._base_dir}'.")
+
+        # 2. Directory existence vs status invariant
+        if meta.status in (WorkspaceStatus.READY, WorkspaceStatus.IN_USE):
+            if not ws_path.exists() or not ws_path.is_dir():
+                violations.append(f"Workspace in status '{meta.status}' but directory missing on disk: '{ws_path}'.")
+        elif meta.status == WorkspaceStatus.CLEANED:
+            if ws_path.exists():
+                violations.append(f"Workspace in status 'CLEANED' but directory still exists: '{ws_path}'.")
+
+        # 3. Base revision format invariant
+        if meta.base_revision:
+            import re
+            if not re.match(r"^[0-9a-fA-F]{7,64}$", meta.base_revision.strip()):
+                violations.append(f"Base revision '{meta.base_revision}' is not a valid git SHA.")
+
+        # 4. Branch name protection invariant
+        if meta.branch_name:
+            clean_b = meta.branch_name.replace("refs/heads/", "").strip().lower()
+            if clean_b in PROTECTED_BRANCHES:
+                violations.append(f"Workspace branch '{meta.branch_name}' targets a protected branch.")
+
+        # 5. Resource limits invariant
+        if ws_path.exists():
+            file_count = sum(1 for _ in ws_path.rglob("*") if _.is_file())
+            if file_count > DEFAULT_MAX_WORKSPACE_FILES:
+                violations.append(f"Workspace contains {file_count} files, exceeding limit {DEFAULT_MAX_WORKSPACE_FILES}.")
+
+        # 6. Forbidden secrets / sensitive files invariant
+        if ws_path.exists():
+            for p in ws_path.rglob("*"):
+                if p.is_file():
+                    name_lower = p.name.lower()
+                    if name_lower.startswith(".env") or name_lower in ("id_rsa", "id_ed25519", "id_dsa") or name_lower.endswith(".pem"):
+                        violations.append(f"Forbidden file or directory detected: {p.name}")
+
+        valid = len(violations) == 0
+        if not valid:
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.INVARIANT_VALIDATION_FAILED,
+                message=f"Workspace invariant validation failed: {'; '.join(violations)}",
+                payload={"violations": violations},
+            )
+
+        return WorkspaceInvariantCheckResult(
+            task_id=task_id,
+            valid=valid,
+            violations=violations,
+        )
+
+    def check_disk_budget(
+        self,
+        task_id: str,
+        max_bytes: int | None = None,
+        max_files: int | None = None,
+    ) -> WorkspaceDiskUsageResult:
+        """Measure workspace storage consumption and enforce disk budget ceilings."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+
+        ws_path = Path(meta.workspace_path)
+        if not ws_path.exists():
+            return WorkspaceDiskUsageResult(
+                task_id=task_id,
+                disk_usage_bytes=0,
+                max_disk_bytes=max_bytes or meta.resource_limits.max_disk_bytes,
+                within_budget=True,
+                file_count=0,
+            )
+
+        total_bytes = 0
+        file_count = 0
+        for root, _, files in os.walk(ws_path):
+            for f in files:
+                fp = Path(root) / f
+                if not fp.is_symlink():
+                    try:
+                        total_bytes += fp.stat().st_size
+                        file_count += 1
+                    except OSError:
+                        pass
+
+        limit_bytes = max_bytes or meta.resource_limits.max_disk_bytes
+        limit_files = max_files or DEFAULT_MAX_WORKSPACE_FILES
+        within_bytes = total_bytes <= limit_bytes
+        within_files = file_count <= limit_files
+        within_budget = within_bytes and within_files
+
+        err_msg = None
+        if not within_bytes:
+            err_msg = (
+                f"Workspace disk usage {total_bytes} bytes exceeds quota {limit_bytes} bytes for task '{task_id}'."
+            )
+        elif not within_files:
+            err_msg = (
+                f"Workspace file count {file_count} exceeds maximum allowed {limit_files} files for task '{task_id}'."
+            )
+
+        if not within_budget:
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.DISK_QUOTA_EXCEEDED,
+                message=err_msg or "Disk budget exceeded.",
+                payload={
+                    "disk_usage_bytes": total_bytes,
+                    "max_disk_bytes": limit_bytes,
+                    "file_count": file_count,
+                    "max_files": limit_files,
+                },
+            )
+
+        return WorkspaceDiskUsageResult(
+            task_id=task_id,
+            disk_usage_bytes=total_bytes,
+            max_disk_bytes=limit_bytes,
+            within_budget=within_budget,
+            file_count=file_count,
+            error_message=err_msg,
+        )

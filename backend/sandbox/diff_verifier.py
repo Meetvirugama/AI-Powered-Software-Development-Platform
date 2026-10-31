@@ -373,6 +373,16 @@ class WorkspaceDiffVerifier:
 
     def _run_git_diff(self, workspace_path: Path, base_revision: str) -> str:
         """Execute git diff command inside workspace directory."""
+        # Ensure workspace metadata files are ignored by git
+        try:
+            exclude_file = workspace_path / ".git" / "info" / "exclude"
+            if exclude_file.parent.exists():
+                curr = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
+                if "metadata.json" not in curr:
+                    exclude_file.write_text(curr + "\nmetadata.json\nworkspace_metadata.json\n", encoding="utf-8")
+        except Exception:
+            pass
+
         # Include untracked files in diff via intent-to-add
         try:
             subprocess.run(
@@ -384,8 +394,10 @@ class WorkspaceDiffVerifier:
         except Exception:
             pass
 
+        excludes = ["--", ".", ":(exclude)*metadata.json"]
+
         # First attempt: diff against base_revision
-        cmd = ["git", "-C", str(workspace_path), "diff", base_revision]
+        cmd = ["git", "-C", str(workspace_path), "diff", base_revision] + excludes
         try:
             proc = subprocess.run(
                 cmd,
@@ -401,7 +413,7 @@ class WorkspaceDiffVerifier:
 
         # Second attempt: diff against HEAD
         try:
-            cmd = ["git", "-C", str(workspace_path), "diff", "HEAD"]
+            cmd = ["git", "-C", str(workspace_path), "diff", "HEAD"] + excludes
             proc = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -416,7 +428,7 @@ class WorkspaceDiffVerifier:
 
         # Third attempt: cached diff (staged)
         try:
-            cmd = ["git", "-C", str(workspace_path), "diff", "--cached"]
+            cmd = ["git", "-C", str(workspace_path), "diff", "--cached"] + excludes
             proc = subprocess.run(
                 cmd,
                 capture_output=True,

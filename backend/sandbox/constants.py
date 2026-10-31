@@ -144,7 +144,7 @@ CRITICAL_PROJECT_FILES: frozenset[str] = frozenset(
 # High-confidence secret detection patterns for diff hunks and commit messages
 SECRET_SCAN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("OpenAI API Key", re.compile(r"sk-[a-zA-Z0-9]{20,}|sk-proj-[a-zA-Z0-9_-]{20,}")),
-    ("GitHub Token", re.compile(r"ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{22,}")),
+    ("GitHub Token", re.compile(r"ghp_[a-zA-Z0-9]{20,}|github_pat_[a-zA-Z0-9_]{22,}")),
     ("AWS Access Key ID", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("Google API Key", re.compile(r"AIza[0-9A-Za-z-_]{35}")),
     ("RSA / EC Private Key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
@@ -155,4 +155,10 @@ SECRET_SCAN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         ),
     ),
 )
+
+# Week 3 Day 6 — Reliability, Security and Failure Recovery constants (Docs/week3.md §8 Day 6)
+DEFAULT_MAX_ORPHAN_AGE_SECONDS: int = 86400  # 24 hours
+DEFAULT_MAX_WORKSPACE_FILES: int = 10000
+RECOVERY_STALE_TIMEOUT_SECONDS: int = 3600  # 1 hour
+MAX_TASK_LOCK_TIMEOUT_SECONDS: float = 30.0
 

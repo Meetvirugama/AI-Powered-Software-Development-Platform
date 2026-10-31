@@ -102,3 +102,32 @@ class WorkspacePushError(WorkspaceError):
 class WorkspaceDraftPRError(WorkspaceError):
     """Raised when opening or formatting a GitHub Draft Pull Request fails."""
 
+
+# Week 3 Day 6 — Reliability, Security and Failure Recovery Exceptions (Docs/week3.md §8 Day 6)
+class WorkspaceStaleRevisionError(WorkspaceError):
+    """Raised when repository base revision has drifted or is superseded by a newer remote revision."""
+
+
+class WorkspacePostVerificationMutationError(WorkspaceError):
+    """Raised when workspace files or diff mutate after independent verification has passed."""
+
+
+class WorkspaceDiffDivergedError(WorkspacePostVerificationMutationError):
+    """Raised when the workspace unified diff hash diverges from the verified diff hash."""
+
+
+class WorkspaceDiskQuotaExceededError(WorkspaceLimitExceededError):
+    """Raised when workspace disk usage exceeds the allocated storage budget ceiling."""
+
+
+class WorkspaceConcurrentOperationError(WorkspaceError):
+    """Raised when an invalid concurrent operation or lock conflict occurs on a workspace."""
+
+
+class WorkspaceInvariantViolationError(WorkspaceError):
+    """Raised when a workspace fails core lifecycle, storage, or security invariants."""
+
+
+class WorkspaceRecoveryError(WorkspaceError):
+    """Raised when reconciling or recovering workspace state across worker restarts fails."""
+

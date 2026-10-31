@@ -254,3 +254,35 @@ class WorkspaceCommandRunner:
                 timed_out=False,
                 error=redact(f"Command execution error: {exc}"),
             )
+
+    def execute_raw_command(
+        self,
+        command_list: Sequence[str],
+        cwd: Path,
+        timeout_seconds: int = 30,
+    ) -> RawCommandResult:
+        """Direct subprocess execution for internal git management operations."""
+        proc = subprocess.run(
+            list(command_list),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+        return RawCommandResult(
+            exit_code=proc.returncode,
+            stdout=proc.stdout or "",
+            stderr=proc.stderr or "",
+            returncode=proc.returncode,
+        )
+
+
+class RawCommandResult:
+    """Lightweight result object for raw command execution."""
+
+    def __init__(self, exit_code: int, stdout: str, stderr: str, returncode: int = 0):
+        self.exit_code = exit_code
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode or exit_code

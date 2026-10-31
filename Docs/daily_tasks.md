@@ -655,6 +655,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 6 Security, Reliability & Performance Hardening
 
+- ✅ Prit: Sandbox reliability, worker crash and restart recovery, stale base-revision divergence detection, post-verification diff immutability, hardened cleanup & orphan collection, sandbox invariant auditing, task mutex locking, secret sanitization, and ToolRouter bridge dispatch (`Docs/reliability_security_and_failure_recovery_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/sandbox/command_runner.py`, `backend/tests/test_prit_w3_d6_reliability_and_recovery.py`)
 - ⬜ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks)
 - ⬜ Meet: Retrieval latency optimization (target P95 < 400ms) and agent token budget checks
 - ⬜ Dev: AI quality evaluation, false-positive metrics, and Gemini/Groq provider validation

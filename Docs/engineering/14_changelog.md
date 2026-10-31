@@ -792,4 +792,51 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/independent_verification_and_draft_pr_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
 
+---
+
+### [W3-Day6] 2026-10-30 — Workspace Reliability, Crash Recovery, Stale Revision Detection, Diff Immutability, and Hardened Orphan Collection
+**Type:** Feature / Reliability, Security & Failure Recovery  
+**Developer:** Prit  
+**Changes:**
+- `backend/sandbox/constants.py`:
+  - Added Day 6 constants: `DEFAULT_MAX_ORPHAN_AGE_SECONDS` (86400s), `DEFAULT_MAX_WORKSPACE_FILES` (1000), `RECOVERY_STALE_TIMEOUT_SECONDS` (3600s), and `MAX_TASK_LOCK_TIMEOUT_SECONDS` (30s).
+  - Enhanced `SECRET_SCAN_PATTERNS` regex to detect GitHub personal access tokens (`ghp_[a-zA-Z0-9]{20,}`).
+- `backend/sandbox/exceptions.py`:
+  - Added 7 reliability and security exceptions: `WorkspaceStaleRevisionError`, `WorkspacePostVerificationMutationError`, `WorkspaceDiffDivergedError`, `WorkspaceDiskQuotaExceededError`, `WorkspaceConcurrentOperationError`, `WorkspaceInvariantViolationError`, and `WorkspaceRecoveryError`.
+- `backend/app/schemas/workspace.py`:
+  - Added 5 new timeline event types: `WORKER_CRASH_RECOVERED`, `STALE_REVISION_DETECTED`, `POST_VERIFICATION_MUTATION_DETECTED`, `ORPHANED_WORKSPACES_CLEANED`, and `INVARIANT_VIOLATION_DETECTED`.
+  - Added `last_active_at` and `verification_diff_hash` fields to `WorkspaceMetadata`.
+  - Implemented Day 6 schemas: `StaleRevisionCheckRequest`, `StaleRevisionCheckResult`, `DiffImmutabilityCheckRequest`, `DiffImmutabilityCheckResult`, `WorkspaceRecoveryRecord`, `WorkspaceRecoveryResult`, `WorkspaceOrphanCleanupResult`, `WorkspaceInvariantCheckResult`, and `WorkspaceDiskUsageResult`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 6 recovery, stale check, diff immutability, and cleanup schemas.
+- `backend/sandbox/command_runner.py`:
+  - Added `execute_raw_command` and `RawCommandResult` for safe internal git operations and unit-test mocking.
+- `backend/sandbox/diff_verifier.py`:
+  - Excluded `*metadata.json` from git diff pathspecs (`-- . ":(exclude)*metadata.json"`) so internal state writes do not mutate git diffs.
+- `backend/sandbox/workspace_manager.py`:
+  - Added atomic metadata disk persistence (`_save_metadata_file`) on every state transition and workspace creation.
+  - Implemented `recover_workspaces()`: discovers and reconstructs workspace state after worker crashes/restarts, safely marks interrupted creation as `FAILED`, and transitions stale `IN_USE` tasks to `STOPPED`.
+  - Implemented `reconcile_workspace(task_id)`: dynamically reloads evicted workspace metadata from disk into in-memory caches.
+  - Implemented `detect_stale_base_revision()` and `assert_not_stale()`: compares base revisions against remote tracking branches, computes commits behind via `git rev-list --count`, and halts stale publication with rebase remediation.
+  - Implemented `compute_verification_diff_hash()` and `verify_diff_immutability()`: computes SHA-256 fingerprint of verified diffs, asserts post-verification immutability, and raises `WorkspacePostVerificationMutationError` upon tampering.
+  - Implemented `cleanup_orphaned_workspaces()`: sweeps abandoned or untracked directories older than threshold, strictly protects active workspaces, and supports non-destructive `dry_run=True`.
+  - Implemented `validate_workspace_invariants()`: audits sandbox containment, directory existence, git repo validity, approval consistency, and secret hygiene.
+  - Implemented `get_task_lock()`: thread-safe task mutex locks to serialize concurrent workspace operations.
+  - Implemented `sanitize_log()`: scrubs tokens, API keys, and credentials from logs and output payloads.
+  - Implemented `check_disk_budget()`: audits byte and file usage against resource limits.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Registered 6 canonical Day 6 tools: `TOOL_RECOVER_WORKSPACE`, `TOOL_CHECK_STALE_REVISION`, `TOOL_VERIFY_DIFF_IMMUTABILITY`, `TOOL_CLEANUP_ORPHANED`, `TOOL_VALIDATE_INVARIANTS`, and `TOOL_CHECK_DISK_BUDGET`.
+  - Added argument validation schemas and execution routing handlers for all Day 6 tools.
+- `backend/sandbox/__init__.py`:
+  - Re-exported Day 6 constants, exceptions, tools, and schemas.
+- `Docs/reliability_security_and_failure_recovery_audit.md`:
+  - Authored comprehensive Week 3 Day 6 Architecture, Crash Recovery, Stale Revision Detection, Diff Immutability, and Invariant Audit Report.
+- `backend/tests/test_prit_w3_d6_reliability_and_recovery.py`:
+  - 32 comprehensive unit and integration tests across 9 test suites (100% pass rate; 169/169 passed across all Week 3 test suites).
+
+**Impact:** Guarantees failure recovery across worker crashes/restarts, protects against silent remote branch divergence, enforces post-verification diff immutability, prevents storage exhaustion via orphan collection, and provides tamper-proof execution integrity for the entire agent pipeline.
+
+**Related Docs:** `Docs/reliability_security_and_failure_recovery_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
+
+
 
