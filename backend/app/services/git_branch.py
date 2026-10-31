@@ -28,7 +28,14 @@ from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact
 from app.integrations.github.client import GitHubAPIError, GitHubClient
-from app.integrations.github.schemas import PRMetadata
+from app.integrations.github.schemas import (
+    BranchIsolationCheck,
+    DiffStatus,
+    FileDiffRange,
+    LineRange,
+    PRMetadata,
+    TaskDiffRanges,
+)
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository
 from app.repositories.pull_request_repository import PullRequestRepository
@@ -721,3 +728,235 @@ class GitBranchService:
             verification_summary=verification_summary,
             user_id=user_id,
         )
+
+    # -----------------------------------------------------------------------
+    # Week 3 Day 2: Diff Line Range Extraction & Blast Radius Input Provider
+    # -----------------------------------------------------------------------
+
+    async def get_diff_line_ranges(
+        self,
+        workspace_path: str | Path,
+        base_branch: str | None = None,
+    ) -> list[FileDiffRange]:
+        """Extract exact modified line ranges per file from workspace git diff.
+
+        Runs ``git diff -U0 <base_branch>...HEAD`` to extract zero-context unified diff
+        hunks and parses them into typed FileDiffRange instances.
+        """
+        path = _validate_safe_workspace_path(workspace_path)
+        effective_base = _validate_safe_git_ref(base_branch or "main", "base_branch")
+
+        # Attempt three-dot diff against base branch
+        returncode, diff_out, _ = await self._run_git(
+            ["diff", "-U0", f"{effective_base}...HEAD"],
+            path,
+        )
+
+        if returncode != 0 or not diff_out.strip():
+            # Fallback to working directory diff against HEAD or HEAD~1
+            returncode, diff_out, _ = await self._run_git(["diff", "-U0", "HEAD"], path)
+
+        if not diff_out.strip():
+            return []
+
+        return parse_unified_diff(diff_out)
+
+    async def get_task_diff_ranges(
+        self,
+        task_id: UUID | str,
+        workspace_path: str | Path | None = None,
+        base_branch: str | None = None,
+        repository_id: UUID | str | None = None,
+        user_id: UUID | str | None = None,
+    ) -> TaskDiffRanges:
+        """Collect structured diff line ranges for a task branch.
+
+        Feeds Prit's symbol mapper (code_symbols overlap) and Yug's affected-files API.
+        """
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_uuid = UUID(str(repository_id)) if repository_id and not isinstance(repository_id, UUID) else None
+        repo = self._get_repository(repo_uuid, user_id) if repo_uuid else None
+        effective_base = base_branch or (repo.default_branch if repo else "main")
+        branch_name = format_agent_branch_name(task_uuid)
+
+        file_diffs: list[FileDiffRange] = []
+        if workspace_path is not None:
+            file_diffs = await self.get_diff_line_ranges(workspace_path, effective_base)
+
+        total_add = sum(f.additions for f in file_diffs)
+        total_del = sum(f.deletions for f in file_diffs)
+
+        return TaskDiffRanges(
+            task_id=task_uuid,
+            repository_id=repo_uuid,
+            base_branch=effective_base,
+            head_branch=branch_name,
+            files=file_diffs,
+            total_files_changed=len(file_diffs),
+            total_additions=total_add,
+            total_deletions=total_del,
+        )
+
+    def verify_branch_isolation(
+        self,
+        repository_id: UUID | str,
+        task_id: UUID | str,
+        base_branch: str | None = None,
+        user_id: UUID | str | None = None,
+    ) -> BranchIsolationCheck:
+        """Verify agent branch isolation prerequisites for Day 2 Task Plan Approval Gate.
+
+        Rule 563: Task branch must follow agent/task-{id} and never target protected branches.
+        """
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+        repo = self._get_repository(repo_uuid, user_id)
+        effective_base = base_branch or repo.default_branch or "main"
+        branch_name = format_agent_branch_name(task_uuid)
+
+        protected_branches = {"main", "master", "develop", "production", "staging"}
+        if branch_name.lower() in protected_branches:
+            return BranchIsolationCheck(
+                task_id=task_uuid,
+                repository_id=repo_uuid,
+                branch_name=branch_name,
+                base_branch=effective_base,
+                is_isolated=False,
+                conflicts_with_protected=True,
+                error_message=f"Agent branch {branch_name} conflicts with protected branch.",
+            )
+
+        return BranchIsolationCheck(
+            task_id=task_uuid,
+            repository_id=repo_uuid,
+            branch_name=branch_name,
+            base_branch=effective_base,
+            is_isolated=True,
+            base_sha=None,
+            conflicts_with_protected=False,
+            error_message=None,
+        )
+
+
+def parse_unified_diff(diff_text: str) -> list[FileDiffRange]:
+    """Parse unified diff text into structured FileDiffRange models with exact line ranges.
+
+    Supports:
+    - Standard git diff output (diff --git a/path b/path)
+    - GitHub PR file patches (@@ -old_start,old_count +new_start,new_count @@)
+    - File status detection: ADDED, REMOVED, MODIFIED, RENAMED
+    - Exact 1-indexed inclusive line ranges [start_line, end_line] for AST symbol mapping (Prit Day 2).
+    """
+    if not diff_text or not diff_text.strip():
+        return []
+
+    files: list[FileDiffRange] = []
+    current_file: str | None = None
+    current_status: DiffStatus = DiffStatus.MODIFIED
+    current_ranges: list[LineRange] = []
+    current_additions = 0
+    current_deletions = 0
+    current_patch_lines: list[str] = []
+
+    def flush_current():
+        nonlocal current_file, current_status, current_ranges, current_additions, current_deletions, current_patch_lines
+        if current_file:
+            files.append(
+                FileDiffRange(
+                    file_path=current_file,
+                    status=current_status,
+                    diff_ranges=list(current_ranges),
+                    additions=current_additions,
+                    deletions=current_deletions,
+                    patch="\n".join(current_patch_lines) if current_patch_lines else None,
+                )
+            )
+        current_file = None
+        current_status = DiffStatus.MODIFIED
+        current_ranges = []
+        current_additions = 0
+        current_deletions = 0
+        current_patch_lines = []
+
+    hunk_regex = re.compile(r"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@")
+
+    lines = diff_text.splitlines()
+    for line in lines:
+        if line.startswith("diff --git "):
+            flush_current()
+            parts = line.split()
+            if len(parts) >= 4:
+                b_path = parts[3]
+                current_file = b_path[2:] if b_path.startswith("b/") else b_path
+            current_patch_lines.append(line)
+            continue
+
+        if current_file is None:
+            if line.startswith("--- a/"):
+                current_file = line[6:]
+            elif line.startswith("+++ b/"):
+                current_file = line[6:]
+            elif line.startswith("@@"):
+                current_file = "unknown"
+
+        if line.startswith("new file mode"):
+            current_status = DiffStatus.ADDED
+            current_patch_lines.append(line)
+            continue
+        elif line.startswith("deleted file mode"):
+            current_status = DiffStatus.REMOVED
+            current_patch_lines.append(line)
+            continue
+        elif line.startswith("similarity index") or line.startswith("rename from"):
+            current_status = DiffStatus.RENAMED
+            current_patch_lines.append(line)
+            continue
+
+        if line.startswith("--- /dev/null"):
+            current_status = DiffStatus.ADDED
+            current_patch_lines.append(line)
+            continue
+        elif line.startswith("+++ /dev/null"):
+            current_status = DiffStatus.REMOVED
+            current_patch_lines.append(line)
+            continue
+        elif line.startswith("+++ b/"):
+            current_file = line[6:]
+            current_patch_lines.append(line)
+            continue
+        elif line.startswith("--- ") or line.startswith("+++ "):
+            current_patch_lines.append(line)
+            continue
+
+        m = hunk_regex.match(line)
+        if m:
+            old_start = int(m.group(1))
+            old_count = int(m.group(2)) if m.group(2) is not None else 1
+            new_start = int(m.group(3))
+            new_count = int(m.group(4)) if m.group(4) is not None else 1
+
+            if new_count > 0:
+                start_l = new_start
+                end_l = new_start + new_count - 1
+                chg = "added" if old_count == 0 else "modified"
+                current_ranges.append(LineRange(start_line=start_l, end_line=end_l, change_type=chg))
+            elif new_count == 0:
+                current_ranges.append(
+                    LineRange(start_line=max(1, new_start), end_line=max(1, new_start), change_type="deleted")
+                )
+
+            current_patch_lines.append(line)
+            continue
+
+        if line.startswith("+") and not line.startswith("+++"):
+            current_additions += 1
+            current_patch_lines.append(line)
+        elif line.startswith("-") and not line.startswith("---"):
+            current_deletions += 1
+            current_patch_lines.append(line)
+        else:
+            current_patch_lines.append(line)
+
+    flush_current()
+    return files
+

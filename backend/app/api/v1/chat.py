@@ -12,11 +12,19 @@ from ai.schemas.output import RepositoryAnswer
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
+from app.api.v1.dependencies import (
+    get_owned_repository,
+    get_request_user_id as _request_user_id,
+)
 from app.models.repository import Repository
 from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.repository import ChatHistoryMessage, RepositoryChatRequest
 
 router = APIRouter(tags=["chat"])
+
+
+def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
+    return get_owned_repository(repository_id, request, db, repo_cls=RepositoryRepository)
 
 
 class RAGChatPipeline(Protocol):
@@ -61,27 +69,3 @@ async def chat_with_repository(
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.
     validated = RepositoryAnswer.model_validate(answer)
     return RepositoryAnswer.model_validate(redact_obj(validated.model_dump(mode="json")))
-
-
-def _request_user_id(request: Request) -> UUID:
-    try:
-        return UUID(request.state.user_id)
-    except (AttributeError, ValueError) as exc:
-        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
-
-
-def _owned_repository(
-    repository_id: UUID,
-    request: Request,
-    db: Session,
-) -> Repository:
-    """Ownership check executed within caller context without thread boundary crossing (F-03)."""
-    user_id = _request_user_id(request)
-    repository = RepositoryRepository(db).get_for_user(repository_id, user_id)
-    if repository is None:
-        raise APIError(
-            404,
-            ErrorCode.REPOSITORY_NOT_FOUND,
-            "Repository does not exist or you do not have access.",
-        )
-    return repository

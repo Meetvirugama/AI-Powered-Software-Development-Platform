@@ -32,6 +32,7 @@ class GitHubInstallationRepository:
     ) -> GitHubInstallation:
         existing = self.get_by_installation_id(installation_id)
         if existing:
+            existing.user_id = user_id
             existing.account_login = account_login
             existing.permissions = permissions
             self.session.commit()

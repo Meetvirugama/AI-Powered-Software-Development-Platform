@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -55,16 +56,18 @@ class InstallationTokenManager:
     def __init__(self, redis: "Redis", settings: "Settings") -> None:  # noqa: UP037
         self._redis = redis
         self._settings = settings
+        self._flight_locks: dict[int, asyncio.Lock] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     async def get_token(self, installation_id: int) -> str:
-        """Return a valid installation access token.
+        """Return a valid installation access token with single-flight concurrency lock.
 
-        Checks Redis first.  If the cached token is missing or close to
-        expiry, mints a fresh token and caches it.
+        Checks Redis first. If the cached token is missing or close to
+        expiry, only one concurrent request mints a fresh token while
+        others await the result, preventing thundering herds.
 
         Args:
             installation_id: GitHub's numeric installation ID.
@@ -78,20 +81,31 @@ class InstallationTokenManager:
         """
         cache_key = _CACHE_KEY.format(installation_id=installation_id)
 
-        # --- cache hit ---
+        # --- Fast path: cache hit ---
         cached = await self._redis.get(cache_key)
         if cached:
             logger.debug("GitHub token cache HIT for installation %d", installation_id)
             return cached.decode() if isinstance(cached, bytes) else cached
 
-        # --- cache miss: mint a new token ---
-        logger.info("GitHub token cache MISS for installation %d — minting new token", installation_id)
-        token = await self._mint_token(installation_id)
+        # --- Single-flight protection: lock per installation_id ---
+        if installation_id not in self._flight_locks:
+            self._flight_locks[installation_id] = asyncio.Lock()
 
-        await self._redis.set(cache_key, token, ex=_TOKEN_CACHE_TTL_SECONDS)
-        logger.debug("Cached GitHub token for installation %d (TTL=%ds)", installation_id, _TOKEN_CACHE_TTL_SECONDS)
+        async with self._flight_locks[installation_id]:
+            # Double-check cache inside lock in case another request minted it
+            cached = await self._redis.get(cache_key)
+            if cached:
+                logger.debug("GitHub token cache HIT (after lock) for installation %d", installation_id)
+                return cached.decode() if isinstance(cached, bytes) else cached
 
-        return token
+            # --- cache miss: mint a new token ---
+            logger.info("GitHub token cache MISS for installation %d — minting new token", installation_id)
+            token = await self._mint_token(installation_id)
+
+            await self._redis.set(cache_key, token, ex=_TOKEN_CACHE_TTL_SECONDS)
+            logger.debug("Cached GitHub token for installation %d (TTL=%ds)", installation_id, _TOKEN_CACHE_TTL_SECONDS)
+
+            return token
 
     async def invalidate(self, installation_id: int) -> None:
         """Remove a cached token, forcing re-mint on the next call.

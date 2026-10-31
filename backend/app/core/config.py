@@ -75,6 +75,26 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048
+    ai_temperature_default: float = 0.2
+    ai_max_context_tokens: int = 100_000
+    ai_max_repair_attempts: int = 2
+    ai_max_concurrent_calls: int = 10
+
+    @property
+    def active_chat_model(self) -> str:
+        """Resolve active default chat model based on ai_primary_provider."""
+        if (self.ai_primary_provider or "").lower() == "groq":
+            return self.groq_chat_model
+        return self.gemini_chat_model
+
+    @property
+    def fallback_chat_model(self) -> str | None:
+        """Resolve fallback chat model based on ai_fallback_provider."""
+        if not self.ai_fallback_provider:
+            return None
+        if self.ai_fallback_provider.lower() == "groq":
+            return self.groq_chat_model
+        return self.gemini_chat_model
 
     @model_validator(mode="before")
     @classmethod
@@ -152,7 +172,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        """Fail closed on insecure production defaults (F-04)."""
+        """Fail closed on insecure production defaults and validate configuration policies (F-04)."""
+        # Validate SameSite configuration
+        if self.cookie_samesite:
+            samesite_lower = self.cookie_samesite.lower().strip()
+            if samesite_lower not in ("lax", "strict", "none"):
+                raise ValueError(
+                    f"Invalid COOKIE_SAMESITE: '{self.cookie_samesite}'. Supported values are 'lax', 'strict', or 'none'."
+                )
+        if self.effective_cookie_samesite == "none" and not self.cookie_secure:
+            raise ValueError(
+                "COOKIE_SECURE must be True when COOKIE_SAMESITE is 'none' for browser security."
+            )
+
+        # Validate database connection pool settings
+        if self.db_pool_size <= 0:
+            raise ValueError("DB_POOL_SIZE must be greater than 0.")
+        if self.db_pool_timeout <= 0:
+            raise ValueError("DB_POOL_TIMEOUT must be greater than 0.")
+
         is_prod = self.app_env.lower() in ("production", "prod")
         if is_prod:
             if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
@@ -181,6 +219,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production configuration error: JWT_EXPIRE_MINUTES must not exceed 1440 minutes in production."
                 )
+            if self.redis_url:
+                redis_url_lower = self.redis_url.lower().strip()
+                if any(cloud in redis_url_lower for cloud in ("upstash.io", "redislabs.com", "azure.com", "amazonaws.com")):
+                    if not redis_url_lower.startswith("rediss://"):
+                        raise ValueError(
+                            "Production configuration error: Remote production Redis connection must use TLS (rediss://)."
+                        )
         return self
 
 

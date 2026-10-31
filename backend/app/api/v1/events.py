@@ -50,24 +50,32 @@ def _should_deliver_event(
     caller_user_id: str | None,
     owned_repo_ids: set[str] | None = None,
 ) -> bool:
-    """Filter user-scoped and repository-scoped events so tenants never receive another user's events."""
+    """Filter user-scoped and repository-scoped events so tenants never receive another user's events.
+    Fails closed on malformed JSON or unauthenticated private streams."""
     try:
         parsed = json.loads(raw_data)
     except Exception:
-        return True
+        # Fail closed on malformed JSON
+        return False
+
     if not isinstance(parsed, dict):
-        return True
+        # Fail closed on non-dict payload
+        return False
+
     data_obj = parsed.get("data")
     event_user_id = (
         parsed.get("user_id")
         or (data_obj.get("user_id") if isinstance(data_obj, dict) else None)
     )
+
+    # If the event is explicitly scoped to a user, strictly match caller_user_id
     if event_user_id is not None:
         if not caller_user_id:
             return False
         if str(event_user_id) != str(caller_user_id):
             return False
 
+    # If the event is scoped to a repository, verify caller ownership
     if isinstance(data_obj, dict) and "repository_id" in data_obj:
         if caller_user_id is None and owned_repo_ids is None:
             return False
@@ -76,6 +84,13 @@ def _should_deliver_event(
                 if event_user_id is not None and str(event_user_id) == str(caller_user_id):
                     return True
                 return False
+
+    # For general events with no repository or user scope, require authenticated user
+    # unless it is explicitly a public system notice
+    if caller_user_id is None:
+        is_public = parsed.get("is_public") is True or parsed.get("type") in {"system.notice", "connected"}
+        if not is_public:
+            return False
 
     return True
 
