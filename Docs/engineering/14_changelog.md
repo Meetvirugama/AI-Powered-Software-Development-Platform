@@ -677,3 +677,42 @@ Related Docs: Which documentation may need updating
 **Impact:** Ingests Git diff line ranges from Parth (`feat(git): Week 3 Day 2`) and AST symbols to deliver symbol-level impact assessment, automated test execution planning, and pre-flight workspace validation for Meet's `TaskPlanner` and human approval gate.
 
 **Related Docs:** `Docs/task_planning_blast_radius_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day3] 2026-10-29 — Workspace Execution Start, Tool Policy Bridge, Sandboxed Command Runner & Execution Timeline
+**Type:** Feature / Execution & Sandbox Security  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceExecutionEventType`, `WorkspaceExecutionEvent`, `WorkspaceStartExecutionRequest`, `WorkspaceStartExecutionResult`, `WorkspaceCommandRequest`, `WorkspaceCommandResult`, `WorkspaceToolPolicyRequest`, and `WorkspaceToolPolicyResult`.
+  - Added `STOPPED -> IN_USE` transition to `VALID_WORKSPACE_TRANSITIONS` for execution resumption.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all new Day 3 workspace execution schemas.
+- `backend/sandbox/constants.py`:
+  - Defined `ALLOWED_COMMAND_TEMPLATES`, `DISALLOWED_COMMAND_TOKENS`, `SENSITIVE_ENV_VARS`, `MAX_COMMAND_OUTPUT_BYTES`, and `DEFAULT_COMMAND_TIMEOUT_SECONDS`.
+- `backend/sandbox/exceptions.py`:
+  - Defined `WorkspaceAuthorizationError`, `WorkspaceStaleApprovalError`, `WorkspaceCommandError`, `WorkspaceCommandTimeoutError`, and `WorkspacePolicyViolationError`.
+- `backend/sandbox/command_runner.py`:
+  - Implemented `WorkspaceCommandRunner` with allowlist enforcement, shell injection detection (rejecting metacharacters/operators/null bytes), environment sanitization (purging host credentials), timeout budgeting, bounded output capture (100 KB), and secret redaction.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Implemented `WorkspaceToolPolicyBridge` and `register_workspace_tools()` connecting Devu's `ToolRouter` with `WorkspaceManager`.
+  - Registered 6 canonical tools (`read_file`, `write_file`, `patch_file`, `delete_file`, `list_files`, `execute_command`) with strict JSON parameter schemas, `WorkspacePathGuard` boundary checks, and fail-closed policy enforcement.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `start_execution()` enforcing human approval check (ADR-010, Docs/week3.md §8 Day 3) and stale revision invalidation.
+  - Implemented `pause_execution()`, `resume_execution()`, `stop_execution()`, and `fail_execution()`.
+  - Implemented `execute_command()` strictly bounded to `IN_USE` workspace states.
+  - Implemented `record_timeline_event()` and `get_execution_timeline()` for task observability.
+- `backend/agent/tools/router.py`:
+  - Updated `ToolRouter.route()` to permit execution when policy engine is verified while maintaining fail-closed default for unverified handlers.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `register_workspace_tools`, and Day 3 exceptions and constants.
+- `Docs/workspace_execution_start_audit.md`:
+  - Authored comprehensive Week 3 Day 3 Architecture, Execution Start & Tool Policy Security Report.
+- `backend/tests/test_prit_w3_d3_workspace_execution.py`:
+  - 16 comprehensive unit and integration tests covering approval gates, stale revision checks, pause/resume, sandboxed commands, shell injection defense, environment purging, ToolRouter policy bridge, path traversal defense, and concurrency isolation (100% pass rate).
+
+**Impact:** Provides safe, authorized workspace execution start and tool routing for Meet's agent execution loop, Yug's execution APIs, and Dhramraj's live execution progress timeline.
+
+**Related Docs:** `Docs/workspace_execution_start_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+

@@ -32,3 +32,24 @@ class WorkspaceCleanupError(WorkspaceError):
 
 class WorkspaceStateError(WorkspaceError):
     """Raised when an illegal lifecycle state transition is attempted."""
+
+
+class WorkspaceAuthorizationError(WorkspaceError):
+    """Raised when an unapproved task attempts to enter or execute in a workspace."""
+
+
+class WorkspaceStaleApprovalError(WorkspaceError):
+    """Raised when the base revision or plan has changed since approval."""
+
+
+class WorkspaceCommandError(WorkspaceError):
+    """Raised when sandboxed command execution fails or violates policy."""
+
+
+class WorkspaceCommandTimeoutError(WorkspaceCommandError):
+    """Raised when command execution exceeds the allotted timeout budget."""
+
+
+class WorkspacePolicyViolationError(WorkspaceError):
+    """Raised when an agent tool request violates security policy."""
+

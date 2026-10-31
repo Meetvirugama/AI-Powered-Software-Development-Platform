@@ -99,8 +99,12 @@ from app.schemas.verification import (
 from app.schemas.workspace import (
     VALID_WORKSPACE_TRANSITIONS,
     WorkspaceCleanupResult,
+    WorkspaceCommandRequest,
+    WorkspaceCommandResult,
     WorkspaceCreateRequest,
     WorkspaceCreateResult,
+    WorkspaceExecutionEvent,
+    WorkspaceExecutionEventType,
     WorkspaceFilePatchRequest,
     WorkspaceFilePatchResult,
     WorkspaceFileReadRequest,
@@ -110,9 +114,14 @@ from app.schemas.workspace import (
     WorkspaceIsolationType,
     WorkspaceMetadata,
     WorkspaceResourceLimits,
+    WorkspaceStartExecutionRequest,
+    WorkspaceStartExecutionResult,
     WorkspaceStatus,
+    WorkspaceToolPolicyRequest,
+    WorkspaceToolPolicyResult,
     can_transition_workspace,
 )
+
 
 __all__ = [
     "AffectedSymbol",
@@ -202,8 +211,12 @@ __all__ = [
     "VerificationResult",
     "VerificationResultResponse",
     "WorkspaceCleanupResult",
+    "WorkspaceCommandRequest",
+    "WorkspaceCommandResult",
     "WorkspaceCreateRequest",
     "WorkspaceCreateResult",
+    "WorkspaceExecutionEvent",
+    "WorkspaceExecutionEventType",
     "WorkspaceFilePatchRequest",
     "WorkspaceFilePatchResult",
     "WorkspaceFileReadRequest",
@@ -213,7 +226,11 @@ __all__ = [
     "WorkspaceIsolationType",
     "WorkspaceMetadata",
     "WorkspaceResourceLimits",
+    "WorkspaceStartExecutionRequest",
+    "WorkspaceStartExecutionResult",
     "WorkspaceStatus",
+    "WorkspaceToolPolicyRequest",
+    "WorkspaceToolPolicyResult",
     "can_transition",
     "can_transition_workspace",
 ]

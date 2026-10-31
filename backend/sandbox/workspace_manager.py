@@ -29,8 +29,12 @@ from app.core.secret_redaction import redact
 from app.services.git_branch import format_agent_branch_name
 from app.schemas.workspace import (
     WorkspaceCleanupResult,
+    WorkspaceCommandRequest,
+    WorkspaceCommandResult,
     WorkspaceCreateRequest,
     WorkspaceCreateResult,
+    WorkspaceExecutionEvent,
+    WorkspaceExecutionEventType,
     WorkspaceFilePatchRequest,
     WorkspaceFilePatchResult,
     WorkspaceFileReadRequest,
@@ -40,17 +44,25 @@ from app.schemas.workspace import (
     WorkspaceIsolationType,
     WorkspaceMetadata,
     WorkspaceResourceLimits,
+    WorkspaceStartExecutionRequest,
+    WorkspaceStartExecutionResult,
     WorkspaceStatus,
     can_transition_workspace,
 )
+from sandbox.command_runner import WorkspaceCommandRunner
 from sandbox.constants import DEFAULT_WORKSPACE_SUBDIR
 from sandbox.exceptions import (
+    WorkspaceAuthorizationError,
     WorkspaceCleanupError,
+    WorkspaceCommandError,
+    WorkspaceCommandTimeoutError,
     WorkspaceCreationError,
     WorkspaceError,
     WorkspaceFileError,
     WorkspaceLimitExceededError,
     WorkspacePathEscapeError,
+    WorkspacePolicyViolationError,
+    WorkspaceStaleApprovalError,
     WorkspaceStateError,
 )
 from sandbox.path_guard import WorkspacePathGuard
@@ -75,11 +87,19 @@ class WorkspaceManager:
 
         self._workspaces: dict[str, WorkspaceMetadata] = {}
         self._monitors: dict[str, WorkspaceResourceMonitor] = {}
+        self._timeline: dict[str, list[WorkspaceExecutionEvent]] = {}
+        self._command_runner = WorkspaceCommandRunner()
 
     @property
     def base_directory(self) -> Path:
         """Return the base directory housing all task workspaces."""
         return self._base_dir
+
+    @property
+    def command_runner(self) -> WorkspaceCommandRunner:
+        """Return the bound sandboxed command runner."""
+        return self._command_runner
+
 
     # -----------------------------------------------------------------------
     # Workspace Lifecycle Operations
@@ -138,7 +158,22 @@ class WorkspaceManager:
             metadata.updated_at = datetime.now(timezone.utc).isoformat()
             self._monitors[task_id] = WorkspaceResourceMonitor(workspace_path, limits)
 
+            # Record initial timeline events (Docs/week3.md §8 Day 3)
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.WORKSPACE_CREATED,
+                message=f"Workspace provisioned via {isolation_used}.",
+                payload={"workspace_path": str(workspace_path), "isolation": isolation_used},
+            )
+            self.record_timeline_event(
+                task_id=task_id,
+                event_type=WorkspaceExecutionEventType.BRANCH_SETUP,
+                message=f"Task branch '{branch_name}' isolated at revision '{request.base_revision}'.",
+                payload={"branch_name": branch_name, "base_revision": request.base_revision},
+            )
+
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+
             logger.info(
                 "workspace_created",
                 extra={
@@ -250,6 +285,220 @@ class WorkspaceManager:
         meta.status = new_status
         meta.updated_at = datetime.now(timezone.utc).isoformat()
         return meta
+
+    # -----------------------------------------------------------------------
+    # Week 3 Day 3 — Execution Start & Lifecycle Management
+    # -----------------------------------------------------------------------
+
+    def start_execution(self, request: WorkspaceStartExecutionRequest) -> WorkspaceStartExecutionResult:
+        """Safely start an approved task in an isolated workspace (Docs/week3.md §8 Day 3).
+
+        Enforces:
+        1. Task approval gate (ADR-010): Task must be in APPROVED status. Unapproved tasks are blocked.
+        2. Base-revision consistency check: If approved_base_revision is supplied, must match workspace base_revision.
+        3. Lifecycle transition: READY (or STOPPED) -> IN_USE.
+        4. Timeline recording: Emits EXECUTION_STARTED event.
+        """
+        task_id = request.task_id.strip()
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'. Cannot start execution.")
+
+        # 1. Approval Gate Check (ADR-010, Docs/week3.md §8 Day 3)
+        norm_task_status = str(request.task_status or "").strip().upper()
+        if norm_task_status != "APPROVED":
+            error_msg = (
+                f"Task '{task_id}' is in status '{norm_task_status}'. "
+                "Execution cannot bypass human approval (ADR-010, Docs/week3.md §8 Day 3)."
+            )
+            logger.warning("unapproved_execution_blocked", extra={"task_id": task_id, "status": norm_task_status})
+            raise WorkspaceAuthorizationError(error_msg)
+
+        # 2. Base Revision Consistency (Stale Approval Check)
+        if request.approved_base_revision:
+            norm_approved = request.approved_base_revision.strip()
+            if norm_approved != meta.base_revision:
+                error_msg = (
+                    f"Task '{task_id}' base revision changed from approved '{norm_approved}' "
+                    f"to current '{meta.base_revision}'. Previous approval is invalidated."
+                )
+                logger.warning(
+                    "stale_approval_detected",
+                    extra={"task_id": task_id, "approved": norm_approved, "current": meta.base_revision},
+                )
+                raise WorkspaceStaleApprovalError(error_msg)
+
+        # 3. Transition State
+        if meta.status == WorkspaceStatus.IN_USE:
+            # Idempotent re-entry
+            return WorkspaceStartExecutionResult(
+                success=True,
+                task_id=task_id,
+                workspace_id=meta.workspace_id,
+                status=meta.status,
+                branch_name=meta.branch_name,
+                base_revision=meta.base_revision,
+                started_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+        if meta.status not in (WorkspaceStatus.READY, WorkspaceStatus.STOPPED):
+            raise WorkspaceStateError(
+                f"Workspace for task '{task_id}' is in state '{meta.status.value}', cannot start execution. Expected READY or STOPPED."
+            )
+
+        self.transition_state(task_id, WorkspaceStatus.IN_USE)
+
+        # 4. Emit Timeline Event
+        started_at = datetime.now(timezone.utc).isoformat()
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.EXECUTION_STARTED,
+            message=f"Execution started for task '{task_id}' on branch '{meta.branch_name}'.",
+            payload={
+                "started_at": started_at,
+                "plan_version": request.plan_version,
+                "base_revision": meta.base_revision,
+                "branch_name": meta.branch_name,
+            },
+        )
+
+        return WorkspaceStartExecutionResult(
+            success=True,
+            task_id=task_id,
+            workspace_id=meta.workspace_id,
+            status=meta.status,
+            branch_name=meta.branch_name,
+            base_revision=meta.base_revision,
+            started_at=started_at,
+        )
+
+    def pause_execution(self, task_id: str, reason: str = "") -> WorkspaceMetadata:
+        """Pause execution in the workspace, transitioning IN_USE -> STOPPED."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+        if meta.status != WorkspaceStatus.IN_USE:
+            raise WorkspaceStateError(
+                f"Cannot pause workspace '{task_id}' in state '{meta.status.value}'. Must be IN_USE."
+            )
+        self.transition_state(task_id, WorkspaceStatus.STOPPED)
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.EXECUTION_PAUSED,
+            message=f"Execution paused: {reason or 'Requested by orchestrator/operator'}",
+            payload={"reason": reason},
+        )
+        return meta
+
+    def resume_execution(self, task_id: str) -> WorkspaceMetadata:
+        """Resume paused execution, transitioning STOPPED -> IN_USE."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+        if meta.status != WorkspaceStatus.STOPPED:
+            raise WorkspaceStateError(
+                f"Cannot resume workspace '{task_id}' in state '{meta.status.value}'. Must be STOPPED."
+            )
+        self.transition_state(task_id, WorkspaceStatus.IN_USE)
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.EXECUTION_RESUMED,
+            message="Execution resumed in isolated workspace.",
+            payload={"resumed_at": datetime.now(timezone.utc).isoformat()},
+        )
+        return meta
+
+    def stop_execution(self, task_id: str, reason: str = "") -> WorkspaceMetadata:
+        """Stop execution in the workspace."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+        if meta.status in (WorkspaceStatus.IN_USE, WorkspaceStatus.READY):
+            self.transition_state(task_id, WorkspaceStatus.STOPPED)
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.EXECUTION_STOPPED,
+            message=f"Execution stopped: {reason or 'Execution stopped by operator/orchestrator'}",
+            payload={"reason": reason},
+        )
+        return meta
+
+    def fail_execution(self, task_id: str, error_message: str) -> WorkspaceMetadata:
+        """Mark workspace execution as failed while preserving logs for diagnosis."""
+        meta = self.get_workspace(task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
+        meta.status = WorkspaceStatus.FAILED
+        meta.error_message = redact(error_message)
+        meta.updated_at = datetime.now(timezone.utc).isoformat()
+        self.record_timeline_event(
+            task_id=task_id,
+            event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
+            message=f"Execution failed: {redact(error_message)}",
+            payload={"error": redact(error_message)},
+        )
+        return meta
+
+    def execute_command(self, request: WorkspaceCommandRequest) -> WorkspaceCommandResult:
+        """Execute an allowlisted command in the workspace strictly while IN_USE."""
+        meta = self.get_workspace(request.task_id)
+        if not meta:
+            raise WorkspaceError(f"Workspace not found for task '{request.task_id}'.")
+        if meta.status != WorkspaceStatus.IN_USE:
+            raise WorkspaceStateError(
+                f"Cannot execute command in workspace state '{meta.status.value}'. "
+                f"Commands are only allowed when workspace is '{WorkspaceStatus.IN_USE.value}'."
+            )
+        root = Path(meta.workspace_path)
+        result = self._command_runner.run_command(
+            workspace_root=root,
+            command=request.command,
+            arguments=request.arguments,
+            timeout_seconds=request.timeout_seconds,
+            custom_env=request.environment,
+        )
+        self.record_timeline_event(
+            task_id=request.task_id,
+            event_type=WorkspaceExecutionEventType.TOOL_INVOCATION,
+            message=f"Executed command '{request.command}' (exit code: {result.exit_code}).",
+            payload={
+                "command": request.command,
+                "exit_code": result.exit_code,
+                "duration_ms": result.duration_ms,
+                "timed_out": result.timed_out,
+            },
+        )
+        return result
+
+    def record_timeline_event(
+        self,
+        task_id: str,
+        event_type: WorkspaceExecutionEventType,
+        message: str,
+        payload: dict[str, Any] | None = None,
+    ) -> WorkspaceExecutionEvent:
+        """Record an execution timeline event for task observability."""
+        meta = self._workspaces.get(task_id)
+        workspace_id = meta.workspace_id if meta else str(uuid4())
+        status = meta.status if meta else WorkspaceStatus.NOT_CREATED
+
+        event = WorkspaceExecutionEvent(
+            event_id=str(uuid4()),
+            task_id=task_id,
+            workspace_id=workspace_id,
+            event_type=event_type,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            status=status,
+            message=message,
+            payload=payload or {},
+        )
+        self._timeline.setdefault(task_id, []).append(event)
+        return event
+
+    def get_execution_timeline(self, task_id: str) -> list[WorkspaceExecutionEvent]:
+        """Retrieve chronological execution timeline events for a task."""
+        return list(self._timeline.get(task_id, []))
+
 
     # -----------------------------------------------------------------------
     # Guarded Sandboxed File Operations
