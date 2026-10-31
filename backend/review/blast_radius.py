@@ -1,7 +1,7 @@
 """Identify repository files affected by changes to other files."""
 
 from collections import deque
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 try:
     from scanner.import_tracker import FileImportMap
@@ -47,3 +47,27 @@ class BlastRadiusEngine:
             "affected_files": sorted(affected),
             "total_affected": len(affected),
         }
+
+    def compute_symbols(
+        self,
+        direct_symbols: Sequence[Any],
+        symbol_edges: Sequence[Any],
+        all_symbols_by_id: Mapping[Any, Any],
+        file_paths: Mapping[Any, str],
+        max_depth: int = 3,
+    ) -> tuple[list[Any], list[Any], list[str]]:
+        """Compute symbol-level blast radius using SymbolBlastRadiusEngine."""
+        try:
+            from scanner.symbol_blast_radius import SymbolBlastRadiusEngine
+        except ImportError:
+            from backend.scanner.symbol_blast_radius import SymbolBlastRadiusEngine
+
+        engine = SymbolBlastRadiusEngine(max_depth=max_depth)
+        return engine.compute_symbol_blast_radius(
+            direct_symbols=direct_symbols,
+            symbol_edges=symbol_edges,
+            all_symbols_by_id=all_symbols_by_id,
+            file_paths=file_paths,
+            max_depth=max_depth,
+        )
+

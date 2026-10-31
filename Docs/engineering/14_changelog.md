@@ -625,11 +625,130 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
 
+## Week 3 Changes
 
+---
 
+### [W3-Day1] 2026-10-27 — Workspace & Sandbox Architecture Audit, WorkspaceManager Interface & Resource Guardrails
+**Type:** Feature / Architecture & Isolation  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceStatus`, `WorkspaceResourceLimits`, and `WorkspaceMetadata` schemas, plus request/result schemas for create, file, and cleanup operations.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `WorkspaceManager` interface providing isolated directory provisioning under `.workspaces/task-<task_id>/`.
+  - Built path traversal containment and resource limits enforcement.
+- `Docs/workspace_sandbox_architecture_audit.md`:
+  - Authored comprehensive architectural audit for workspace and sandbox isolation.
+- `backend/tests/test_prit_w3_d1_workspace.py`:
+  - 38 unit and integration tests verifying workspace creation, boundary enforcement, and cleanup.
 
+**Impact:** Provides secure, isolated workspace directory provisioning for task execution and safe agent tool containment.
 
+**Related Docs:** `Docs/workspace_sandbox_architecture_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+### [W3-Day2] 2026-10-28 — Symbol-Level Blast Radius Engine, Test Discovery Planner & Task Planning Context
+**Type:** Feature / Analysis & Planning  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/planner_context.py`:
+  - Implemented `LineRange`, `FileDiffRange`, `TaskDiffRanges`, `AffectedSymbol`, `RiskLevel`, `RiskAssessment`, `ProposedTest`, `TestExecutionPlan` (with `__test__ = False`), `TaskImpactAssessment`, and `TaskPlanningContext` Pydantic schemas.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all planner context schemas in public schemas package.
+- `backend/scanner/symbol_blast_radius.py`:
+  - Implemented `SymbolBlastRadiusEngine` with 1-indexed interval intersection (`map_diff_ranges_to_symbols`), multi-hop BFS graph traversal across dependency edges (`compute_symbol_blast_radius`) with cycle protection, and multi-tier risk evaluation (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+- `backend/scanner/task_test_planner.py`:
+  - Implemented `TaskTestPlanner` providing framework detection (`pytest`, `unittest`, `jest`), reverse test mapping via `FileTestMapper`, missing coverage discovery for modified symbols, standardized test proposals, and CLI command formulation.
+- `backend/scanner/workspace_preflight.py`:
+  - Implemented `WorkspaceBaseValidator` providing base-revision SHA validation, workspace path boundary confinement (`WorkspacePathGuard`), framework detection, and lifecycle status validation.
+- `backend/scanner/__init__.py`:
+  - Re-exported `SymbolBlastRadiusEngine`, `TaskTestPlanner`, `WorkspaceBaseValidator`, and `WorkspacePreflightResult`.
+- `backend/review/blast_radius.py`:
+  - Enhanced existing `BlastRadiusEngine` with `compute_symbols()` delegating to `SymbolBlastRadiusEngine` while maintaining full backward compatibility.
+- `Docs/task_planning_blast_radius_audit.md`:
+  - Authored comprehensive Week 3 Day 2 Architecture, Blast Radius & Test Planning Report with mathematical models, component specifications, and SLA benchmarks.
+- `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`:
+  - 35 comprehensive unit/integration tests covering line-range matching, multi-hop BFS, recursion/cycle safety, risk tiers, framework detection, test discovery, proposed tests, pre-flight checks, schema validation, and real-world multi-language fixtures.
+
+**Impact:** Ingests Git diff line ranges from Parth (`feat(git): Week 3 Day 2`) and AST symbols to deliver symbol-level impact assessment, automated test execution planning, and pre-flight workspace validation for Meet's `TaskPlanner` and human approval gate.
+
+**Related Docs:** `Docs/task_planning_blast_radius_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day3] 2026-10-29 — Workspace Execution Start, Tool Policy Bridge, Sandboxed Command Runner & Execution Timeline
+**Type:** Feature / Execution & Sandbox Security  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceExecutionEventType`, `WorkspaceExecutionEvent`, `WorkspaceStartExecutionRequest`, `WorkspaceStartExecutionResult`, `WorkspaceCommandRequest`, `WorkspaceCommandResult`, `WorkspaceToolPolicyRequest`, and `WorkspaceToolPolicyResult`.
+  - Added `STOPPED -> IN_USE` transition to `VALID_WORKSPACE_TRANSITIONS` for execution resumption.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all new Day 3 workspace execution schemas.
+- `backend/sandbox/constants.py`:
+  - Defined `ALLOWED_COMMAND_TEMPLATES`, `DISALLOWED_COMMAND_TOKENS`, `SENSITIVE_ENV_VARS`, `MAX_COMMAND_OUTPUT_BYTES`, and `DEFAULT_COMMAND_TIMEOUT_SECONDS`.
+- `backend/sandbox/exceptions.py`:
+  - Defined `WorkspaceAuthorizationError`, `WorkspaceStaleApprovalError`, `WorkspaceCommandError`, `WorkspaceCommandTimeoutError`, and `WorkspacePolicyViolationError`.
+- `backend/sandbox/command_runner.py`:
+  - Implemented `WorkspaceCommandRunner` with allowlist enforcement, shell injection detection (rejecting metacharacters/operators/null bytes), environment sanitization (purging host credentials), timeout budgeting, bounded output capture (100 KB), and secret redaction.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Implemented `WorkspaceToolPolicyBridge` and `register_workspace_tools()` connecting Devu's `ToolRouter` with `WorkspaceManager`.
+  - Registered 6 canonical tools (`read_file`, `write_file`, `patch_file`, `delete_file`, `list_files`, `execute_command`) with strict JSON parameter schemas, `WorkspacePathGuard` boundary checks, and fail-closed policy enforcement.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `start_execution()` enforcing human approval check (ADR-010, Docs/week3.md §8 Day 3) and stale revision invalidation.
+  - Implemented `pause_execution()`, `resume_execution()`, `stop_execution()`, and `fail_execution()`.
+  - Implemented `execute_command()` strictly bounded to `IN_USE` workspace states.
+  - Implemented `record_timeline_event()` and `get_execution_timeline()` for task observability.
+- `backend/agent/tools/router.py`:
+  - Updated `ToolRouter.route()` to permit execution when policy engine is verified while maintaining fail-closed default for unverified handlers.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `register_workspace_tools`, and Day 3 exceptions and constants.
+- `Docs/workspace_execution_start_audit.md`:
+  - Authored comprehensive Week 3 Day 3 Architecture, Execution Start & Tool Policy Security Report.
+- `backend/tests/test_prit_w3_d3_workspace_execution.py`:
+  - 16 comprehensive unit and integration tests covering approval gates, stale revision checks, pause/resume, sandboxed commands, shell injection defense, environment purging, ToolRouter policy bridge, path traversal defense, and concurrency isolation (100% pass rate).
+
+**Impact:** Provides safe, authorized workspace execution start and tool routing for Meet's agent execution loop, Yug's execution APIs, and Dhramraj's live execution progress timeline.
+
+**Related Docs:** `Docs/workspace_execution_start_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day4] 2026-10-29 — Restricted Test Runner, Failure Classification & Bounded Auto-Repair Loop
+**Type:** Feature / Test Execution & Bounded Self-Repair  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `TestOutcomeStatus` (`PASSED`, `FAILED`, `ERROR`, `TIMEOUT`, `UNSUPPORTED_FRAMEWORK`, `AMBIGUOUS`, `NO_TESTS_FOUND`).
+  - Implemented `TestFailureClassification` (`NONE`, `TEST_FAILURE`, `INFRASTRUCTURE_ERROR`, `TIMEOUT`, `SECURITY_VIOLATION`).
+  - Implemented `WorkspaceTestExecutionRequest`, `WorkspaceTestExecutionResult`, `RepairAttemptRecord`, and `WorkspaceRepairBudgetStatus`.
+  - Added new test and repair timeline events to `WorkspaceExecutionEventType`: `TESTS_STARTED`, `TESTS_PASSED`, `TESTS_FAILED`, `TEST_INFRASTRUCTURE_FAILURE`, `TEST_TIMEOUT`, `REPAIR_ATTEMPT_STARTED`, `REPAIR_ATTEMPT_COMPLETED`, and `REPAIR_BUDGET_EXHAUSTED`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 4 test runner and repair schemas.
+- `backend/sandbox/exceptions.py`:
+  - Added `WorkspaceTestExecutionError`, `WorkspaceUnsupportedFrameworkError`, `WorkspaceRepairBudgetExhaustedError`, and `WorkspaceDuplicateRepairPatchError`.
+- `backend/sandbox/test_runner.py`:
+  - Implemented `WorkspaceTestRunner` with automatic framework detection (`pytest`, `unittest`, `jest`), graceful handling of unsupported frameworks (`vitest`, `go test`), command allowlisting, dependency install prevention (`npm install`, `pip install`), shell injection blocking, path traversal containment, timeout budgeting (default 60s, max 300s), 100 KB output log bounding with truncation notices, and automatic secret redaction.
+  - Implemented structured output parser and failure classifier distinguishing assertion/test failures (`is_repair_eligible=True`) from infrastructure crashes, timeouts, and security violations (`is_repair_eligible=False`).
+  - Implemented bounded auto-repair tracker enforcing the strict 3-attempt task-level budget ceiling per ADR-010, emitting `REPAIR_BUDGET_EXHAUSTED` timeline events upon exhaustion, and detecting duplicate failed repair patches via SHA-256 hashing.
+- `backend/sandbox/workspace_manager.py`:
+  - Integrated `run_tests()`, `get_test_history()`, `get_repair_budget_status()`, `record_repair_attempt()`, and `get_repair_history()`.
+  - Recorded timeline events across the entire test execution and repair attempt lifecycle.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Registered canonical tools `TOOL_RUN_TESTS` (`run_tests`) and `TOOL_RECORD_REPAIR` (`record_repair_attempt`) with Devu's `ToolRouter`.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceTestRunner`, `TOOL_RUN_TESTS`, `TOOL_RECORD_REPAIR`, and Day 4 exceptions.
+- `Docs/restricted_test_runner_bounded_repair_audit.md`:
+  - Authored comprehensive Week 3 Day 4 Architecture, Restricted Test Runner, Failure Classification, and Bounded Repair Loop Audit Report.
+- `backend/tests/test_prit_w3_d4_restricted_test_runner.py`:
+  - 18 comprehensive unit and integration tests covering framework autodetection, explicit overrides, unsupported frameworks, allowlist enforcement, shell injection blocking, path traversal containment, output parsing, failure classification, secret redaction, output truncation, 3-attempt repair budget enforcement, duplicate patch rejection, WorkspaceManager integration, timeline events, and ToolRouter dispatch (100% pass rate).
+
+**Impact:** Delivers sandboxed test execution and bounded auto-repair enforcement for Meet's agent self-repair loop, Dev's failure diagnosis, Yug's test APIs, and Dhramraj's live repair counter UI.
+
+**Related Docs:** `Docs/restricted_test_runner_bounded_repair_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/engineering/14_changelog.md`
 
 

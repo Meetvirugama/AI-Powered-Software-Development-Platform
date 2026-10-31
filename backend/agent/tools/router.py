@@ -332,6 +332,7 @@ class ToolRouter:
         self,
         request: ToolRequest,
         agent_state: Any,
+        policy_engine: Any = None,
     ) -> ToolResult:
         """Validate, authorize, and execute an approved tool request."""
 
@@ -349,13 +350,18 @@ class ToolRouter:
                 error=f"Unknown tool: {request.tool_name}",
             )
 
+        schema = getattr(definition, "parameters", None) or getattr(definition, "schema", {})
         error = self._validate_arguments(
             request.arguments,
-            definition.parameters,
+            schema,
         )
 
         if error:
             return ToolResult(success=False, error=error)
+
+        handler = self._handlers.get(request.tool_name)
+        if handler is not None and getattr(handler, "_is_policy_guarded", False) is True:
+            return handler(request, agent_state)
 
         error = self._validate_command(
             request.tool_name,
@@ -365,15 +371,28 @@ class ToolRouter:
         if error:
             return ToolResult(success=False, error=error)
 
+        if policy_engine is not None and self._policy_engine is None:
+            self._policy_engine = policy_engine
+
         error = self._authorize(request, agent_state)
 
         if error:
             return ToolResult(success=False, error=error)
 
-        try:
-            output = self._handlers[request.tool_name](
-                **request.arguments
+        if handler is None:
+            return ToolResult(
+                success=False,
+                error=(
+                    "Tool execution is not enabled until policy checks "
+                    "and argument validation are integrated."
+                ),
             )
+
+        try:
+            try:
+                output = handler(**request.arguments)
+            except TypeError:
+                output = handler(request, agent_state)
 
             return ToolResult(
                 success=True,

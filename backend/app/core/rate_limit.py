@@ -1,7 +1,7 @@
 """Per-route rate limiting backed by Redis.
-Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2, Day 1–7
+Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2 & W3
 
-Limits (Docs/week1.md, Day 6 & Docs/week2.md, Section 4.6):
+Limits:
     /auth/github/callback                      10 req/min per IP
     /repositories/:id/sync                      5 req/min per user
     /repositories/:id/chat                     30 req/min per user
@@ -12,17 +12,10 @@ Limits (Docs/week1.md, Day 6 & Docs/week2.md, Section 4.6):
     /repositories/:id/source/agent-branch      20 req/min per user
     /repositories/:id/source/commit            20 req/min per user
     /repositories/:id/source/pr-metadata       20 req/min per user
-
-Algorithm: fixed one-minute window. Each request increments
-``ratelimit:<rule>:<identity>:<window>`` in Redis; the key expires on its own
-after the window, so Redis never grows without bound. When the count passes
-the limit the API returns ``429 RATE_LIMITED`` with a ``Retry-After`` header.
-
-If Redis is unreachable the request is allowed (fail open) and a warning is
-logged, so a Redis outage never takes the whole API down with it.
-
-Middleware order matters: this middleware must run *inside* JWTMiddleware so
-``request.state.user_id`` is already set for the per-user limits.
+    /repositories/:id/issues                   20 req/min per user
+    /repositories/:id/issues/import            20 req/min per user
+    /tasks                                     30 req/min per user
+    /tasks/:id/plan                            15 req/min per user
 """
 
 from __future__ import annotations
@@ -61,8 +54,6 @@ class RateLimitRule:
 def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
     p = re.escape(prefix)
     return (
-        # The OAuth callback is a GET redirect from GitHub in our implementation;
-        # POST is included too so the limit still applies if it ever changes.
         RateLimitRule("auth_callback", frozenset({"GET", "POST"}),
                       re.compile(rf"^{p}/auth/github/callback/?$"), 10, 60, "ip"),
         RateLimitRule("repo_sync", frozenset({"POST"}),
@@ -83,6 +74,12 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/source/commit/?$"), 20, 60, "user"),
         RateLimitRule("repo_pr_metadata", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/source/pr-metadata/?$"), 20, 60, "user"),
+        RateLimitRule("repo_issues", frozenset({"POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/issues(?:/import)?/?$"), 20, 60, "user"),
+        RateLimitRule("tasks_create", frozenset({"POST"}),
+                      re.compile(rf"^{p}/tasks/?$"), 30, 60, "user"),
+        RateLimitRule("task_plan", frozenset({"POST"}),
+                      re.compile(rf"^{p}/tasks/[^/]+/plan/?$"), 15, 60, "user"),
     )
 
 
@@ -98,7 +95,7 @@ class RedisRateLimitStore:
     def hit(self, key: str, window_seconds: int) -> int:
         pipe = self.redis.pipeline()
         pipe.incr(key)
-        pipe.expire(key, window_seconds + 5)  # small buffer; the key name already carries the window
+        pipe.expire(key, window_seconds + 5)
         count, _ = pipe.execute()
         return int(count)
 
@@ -115,12 +112,7 @@ class InMemoryRateLimitStore:
 
 
 class BoundedInMemoryRateLimitStore:
-    """Thread-safe bounded in-memory rate limit store for AI endpoint fallback during Redis outages (B-04).
-
-    Ensures that per-user limits for expensive LLM operations continue to be enforced
-    locally even when Redis is down, preventing runaway provider quota exhaustion.
-    Prunes expired keys automatically to prevent unbounded memory growth.
-    """
+    """Thread-safe bounded in-memory rate limit store for AI endpoint fallback during Redis outages (B-04)."""
 
     def __init__(self, max_keys: int = 10_000) -> None:
         self._counts: dict[str, tuple[int, float]] = {}  # key -> (count, expires_at)
@@ -128,7 +120,6 @@ class BoundedInMemoryRateLimitStore:
 
     def hit(self, key: str, window_seconds: int) -> int:
         now = time.time()
-        # Periodic pruning when table gets large
         if len(self._counts) >= self._max_keys:
             self._prune(now)
 
@@ -148,7 +139,6 @@ class BoundedInMemoryRateLimitStore:
         for k in expired:
             self._counts.pop(k, None)
         if len(self._counts) >= self._max_keys:
-            # Evict oldest 25% of keys if still at cap
             oldest = list(self._counts.keys())[: self._max_keys // 4]
             for k in oldest:
                 self._counts.pop(k, None)
@@ -163,6 +153,7 @@ AI_EXPENSIVE_RULES: frozenset[str] = frozenset({
     "repo_detect_bugs",
     "repo_generate_tests",
     "repo_review",
+    "task_plan",
 })
 
 _fallback_ai_store = BoundedInMemoryRateLimitStore()
@@ -198,7 +189,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if rule.per == "user":
             user_id = getattr(request.state, "user_id", None)
             if not user_id:
-                # Unauthenticated requests are already rejected by JWTMiddleware.
                 return await call_next(request)
             identity = f"user:{user_id}"
         else:
@@ -239,10 +229,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
             if is_ai_rule:
-                # B-04 Fix: Enforce bounded in-memory rate limiting for expensive AI endpoints during Redis outages
                 count = _fallback_ai_store.hit(key, rule.window_seconds)
             else:
-                # Non-AI endpoints fail open to preserve general site availability
                 return await call_next(request)
 
         remaining = max(0, rule.limit - count)
