@@ -27,6 +27,8 @@ Middleware order matters: this middleware must run *inside* JWTMiddleware so
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 import re
 import time
@@ -210,7 +212,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         redis_failed = False
 
         try:
-            count = get_rate_limit_store().hit(key, rule.window_seconds)
+            store = get_rate_limit_store()
+            hit_fn = getattr(store, "hit", None)
+            if hit_fn is None:
+                count = 1
+            elif inspect.iscoroutinefunction(hit_fn):
+                count = await asyncio.wait_for(hit_fn(key, rule.window_seconds), timeout=1.0)
+            else:
+                res = await asyncio.wait_for(
+                    asyncio.to_thread(hit_fn, key, rule.window_seconds),
+                    timeout=1.0,
+                )
+                if inspect.isawaitable(res):
+                    count = await asyncio.wait_for(res, timeout=1.0)
+                else:
+                    count = int(res)
         except Exception as exc:  # noqa: BLE001
             redis_failed = True
             logger.warning(

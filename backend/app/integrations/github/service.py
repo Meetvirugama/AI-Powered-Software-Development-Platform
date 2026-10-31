@@ -2,32 +2,44 @@
 
 This module provides :class:`GitHubService`, which implements
 :class:`~app.integrations.github.base.GitHubIntegrationBase` against the
-real GitHub REST API.
+real GitHub REST API, and publishes the high-level PR and workflow interfaces
+for Week 3.
 
 Key responsibilities:
-- Week 1: Repository listing, metadata, branch inspection, shallow authenticated clone,
-          and error classification with token invalidation.
-- Week 3 Day 1: High-level workflow methods (push_branch, create_pull_request,
-                update_pull_request, get_pull_request_detail, create_issue_from_finding).
+- Week 1: list_repositories, get_repository, list_branches, get_default_branch, clone_repository.
+- Week 2: Source content retrieval, commit metadata, PR diffs via GitHubSourceService.
+- Week 3 Day 1: Published interfaces (push_branch, create_pull_request, update_pull_request,
+  get_pull_request_detail, create_issue_from_finding).
 - Week 3 Day 2: Branch comparison, diff analysis, and blast radius input provider.
 """
 
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 import httpx
+from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.core.errors import APIError, ErrorCode
+from app.core.input_security import is_within
+from app.integrations.github.cache import SourceRevisionCache
+from app.integrations.github.client import GitHubAPIError, GitHubClient
+from app.integrations.github.schemas import PullRequestInfo
+from app.models.github_installation import GitHubInstallation as DBGitHubInstallation
+from app.models.repository import Repository
 from .base import (
     GitHubBranch,
     GitHubInstallation,
@@ -42,14 +54,11 @@ from .exceptions import (
     GitHubPermissionDeniedError,
     GitHubRateLimitError,
 )
-from .client import GitHubClient
-from .schemas import PullRequestInfo
+from .source_service import GitHubSourceService
 from .token_manager import InstallationTokenManager
 
 if TYPE_CHECKING:
     from redis.asyncio import Redis
-    from sqlalchemy.orm import Session
-    from app.core.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,45 +69,44 @@ _GITHUB_API_BASE = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
 
 
-class GitHubService(GitHubIntegrationBase):
-    """GitHub REST API service for the AI-Powered Software Development Platform.
+class GitHubService(GitHubIntegrationBase, GitHubSourceService):
+    """GitHub REST API and Workflow client for the AI-Powered Software Development Platform.
 
-    Args:
-        redis: Async Redis client used by :class:`InstallationTokenManager` (or DB Session).
-        settings: Application settings object.
-        workspace_root: Base directory where repositories are cloned.
-        db: Optional database session for DB-backed operations.
+    Supports both low-level Git/REST operations (clone, branch, repo metadata)
+    and high-level workflow automation (push_branch, draft PR creation, issue reporting).
     """
 
     def __init__(
         self,
-        redis: Any = None,
-        settings: Optional["Settings"] = None,
+        db_or_redis: Any = None,
+        settings: Settings | None = None,
         workspace_root: Path | None = None,
-        db: Optional["Session"] = None,
+        *,
+        redis: "Redis | None" = None,
+        db: Session | None = None,
+        cache: SourceRevisionCache | None = None,
     ) -> None:
-        from app.core.config import get_settings
-
-        self._settings = settings or get_settings()
-
-        # Handle polymorphism: if first arg is DB session or mock DB
-        if db is not None:
-            self._db = db
-            self._redis = redis
-        elif redis is not None and (
-            hasattr(redis, "execute")
-            or hasattr(redis, "query")
-            or hasattr(redis, "add")
-            or "Mock" in type(redis).__name__
-        ):
-            self._db = redis
-            self._redis = None
+        if redis is not None:
+            r = redis
+            s = settings
+            d = db or (db_or_redis if not hasattr(db_or_redis, "get") else None)
+        elif settings is not None:
+            r = db_or_redis
+            s = settings
+            d = db
         else:
-            self._db = None
-            self._redis = redis
+            r = None
+            s = None
+            d = db or db_or_redis
 
-        if self._redis is not None:
-            self._token_manager = InstallationTokenManager(self._redis, self._settings)
+        self._db: Session | None = d
+        self._cache = cache if cache is not None else SourceRevisionCache()
+        self._settings = s
+
+        if r is not None and s is not None:
+            self._token_manager: InstallationTokenManager | None = InstallationTokenManager(r, s)
+        elif hasattr(s, "github_app_id"):
+            self._token_manager = InstallationTokenManager(r, s)  # type: ignore[arg-type]
         else:
             self._token_manager = None
 
@@ -112,11 +120,7 @@ class GitHubService(GitHubIntegrationBase):
     def _app_auth_headers(self) -> dict[str, str]:
         """Return headers for GitHub App-level (JWT) requests."""
         if self._token_manager is None:
-            return {
-                "Authorization": "Bearer mock-jwt",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": _GITHUB_API_VERSION,
-            }
+            raise RuntimeError("Token manager not configured for app auth.")
         app_jwt = self._token_manager._build_app_jwt()
         return {
             "Authorization": f"Bearer {app_jwt}",
@@ -127,11 +131,7 @@ class GitHubService(GitHubIntegrationBase):
     async def _installation_auth_headers(self, installation_id: int) -> dict[str, str]:
         """Return headers authenticated as the given installation."""
         if self._token_manager is None:
-            return {
-                "Authorization": "Bearer mock-token",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": _GITHUB_API_VERSION,
-            }
+            raise RuntimeError("Token manager not configured for installation auth.")
         token = await self._token_manager.get_token(installation_id)
         return {
             "Authorization": f"Bearer {token}",
@@ -144,7 +144,14 @@ class GitHubService(GitHubIntegrationBase):
         response: httpx.Response,
         installation_id: int | None = None,
     ) -> None:
-        """Inspect an HTTP response and raise the appropriate exception."""
+        """Inspect an HTTP response and raise the appropriate exception.
+
+        Implements Day 5 error handling:
+        - 401 → invalidate cached token, raise :class:`GitHubAuthError`
+        - 403 → raise :class:`GitHubPermissionDeniedError`
+        - 404 → detect installation-removed vs. plain not-found
+        - 429 → parse rate-limit headers, raise :class:`GitHubRateLimitError`
+        """
         if response.is_success:
             return
 
@@ -159,6 +166,7 @@ class GitHubService(GitHubIntegrationBase):
         if status == 403:
             body = response.json() if response.content else {}
             message = body.get("message", "Permission denied")
+            # GitHub sends 403 with a specific message when an installation is blocked.
             if "installation" in message.lower() and "suspend" in message.lower():
                 logger.warning("GitHub App installation suspended: %s", message)
                 if installation_id is not None:
@@ -178,7 +186,6 @@ class GitHubService(GitHubIntegrationBase):
             if reset_ts:
                 reset_time = int(reset_ts)
                 import time
-
                 retry_after = max(retry_after, reset_time - int(time.time()))
             logger.warning("GitHub rate-limited — retry after %ds", retry_after)
             raise GitHubRateLimitError(retry_after_seconds=retry_after)
@@ -243,7 +250,10 @@ class GitHubService(GitHubIntegrationBase):
         )
 
     async def list_repositories(self, installation_id: int) -> list[GitHubRepository]:
-        """List all repositories accessible to this installation."""
+        """List all repositories accessible to this installation.
+
+        Handles GitHub's pagination automatically (100 items per page).
+        """
         headers = await self._installation_auth_headers(installation_id)
         repos: list[GitHubRepository] = []
         page = 1
@@ -268,7 +278,12 @@ class GitHubService(GitHubIntegrationBase):
     async def get_repository(
         self, owner_or_installation_id: str | int, repo_or_id: str | int
     ) -> GitHubRepository:
-        """Fetch full metadata for a single repository."""
+        """Fetch full metadata for a single repository.
+
+        Supports both:
+          - (owner: str, repo: str) e.g. ("Meetvirugama", "SchoolWebPage")
+          - (installation_id: int, repo_id: int) e.g. (171308854, 1119895424)
+        """
         is_inst_id = isinstance(owner_or_installation_id, int) or (
             isinstance(owner_or_installation_id, str) and str(owner_or_installation_id).isdigit()
         )
@@ -309,6 +324,81 @@ class GitHubService(GitHubIntegrationBase):
         repo_data = await self.get_repository(owner, repo)
         return repo_data.default_branch
 
+    async def _download_zipball(
+        self,
+        installation_id: int,
+        owner: str,
+        repo: str,
+        branch: str,
+        target: Path,
+    ) -> None:
+        """Download and extract repository archive via GitHub REST API.
+
+        Serves as the primary or fallback cloning strategy for environments
+        where the Git CLI is not installed (e.g. minimal PaaS container runtimes
+        such as Azure App Service or AWS Lambda).
+        """
+        if self._token_manager is None:
+            raise RuntimeError("Token manager is required for zipball download.")
+        token = await self._token_manager.get_token(installation_id)
+        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/zipball/{branch}"
+
+        logger.info("Downloading archive for %s/%s (branch=%s) from GitHub API", owner, repo, branch)
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=180.0) as client:
+                resp = await client.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                        "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+                    },
+                )
+                if resp.status_code == 404:
+                    raise GitHubNotFoundError(f"Repository or branch not found: {owner}/{repo}@{branch}")
+                if resp.status_code == 401:
+                    await self._token_manager.invalidate(installation_id)
+                    raise GitHubAuthError(f"Authentication failed for {owner}/{repo}: HTTP 401")
+                if resp.status_code == 403:
+                    raise GitHubPermissionDeniedError(f"Permission denied for {owner}/{repo}: HTTP 403")
+                if resp.status_code != 200:
+                    raise GitHubCloneError(
+                        f"GitHub archive download failed for {owner}/{repo}: HTTP {resp.status_code}",
+                        returncode=resp.status_code,
+                    )
+                zip_bytes = resp.content
+
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                members = zf.infolist()
+                prefix = members[0].filename.split("/")[0] + "/" if members and "/" in members[0].filename else ""
+                for m in members:
+                    if not m.filename.startswith(prefix) or m.filename == prefix:
+                        continue
+                    rel_path = m.filename[len(prefix):]
+                    if not rel_path:
+                        continue
+                    dest = (target / rel_path).resolve()
+                    if not is_within(target, dest):
+                        continue
+                    if m.is_dir():
+                        dest.mkdir(parents=True, exist_ok=True)
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(m) as src, open(dest, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+
+            logger.info("Successfully extracted archive for %s/%s into %s", owner, repo, target)
+        except (GitHubNotFoundError, GitHubAuthError, GitHubPermissionDeniedError, GitHubCloneError):
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise
+        except Exception as exc:
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
+            raise GitHubCloneError(f"Failed to extract repository archive for {owner}/{repo}: {exc}") from exc
+
     async def clone_repository(
         self,
         installation_id: int,
@@ -317,10 +407,30 @@ class GitHubService(GitHubIntegrationBase):
         branch: str,
         workspace_path: str,
     ) -> str:
-        """Shallow-clone a repository using a short-lived installation token."""
-        import re
-        from app.core.input_security import is_within
+        """Shallow-clone a repository using a short-lived installation token.
 
+        Day 4 implementation:
+        - Gets a fresh installation token from :class:`InstallationTokenManager`.
+        - Validates the target path is within ``workspace_root`` (no traversal).
+        - If ``git`` binary is missing or subprocess execution fails (e.g. Azure App Service),
+          falls back directly to downloading the repository archive via the GitHub REST API.
+        - Cleans up the partial clone directory on failure.
+
+        Args:
+            installation_id: GitHub App installation ID.
+            owner: Repository owner login.
+            repo: Repository name.
+            branch: Branch to clone.
+            workspace_path: Absolute local path for the cloned repository.
+
+        Returns:
+            The resolved ``workspace_path`` string.
+
+        Raises:
+            ValueError: If ``workspace_path`` escapes the workspace root.
+            GitHubCloneError: If the clone/download process fails.
+        """
+        # --- path traversal & argument injection guards ---
         target = Path(workspace_path).resolve()
         if not is_within(self._workspace_root, target) or target == self._workspace_root:
             raise ValueError(
@@ -335,8 +445,28 @@ class GitHubService(GitHubIntegrationBase):
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
             raise ValueError(f"Invalid branch name: {branch!r}")
 
-        token = await self._token_manager.get_token(installation_id) if self._token_manager else "mock-token"
-        auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+        # Check if git CLI binary is present in runtime environment
+        git_binary = shutil.which("git")
+        if not git_binary:
+            logger.info(
+                "git binary not found in environment; using GitHub REST API archive download for %s/%s",
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
+
+        # --- get installation token (never exposed in process arguments) ---
+        if self._token_manager is None:
+            raise RuntimeError("Token manager is required for authenticated git clone.")
+        token = await self._token_manager.get_token(installation_id)
+        clone_url = f"https://x-access-token@github.com/{owner}/{repo}.git"
 
         cmd = [
             "git",
@@ -345,18 +475,30 @@ class GitHubService(GitHubIntegrationBase):
             "--branch",
             branch,
             "--",
-            auth_url,
+            clone_url,
             str(target),
         ]
 
         logger.info("Cloning %s/%s (branch=%s) into %s", owner, repo, branch, target)
 
+        askpass_path: Path | None = None
         try:
+            # Secure GIT_ASKPASS helper with 0o700 permissions to supply token to Git
+            # without exposing it in cmd / argv process arguments
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as askpass_file:
+                askpass_file.write(f'#!/bin/sh\necho "{token}"\n')
+                askpass_path = Path(askpass_file.name)
+            askpass_path.chmod(0o700)
+
             result = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                env={
+                    **os.environ,
+                    "GIT_ASKPASS": str(askpass_path),
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
             )
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
 
@@ -369,18 +511,41 @@ class GitHubService(GitHubIntegrationBase):
                     f"git clone failed for {owner}/{repo}: {stderr_text}",
                     returncode=result.returncode,
                 )
+
+        except (FileNotFoundError, OSError) as err:
+            logger.warning(
+                "git execution failed (%s); falling back to GitHub API archive download for %s/%s",
+                err,
+                owner,
+                repo,
+            )
+            await self._download_zipball(
+                installation_id=installation_id,
+                owner=owner,
+                repo=repo,
+                branch=branch,
+                target=target,
+            )
+            return str(target)
         except (asyncio.TimeoutError, GitHubCloneError):
+            # Clean up partial clone
             if target.exists():
                 shutil.rmtree(target, ignore_errors=True)
                 logger.warning("Cleaned up partial clone at %s", target)
             raise
+        finally:
+            if askpass_path and askpass_path.exists():
+                try:
+                    askpass_path.unlink()
+                except Exception:
+                    pass
 
         logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
         return str(target)
 
-    # ------------------------------------------------------------------
-    # Week 3 Day 1 & Day 2 Methods (Parth — GitHub PR & Workflow Lead)
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Week 3 Day 1: Published High-Level GitHub Service (Parth)
+    # ---------------------------------------------------------------------------
 
     async def push_branch(
         self,
@@ -391,7 +556,7 @@ class GitHubService(GitHubIntegrationBase):
         remote_branch: str,
         workspace_path: str | None = None,
     ) -> None:
-        """Push an agent branch from local workspace to GitHub remote.
+        """Push an agent branch from the local workspace to GitHub remote.
 
         Rule 554: Only called after WAITING_PUSH_APPROVAL state receives explicit human approval.
         Rule 563: Direct push to main is strictly forbidden; must push to agent/task-*.
@@ -563,37 +728,27 @@ class GitHubService(GitHubIntegrationBase):
     async def _resolve_token(self, installation_id: UUID | str | None) -> str:
         """Resolve installation token from DB installation_id or config."""
         if installation_id is not None:
-            if self._db is not None and isinstance(installation_id, UUID):
-                from app.models.github_installation import GitHubInstallation
-
-                inst = self._db.get(GitHubInstallation, installation_id)
-                if inst and inst.access_token:
-                    return inst.access_token
+            if self._token_manager is not None and isinstance(installation_id, int):
+                try:
+                    return await self._token_manager.get_token(installation_id)
+                except Exception:
+                    pass
+            inst = (
+                self._db.get(DBGitHubInstallation, installation_id)
+                if (isinstance(installation_id, UUID) and self._db)
+                else None
+            )
+            if inst and getattr(inst, "access_token", None):
+                return inst.access_token
             try:
-                from app.integrations.github.client import GitHubClient
-
                 return await GitHubClient.get_installation_token(str(installation_id))
             except Exception:
                 return "mock-token"
         return "mock-token"
 
     @staticmethod
-    def _parse_pull_request(data: dict[str, Any]) -> PullRequestInfo:
-        """Parse raw GitHub pull request JSON into PullRequestInfo."""
-        return PullRequestInfo(
-            number=data.get("number", 0),
-            title=data.get("title", ""),
-            state=data.get("state", "open"),
-            draft=bool(data.get("draft", False)),
-            author=data.get("user", {}).get("login") if isinstance(data.get("user"), dict) else None,
-            base_ref=data.get("base", {}).get("ref") if isinstance(data.get("base"), dict) else None,
-            head_ref=data.get("head", {}).get("ref") if isinstance(data.get("head"), dict) else None,
-            base_sha=data.get("base", {}).get("sha") if isinstance(data.get("base"), dict) else None,
-            head_sha=data.get("head", {}).get("sha") if isinstance(data.get("head"), dict) else None,
-            created_at=data.get("created_at"),
-            updated_at=data.get("updated_at"),
-            body=data.get("body"),
-        )
+    def _parse_pull_request(data: dict) -> PullRequestInfo:
+        return GitHubSourceService._parse_pull_request(data)
 
 
 # Re-export GitHubSourceService for backwards compatibility with Week 2 source routes

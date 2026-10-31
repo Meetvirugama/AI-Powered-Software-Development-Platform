@@ -10,9 +10,10 @@ describe('syncProgressFromStatus', () => {
     expect(progress.isFailed).toBe(false);
   });
 
-  it('maps SYNCING to active CLONING stage', () => {
+  it('maps SYNCING to active SYNCING stage without assuming cloning', () => {
     const progress = syncProgressFromStatus('SYNCING');
-    expect(progress.stage).toBe('CLONING');
+    expect(progress.stage).toBe('SYNCING');
+    expect(progress.label).toBe('Syncing repository…');
     expect(progress.isActive).toBe(true);
     expect(progress.isComplete).toBe(false);
     expect(progress.isFailed).toBe(false);

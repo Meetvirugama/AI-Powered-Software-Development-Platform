@@ -1,4 +1,4 @@
-"""GitHub integration package owned by Parth.
+"""GitHub App integration package owned by Parth.
 
 Provides authorized access to repository files, commit metadata,
 branch management, pull-request workflows, and GitHub issues.
@@ -11,10 +11,10 @@ from .source_service import GitHubSourceService
 from .token_manager import InstallationTokenManager
 
 __all__ = [
-    "GitHubService",
-    "GitHubSourceService",
-    "GitHubIntegrationBase",
-    "InstallationTokenManager",
     "GitHubAPIError",
     "GitHubClient",
+    "GitHubIntegrationBase",
+    "GitHubService",
+    "GitHubSourceService",
+    "InstallationTokenManager",
 ]

@@ -48,6 +48,20 @@ _DEFAULT_MODEL = "gemini-flash-lite-latest"
 _MAX_REPAIR_ATTEMPTS = 2
 
 
+def _resolve_engine_model(model: str | None, llm: Any) -> str:
+    """Resolve active model from gateway provider default or central settings."""
+    if model and model != _DEFAULT_MODEL:
+        return model
+    try:
+        prov_model = getattr(getattr(llm, "provider", None), "default_model", None)
+        if isinstance(prov_model, str) and prov_model.strip():
+            return prov_model
+        from app.core.config import settings
+        return settings.active_chat_model
+    except Exception:
+        return model or _DEFAULT_MODEL
+
+
 class _LLMReviewOutputEnvelope(BaseModel):
     summary: str = Field(default="Standalone AI code review completed.")
     risk_level: str = Field(default="LOW")
@@ -65,7 +79,7 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
         validator: OutputValidator | None = None,
     ) -> None:
         self._llm = llm_gateway
-        self._model = model or _DEFAULT_MODEL
+        self._model = _resolve_engine_model(model, llm_gateway)
         self._validator = validator or OutputValidator()
         self._system_prompt = self._load_system_prompt()
 

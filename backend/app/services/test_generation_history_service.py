@@ -28,40 +28,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
 from app.repositories.analysis_run_repository import AnalysisRunRepository
+from app.services.history.base import BaseHistoryService
 
 logger = logging.getLogger(__name__)
 
 
-class TestGenerationHistoryService:
+class TestGenerationHistoryService(BaseHistoryService):
     """Service managing persistent history for Framework-Aware Test Generation runs."""
 
     __test__ = False
-
-    def __init__(
-        self,
-        session_factory: Optional[sessionmaker] = None,
-        session: Optional[Session] = None,
-    ) -> None:
-        self.session_factory = session_factory
-        self._session = session
-
-    @contextmanager
-    def _get_session(self, db: Optional[Session] = None) -> Generator[Session, None, None]:
-        """Provide an active database session from argument, cached session, or session factory."""
-        if db is not None:
-            yield db
-            return
-        if self._session is not None:
-            yield self._session
-            return
-        if self.session_factory is not None:
-            s: Session = self.session_factory()
-            try:
-                yield s
-            finally:
-                s.close()
-            return
-        raise RuntimeError("No database session or session_factory configured for TestGenerationHistoryService.")
 
     # -----------------------------------------------------------------------
     # 1. Save Completed & Failed Test Generation Runs
