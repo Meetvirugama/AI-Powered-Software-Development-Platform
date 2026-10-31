@@ -10,6 +10,7 @@ Key responsibilities:
 - Week 2: Source content retrieval, commit metadata, PR diffs via GitHubSourceService.
 - Week 3 Day 1: Published interfaces (push_branch, create_pull_request, update_pull_request,
   get_pull_request_detail, create_issue_from_finding).
+- Week 3 Day 2: Branch comparison, diff analysis, and blast radius input provider.
 """
 
 from __future__ import annotations
@@ -673,6 +674,19 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             labels=issue_labels,
             assignees=assignees,
         )
+
+    async def compare_branches(
+        self,
+        owner: str,
+        repo: str,
+        base: str,
+        head: str,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Compare two branches or commits on GitHub and return diff information."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        return await client.compare_commits(owner, repo, base, head)
 
     async def _resolve_token(self, installation_id: UUID | str | None) -> str:
         """Resolve installation token from DB installation_id or config."""

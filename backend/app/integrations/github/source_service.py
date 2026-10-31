@@ -39,6 +39,7 @@ from app.integrations.github.schemas import (
     DiffStatus,
     FileContentRequest,
     FileContentResponse,
+    FileDiffRange,
     FileTreeResponse,
     PullRequestDiffResponse,
     PullRequestFile,
@@ -610,6 +611,56 @@ class GitHubSourceService:
             total_deletions=total_deletions,
             total_changes=total_additions + total_deletions,
         )
+
+    async def get_pull_request_diff_ranges(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        pr_number: int,
+    ) -> list[FileDiffRange]:
+        """Retrieve exact modified line ranges for files changed in a pull request.
+
+        Parses unified diff patches from each PR file to provide symbol-level blast
+        radius inputs (Week 3 Day 2).
+        """
+        from app.services.git_branch import parse_unified_diff
+
+        pr_diff = await self.get_pull_request_diff(repository_id, user_id, pr_number)
+        result: list[FileDiffRange] = []
+
+        for pr_file in pr_diff.files:
+            if pr_file.patch:
+                parsed = parse_unified_diff(pr_file.patch)
+                if parsed:
+                    for f in parsed:
+                        if f.file_path == "unknown":
+                            f.file_path = pr_file.filename
+                        f.status = pr_file.status
+                    result.extend(parsed)
+                else:
+                    result.append(
+                        FileDiffRange(
+                            file_path=pr_file.filename,
+                            status=pr_file.status,
+                            diff_ranges=[],
+                            additions=pr_file.additions,
+                            deletions=pr_file.deletions,
+                            patch=pr_file.patch,
+                        )
+                    )
+            else:
+                result.append(
+                    FileDiffRange(
+                        file_path=pr_file.filename,
+                        status=pr_file.status,
+                        diff_ranges=[],
+                        additions=pr_file.additions,
+                        deletions=pr_file.deletions,
+                    )
+                )
+
+        return result
+
 
     async def list_pull_requests(
         self,
