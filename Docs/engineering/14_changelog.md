@@ -625,11 +625,55 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
 
+## Week 3 Changes
 
+---
 
+### [W3-Day1] 2026-10-27 — Workspace & Sandbox Architecture Audit, WorkspaceManager Interface & Resource Guardrails
+**Type:** Feature / Architecture & Isolation  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceStatus`, `WorkspaceConfig`, `ResourceLimits`, `WorkspacePathGuard`, and `WorkspaceMetadata` Pydantic schemas.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `WorkspaceManager` interface providing isolated directory provisioning under `.workspaces/task-<task_id>/`.
+  - Built path traversal containment and resource limits enforcement.
+- `Docs/workspace_sandbox_architecture_audit.md`:
+  - Authored comprehensive architectural audit for workspace and sandbox isolation.
+- `backend/tests/test_prit_w3_d1_workspace.py`:
+  - 38 unit and integration tests verifying workspace creation, boundary enforcement, and cleanup.
 
+**Impact:** Provides secure, isolated workspace directory provisioning for task execution and safe agent tool containment.
 
+**Related Docs:** `Docs/workspace_sandbox_architecture_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
 
+### [W3-Day2] 2026-10-28 — Symbol-Level Blast Radius Engine, Test Discovery Planner & Task Planning Context
+**Type:** Feature / Analysis & Planning  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/planner_context.py`:
+  - Implemented `LineRange`, `FileDiffRange`, `TaskDiffRanges`, `AffectedSymbol`, `RiskLevel`, `RiskAssessment`, `ProposedTest`, `TestExecutionPlan` (with `__test__ = False`), `TaskImpactAssessment`, and `TaskPlanningContext` Pydantic schemas.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all planner context schemas in public schemas package.
+- `backend/scanner/symbol_blast_radius.py`:
+  - Implemented `SymbolBlastRadiusEngine` with 1-indexed interval intersection (`map_diff_ranges_to_symbols`), multi-hop BFS graph traversal across dependency edges (`compute_symbol_blast_radius`) with cycle protection, and multi-tier risk evaluation (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+- `backend/scanner/task_test_planner.py`:
+  - Implemented `TaskTestPlanner` providing framework detection (`pytest`, `unittest`, `jest`), reverse test mapping via `FileTestMapper`, missing coverage discovery for modified symbols, standardized test proposals, and CLI command formulation.
+- `backend/scanner/workspace_preflight.py`:
+  - Implemented `WorkspaceBaseValidator` providing base-revision SHA validation, workspace path boundary confinement (`WorkspacePathGuard`), framework detection, and lifecycle status validation.
+- `backend/scanner/__init__.py`:
+  - Re-exported `SymbolBlastRadiusEngine`, `TaskTestPlanner`, `WorkspaceBaseValidator`, and `WorkspacePreflightResult`.
+- `backend/review/blast_radius.py`:
+  - Enhanced existing `BlastRadiusEngine` with `compute_symbols()` delegating to `SymbolBlastRadiusEngine` while maintaining full backward compatibility.
+- `Docs/task_planning_blast_radius_audit.md`:
+  - Authored comprehensive Week 3 Day 2 Architecture, Blast Radius & Test Planning Report with mathematical models, component specifications, and SLA benchmarks.
+- `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`:
+  - 35 comprehensive unit/integration tests covering line-range matching, multi-hop BFS, recursion/cycle safety, risk tiers, framework detection, test discovery, proposed tests, pre-flight checks, schema validation, and real-world multi-language fixtures.
 
+**Impact:** Ingests Git diff line ranges from Parth (`feat(git): Week 3 Day 2`) and AST symbols to deliver symbol-level impact assessment, automated test execution planning, and pre-flight workspace validation for Meet's `TaskPlanner` and human approval gate.
+
+**Related Docs:** `Docs/task_planning_blast_radius_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
