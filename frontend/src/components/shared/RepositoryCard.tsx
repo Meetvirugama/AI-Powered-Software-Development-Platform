@@ -194,7 +194,7 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
         </div>
       )}
 
-      {/* Action Buttons */}
+      {/* Action Buttons: strictly 2 consistent enterprise actions */}
       <div className="mt-auto flex gap-2 pt-1">
         <button
           onClick={() => navigate(`/app/repositories/${repo.id}`)}
@@ -205,31 +205,41 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
           View
         </button>
 
-        {isFailed || isNotSynced ? (
+        {isSyncing ? (
+          <button
+            disabled
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-amber-500/15 border border-amber-500/30 px-3 py-2 text-xs font-medium text-amber-500 cursor-not-allowed opacity-90"
+            aria-label={`Syncing ${repo.name}`}
+          >
+            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+            <span>Syncing…</span>
+          </button>
+        ) : isFailed ? (
           <button
             onClick={handleSync}
-            disabled={isSyncing}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-destructive px-3 py-2 text-xs font-medium text-destructive-foreground transition-colors hover:bg-destructive/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
+            aria-label={`Retry sync for ${repo.name}`}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Retry Sync</span>
+          </button>
+        ) : isNotSynced ? (
+          <button
+            onClick={handleSync}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
             aria-label={`Sync ${repo.name}`}
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} />
-            {isSyncing ? 'Syncing…' : isFailed ? 'Retry Sync' : 'Sync Now'}
+            <RefreshCw className="h-3.5 w-3.5" />
+            <span>Sync Now</span>
           </button>
         ) : (
           <button
             onClick={() => navigate(`/app/repositories/${repo.id}/chat`)}
-            disabled={!isSynced}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isSynced
-                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                : "bg-muted text-muted-foreground cursor-not-allowed opacity-60"
-            )}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring shadow-xs"
             aria-label={`Ask about ${repo.name}`}
-            title={!isSynced ? "Sync repository first to use AI chat" : undefined}
           >
             <MessageSquare className="h-3.5 w-3.5" />
-            Ask AI
+            <span>Ask AI</span>
           </button>
         )}
       </div>
