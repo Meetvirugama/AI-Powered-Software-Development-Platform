@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -29,11 +31,14 @@ from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact
 from app.integrations.github.client import GitHubAPIError, GitHubClient
 from app.integrations.github.schemas import (
+    BaseRevisionValidationResponse,
     BranchIsolationCheck,
     DiffStatus,
     FileDiffRange,
     LineRange,
     PRMetadata,
+    TaskBranchIsolationRequest,
+    TaskBranchIsolationResponse,
     TaskDiffRanges,
 )
 from app.models.github_installation import GitHubInstallation
@@ -43,6 +48,7 @@ from app.repositories.pull_request_repository import PullRequestRepository
 logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "ai_platform_workspaces"
 _PROTECTED_SYSTEM_PREFIXES: tuple[str, ...] = (
     "/etc",
     "/private/etc",
@@ -54,6 +60,7 @@ _PROTECTED_SYSTEM_PREFIXES: tuple[str, ...] = (
 )
 _SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,200}$")
 _SAFE_TASK_ID_RE = re.compile(r"[^A-Za-z0-9._-]")
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 
 
 @dataclass(frozen=True)
@@ -182,6 +189,42 @@ def _validate_safe_workspace_path(workspace_path: str | Path) -> Path:
             f"Workspace path does not exist or is not a directory: {workspace_path}",
         )
     return path
+
+
+def create_isolated_task_workspace(
+    base_dir: Path | str,
+    task_id: UUID | str,
+) -> Path:
+    """Create an isolated workspace directory .workspaces/task-{id} with path traversal protection (F33)."""
+    raw_base = str(base_dir or "").strip()
+    if not raw_base or "\x00" in raw_base:
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid base directory for workspace.")
+
+    normalized_base = raw_base.replace("\\", "/").split("/")
+    if ".." in normalized_base:
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Path traversal ('..') is not allowed in base_dir.")
+
+    clean_task_id = str(task_id).strip()
+    if not clean_task_id or "\x00" in clean_task_id or ".." in clean_task_id or clean_task_id.startswith("-"):
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid task_id for workspace.")
+
+    branch_name = format_agent_branch_name(clean_task_id)
+    short_task_id = branch_name.removeprefix("agent/task-")
+
+    base_path = Path(raw_base).resolve()
+    ws_parent = (base_path / ".workspaces").resolve()
+    ws_path = (ws_parent / f"task-{short_task_id}").resolve()
+
+    # Path traversal guard: must be strictly inside base_path / ".workspaces"
+    try:
+        if not ws_path.is_relative_to(ws_parent):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Path traversal escape detected in workspace creation.")
+    except AttributeError:
+        if not str(ws_path).startswith(str(ws_parent)):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Path traversal escape detected in workspace creation.")
+
+    ws_path.mkdir(parents=True, exist_ok=True)
+    return ws_path
 
 
 class GitBranchService:
@@ -337,28 +380,11 @@ class GitBranchService:
                 status="ready",
             )
 
-        # Resolve latest commit SHA of source branch only when creating new branch
-        try:
-            branch_info = await client.get_branch(repo.owner, repo.name, source_branch)
-            source_sha = branch_info.get("commit", {}).get("sha") if isinstance(branch_info, dict) else None
-            if not source_sha:
-                ref_info = await client.get_ref(repo.owner, repo.name, f"heads/{source_branch}")
-                if isinstance(ref_info, dict):
-                    source_sha = ref_info.get("object", {}).get("sha")
-        except GitHubAPIError as exc:
-            raise APIError(
-                502,
-                ErrorCode.SERVICE_UNAVAILABLE,
-                f"Failed to resolve base branch '{source_branch}': {exc}",
-                retryable=exc.retryable,
-            ) from exc
-
-        if not source_sha:
-            raise APIError(
-                500,
-                ErrorCode.INTERNAL_SERVER_ERROR,
-                f"Could not determine commit SHA for base branch '{source_branch}'.",
-            )
+        source_branch, source_sha, _ = await self.resolve_base_revision(
+            repository_id=repository_id,
+            base_revision=base_branch,
+            user_id=user_id,
+        )
 
         # Create branch ref pointing to source_sha
         try:
@@ -835,6 +861,212 @@ class GitBranchService:
             base_sha=None,
             conflicts_with_protected=False,
             error_message=None,
+        )
+
+    # ----- Week 3 Day 3: Base Revision Resolution & Task Branch Isolation ---
+
+    async def resolve_base_revision(
+        self,
+        repository_id: UUID | str,
+        base_revision: str | None = None,
+        user_id: UUID | str | None = None,
+    ) -> tuple[str, str, str]:
+        """Resolve and validate a base revision (branch name or commit SHA).
+
+        Returns:
+            tuple[str, str, str]: (effective_base_ref, resolved_commit_sha, ref_type)
+            where ref_type is "branch" | "commit" | "tag"
+        """
+        repo = self._get_repository(repository_id, user_id)
+        client = await self._get_client_for_repo(repo)
+
+        # Default branch if none specified
+        if not base_revision or not str(base_revision).strip():
+            effective_base = repo.default_branch or "main"
+            clean_ref = _validate_safe_git_ref(effective_base, "default_branch")
+            try:
+                branch_info = await client.get_branch(repo.owner, repo.name, clean_ref)
+                sha = branch_info.get("commit", {}).get("sha") if isinstance(branch_info, dict) else None
+                if not sha:
+                    ref_info = await client.get_ref(repo.owner, repo.name, f"heads/{clean_ref}")
+                    if isinstance(ref_info, dict):
+                        sha = ref_info.get("object", {}).get("sha")
+            except GitHubAPIError as exc:
+                if exc.status_code == 404:
+                    raise APIError(
+                        404,
+                        ErrorCode.INVALID_REQUEST,
+                        f"Default branch '{clean_ref}' not found in repository.",
+                    ) from exc
+                raise APIError(
+                    502,
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    f"Failed to resolve default branch: {exc}",
+                    retryable=exc.retryable,
+                ) from exc
+
+            if not sha:
+                raise APIError(
+                    500,
+                    ErrorCode.INTERNAL_SERVER_ERROR,
+                    f"Could not determine commit SHA for default branch '{clean_ref}'.",
+                )
+            return clean_ref, sha, "branch"
+
+        raw_rev = str(base_revision).strip()
+        # Security: reject traversal, null bytes, CLI flags
+        if "\x00" in raw_rev or ".." in raw_rev or raw_rev.startswith("-"):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Invalid base_revision: '{base_revision}'.")
+
+        # 1. Check if it is a commit SHA (hex string 7..64 chars)
+        if _COMMIT_SHA_RE.match(raw_rev):
+            try:
+                commit_info = await client.get_commit(repo.owner, repo.name, raw_rev)
+                sha = commit_info.get("sha", raw_rev) if isinstance(commit_info, dict) else raw_rev
+                return raw_rev, sha, "commit"
+            except GitHubAPIError as exc:
+                if exc.status_code != 404:
+                    raise APIError(
+                        502,
+                        ErrorCode.SERVICE_UNAVAILABLE,
+                        f"Failed to resolve commit SHA '{raw_rev}': {exc}",
+                        retryable=exc.retryable,
+                    ) from exc
+
+        # 2. Check as branch or tag ref
+        clean_ref = _validate_safe_git_ref(raw_rev.removeprefix("refs/heads/"), "base_revision")
+        try:
+            branch_info = await client.get_branch(repo.owner, repo.name, clean_ref)
+            sha = branch_info.get("commit", {}).get("sha") if isinstance(branch_info, dict) else None
+            if sha:
+                return clean_ref, sha, "branch"
+        except GitHubAPIError as exc:
+            if exc.status_code != 404:
+                raise APIError(
+                    502,
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    f"Failed to resolve branch '{clean_ref}': {exc}",
+                    retryable=exc.retryable,
+                ) from exc
+
+        # Try heads ref
+        try:
+            ref_info = await client.get_ref(repo.owner, repo.name, f"heads/{clean_ref}")
+            if isinstance(ref_info, dict):
+                sha = ref_info.get("object", {}).get("sha")
+                if sha:
+                    return clean_ref, sha, "branch"
+        except GitHubAPIError:
+            pass
+
+        # Try tags ref
+        try:
+            tag_info = await client.get_ref(repo.owner, repo.name, f"tags/{clean_ref}")
+            if isinstance(tag_info, dict):
+                sha = tag_info.get("object", {}).get("sha")
+                if sha:
+                    return clean_ref, sha, "tag"
+        except GitHubAPIError:
+            pass
+
+        raise APIError(404, ErrorCode.INVALID_REQUEST, f"Base revision '{raw_rev}' not found in repository.")
+
+    async def setup_task_branch_isolation(
+        self,
+        repository_id: UUID | str,
+        task_id: UUID | str,
+        base_revision: str | None = None,
+        workspace_path: str | Path | None = None,
+        user_id: UUID | str | None = None,
+        create_workspace: bool = False,
+    ) -> TaskBranchIsolationResponse:
+        """Create and isolate agent/task-{id} branch from validated base revision.
+
+        Fulfills Parth's Week 3 Day 3 deliverable:
+        - Resolves and validates base revision (commit SHA, branch, tag, or repo default).
+        - Verifies branch isolation prerequisites (Rule 563: agent branch never conflicts with protected branches).
+        - Ensures remote branch agent/task-{id} exists pointing to base SHA (idempotent).
+        - When workspace_path is supplied, checks out/creates the branch locally with path-traversal guards.
+        """
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+
+        # 1. Branch naming and Rule 563 check
+        branch_name = format_agent_branch_name(task_uuid)
+        iso_check = self.verify_branch_isolation(repo_uuid, task_uuid, base_revision, user_id)
+        if not iso_check.is_isolated or iso_check.conflicts_with_protected:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                iso_check.error_message or f"Agent branch {branch_name} conflicts with protected branch.",
+            )
+
+        # 2. Base revision validation and SHA resolution
+        base_ref, base_sha, _ = await self.resolve_base_revision(repo_uuid, base_revision, user_id)
+
+        # 3. Remote branch setup on GitHub
+        repo = self._get_repository(repo_uuid, user_id)
+        client = await self._get_client_for_repo(repo)
+
+        branch_exists_remote = await self.branch_exists(repo_uuid, branch_name, user_id)
+        status = "ready"
+        if not branch_exists_remote:
+            try:
+                await client.create_branch(repo.owner, repo.name, branch_name, base_sha)
+                logger.info(
+                    "Created isolated agent branch %s at base SHA %s for repo %s",
+                    branch_name,
+                    base_sha,
+                    repo_uuid,
+                )
+                status = "created"
+            except GitHubAPIError as exc:
+                raise APIError(
+                    502,
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    f"Failed to create agent branch '{branch_name}': {exc}",
+                    retryable=exc.retryable,
+                ) from exc
+
+        # 4. Workspace setup if provided
+        final_ws_path: str | None = None
+        if workspace_path is not None or create_workspace:
+            if workspace_path is None:
+                ws_dir = _DEFAULT_WORKSPACE_ROOT / f"task-{branch_name.removeprefix('agent/task-')}"
+                ws_dir.mkdir(parents=True, exist_ok=True)
+                target_ws = ws_dir
+            else:
+                target_ws = Path(workspace_path)
+                if create_workspace and not target_ws.exists():
+                    target_ws.mkdir(parents=True, exist_ok=True)
+
+            validated_ws = _validate_safe_workspace_path(target_ws)
+            final_ws_path = str(validated_ws)
+
+            # If workspace has .git, checkout / switch to branch_name
+            if (validated_ws / ".git").exists():
+                code, out, err = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], validated_ws)
+                current_head = out.strip()
+                if current_head != branch_name:
+                    bcode, bout, _ = await self._run_git(["branch", "--list", branch_name], validated_ws)
+                    if branch_name in bout:
+                        await self._run_git(["checkout", branch_name], validated_ws)
+                    else:
+                        ccode, _, _ = await self._run_git(["checkout", "-b", branch_name, base_sha], validated_ws)
+                        if ccode != 0:
+                            await self._run_git(["checkout", "-b", branch_name], validated_ws)
+
+                status = "isolated"
+
+        return TaskBranchIsolationResponse(
+            task_id=task_uuid,
+            repository_id=repo_uuid,
+            branch_name=branch_name,
+            base_branch=base_ref,
+            base_sha=base_sha,
+            workspace_path=final_ws_path,
+            is_isolated=True,
+            status=status,
         )
 
 

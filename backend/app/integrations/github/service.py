@@ -720,6 +720,43 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         client = GitHubClient(token)
         return await client.compare_commits(owner, repo, base, head)
 
+    async def create_task_branch(
+        self,
+        owner: str,
+        repo: str,
+        task_id: UUID | str,
+        base_revision: str | None = None,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Create an isolated task branch agent/task-{id} from base_revision (F33 / W3-04)."""
+        import re
+        from app.services.git_branch import format_agent_branch_name
+
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        branch_name = format_agent_branch_name(task_id)
+
+        # Rule 563: Reject collision with protected branches
+        if branch_name.lower() in {"main", "master", "develop", "production", "staging"}:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Task branch {branch_name} conflicts with protected branch.")
+
+        # Resolve base revision
+        source_ref = (base_revision or "main").strip()
+        sha: str | None = None
+        if re.match(r"^[0-9a-fA-F]{7,64}$", source_ref):
+            commit = await client.get_commit(owner, repo, source_ref)
+            sha = commit.get("sha", source_ref)
+        else:
+            clean_b = source_ref.removeprefix("refs/heads/")
+            branch = await client.get_branch(owner, repo, clean_b)
+            sha = branch.get("commit", {}).get("sha")
+
+        if not sha:
+            raise APIError(500, ErrorCode.INTERNAL_SERVER_ERROR, f"Could not determine SHA for base {source_ref}")
+
+        created_ref = await client.create_branch(owner, repo, branch_name, sha)
+        return {"branch_name": branch_name, "base_branch": source_ref, "base_sha": sha, "ref": created_ref}
+
     # ------------------------------------------------------------------
     # Week 3 Day 1 (F31): GitHub Issue Integration
     # ------------------------------------------------------------------

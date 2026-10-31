@@ -625,8 +625,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 ## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
 
 - ✅ Prit: `WorkspaceManager` execution start, human approval gate, lifecycle transitions, command allowlist runner, timeline events & Devu `ToolRouter` policy bridge (`Docs/workspace_execution_start_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/command_runner.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d3_workspace_execution.py`)
-- ⬜ Parth: Task branch isolation creating `agent/task-<id>` from base revision
-
+- ✅ Parth: Task branch isolation creating `agent/task-<id>` from base revision (`GitBranchService.setup_task_branch_isolation()`, `resolve_base_revision()`, `create_isolated_task_workspace()`, `POST /api/v1/repositories/{id}/source/task-branch/isolate`, `test_week3_day3_task_branch_isolation.py`, `PR #149`)
 - ⬜ Devu: `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas
 - ⬜ Meet: Agent execution loop executing approved plan steps with loop detection
 - ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
