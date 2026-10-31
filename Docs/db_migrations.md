@@ -12,6 +12,8 @@ We use Alembic for managing database migrations with PostgreSQL.
 | `cb4e2a7d0f31` | `cb4e2a7d0f31_add_sync_jobs.py` | Adds sync_jobs table for repository sync tracking |
 | `e7b8c9d0f1a2` | `e7b8c9d0f1a2_add_code_chunks_and_memory.py` | Adds memory_entries table, vector indexes, and chunk enhancements |
 | `f1c2d3e4b5a6` | `f1c2d3e4b5a6_add_analysis_runs_and_findings.py` | Developer Intelligence Suite — analysis_runs & analysis_findings |
+| `b627460d74e0` | `b627460d74e0_add_pull_requests_table.py` | Pull Requests — pull_requests table for commit staging and PR metadata |
+| `b3c4d5e6f7a8` | `b3c4d5e6f7a8_add_workflow_automation_tables.py` | Workflow Automation & Tasks — tasks, task_plans, approvals, workspaces, checkpoints |
 
 ## How to Create a Migration
 
@@ -62,6 +64,19 @@ alembic downgrade <revision_id>
 | `memory_entries` | `e7b8c9d0f1a2_add_code_chunks_and_memory` | Repository memory, architectural decisions, and learnings |
 | `analysis_runs` | `f1c2d3e4b5a6_add_analysis_runs_and_findings` | Analysis execution runs, targets, source revisions & outputs |
 | `analysis_findings` | `f1c2d3e4b5a6_add_analysis_runs_and_findings` | Categorized defect & review findings with source references |
+| `pull_requests` | `b627460d74e0_add_pull_requests_table` | Pull request metadata records and commit staging linkage |
+| `tasks` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Development tasks with source traceability and repair counters |
+| `task_plans` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Versioned implementation steps, expected files, test targets, and risks |
+| `task_approvals` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Immutable human plan approvals and rejections |
+| `workspaces` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Task workspace environments, isolation paths, and branches |
+| `task_executions` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Worker execution attempts and execution statuses |
+| `tool_invocations` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Controlled tool router executions and audit logs |
+| `test_runs` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Test execution commands, outcomes, exit codes, and sanitized logs |
+| `repair_attempts` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Bounded repair loop accounting (max 3 attempts) |
+| `verification_results` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Multi-dimensional checks tied strictly to verified revisions |
+| `task_checkpoints` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Recovery state snapshots with automated credential scrubbing |
+| `task_events` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Chronological audit timeline and state transition events |
+| `task_pull_requests` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Created GitHub Draft PR records and head revisions |
 
 ## Week 2 Day 7 — Migration Consistency & Index Audit
 

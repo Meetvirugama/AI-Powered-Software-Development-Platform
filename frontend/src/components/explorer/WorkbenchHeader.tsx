@@ -1,14 +1,10 @@
 import { Link } from 'react-router-dom';
 import { FileCode, Sparkles, History, MessageSquare, Maximize2 } from 'lucide-react';
-import { cn } from '../../lib/utils';
 import type { RepositoryFile } from '../../types/api';
-import type { AnalysisFeatureType } from '../../types/analysis';
 
 export interface WorkbenchHeaderProps {
   repositoryId: string;
   selectedFile: RepositoryFile | null;
-  activeFeature: AnalysisFeatureType | null;
-  onToggleAnalysisPanel: () => void;
   onOpenHistory: () => void;
   onOpenFullscreen: () => void;
 }
@@ -16,8 +12,6 @@ export interface WorkbenchHeaderProps {
 export function WorkbenchHeader({
   repositoryId,
   selectedFile,
-  activeFeature,
-  onToggleAnalysisPanel,
   onOpenHistory,
   onOpenFullscreen,
 }: WorkbenchHeaderProps) {
@@ -38,23 +32,15 @@ export function WorkbenchHeader({
       <div className="flex items-center gap-1.5 shrink-0">
         {selectedFile && (
           <>
-            {/* Analysis Panel Toggle */}
-            <button
-              type="button"
-              onClick={onToggleAnalysisPanel}
-              className={cn(
-                'inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
-                activeFeature
-                  ? 'bg-primary text-primary-foreground shadow-xs'
-                  : 'bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground'
-              )}
-              title="Toggle Analysis Result Panel"
+            {/* Quick Open in Explain Studio */}
+            <Link
+              to={`/app/repositories/${repositoryId}/explain`}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+              title="Open in Explain Studio"
             >
               <Sparkles className="h-3 w-3" />
-              <span className="hidden sm:inline">
-                {activeFeature ? 'Hide Analysis' : 'Analysis Panel'}
-              </span>
-            </button>
+              <span className="hidden sm:inline">Explain in Studio</span>
+            </Link>
 
             {/* Universal Analysis History Trigger */}
             <button
@@ -91,3 +77,4 @@ export function WorkbenchHeader({
   );
 }
 
+export default WorkbenchHeader;
