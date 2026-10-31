@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -118,6 +120,8 @@ class WorkspaceCommandRunner:
             "WINDIR",
             "TEMP",
             "TMP",
+            "APPDATA",
+            "LOCALAPPDATA",
             "USERPROFILE",
             "HOMEPATH",
             "HOMEDRIVE",
@@ -170,6 +174,8 @@ class WorkspaceCommandRunner:
 
         env = self.sanitize_environment(custom_env)
         cmd_list = [command, *args]
+        if command == "pytest" and not shutil.which("pytest"):
+            cmd_list = [sys.executable, "-m", "pytest", *args]
 
         try:
             with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:

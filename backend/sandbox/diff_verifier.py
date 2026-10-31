@@ -394,7 +394,7 @@ class WorkspaceDiffVerifier:
         except Exception:
             pass
 
-        excludes = ["--", ".", ":(exclude)*metadata.json"]
+        excludes = ["--", ".", ":(exclude)*metadata.json", ":(exclude)*__pycache__*", ":(exclude)*.pyc", ":(exclude)*.pytest_cache*"]
 
         # First attempt: diff against base_revision
         cmd = ["git", "-C", str(workspace_path), "diff", base_revision] + excludes
