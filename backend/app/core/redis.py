@@ -16,8 +16,8 @@ def get_redis() -> Redis:
     return Redis.from_url(
         get_settings().redis_url,
         decode_responses=True,
-        socket_connect_timeout=2.0,
-        socket_timeout=2.0,
+        socket_connect_timeout=5.0,
+        socket_timeout=10.0,
     )
 
 
@@ -28,8 +28,8 @@ async def get_redis_async() -> AsyncRedis:
         _async_redis_client = AsyncRedis.from_url(
             get_settings().redis_url,
             decode_responses=True,
-            socket_connect_timeout=2.0,
-            socket_timeout=2.0,
+            socket_connect_timeout=5.0,
+            socket_timeout=10.0,
         )
     return _async_redis_client
 

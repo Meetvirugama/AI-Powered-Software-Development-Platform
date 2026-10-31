@@ -601,17 +601,18 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 1 GitHub Issue Creation & Task Intake
 
-- ⬜ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens
+- ✅ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens & PR interfaces (`PR #139`)
 - ⬜ Yug: `POST /api/v1/repositories/{id}/issues` validating finding ownership and returning issue URL
 - ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
 - ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
 - ✅ Dev: Validated task-intake schema separating requirements, assumptions, and constraints (`backend/app/schemas/task.py`, `backend/app/schemas/verification.py`, `backend/tests/test_dev_w3_day1_task_intake.py`)
-- ⬜ Om: Issue-to-task persistence relationships and foreign keys
+- ✅ Om: Issue-to-task persistence relationships, workflow models, migration `b3c4d5e6f7a8`, and `TaskRepository` (13/13 tests passing)
 - ⬜ Sukun: GitHub issue creation security checks & token confidentiality
 - ⬜ Keval: Acceptance tests for issue creation from bug and review findings
 
 ## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
+- ✅ Parth: Git diff line-range extraction, hunk parser & symbol-level blast radius input provider (`GitBranchService.get_diff_line_ranges()`, `GitHubSourceService.get_pull_request_diff_ranges()`, `GET /api/v1/repositories/{id}/source/diff-ranges`, `test_week3_day2_diff_and_blast_radius_input.py`)
 - ⬜ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis
 - ⬜ Dev: `PlannerSchema` and step dependency validation
 - ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
@@ -623,7 +624,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ⬜ Prit: `WorkspaceManager` managing disposable `.workspaces/task-<id>/` with path traversal guards
 - ⬜ Parth: Task branch isolation creating `agent/task-<id>` from base revision
-- ⬜ Devu: `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas
+- ✅ Devu: Policy-enforced `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas (`backend/agent/tools/router.py`, `backend/tests/test_tool_router.py`)
 - ⬜ Meet: Agent execution loop executing approved plan steps with loop detection
 - ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
 - ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs

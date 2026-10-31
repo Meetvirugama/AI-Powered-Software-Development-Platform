@@ -39,6 +39,7 @@ from app.integrations.github.schemas import (
     DiffStatus,
     FileContentRequest,
     FileContentResponse,
+    FileDiffRange,
     FileTreeResponse,
     PullRequestDiffResponse,
     PullRequestFile,
@@ -84,7 +85,14 @@ class GitHubSourceService:
 
     def __init__(self, db: Session, cache: SourceRevisionCache | None = None) -> None:
         self._db = db
-        self._cache = cache if cache is not None else SourceRevisionCache()
+        if cache is not None:
+            self._cache = cache
+        else:
+            try:
+                from app.core.redis import get_redis
+                self._cache = SourceRevisionCache(redis_client=get_redis())
+            except Exception:
+                self._cache = SourceRevisionCache()
 
     # ----- Authorization helpers -------------------------------------------
 
@@ -604,6 +612,56 @@ class GitHubSourceService:
             total_changes=total_additions + total_deletions,
         )
 
+    async def get_pull_request_diff_ranges(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        pr_number: int,
+    ) -> list[FileDiffRange]:
+        """Retrieve exact modified line ranges for files changed in a pull request.
+
+        Parses unified diff patches from each PR file to provide symbol-level blast
+        radius inputs (Week 3 Day 2).
+        """
+        from app.services.git_branch import parse_unified_diff
+
+        pr_diff = await self.get_pull_request_diff(repository_id, user_id, pr_number)
+        result: list[FileDiffRange] = []
+
+        for pr_file in pr_diff.files:
+            if pr_file.patch:
+                parsed = parse_unified_diff(pr_file.patch)
+                if parsed:
+                    for f in parsed:
+                        if f.file_path == "unknown":
+                            f.file_path = pr_file.filename
+                        f.status = pr_file.status
+                    result.extend(parsed)
+                else:
+                    result.append(
+                        FileDiffRange(
+                            file_path=pr_file.filename,
+                            status=pr_file.status,
+                            diff_ranges=[],
+                            additions=pr_file.additions,
+                            deletions=pr_file.deletions,
+                            patch=pr_file.patch,
+                        )
+                    )
+            else:
+                result.append(
+                    FileDiffRange(
+                        file_path=pr_file.filename,
+                        status=pr_file.status,
+                        diff_ranges=[],
+                        additions=pr_file.additions,
+                        deletions=pr_file.deletions,
+                    )
+                )
+
+        return result
+
+
     async def list_pull_requests(
         self,
         repository_id: UUID,
@@ -715,6 +773,7 @@ class GitHubSourceService:
             number=data.get("number", 0),
             title=redact(data.get("title", "")),
             state=data.get("state", "unknown"),
+            draft=bool(data.get("draft", False)),
             author=user.get("login") if isinstance(user, dict) else None,
             base_ref=base.get("ref") if isinstance(base, dict) else None,
             head_ref=head.get("ref") if isinstance(head, dict) else None,

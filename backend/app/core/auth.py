@@ -67,9 +67,29 @@ class JWTMiddleware(BaseHTTPMiddleware):
             await _try_populate_user_state(request)
             return await call_next(request)
 
-        token = _get_token(request)
+        token, auth_source = _get_token_and_source(request)
         if not token:
             return error_response(401, ErrorCode.UNAUTHORIZED, "Authentication is required.")
+
+        # CSRF Protection: For state-changing requests authenticated by cookies, validate Origin
+        if auth_source == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin")
+            trusted_origins = {o.rstrip("/") for o in get_settings().cors_origins}
+            if origin:
+                if origin.rstrip("/") not in trusted_origins:
+                    logger.warning("untrusted_origin_rejected", extra={"origin": origin, "path": request.url.path})
+                    return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")
+            elif get_settings().is_production:
+                referer = request.headers.get("referer")
+                if referer:
+                    from urllib.parse import urlparse
+                    ref_parsed = urlparse(referer)
+                    ref_origin = f"{ref_parsed.scheme}://{ref_parsed.netloc}".rstrip("/")
+                    if ref_origin not in trusted_origins:
+                        return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")
+                else:
+                    return error_response(403, ErrorCode.FORBIDDEN, "Origin header is required for cookie-authenticated requests.")
+
         try:
             claims = decode_access_token(token)
             jti = str(claims["jti"])
@@ -87,7 +107,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
 
 async def _try_populate_user_state(request: Request) -> None:
     """Opportunistically populate request.state.user_id on public/callback routes when a valid token is present."""
-    token = _get_token(request)
+    token, _ = _get_token_and_source(request)
     if not token:
         return
     try:
@@ -102,9 +122,17 @@ async def _try_populate_user_state(request: Request) -> None:
         pass
 
 
-def _get_token(request: Request) -> str | None:
+def _get_token_and_source(request: Request) -> tuple[str | None, str]:
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() == "bearer" and token:
-        return token
-    return request.cookies.get(get_settings().auth_cookie_name)
+        return token, "bearer"
+    cookie_token = request.cookies.get(get_settings().auth_cookie_name)
+    if cookie_token:
+        return cookie_token, "cookie"
+    return None, "none"
+
+
+def _get_token(request: Request) -> str | None:
+    token, _ = _get_token_and_source(request)
+    return token

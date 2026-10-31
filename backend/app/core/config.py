@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -57,6 +58,7 @@ class Settings(BaseSettings):
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
+    cookie_samesite: str | None = None
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
@@ -73,6 +75,37 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048
+    ai_temperature_default: float = 0.2
+    ai_max_context_tokens: int = 100_000
+    ai_max_repair_attempts: int = 2
+    ai_max_concurrent_calls: int = 10
+
+    @property
+    def active_chat_model(self) -> str:
+        """Resolve active default chat model based on ai_primary_provider."""
+        if (self.ai_primary_provider or "").lower() == "groq":
+            return self.groq_chat_model
+        return self.gemini_chat_model
+
+    @property
+    def fallback_chat_model(self) -> str | None:
+        """Resolve fallback chat model based on ai_fallback_provider."""
+        if not self.ai_fallback_provider:
+            return None
+        if self.ai_fallback_provider.lower() == "groq":
+            return self.groq_chat_model
+        return self.gemini_chat_model
+
+    @model_validator(mode="before")
+    @classmethod
+    def fallback_github_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("github_app_private_key"):
+                for alt in ("github_private_key", "GITHUB_PRIVATE_KEY", "GITHUB_APP_PRIVATE_KEY"):
+                    if data.get(alt):
+                        data["github_app_private_key"] = data[alt]
+                        break
+        return data
 
     @field_validator("ai_primary_provider", "ai_fallback_provider")
     @classmethod
@@ -131,9 +164,33 @@ class Settings(BaseSettings):
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
         return [o for o in origins if o != "*"]
 
+    @property
+    def effective_cookie_samesite(self) -> str:
+        if self.cookie_samesite:
+            return self.cookie_samesite.lower()
+        return "none" if self.cookie_secure else "lax"
+
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
-        """Fail closed on insecure production defaults (F-04)."""
+        """Fail closed on insecure production defaults and validate configuration policies (F-04)."""
+        # Validate SameSite configuration
+        if self.cookie_samesite:
+            samesite_lower = self.cookie_samesite.lower().strip()
+            if samesite_lower not in ("lax", "strict", "none"):
+                raise ValueError(
+                    f"Invalid COOKIE_SAMESITE: '{self.cookie_samesite}'. Supported values are 'lax', 'strict', or 'none'."
+                )
+        if self.effective_cookie_samesite == "none" and not self.cookie_secure:
+            raise ValueError(
+                "COOKIE_SECURE must be True when COOKIE_SAMESITE is 'none' for browser security."
+            )
+
+        # Validate database connection pool settings
+        if self.db_pool_size <= 0:
+            raise ValueError("DB_POOL_SIZE must be greater than 0.")
+        if self.db_pool_timeout <= 0:
+            raise ValueError("DB_POOL_TIMEOUT must be greater than 0.")
+
         is_prod = self.app_env.lower() in ("production", "prod")
         if is_prod:
             if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
@@ -162,6 +219,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production configuration error: JWT_EXPIRE_MINUTES must not exceed 1440 minutes in production."
                 )
+            if self.redis_url:
+                redis_url_lower = self.redis_url.lower().strip()
+                if any(cloud in redis_url_lower for cloud in ("upstash.io", "redislabs.com", "azure.com", "amazonaws.com")):
+                    if not redis_url_lower.startswith("rediss://"):
+                        raise ValueError(
+                            "Production configuration error: Remote production Redis connection must use TLS (rediss://)."
+                        )
         return self
 
 
