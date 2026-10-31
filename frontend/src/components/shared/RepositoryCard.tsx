@@ -88,7 +88,6 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
   const isSyncing = repo.sync_status === 'SYNCING' || isSyncPending;
   const isFailed = repo.sync_status === 'FAILED';
   const isNotSynced = repo.sync_status === 'NOT_SYNCED';
-  const isSynced = repo.sync_status === 'SYNCED';
 
   const status = syncStatusConfig(isSyncing ? 'SYNCING' : repo.sync_status);
 
