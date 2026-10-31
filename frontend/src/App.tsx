@@ -26,10 +26,11 @@ const RepositoryTestStudio = lazy(() =>
 const RepositoryReviewStudio = lazy(() =>
   import('./pages/RepositoryReviewStudio').then((m) => ({ default: m.RepositoryReviewStudio }))
 );
+const NotFound = lazy(() => import('./pages/NotFound').then((m) => ({ default: m.NotFound })));
 
 function RouteFallback() {
   return (
-    <div className="flex h-64 w-full items-center justify-center">
+    <div className="flex min-h-screen w-full items-center justify-center bg-background">
       <LoadingSpinner size="lg" label="Loading page..." />
     </div>
   );
@@ -66,8 +67,8 @@ export function App() {
             {/* Root redirect */}
             <Route path="/" element={<Navigate to="/app/dashboard" replace />} />
 
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
+            {/* Catch-all 404 */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

@@ -114,6 +114,16 @@ class GitHubClient:
                             rate_limited=True,
                         )
 
+                if response.status_code == 429:
+                    retry_after = response.headers.get("retry-after", "")
+                    reset_time = response.headers.get("x-ratelimit-reset", "")
+                    raise GitHubAPIError(
+                        f"GitHub API rate limit exceeded (HTTP 429). Retry-After: {retry_after or reset_time}s.",
+                        status_code=429,
+                        retryable=True,
+                        rate_limited=True,
+                    )
+
                 if response.status_code == 404:
                     raise GitHubAPIError(
                         f"Resource not found: {path}",
@@ -277,6 +287,73 @@ class GitHubClient:
             params=params,
         )
 
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+        draft: bool = True,
+    ) -> dict[str, Any]:
+        """Create a pull request on GitHub (defaults to Draft PR)."""
+        payload = {
+            "title": title,
+            "head": head,
+            "base": base,
+            "body": body,
+            "draft": draft,
+        }
+        return await self._request("POST", f"/repos/{owner}/{repo}/pulls", json_body=payload)
+
+    async def update_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str | None = None,
+        title: str | None = None,
+        state: str | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing pull request on GitHub."""
+        payload: dict[str, Any] = {}
+        if body is not None:
+            payload["body"] = body
+        if title is not None:
+            payload["title"] = title
+        if state is not None:
+            payload["state"] = state
+        return await self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{pr_number}", json_body=payload)
+
+    # ----- Issues (F-23) ---------------------------------------------------
+
+    async def create_issue(
+        self,
+        owner: str,
+        repo: str,
+        title: str,
+        body: str,
+        labels: list[str] | None = None,
+        assignees: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Create a new issue on GitHub (e.g. from AI code review finding F-23)."""
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if labels:
+            payload["labels"] = labels
+        if assignees:
+            payload["assignees"] = assignees
+        return await self._request("POST", f"/repos/{owner}/{repo}/issues", json_body=payload)
+
+    async def get_issue(
+        self,
+        owner: str,
+        repo: str,
+        issue_number: int,
+    ) -> dict[str, Any]:
+        """Retrieve issue details by issue number."""
+        return await self._request("GET", f"/repos/{owner}/{repo}/issues/{issue_number}")
+
     # ----- Git References and Branches ------------------------------------
 
     async def get_branch(
@@ -333,6 +410,16 @@ class GitHubClient:
         clean_ref = ref.removeprefix("refs/")
         return await self._request("GET", f"/repos/{owner}/{repo}/git/ref/{clean_ref}")
 
+    async def compare_commits(
+        self,
+        owner: str,
+        repo: str,
+        base: str,
+        head: str,
+    ) -> dict[str, Any]:
+        """Compare two commits or branches: GET /repos/{owner}/{repo}/compare/{base}...{head}."""
+        return await self._request("GET", f"/repos/{owner}/{repo}/compare/{base}...{head}")
+
     # ----- Installation token management -----------------------------------
 
     @staticmethod
@@ -358,9 +445,18 @@ class GitHubClient:
             "exp": now + (10 * 60),
             "iss": settings.github_app_id,
         }
+        pem_key = (
+            settings.github_app_private_key.strip()
+            .strip('"')
+            .strip("'")
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .strip()
+        )
         app_jwt = jose_jwt.encode(
             payload,
-            settings.github_app_private_key,
+            pem_key,
             algorithm="RS256",
         )
 

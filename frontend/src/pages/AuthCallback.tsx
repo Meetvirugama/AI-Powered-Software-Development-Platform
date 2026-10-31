@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { getSafeRedirectPath } from '../lib/authRedirect';
 
 export function AuthCallback() {
   const { isAuthenticated, isLoading, sessionError, retrySessionCheck } = useAuth();
@@ -21,10 +22,8 @@ export function AuthCallback() {
       let targetPath = '/app/dashboard';
       if (typeof sessionStorage !== 'undefined') {
         const savedRedirect = sessionStorage.getItem('auth_redirect');
-        if (savedRedirect && savedRedirect.startsWith('/')) {
-          targetPath = savedRedirect;
-          sessionStorage.removeItem('auth_redirect');
-        }
+        targetPath = getSafeRedirectPath(savedRedirect);
+        sessionStorage.removeItem('auth_redirect');
       }
       navigate(targetPath, { replace: true });
     }
@@ -44,7 +43,9 @@ export function AuthCallback() {
       <div className="flex flex-col items-center justify-center min-h-screen gap-4 bg-background p-6 text-center text-foreground">
         <div className="w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-sm space-y-4">
           <h2 className="text-base font-semibold">Sign in Verification Delayed</h2>
-          <p className="text-xs text-muted-foreground">{sessionError}</p>
+          <p className="text-xs text-muted-foreground">
+            We could not verify your session with GitHub. Please check your network connection and try again.
+          </p>
           <div className="flex items-center justify-center gap-3 pt-2">
             <button
               onClick={() => retrySessionCheck()}
