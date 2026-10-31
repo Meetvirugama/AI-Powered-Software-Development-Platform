@@ -22,14 +22,20 @@ from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceStatus,
+    WorkspaceCommitRequest,
+    WorkspaceDraftPRRequest,
+    WorkspacePushRequest,
     WorkspaceTestExecutionRequest,
     WorkspaceToolPolicyRequest,
     WorkspaceToolPolicyResult,
 )
+from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
     WorkspaceError,
     WorkspacePathEscapeError,
     WorkspacePolicyViolationError,
+    WorkspaceProtectedBranchError,
+    WorkspacePublicationUnauthorizedError,
     WorkspaceStateError,
 )
 from sandbox.path_guard import WorkspacePathGuard
@@ -47,6 +53,11 @@ TOOL_LIST_FILES = "list_files"
 TOOL_EXECUTE_COMMAND = "execute_command"
 TOOL_RUN_TESTS = "run_tests"
 TOOL_RECORD_REPAIR = "record_repair_attempt"
+TOOL_INSPECT_DIFF = "inspect_git_diff"
+TOOL_VALIDATE_DIFF = "validate_task_diff"
+TOOL_COMMIT_CHANGES = "commit_task_changes"
+TOOL_PUSH_BRANCH = "push_task_branch"
+TOOL_CREATE_DRAFT_PR = "create_draft_pr"
 
 CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_READ_FILE,
@@ -57,6 +68,11 @@ CANONICAL_WORKSPACE_TOOLS: tuple[str, ...] = (
     TOOL_EXECUTE_COMMAND,
     TOOL_RUN_TESTS,
     TOOL_RECORD_REPAIR,
+    TOOL_INSPECT_DIFF,
+    TOOL_VALIDATE_DIFF,
+    TOOL_COMMIT_CHANGES,
+    TOOL_PUSH_BRANCH,
+    TOOL_CREATE_DRAFT_PR,
 )
 
 
@@ -157,7 +173,40 @@ class WorkspaceToolPolicyBridge:
                 if not patch_summary:
                     raise WorkspacePolicyViolationError("Missing required argument: 'patch_summary'")
 
-        except (WorkspacePathEscapeError, WorkspacePolicyViolationError, WorkspaceError) as exc:
+            elif clean_name == TOOL_COMMIT_CHANGES:
+                message = str(arguments.get("message", "")).strip()
+                if not message:
+                    raise WorkspacePolicyViolationError("Missing required argument: 'message'")
+                branch = str(arguments.get("branch_name", "")).strip().removeprefix("refs/heads/").lower()
+                if branch and branch in PROTECTED_BRANCHES:
+                    raise WorkspaceProtectedBranchError(f"Cannot commit directly to protected branch '{branch}' (ADR-010).")
+
+            elif clean_name == TOOL_PUSH_BRANCH:
+                branch = str(arguments.get("branch_name", "")).strip().removeprefix("refs/heads/").lower()
+                if not branch:
+                    raise WorkspacePolicyViolationError("Missing required argument: 'branch_name'")
+                if branch in PROTECTED_BRANCHES:
+                    raise WorkspaceProtectedBranchError(f"Cannot push directly to protected branch '{branch}' (ADR-010).")
+                if not arguments.get("publication_authorized", False):
+                    raise WorkspacePublicationUnauthorizedError(
+                        "Push blocked: explicit human publication authorization is required (ADR-010, Docs/week3.md §6 F37)."
+                    )
+
+            elif clean_name == TOOL_CREATE_DRAFT_PR:
+                title = str(arguments.get("title", "")).strip()
+                head_branch = str(arguments.get("head_branch", "")).strip().removeprefix("refs/heads/").lower()
+                if not title:
+                    raise WorkspacePolicyViolationError("Missing required argument: 'title'")
+                if not head_branch:
+                    raise WorkspacePolicyViolationError("Missing required argument: 'head_branch'")
+                if head_branch in PROTECTED_BRANCHES:
+                    raise WorkspaceProtectedBranchError(f"Head branch '{head_branch}' cannot be a protected branch.")
+                if not arguments.get("publication_authorized", False):
+                    raise WorkspacePublicationUnauthorizedError(
+                        "Draft PR creation blocked: explicit human publication authorization is required (ADR-010)."
+                    )
+
+        except (WorkspacePathEscapeError, WorkspacePolicyViolationError, WorkspaceProtectedBranchError, WorkspacePublicationUnauthorizedError, WorkspaceError) as exc:
             return WorkspaceToolPolicyResult(
                 is_permitted=False,
                 tool_name=clean_name,
@@ -333,6 +382,108 @@ class WorkspaceToolPolicyBridge:
                         "success": record.success,
                         "timestamp": record.timestamp,
                     },
+                )
+
+            elif tool_name == TOOL_INSPECT_DIFF:
+                diff_res = self._workspace_manager.get_workspace_diff(task_id, args.get("base_revision"))
+                return ToolResult(
+                    success=True,
+                    output={
+                        "total_files_changed": diff_res.total_files_changed,
+                        "insertions": diff_res.insertions,
+                        "deletions": diff_res.deletions,
+                        "is_empty": diff_res.is_empty,
+                        "base_revision": diff_res.base_revision,
+                        "files": [f.model_dump() for f in diff_res.files],
+                        "raw_diff": diff_res.raw_diff,
+                    },
+                )
+
+            elif tool_name == TOOL_VALIDATE_DIFF:
+                val_res = self._workspace_manager.validate_workspace_diff(
+                    task_id,
+                    allowed_files=args.get("allowed_files"),
+                    allow_critical_deletions=args.get("allow_critical_deletions", False),
+                )
+                return ToolResult(
+                    success=val_res.is_valid,
+                    output={
+                        "is_valid": val_res.is_valid,
+                        "verified_revision": val_res.verified_revision,
+                        "modified_files": val_res.modified_files,
+                        "unapproved_files": val_res.unapproved_files,
+                        "deleted_critical_files": val_res.deleted_critical_files,
+                        "secret_findings": [f.model_dump() for f in val_res.secret_findings],
+                        "blocking_findings": val_res.blocking_findings,
+                        "warnings": val_res.warnings,
+                    },
+                    error="; ".join(val_res.blocking_findings) if not val_res.is_valid else None,
+                )
+
+            elif tool_name == TOOL_COMMIT_CHANGES:
+                commit_req = WorkspaceCommitRequest(
+                    task_id=task_id,
+                    message=args["message"],
+                    branch_name=args.get("branch_name"),
+                    author_name=args.get("author_name", "Agent"),
+                    author_email=args.get("author_email", "agent@ai-platform.local"),
+                    files=args.get("files"),
+                )
+                commit_res = self._workspace_manager.commit_task_changes(commit_req)
+                return ToolResult(
+                    success=commit_res.success,
+                    output={
+                        "commit_sha": commit_res.commit_sha,
+                        "branch": commit_res.branch,
+                        "message": commit_res.message,
+                        "files_committed": commit_res.files_committed,
+                    },
+                    error=commit_res.error,
+                )
+
+            elif tool_name == TOOL_PUSH_BRANCH:
+                push_req = WorkspacePushRequest(
+                    task_id=task_id,
+                    branch_name=args["branch_name"],
+                    remote_name=args.get("remote_name", "origin"),
+                    publication_authorized=args.get("publication_authorized", False),
+                    remote_url=args.get("remote_url"),
+                )
+                push_res = self._workspace_manager.push_task_branch(push_req)
+                return ToolResult(
+                    success=push_res.success,
+                    output={
+                        "branch": push_res.branch,
+                        "pushed_sha": push_res.pushed_sha,
+                        "remote_name": push_res.remote_name,
+                    },
+                    error=push_res.error,
+                )
+
+            elif tool_name == TOOL_CREATE_DRAFT_PR:
+                pr_req = WorkspaceDraftPRRequest(
+                    task_id=task_id,
+                    title=args["title"],
+                    body=args.get("body"),
+                    head_branch=args["head_branch"],
+                    base_branch=args.get("base_branch", "main"),
+                    draft=True,
+                    repository_owner=args.get("repository_owner"),
+                    repository_name=args.get("repository_name"),
+                    publication_authorized=args.get("publication_authorized", False),
+                )
+                pr_res = self._workspace_manager.create_draft_pr(pr_req)
+                return ToolResult(
+                    success=pr_res.success,
+                    output={
+                        "pr_number": pr_res.pr_number,
+                        "pr_url": pr_res.pr_url,
+                        "head_branch": pr_res.head_branch,
+                        "base_branch": pr_res.base_branch,
+                        "is_draft": pr_res.is_draft,
+                        "summary": pr_res.summary,
+                    },
+                    error=pr_res.error,
                 )
 
             return ToolResult(success=False, error=f"Unhandled tool: {tool_name}")
@@ -513,6 +664,139 @@ def register_workspace_tools(
                     },
                 },
                 "required": ["patch_summary"],
+            },
+        ),
+        (
+            TOOL_INSPECT_DIFF,
+            "Inspect unified and per-file diffs of modifications made inside the task workspace sandbox.",
+            {
+                "type": "object",
+                "properties": {
+                    "base_revision": {
+                        "type": "string",
+                        "description": "Base git revision to compare against (defaults to HEAD).",
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_VALIDATE_DIFF,
+            "Validate sandbox diff against allowed scope, secret leaks, and critical manifest deletions.",
+            {
+                "type": "object",
+                "properties": {
+                    "allowed_files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Allowed file paths. If omitted, uses files declared in task execution plan.",
+                    },
+                    "allow_critical_deletions": {
+                        "type": "boolean",
+                        "description": "Whether deletion of critical project manifests is explicitly allowed.",
+                        "default": False,
+                    },
+                },
+            },
+        ),
+        (
+            TOOL_COMMIT_CHANGES,
+            "Create a clean git commit of verified task workspace changes with task metadata.",
+            {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Git commit message describing task changes.",
+                    },
+                    "branch_name": {
+                        "type": "string",
+                        "description": "Target branch name to commit to (must not be a protected branch).",
+                    },
+                    "author_name": {
+                        "type": "string",
+                        "description": "Commit author name.",
+                        "default": "Agent",
+                    },
+                    "author_email": {
+                        "type": "string",
+                        "description": "Commit author email.",
+                        "default": "agent@ai-platform.local",
+                    },
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Specific repository files to stage. If omitted, stages all changed files.",
+                    },
+                },
+                "required": ["message"],
+            },
+        ),
+        (
+            TOOL_PUSH_BRANCH,
+            "Push task feature branch to remote origin. Requires explicit human publication authorization.",
+            {
+                "type": "object",
+                "properties": {
+                    "branch_name": {
+                        "type": "string",
+                        "description": "Target feature branch to push (cannot be a protected branch).",
+                    },
+                    "remote_name": {
+                        "type": "string",
+                        "description": "Git remote name.",
+                        "default": "origin",
+                    },
+                    "publication_authorized": {
+                        "type": "boolean",
+                        "description": "Explicit human publication authorization token flag (must be True to push).",
+                        "default": False,
+                    },
+                    "remote_url": {
+                        "type": "string",
+                        "description": "Optional custom remote repository URL.",
+                    },
+                },
+                "required": ["branch_name"],
+            },
+        ),
+        (
+            TOOL_CREATE_DRAFT_PR,
+            "Generate and prepare a draft pull request with structured task summary. Auto-merge is strictly forbidden.",
+            {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Draft pull request title.",
+                    },
+                    "head_branch": {
+                        "type": "string",
+                        "description": "Source feature branch name (cannot be protected).",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Custom PR description body. If omitted, auto-generates structured task summary.",
+                    },
+                    "base_branch": {
+                        "type": "string",
+                        "description": "Target base branch to merge into.",
+                        "default": "main",
+                    },
+                    "repository_owner": {
+                        "type": "string",
+                        "description": "Repository owner or organization name.",
+                    },
+                    "repository_name": {
+                        "type": "string",
+                        "description": "Repository name.",
+                    },
+                    "publication_authorized": {
+                        "type": "boolean",
+                        "description": "Explicit human publication authorization token flag.",
+                        "default": False,
+                    },
+                },
+                "required": ["title", "head_branch"],
             },
         ),
     ]

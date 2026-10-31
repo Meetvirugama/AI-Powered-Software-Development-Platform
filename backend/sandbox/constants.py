@@ -112,3 +112,47 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
 MAX_COMMAND_OUTPUT_BYTES: int = 100 * 1024  # 100 KB max stdout/stderr capture
 DEFAULT_COMMAND_TIMEOUT_SECONDS: int = 60
 
+# Week 3 Day 5 — Git publication and verification safety constants (ADR-010, Docs/week3.md §6 F36, F37)
+PROTECTED_BRANCHES: frozenset[str] = frozenset(
+    {
+        "main",
+        "master",
+        "develop",
+        "dev",
+        "release",
+        "production",
+        "prod",
+        "staging",
+    }
+)
+
+# Critical project manifests whose deletion is rejected by default during diff validation
+CRITICAL_PROJECT_FILES: frozenset[str] = frozenset(
+    {
+        "README.md",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "requirements.txt",
+        "tsconfig.json",
+        "Cargo.toml",
+        "go.mod",
+        "pom.xml",
+    }
+)
+
+# High-confidence secret detection patterns for diff hunks and commit messages
+SECRET_SCAN_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("OpenAI API Key", re.compile(r"sk-[a-zA-Z0-9]{20,}|sk-proj-[a-zA-Z0-9_-]{20,}")),
+    ("GitHub Token", re.compile(r"ghp_[a-zA-Z0-9]{36}|github_pat_[a-zA-Z0-9_]{22,}")),
+    ("AWS Access Key ID", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("Google API Key", re.compile(r"AIza[0-9A-Za-z-_]{35}")),
+    ("RSA / EC Private Key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    (
+        "Generic Secret Assignment",
+        re.compile(
+            r"""(?i)(?:api_key|apikey|secret|password|auth_token|token)\s*[:=]\s*['"][a-zA-Z0-9_\-.~+=/]{12,}['"]"""
+        ),
+    ),
+)
+
