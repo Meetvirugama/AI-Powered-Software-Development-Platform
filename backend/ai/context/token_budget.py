@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -20,14 +21,29 @@ logger = logging.getLogger(__name__)
 
 _ENCODING_NAME: str = "cl100k_base"
 _OVERHEAD_TOKENS: int = 500
+_BPE_WORD_PUNCT_RE = re.compile(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]+")
 
 
 @functools.lru_cache(maxsize=8)
 def _get_encoder(encoding_name: str = _ENCODING_NAME) -> Any:
-    """Return the cached tiktoken encoder (thread-safe and reusable)."""
+    """Return the cached tiktoken encoder (thread-safe and reusable), or None if unavailable offline."""
     if tiktoken is None:
         return None
-    return tiktoken.get_encoding(encoding_name)
+    try:
+        return tiktoken.get_encoding(encoding_name)
+    except Exception as exc:
+        logger.warning(
+            "tiktoken_encoder_unavailable_using_fallback",
+            extra={"encoding_name": encoding_name, "error": str(exc)},
+        )
+        return None
+
+
+def _approximate_bpe_tokens(text: str) -> int:
+    """Approximate cl100k_base token count offline when tiktoken blob cache is unreachable."""
+    if not text:
+        return 0
+    return max(1, len(_BPE_WORD_PUNCT_RE.findall(text)))
 
 
 def count_tokens(text: str, encoding_name: str = _ENCODING_NAME) -> int:
@@ -41,19 +57,18 @@ def count_tokens(text: str, encoding_name: str = _ENCODING_NAME) -> int:
     if not text:
         return 0
     if tiktoken is None:
-        return max(1, len(text) // 4)
+        return _approximate_bpe_tokens(text)
     try:
         enc = _get_encoder(encoding_name)
         if enc is None:
-            return max(1, len(text) // 4)
+            return _approximate_bpe_tokens(text)
         return len(enc.encode(text, disallowed_special=()))
-    except (ValueError, UnicodeError, TypeError, KeyError) as exc:
+    except Exception as exc:
         logger.warning(
             "token_counting_fallback",
             extra={"error": str(exc), "text_len": len(text)},
         )
-        # Sane heuristic fallback (approx. 4 characters per token) if tokenizer fails
-        return max(1, len(text) // 4)
+        return _approximate_bpe_tokens(text)
 
 
 def fit_history(
@@ -115,4 +130,3 @@ def fit_items(
         kept.append(item)
         used += tokens
     return used, kept
-

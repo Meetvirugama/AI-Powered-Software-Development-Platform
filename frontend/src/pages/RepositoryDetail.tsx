@@ -46,6 +46,10 @@ export function RepositoryDetail() {
   const [showModal, setShowModal] = useState(false);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
+  const [_reviewTarget, setReviewTarget] = useState<{ type: 'file' | 'commit' | 'pr'; path?: string }>({
+    type: 'file',
+    path: fileParam ?? undefined,
+  });
   const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null>(null);
 
   // ------------------------------------------------------------------
@@ -311,6 +315,9 @@ export function RepositoryDetail() {
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
                       setUserHighlightedSource(null);
+                      setReviewTarget((prev) =>
+                        prev.type === 'file' ? { type: 'file', path: file.path } : prev
+                      );
                     }}
                   />
                 </div>

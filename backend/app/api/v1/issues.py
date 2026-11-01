@@ -99,9 +99,11 @@ def _serialize_issue(issue: GitHubIssue, task_id: str | None = None) -> GitHubIs
         "state": issue.state or "open",
         "labels": [redact(str(lbl)) for lbl in (issue.labels or [])],
         "html_url": issue.html_url,
+        "url": issue.html_url,
         "author": issue.author,
         "origin_finding_id": str(issue.origin_finding_id) if issue.origin_finding_id else None,
         "task_id": linked_task_id,
+        "is_imported": linked_task_id is not None,
         "created_at": issue.created_at.isoformat() if issue.created_at else "",
         "updated_at": issue.updated_at.isoformat() if issue.updated_at else "",
     }

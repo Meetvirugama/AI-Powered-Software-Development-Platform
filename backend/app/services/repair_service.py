@@ -41,7 +41,7 @@ from app.schemas.repair import (
 
 # Pytest patterns
 _PYTEST_FAILED_LINE_RE = re.compile(
-    r"FAILED\s+([^\s:]+)::([^\s]+)\s+-\s+([A-Za-z0-9_.]+(?:Error|Exception|Failure)):\s*(.*)",
+    r"FAILED\s+([^\s:]+)::([^\s]+)\s+-\s+([A-Za-z0-9_.]+(?:Error|Exception|Failure))(?::\s*(.*))?",
     re.MULTILINE,
 )
 _PYTEST_FILE_LINE_RE = re.compile(
@@ -241,6 +241,7 @@ class FailureTracebackAnalyzer:
         # 1. Match short summary lines: FAILED path/to/test.py::test_fn - AssertionError: msg
         for match in _PYTEST_FAILED_LINE_RE.finditer(output):
             file_path, test_name, err_type, err_msg = match.groups()
+            err_msg = err_msg or ""
             cat: FailureCategory = "TEST_FAILURE"
             if "SyntaxError" in err_type:
                 cat = "SYNTAX_ERROR"

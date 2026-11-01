@@ -621,6 +621,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
 - ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
 - ⬜ Keval: Acceptance tests for valid plans, rejected plans, and unapproved execution attempts
+- ✅ Om: Plan versioning, immutable approval/rejection persistence, approval invalidation upon plan edits, `TaskHistoryService`, and test suite (`test_om_w3_d2_planning_persistence.py`, 15/15 tests passing)
 
 ## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
 
@@ -631,6 +632,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
 - ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs
 - ⬜ Sukun: Tool-level permission checks and workspace boundary security tests
+- ✅ Om: Workspace lifecycle persistence (READY, IN_USE, CLEANUP_PENDING, CLEANED), execution tracking start/finish, tool invocation audit logging with secret scrubbing, and execution precondition enforcement
 
 ## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
@@ -641,16 +643,17 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: Test and repair progress APIs and failure reporting
 - ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
 - ⬜ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling
+- ✅ Om: Test run execution logging (counts, exit codes, durations, sanitized logs), bounded repair loop accounting enforcing strict 3-attempt ceiling across worker restarts, and failure transition guards
 
 ## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 
 - ✅ Prit: Sandbox `WorkspaceDiffVerifier` diff extraction & scope validation, addition-level secret scanner, protected branch guards, authorized git push & draft PR preparation with structured task summary (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/diff_verifier.py`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d5_verification_and_draft_pr.py`)
-- ⬜ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary
+- ✅ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary (`backend/app/schemas/verification.py`, `backend/app/services/independent_verifier.py`, `backend/tests/test_dev_w3_day5_verification.py`)
 - ✅ Meet: Requirement-to-code verification comparing final diff against original plan (`backend/ai/services/requirement_verifier.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ⬜ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)`
 - ⬜ Yug: `POST /api/v1/tasks/{id}/create-pr` verifying task passed verification before opening PR
 - ⬜ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR
-- ⬜ Om: End-to-end traceability linking finding -> issue -> task -> commit -> Draft PR
+- ✅ Om: Independent verification persistence, publication authorization gate, GitHub Draft PR persistence, and end-to-end traceability graph linking Finding -> Issue/Task -> Plan -> Approval -> Workspace -> Execution -> Test Run -> Repair -> Verification -> Draft PR (15/15 Day 5 tests, 54/54 Week 3 suite passing)
 - ⬜ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff
 
 ## WEEK 3 — Day 6 Security, Reliability & Performance Hardening

@@ -18,6 +18,7 @@ from app.models.task import (
     ApprovalDecision,
     ExecutionStatus,
     GitHubIssue,
+    RepairAttempt,
     RepairResult,
     Task,
     TaskApproval,
@@ -52,7 +53,7 @@ __all__ = [
     "Task", "TaskStatus", "TaskSourceType", "TaskPlan", "TaskPlanStatus",
     "TaskApproval", "ApprovalDecision", "Workspace", "WorkspaceStatus",
     "TaskExecution", "ExecutionStatus", "ToolInvocation", "ToolInvocationStatus",
-    "TestRun", "TestRunStatus", "RepairResult",
+    "TestRun", "TestRunStatus", "RepairAttempt", "RepairResult",
     "VerificationResult", "VerificationStatus", "TaskCheckpoint",
     "TaskEvent", "TaskEventType", "TaskPullRequest",
 ]

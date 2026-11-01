@@ -340,8 +340,8 @@ class WorkspaceManager:
                 subprocess.run(["git", "config", "user.name", "AI Platform"], cwd=workspace_path, capture_output=True, check=False)
                 subprocess.run(["git", "config", "user.email", "agent@ai-platform.local"], cwd=workspace_path, capture_output=True, check=False)
                 subprocess.run(["git", "add", "."], cwd=workspace_path, capture_output=True, check=False)
-                subprocess.run(["git", "commit", "-m", "Initial baseline"], cwd=workspace_path, capture_output=True, check=False)
-                subprocess.run(["git", "checkout", "-b", branch_name], cwd=workspace_path, capture_output=True, check=False)
+                subprocess.run(["git", "commit", "--allow-empty", "-m", "Initial baseline"], cwd=workspace_path, capture_output=True, check=False)
+                subprocess.run(["git", "checkout", "-B", branch_name], cwd=workspace_path, capture_output=True, check=False)
             except Exception:
                 pass
 

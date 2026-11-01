@@ -264,6 +264,20 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["task_planner"] = False
         success = False
 
+    # Task Execution Orchestrator (Week 3 F33-F35)
+    try:
+        if getattr(app.state, "task_execution_orchestrator", None) is None:
+            from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
+            app.state.task_execution_orchestrator = TaskExecutionOrchestrator()
+            app.state.service_readiness["task_execution_orchestrator"] = True
+            logger.info("task_execution_orchestrator_ready")
+        else:
+            app.state.service_readiness["task_execution_orchestrator"] = True
+    except Exception as exc:
+        logger.error("task_execution_orchestrator_init_failed", extra={"error": str(exc)})
+        app.state.task_execution_orchestrator = None
+        app.state.service_readiness["task_execution_orchestrator"] = False
+
     return success
 
 
@@ -291,12 +305,14 @@ def init_history_services(app: FastAPI) -> bool:
         from app.services.test_generation_history_service import TestGenerationHistoryService
         from app.services.review_history_service import ReviewHistoryService
         from app.services.analysis_run_history_service import AnalysisRunHistoryService
+        from app.services.task_history_service import TaskHistoryService
 
         app.state.explanation_history_service = ExplanationHistoryService(session_factory=SessionLocal)
         app.state.bug_scan_history_service = BugScanHistoryService(session_factory=SessionLocal)
         app.state.test_generation_history_service = TestGenerationHistoryService(session_factory=SessionLocal)
         app.state.review_history_service = ReviewHistoryService(session_factory=SessionLocal)
         app.state.analysis_run_service = AnalysisRunHistoryService(session_factory=SessionLocal)
+        app.state.task_history_service = TaskHistoryService(session_factory=SessionLocal)
 
         app.state.service_readiness["history_services"] = True
         logger.info("history_services_ready")
@@ -308,6 +324,7 @@ def init_history_services(app: FastAPI) -> bool:
         app.state.test_generation_history_service = None
         app.state.review_history_service = None
         app.state.analysis_run_service = None
+        app.state.task_history_service = None
         app.state.service_readiness["history_services"] = False
         return False
 
@@ -409,4 +426,3 @@ async def lifespan(app: FastAPI):
         logger.debug("db_dispose_error", extra={"error": str(exc)})
 
     logger.info("app_shutdown")
-

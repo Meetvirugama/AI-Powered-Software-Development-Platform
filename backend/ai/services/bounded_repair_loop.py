@@ -16,11 +16,11 @@ Key Responsibilities:
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 from app.core.secret_redaction import redact
 from app.schemas.repair import (
@@ -36,17 +36,12 @@ from app.schemas.workspace import (
     TestOutcomeStatus,
     WorkspaceExecutionEventType,
     WorkspaceFileWriteRequest,
-    WorkspaceStatus,
 )
 from app.services.repair_service import (
     FailureTracebackAnalyzer,
     RepairPatchValidator,
 )
-from sandbox.exceptions import (
-    WorkspaceError,
-    WorkspacePolicyViolationError,
-    WorkspaceStateError,
-)
+from sandbox.exceptions import WorkspaceError
 from sandbox.test_runner import WorkspaceTestRunner
 from sandbox.workspace_manager import WorkspaceManager
 
@@ -145,7 +140,9 @@ class BoundedRepairLoop:
         previous_hashes: list[str] = []
         current_attempts = getattr(meta, "repair_attempts_used", 0)
 
-        primary_category = diagnosis.failures[0].category if diagnosis.failures else FailureCategory.UNKNOWN
+        primary_category: FailureCategory | str = (
+            diagnosis.failures[0].category if diagnosis.failures else "TEST_FAILURE"
+        )
         cat_val = primary_category.value if hasattr(primary_category, "value") else str(primary_category)
 
         self.workspace_manager.record_timeline_event(
@@ -207,16 +204,23 @@ class BoundedRepairLoop:
             )
 
             if not validation.is_valid:
-                err_summary = "; ".join(validation.rejection_reasons)
+                reasons = (
+                    list(validation.violations)
+                    if getattr(validation, "violations", None)
+                    else list(getattr(validation, "rejection_reasons", None) or [])
+                )
+                if not reasons and getattr(validation, "rejection_reason", None):
+                    reasons = [str(validation.rejection_reason)]
+                err_summary = "; ".join(reasons) or "Patch validation failed."
                 logger.warning(
                     "repair_patch_rejected",
-                    extra={"task_id": task_id, "attempt": current_attempts, "reasons": validation.rejection_reasons},
+                    extra={"task_id": task_id, "attempt": current_attempts, "reasons": reasons},
                 )
                 self.workspace_manager.record_timeline_event(
                     task_id=task_id,
                     event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
                     message=f"Repair patch rejected on attempt {current_attempts}: {err_summary}",
-                    payload={"reasons": validation.rejection_reasons},
+                    payload={"reasons": reasons},
                 )
                 repair_records.append(
                     RepairAttemptRecord(
@@ -338,6 +342,8 @@ class BoundedRepairLoop:
         if callable(patch_synthesizer):
             res = patch_synthesizer(task_id, attempt_number, diagnosis)
             if isinstance(res, RepairPatchPayload):
+                if previous_hashes and not res.previous_patch_hashes:
+                    res.previous_patch_hashes = list(previous_hashes)
                 return res
 
         # Default targeted patch generation based on diagnosed failure files
@@ -345,7 +351,9 @@ class BoundedRepairLoop:
         if diagnosis.failures and diagnosis.failures[0].file_path:
             primary_file = diagnosis.failures[0].file_path
 
-        primary_cat = diagnosis.failures[0].category if diagnosis.failures else FailureCategory.UNKNOWN
+        primary_cat: FailureCategory | str = (
+            diagnosis.failures[0].category if diagnosis.failures else "TEST_FAILURE"
+        )
         cat_str = primary_cat.value if hasattr(primary_cat, "value") else str(primary_cat)
 
         diff_text = (
@@ -367,15 +375,75 @@ class BoundedRepairLoop:
             previous_patch_hashes=list(previous_hashes or []),
         )
 
+    @staticmethod
+    def _extract_patched_content(existing_content: str, diff_text: str, target_file: str, explanation: str) -> str:
+        """Apply simple unified diff hunks to existing file content or reconstruct added lines."""
+        if not diff_text.strip():
+            return existing_content or f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
+
+        removed_lines: list[str] = []
+        added_lines: list[str] = []
+        for raw_line in diff_text.splitlines():
+            if raw_line.startswith(("---", "+++", "@@")):
+                continue
+            if raw_line.startswith("-"):
+                removed_lines.append(raw_line[1:])
+            elif raw_line.startswith("+"):
+                added_lines.append(raw_line[1:])
+
+        if existing_content and removed_lines:
+            removed_block = "\n".join(removed_lines)
+            added_block = "\n".join(added_lines)
+            if removed_block in existing_content:
+                return existing_content.replace(removed_block, added_block, 1)
+
+        if existing_content and added_lines and not removed_lines:
+            return existing_content.rstrip("\n") + "\n" + "\n".join(added_lines) + "\n"
+
+        if added_lines:
+            # Reconstruct from non-removed diff lines
+            reconstructed: list[str] = []
+            for raw_line in diff_text.splitlines():
+                if raw_line.startswith(("---", "+++", "@@", "-")):
+                    continue
+                if raw_line.startswith("+") or raw_line.startswith(" "):
+                    reconstructed.append(raw_line[1:])
+            if reconstructed:
+                return "\n".join(reconstructed) + "\n"
+
+        return f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
+
     def _apply_patch_files(self, task_id: str, patch_payload: RepairPatchPayload) -> None:
         """Apply patch to workspace target files safely."""
         meta = self.workspace_manager.get_workspace(task_id)
         if not meta or not meta.workspace_path:
             raise WorkspaceError(f"Cannot apply patch: workspace missing for '{task_id}'")
 
-        # For files targeted in patch, apply safe write
-        for target_file in patch_payload.target_files:
-            content = f"# Repaired content for {target_file}\n# Patch: {patch_payload.explanation}\n"
+        target_files = list(patch_payload.target_files or [])
+        if not target_files:
+            # Extract from diff header if target_files was omitted
+            for match in re.finditer(r"^\+\+\+\s+(?:b/)?([^\s\t\r\n]+)", patch_payload.diff, re.MULTILINE):
+                path = match.group(1).strip()
+                if path and path != "/dev/null" and path not in target_files:
+                    target_files.append(path)
+
+        for target_file in target_files:
+            existing_content = ""
+            if hasattr(self.workspace_manager, "read_file"):
+                try:
+                    read_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                    if getattr(read_res, "success", False):
+                        existing_content = getattr(read_res, "content", "") or ""
+                except Exception:
+                    existing_content = ""
+
+            content = self._extract_patched_content(
+                existing_content=existing_content,
+                diff_text=patch_payload.diff,
+                target_file=target_file,
+                explanation=patch_payload.explanation,
+            )
+
             if hasattr(self.workspace_manager, "write_file"):
                 self.workspace_manager.write_file(
                     task_id=task_id,
@@ -414,7 +482,7 @@ class BoundedRepairLoop:
             req = WorkspaceTestExecutionRequest(
                 task_id=task_id,
                 framework=framework,
-                test_target=test_path,
+                test_path=test_path,
             )
             return self.test_runner.run_tests(
                 workspace_root=Path(workspace_path),
@@ -426,5 +494,3 @@ class BoundedRepairLoop:
         if hasattr(self.traceback_analyzer, "diagnose"):
             return self.traceback_analyzer.diagnose(raw_output, framework=framework)
         return self.traceback_analyzer.analyze_traceback(raw_output, framework=framework)
-
-
