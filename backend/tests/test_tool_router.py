@@ -389,3 +389,37 @@ def test_policy_none_decision_fails_closed():
     assert result.success is False
     assert "no decision" in result.error
     assert executed == []
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["pytest;whoami", "echo $(whoami)", "a|b", "out>file", "line\nbreak"],
+)
+def test_argv_rejects_shell_metacharacters(token):
+    assert ToolRouter.validate_argv_tokens([token]) is not None
+
+
+@pytest.mark.parametrize("token", ["../secret.txt", "folder/../secret.txt", r"folder\\..\\secret.txt"])
+def test_argv_rejects_path_traversal(token):
+    error = ToolRouter.validate_argv_tokens([token])
+    assert error is not None
+    assert "Path traversal" in error
+
+
+@pytest.mark.parametrize("flag", ["-c", "--command", "--exec", "--upload-pack", "--override-ini"])
+def test_argv_rejects_dangerous_flags(flag):
+    error = ToolRouter.validate_argv_tokens(["pytest", flag])
+    assert error is not None
+    assert "Forbidden command flag" in error
+
+
+def test_command_allowlist_accepts_explicit_safe_prefix_template():
+    router = ToolRouter(command_allowlist={"run_tests": [["pytest", "-q", "*"]]})
+    assert router._validate_command("run_tests", {"argv": ["pytest", "-q", "backend/tests"]}) is None
+
+
+def test_command_allowlist_rejects_different_prefix():
+    router = ToolRouter(command_allowlist={"run_tests": [["pytest", "-q", "*"]]})
+    error = router._validate_command("run_tests", {"argv": ["python", "malicious.py"]})
+    assert error is not None
+    assert "allowlist" in error
