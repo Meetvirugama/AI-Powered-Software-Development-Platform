@@ -724,14 +724,6 @@ class TaskEvent(TimestampedModel, Base):
     user: Mapped[Optional["User"]] = relationship("User")
 
     @property
-    def comment(self) -> Optional[str]:
-        return self.feedback
-
-    @comment.setter
-    def comment(self, val: Optional[str]) -> None:
-        self.feedback = val
-
-    @property
     def approver_id(self) -> Optional[uuid.UUID]:
         return self.user_id
 

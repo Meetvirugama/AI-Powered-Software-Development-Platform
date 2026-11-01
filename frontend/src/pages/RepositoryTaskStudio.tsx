@@ -1,54 +1,71 @@
 /**
- * RepositoryTaskStudio — Week 3 Day 1 & Day 2 Studio UI:
+ * RepositoryTaskStudio — Week 3 Day 1–4 Studio UI:
  * - F31 GitHub Issue Import & Issue List
  * - F32 Task Intake (segregated Requirements, Assumptions, Protected-File Constraints)
  * - F32 Structured Implementation Plan Viewer (steps, dependencies, files, tests, validation, risks, budget)
  * - F32 Human Approval Gate (Approve Plan vN, Reject Plan with reason, Revise Plan with notes, Execute Approved Plan)
+ * - F33 Isolated Workspace Lifecycle Controls (Pause, Resume, Cancel, Branch & Sandbox Telemetry)
+ * - F35 Test Runner & Bounded Self-Repair Loop Controls (Run Tests, Trigger Auto-Repair, 3-Attempt Budget Tracker)
  * - F38 Ordered Task Execution Timeline & Audit History
  *
- * Owner: Dhramraj — Week 3 Day 1–2 Deliverable (Docs/week3.md §6 F31, F32, F38)
+ * Owner: Dhramraj — Week 3 Day 1–4 Deliverable (Docs/week3.md §6 F31–F35, F38)
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
-  CheckCircle2,
   Clock,
   ExternalLink,
   FileCode,
+  FlaskConical,
   GitBranch,
   GitPullRequestDraft,
   History,
   ListChecks,
   Loader2,
+  Pause,
   Play,
   Plus,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
+  Slash,
   Sparkles,
+  Terminal,
   ThumbsDown,
   ThumbsUp,
+  Wrench,
   XCircle,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
   approveTaskPlan,
+  cancelTask,
   createTask,
-  executeApprovedTask,
+  executeTask,
   generateTaskPlan,
   getTaskDetail,
   getTaskEvents,
+  getTaskRepairBudget,
+  getTaskTests,
+  getTaskWorkspace,
   importGitHubIssue,
   listTasks,
+  pauseTask,
   rejectTaskPlan,
+  resumeTask,
+  triggerTaskRepair,
+  triggerTaskTests,
 } from '../services/tasks';
 import type {
   PlanStep,
   TaskDetail,
   TaskEvent,
   TaskSummary,
+  TaskTestResultsResponse,
+  WorkspaceMetadata,
+  WorkspaceRepairBudgetStatus,
 } from '../types/task';
 
 const STATUS_BADGE_MAP: Record<
@@ -83,9 +100,29 @@ const STATUS_BADGE_MAP: Record<
     label: 'Executing',
     className: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40',
   },
+  TESTING: {
+    label: 'Testing',
+    className: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
+  },
+  REPAIRING: {
+    label: 'Self-Repairing',
+    className: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  },
+  VERIFYING: {
+    label: 'Verifying',
+    className: 'bg-teal-500/15 text-teal-300 border-teal-500/40',
+  },
   DRAFT_PR_CREATED: {
     label: 'Draft PR Created',
     className: 'bg-purple-500/15 text-purple-300 border-purple-500/40',
+  },
+  FAILED: {
+    label: 'Failed',
+    className: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+  },
+  CANCELLED: {
+    label: 'Cancelled',
+    className: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/40',
   },
 };
 
@@ -107,6 +144,9 @@ export function RepositoryTaskStudio() {
   );
   const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
+  const [workspaceMeta, setWorkspaceMeta] = useState<WorkspaceMetadata | null>(null);
+  const [testResults, setTestResults] = useState<TaskTestResultsResponse | null>(null);
+  const [repairBudget, setRepairBudget] = useState<WorkspaceRepairBudgetStatus | null>(null);
 
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -145,12 +185,18 @@ export function RepositoryTaskStudio() {
   const fetchTaskDetailAndEvents = useCallback(async (taskId: string) => {
     setLoadingDetail(true);
     try {
-      const [detail, evtList] = await Promise.all([
+      const [detail, evtList, ws, tests, budget] = await Promise.all([
         getTaskDetail(taskId),
         getTaskEvents(taskId),
+        getTaskWorkspace(taskId).catch(() => null),
+        getTaskTests(taskId).catch(() => null),
+        getTaskRepairBudget(taskId).catch(() => null),
       ]);
       setTaskDetail(detail);
       setEvents(Array.isArray(evtList) ? evtList : (evtList as any)?.items || []);
+      setWorkspaceMeta(ws);
+      setTestResults(tests);
+      setRepairBudget(budget);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to load task details.');
     } finally {
@@ -169,6 +215,9 @@ export function RepositoryTaskStudio() {
     } else {
       setTaskDetail(null);
       setEvents([]);
+      setWorkspaceMeta(null);
+      setTestResults(null);
+      setRepairBudget(null);
     }
   }, [selectedTaskId, fetchTaskDetailAndEvents, setSearchParams]);
 
@@ -318,16 +367,89 @@ export function RepositoryTaskStudio() {
     }
   }
 
-  async function handleExecuteTask() {
+  async function handleExecuteTask(runSteps = true) {
     if (!taskDetail) return;
     setActionBusy('execute');
     setErrorBanner(null);
     try {
-      await executeApprovedTask(taskDetail.task_id);
+      await executeTask(taskDetail.task_id, { run_steps: runSteps });
       await fetchTasks();
       await fetchTaskDetailAndEvents(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Execution blocked by approval gate.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handlePauseTask() {
+    if (!taskDetail) return;
+    setActionBusy('pause');
+    setErrorBanner(null);
+    try {
+      await pauseTask(taskDetail.task_id);
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to pause workspace execution.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleResumeTask() {
+    if (!taskDetail) return;
+    setActionBusy('resume');
+    setErrorBanner(null);
+    try {
+      await resumeTask(taskDetail.task_id);
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to resume workspace execution.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleCancelTask() {
+    if (!taskDetail) return;
+    setActionBusy('cancel');
+    setErrorBanner(null);
+    try {
+      await cancelTask(taskDetail.task_id);
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to cancel task.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleRunTests() {
+    if (!taskDetail) return;
+    setActionBusy('tests');
+    setErrorBanner(null);
+    try {
+      await triggerTaskTests(taskDetail.task_id, { framework: 'pytest' });
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to run workspace tests.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleRunRepair() {
+    if (!taskDetail) return;
+    setActionBusy('repair');
+    setErrorBanner(null);
+    try {
+      await triggerTaskRepair(taskDetail.task_id, { framework: 'pytest' });
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Bounded self-repair failed or budget exhausted.');
     } finally {
       setActionBusy(null);
     }
@@ -338,6 +460,8 @@ export function RepositoryTaskStudio() {
     taskDetail?.status === 'APPROVED' &&
     taskDetail.approved_plan_version != null &&
     taskDetail.approved_plan_version === latestPlan?.plan_version;
+  const hasWorkspace =
+    workspaceMeta && workspaceMeta.status && workspaceMeta.status !== 'NOT_CREATED';
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden bg-background">
@@ -346,7 +470,7 @@ export function RepositoryTaskStudio() {
         <div className="flex items-center gap-2">
           <ListChecks className="h-4 w-4 text-primary" />
           <span className="text-xs font-semibold text-foreground">
-            Week 3 Workflow Automation — Task Planner & Human Approval Gate
+            Week 3 Workflow Automation — Task Planner, Isolated Sandbox & Bounded Repair
           </span>
         </div>
 
@@ -481,7 +605,7 @@ export function RepositoryTaskStudio() {
         </form>
       )}
 
-      {/* Main Split View: Left Task List, Center Plan & Approval Gate, Right Timeline */}
+      {/* Main Split View: Left Task List, Center Plan/Sandbox/Repair, Right Timeline */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Sidebar: Task List */}
         <aside className="w-80 shrink-0 border-r border-border bg-card/30 flex flex-col min-h-0">
@@ -549,7 +673,7 @@ export function RepositoryTaskStudio() {
           </div>
         </aside>
 
-        {/* Center Canvas: Task Detail, Structured Plan & Approval Gate */}
+        {/* Center Canvas: Task Detail, Structured Plan, Workspace Sandbox & Bounded Repair */}
         <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5">
           {loadingDetail && !taskDetail ? (
             <div className="h-64 flex items-center justify-center text-xs text-muted-foreground gap-2">
@@ -600,7 +724,7 @@ export function RepositoryTaskStudio() {
                     <h2 className="text-base font-bold text-foreground">{taskDetail.title}</h2>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
                       disabled={actionBusy !== null}
@@ -622,7 +746,7 @@ export function RepositoryTaskStudio() {
                     <button
                       type="button"
                       disabled={!isApproved || actionBusy !== null}
-                      onClick={handleExecuteTask}
+                      onClick={() => handleExecuteTask(true)}
                       title={
                         isApproved
                           ? 'Execute approved plan in isolated workspace'
@@ -633,6 +757,20 @@ export function RepositoryTaskStudio() {
                       <Play className="h-3.5 w-3.5" />
                       <span>Start Workspace Execution</span>
                     </button>
+
+                    {taskDetail.status !== 'CANCELLED' &&
+                      taskDetail.status !== 'FAILED' &&
+                      taskDetail.status !== 'DRAFT_PR_CREATED' && (
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null}
+                          onClick={handleCancelTask}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 disabled:opacity-40"
+                        >
+                          <Slash className="h-3.5 w-3.5" />
+                          <span>Cancel</span>
+                        </button>
+                      )}
                   </div>
                 </div>
 
@@ -682,6 +820,105 @@ export function RepositoryTaskStudio() {
                   </div>
                 </div>
               </div>
+
+              {/* Day 3 & Day 4: Isolated Workspace, Test Runner & Bounded Repair Card */}
+              {hasWorkspace && workspaceMeta && (
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="h-4 w-4 text-indigo-400" />
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                        Isolated Workspace &amp; Test / Repair Controls
+                      </h3>
+                      <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
+                        {workspaceMeta.status}
+                      </span>
+                      <span className="text-[11px] font-mono text-muted-foreground">
+                        Branch: <strong className="text-foreground">{workspaceMeta.branch_name}</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {workspaceMeta.status === 'IN_USE' && (
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null}
+                          onClick={handlePauseTask}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-medium hover:bg-amber-500/20"
+                        >
+                          <Pause className="h-3 w-3" />
+                          <span>Pause</span>
+                        </button>
+                      )}
+                      {workspaceMeta.status === 'STOPPED' && (
+                        <button
+                          type="button"
+                          disabled={actionBusy !== null}
+                          onClick={handleResumeTask}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs font-medium hover:bg-emerald-500/20"
+                        >
+                          <Play className="h-3 w-3" />
+                          <span>Resume</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleRunTests}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-sky-500/40 bg-sky-500/10 text-sky-300 text-xs font-medium hover:bg-sky-500/20"
+                      >
+                        <FlaskConical className="h-3 w-3" />
+                        <span>Run Tests</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={
+                          actionBusy !== null ||
+                          taskDetail.repair_attempts_used >= taskDetail.repair_attempts_max
+                        }
+                        onClick={handleRunRepair}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-purple-500/40 bg-purple-500/10 text-purple-300 text-xs font-medium hover:bg-purple-500/20 disabled:opacity-40"
+                      >
+                        <Wrench className="h-3 w-3" />
+                        <span>
+                          Auto-Repair ({taskDetail.repair_attempts_used}/{taskDetail.repair_attempts_max})
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Test & Repair Telemetry Summary */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs pt-2 border-t border-border/50">
+                    <div className="rounded-lg bg-background/60 border border-border/60 p-2.5 space-y-1">
+                      <div className="text-[10px] font-mono uppercase text-sky-400 font-bold">
+                        Test Execution Runs ({testResults?.runs?.length || 0})
+                      </div>
+                      {testResults?.runs && testResults.runs.length > 0 ? (
+                        <div className="text-[11px] font-mono space-y-0.5">
+                          <div>
+                            Latest: <strong>{testResults.runs[testResults.runs.length - 1].status}</strong> (
+                            {testResults.runs[testResults.runs.length - 1].tests_passed} passed,{' '}
+                            {testResults.runs[testResults.runs.length - 1].tests_failed} failed)
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-muted-foreground">No test runs recorded yet.</div>
+                      )}
+                    </div>
+
+                    <div className="rounded-lg bg-background/60 border border-border/60 p-2.5 space-y-1">
+                      <div className="text-[10px] font-mono uppercase text-purple-400 font-bold">
+                        Bounded Self-Repair Budget ({taskDetail.repair_attempts_used}/{taskDetail.repair_attempts_max})
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {repairBudget?.is_budget_exhausted
+                          ? 'Retry budget exhausted (3/3 attempts used). Human review required.'
+                          : `${taskDetail.repair_attempts_max - taskDetail.repair_attempts_used} repair attempt(s) remaining.`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Human Approval Gate Banner & Plan Viewer */}
               {!latestPlan ? (
@@ -779,14 +1016,14 @@ export function RepositoryTaskStudio() {
                           type="text"
                           value={revisionNotes}
                           onChange={(e) => setRevisionNotes(e.target.value)}
-                          placeholder="Revision instructions for v(N+1)…"
+                          placeholder="Revision instructions for AI planner…"
                           className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
                         />
                         <button
                           type="button"
                           disabled={actionBusy !== null}
                           onClick={handleGenerateOrRevisePlan}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-accent text-xs font-semibold text-foreground shrink-0"
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-accent text-xs font-semibold shrink-0"
                         >
                           <RefreshCw className="h-3.5 w-3.5" />
                           <span>Revise</span>
@@ -795,159 +1032,157 @@ export function RepositoryTaskStudio() {
                     </div>
                   </div>
 
-                  {/* Plan Summary, Expected Files, Tests & Budget */}
-                  <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                        Structured Plan Overview (v{latestPlan.plan_version})
-                      </h3>
-                      {latestPlan.resource_budget && (
-                        <span className="text-[11px] font-mono text-muted-foreground">
-                          Max Repair Budget: {latestPlan.resource_budget.max_repair_attempts ?? 3} attempts ·{' '}
-                          {latestPlan.resource_budget.max_tokens ?? 20000} tokens
-                        </span>
+                  {/* Structured Plan Summary & Steps */}
+                  <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-mono uppercase text-primary font-bold">
+                        Plan Summary (v{latestPlan.plan_version})
+                      </div>
+                      <p className="text-sm font-medium text-foreground">{latestPlan.summary}</p>
+                      {latestPlan.problem_statement && (
+                        <p className="text-xs text-muted-foreground">{latestPlan.problem_statement}</p>
                       )}
                     </div>
-                    <p className="text-xs text-foreground leading-relaxed">{latestPlan.summary}</p>
 
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {((latestPlan.expected_files || (latestPlan as any).expected_files_to_modify || []) as string[]).map((fp: string) => (
-                        <span
-                          key={fp}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-primary/10 border border-primary/20 text-primary text-[11px] font-mono"
-                        >
-                          <FileCode className="h-3 w-3" />
-                          <span>{fp}</span>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Ordered Implementation Steps */}
-                  <div className="space-y-2.5">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      Ordered Implementation Steps ({latestPlan.steps.length})
-                    </h3>
-                    {latestPlan.steps.map((step: PlanStep, index: number) => (
-                      <div
-                        key={step.step_id}
-                        className="rounded-xl border border-border bg-card/60 p-3.5 space-y-2"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className="px-2 py-0.5 rounded bg-primary/15 text-primary border border-primary/30 text-[10px] font-mono font-bold">
-                              #{index + 1} · {step.step_id}
-                            </span>
-                            <span className="px-2 py-0.5 rounded bg-muted text-muted-foreground text-[10px] font-mono uppercase">
-                              {step.action_type || step.step_type}
-                            </span>
-                            <h4 className="text-xs font-semibold text-foreground">{step.title}</h4>
-                          </div>
-                          {step.depends_on && step.depends_on.length > 0 && (
-                            <span className="text-[10px] font-mono text-muted-foreground">
-                              Depends on: {step.depends_on.join(', ')}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          {step.description}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
-                          {step.expected_files.map((f) => (
-                            <span
-                              key={f}
-                              className="px-1.5 py-0.5 rounded bg-muted/40 border border-border text-foreground"
-                            >
-                              {f}
-                            </span>
-                          ))}
-                          {step.verification.map((v, i) => (
-                            <span
-                              key={i}
-                              className="inline-flex items-center gap-1 text-emerald-400"
-                            >
-                              <CheckCircle2 className="h-3 w-3" />
-                              <span>{v}</span>
-                            </span>
-                          ))}
-                        </div>
+                    {/* Ordered Implementation Steps */}
+                    <div className="space-y-2.5">
+                      <div className="text-[11px] font-mono uppercase text-muted-foreground font-bold">
+                        Ordered Implementation Steps ({latestPlan.steps.length})
                       </div>
-                    ))}
-                  </div>
-
-                  {/* Risks & Validation Strategy */}
-                  {Array.isArray(latestPlan.risks) && latestPlan.risks.length > 0 && (
-                    <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                        Identified Risks & Mitigations
-                      </h3>
-                      {latestPlan.risks.map((risk: any, rIdx: number) => {
-                        const isObj = typeof risk === 'object' && risk !== null;
-                        const rId = isObj ? (risk.id || risk.risk_id || `risk-${rIdx}`) : `risk-${rIdx}`;
-                        const rDesc = isObj ? risk.description : String(risk);
-                        const rMitigation = isObj ? risk.mitigation : null;
-                        const rSeverity = isObj ? (risk.severity || 'low') : 'low';
-                        return (
-                          <div
-                            key={rId}
-                            className="flex items-start justify-between gap-3 text-xs border-t border-border/40 pt-2"
-                          >
-                            <div className="space-y-0.5">
-                              <div className="font-medium text-foreground">{rDesc}</div>
-                              {rMitigation && (
-                                <div className="text-[11px] text-muted-foreground">
-                                  Mitigation: {rMitigation}
-                                </div>
-                              )}
+                      {latestPlan.steps.map((step: PlanStep, idx: number) => (
+                        <div
+                          key={step.step_id}
+                          className="rounded-lg border border-border/70 bg-muted/15 p-3 space-y-2"
+                        >
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-[10px] font-bold">
+                                #{idx + 1} • {step.step_id}
+                              </span>
+                              <span className="px-2 py-0.5 rounded border border-border text-[10px] font-mono uppercase">
+                                {step.action_type || step.step_type}
+                              </span>
+                              <span className="text-xs font-semibold text-foreground">
+                                {step.title}
+                              </span>
                             </div>
                             <span
                               className={cn(
-                                'px-2 py-0.5 rounded border text-[10px] font-mono uppercase font-bold shrink-0',
-                                RISK_BADGE_MAP[rSeverity] || RISK_BADGE_MAP.low
+                                'px-2 py-0.5 rounded border text-[10px] font-mono uppercase',
+                                RISK_BADGE_MAP[step.risk_level || 'low'] || RISK_BADGE_MAP.low
                               )}
                             >
-                              {rSeverity}
+                              Risk: {step.risk_level || 'low'}
                             </span>
                           </div>
-                        );
-                      })}
+
+                          <p className="text-xs text-muted-foreground">{step.description}</p>
+
+                          <div className="flex flex-wrap gap-3 text-[11px] font-mono text-muted-foreground">
+                            {step.expected_files.length > 0 && (
+                              <span className="inline-flex items-center gap-1">
+                                <FileCode className="h-3 w-3 text-primary" />
+                                <span>Files: {step.expected_files.join(', ')}</span>
+                              </span>
+                            )}
+                            {(step.depends_on || step.dependencies || []).length > 0 && (
+                              <span>
+                                Depends on: {(step.depends_on || step.dependencies || []).join(', ')}
+                              </span>
+                            )}
+                          </div>
+
+                          {step.verification.length > 0 && (
+                            <div className="text-[11px] text-emerald-400/90 font-mono">
+                              ✓ Verification: {step.verification.join(' | ')}
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
-                  )}
+
+                    {/* Expected Files, Tests to Run, Validation Strategy & Risks */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-border/60 text-xs">
+                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-1.5">
+                        <div className="text-[10px] font-mono uppercase text-primary font-bold">
+                          Expected Files &amp; Permitted Tests
+                        </div>
+                        <div className="text-[11px] font-mono text-foreground/90">
+                          <strong>Files:</strong>{' '}
+                          {(latestPlan.expected_files || latestPlan.expected_files_to_modify || []).join(', ') || 'None'}
+                        </div>
+                        <div className="text-[11px] font-mono text-foreground/90">
+                          <strong>Tests:</strong>{' '}
+                          {(latestPlan.tests_to_run || latestPlan.tests_to_add || []).join(' ; ') || 'pytest'}
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-1.5">
+                        <div className="text-[10px] font-mono uppercase text-amber-400 font-bold">
+                          Risks &amp; Resource Budget
+                        </div>
+                        {(latestPlan.risks || []).map((r: any, i: number) => (
+                          <div key={r.id || i} className="text-[11px] text-foreground/90">
+                            • [{String(r.severity || 'medium').toUpperCase()}] {r.description || String(r)} —{' '}
+                            <span className="text-muted-foreground">{r.mitigation || ''}</span>
+                          </div>
+                        ))}
+                        {latestPlan.resource_budget && (
+                          <div className="text-[10px] font-mono text-muted-foreground pt-1">
+                            Budget: max {latestPlan.resource_budget.max_repair_attempts ?? 3} repair attempts •{' '}
+                            {latestPlan.resource_budget.max_tokens ?? 20000} tokens
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )}
             </>
           )}
         </div>
 
-        {/* Right Sidebar: Ordered Audit Timeline */}
-        <aside className="w-72 shrink-0 border-l border-border bg-card/30 flex flex-col min-h-0">
-          <div className="px-3.5 py-2.5 border-b border-border flex items-center gap-1.5 text-xs font-semibold">
+        {/* Right Sidebar: Ordered Audit & Execution Timeline (F38) */}
+        <aside className="w-80 shrink-0 border-l border-border bg-card/30 flex flex-col min-h-0">
+          <div className="px-3.5 py-2.5 border-b border-border flex items-center gap-2 text-xs font-semibold">
             <History className="h-3.5 w-3.5 text-primary" />
-            <span>Audit Timeline ({events.length})</span>
+            <span>Execution &amp; Audit Timeline ({events.length})</span>
           </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
             {events.length === 0 ? (
-              <div className="text-center text-xs text-muted-foreground py-8">
+              <div className="text-xs text-muted-foreground text-center py-8">
                 No timeline events recorded yet.
               </div>
             ) : (
-              events.map((evt) => (
+              events.map((evt, idx) => (
                 <div
-                  key={evt.event_id}
+                  key={evt.event_id || evt.id || idx}
                   className="rounded-lg border border-border/60 bg-background/60 p-2.5 space-y-1 text-xs"
                 >
-                  <div className="flex items-center justify-between gap-1 text-[10px] font-mono">
-                    <span className="text-primary font-semibold">{evt.event_type}</span>
-                    <span className="text-muted-foreground inline-flex items-center gap-0.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-[10px] font-bold text-primary">
+                      {evt.event_type}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
                       <Clock className="h-2.5 w-2.5" />
-                      {evt.created_at ? new Date(evt.created_at).toLocaleTimeString() : ''}
+                      <span>
+                        {evt.created_at
+                          ? new Date(evt.created_at).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })
+                          : ''}
+                      </span>
                     </span>
                   </div>
-                  <p className="text-[11px] text-foreground/90 leading-snug">{evt.summary}</p>
-                  {evt.to_status && (
+                  <p className="text-[11px] text-foreground/90">
+                    {evt.summary || evt.description}
+                  </p>
+                  {evt.from_status && evt.to_status && (
                     <div className="text-[10px] font-mono text-muted-foreground">
-                      {evt.from_status ? `${evt.from_status} → ` : ''}
-                      <span className="text-emerald-400">{evt.to_status}</span>
+                      {evt.from_status} → <strong className="text-foreground">{evt.to_status}</strong>
                     </div>
                   )}
                 </div>

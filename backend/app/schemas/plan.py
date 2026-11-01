@@ -116,7 +116,7 @@ class GitHubIssueCreateRequest(BaseModel):
 class GitHubIssueResponse(BaseModel):
     """Normalized GitHub issue record returned by the API."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
     repository_id: str
@@ -126,11 +126,23 @@ class GitHubIssueResponse(BaseModel):
     state: str = "open"
     labels: list[str] = Field(default_factory=list)
     html_url: str
+    url: str = ""
     author: str | None = None
     origin_finding_id: str | None = None
     task_id: str | None = None
+    is_imported: bool = False
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @model_validator(mode="after")
+    def _sync_issue_aliases(self) -> "GitHubIssueResponse":
+        if self.html_url and not self.url:
+            self.url = self.html_url
+        elif self.url and not self.html_url:
+            self.html_url = self.url
+        if self.task_id and not self.is_imported:
+            self.is_imported = True
+        return self
 
 
 class IssueImportResponse(BaseModel):
@@ -810,6 +822,24 @@ class PlanApprovalRequest(BaseModel):
         max_length=2000,
         description="Optional approver comment or sign-off note.",
     )
+    notes: str | None = Field(
+        default=None,
+        max_length=2000,
+        description="Alias for comment (used by frontend PlanReviewPanel).",
+    )
+    approved_by: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Optional approver username or identifier.",
+    )
+
+    @model_validator(mode="after")
+    def _sync_comment_and_notes(self) -> "PlanApprovalRequest":
+        if self.notes and not self.comment:
+            self.comment = self.notes
+        elif self.comment and not self.notes:
+            self.notes = self.comment
+        return self
 
 
 class PlanRejectionRequest(BaseModel):
@@ -826,6 +856,11 @@ class PlanRejectionRequest(BaseModel):
         max_length=2000,
         description="Reason for rejecting the plan.",
     )
+    rejected_by: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Optional reviewer username or identifier.",
+    )
 
 
 class TaskPlanGenerateRequest(BaseModel):
@@ -835,15 +870,32 @@ class TaskPlanGenerateRequest(BaseModel):
         default=None,
         description="Optional updated base revision SHA or branch ref.",
     )
+    regenerate: bool = Field(
+        default=False,
+        description="Flag indicating explicit plan regeneration.",
+    )
     revision_notes: str | None = Field(
         default=None,
         max_length=4000,
         description="Optional human feedback or instructions for revising the plan.",
     )
+    prompt_instructions: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="Alias for revision_notes (used by frontend PlanReviewPanel).",
+    )
     custom_plan: PlannerSchema | None = Field(
         default=None,
         description="Optional user-edited structured plan to validate and save as a new plan version.",
     )
+
+    @model_validator(mode="after")
+    def _sync_revision_instructions(self) -> "TaskPlanGenerateRequest":
+        if self.prompt_instructions and not self.revision_notes:
+            self.revision_notes = self.prompt_instructions
+        elif self.revision_notes and not self.prompt_instructions:
+            self.prompt_instructions = self.revision_notes
+        return self
 
     @field_validator("base_revision")
     @classmethod
@@ -873,7 +925,9 @@ class TaskPlanResponse(BaseModel):
     relevant_symbols: list[str] = Field(default_factory=list)
     steps: list[PlanStep]
     expected_files: list[str] = Field(default_factory=list)
+    expected_files_to_modify: list[str] = Field(default_factory=list)
     tests_to_run: list[str] = Field(default_factory=list)
+    tests_to_add: list[str] = Field(default_factory=list)
     validation_strategy: list[str] = Field(default_factory=list)
     risks: list[PlanRisk] = Field(default_factory=list)
     required_permissions: list[str] = Field(default_factory=list)
@@ -884,36 +938,85 @@ class TaskPlanResponse(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+    @model_validator(mode="after")
+    def _sync_plan_response_aliases(self) -> "TaskPlanResponse":
+        if self.expected_files and not self.expected_files_to_modify:
+            self.expected_files_to_modify = list(self.expected_files)
+        if self.tests_to_run and not self.tests_to_add:
+            self.tests_to_add = list(self.tests_to_run)
+        return self
+
 
 class TaskApprovalResponse(BaseModel):
     """Immutable audit record of a plan approval or rejection decision."""
 
+    model_config = ConfigDict(extra="allow")
+
+    id: str = ""
     approval_id: str
     task_id: str
     plan_id: str
     plan_version: int
     approver_id: str
+    user_id: str | None = None
     decision: Literal["APPROVED", "REJECTED"]
     comment: str | None = None
+    notes: str | None = None
+    reason: str | None = None
     base_revision: str | None = None
     plan_hash: str
     task_status: TaskStatus
+    status: TaskStatus | None = None
     approved_plan_version: int | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @model_validator(mode="after")
+    def _sync_approval_aliases(self) -> "TaskApprovalResponse":
+        if not self.id:
+            self.id = self.approval_id
+        if not self.user_id and self.approver_id:
+            self.user_id = self.approver_id
+        if self.comment and not self.notes:
+            self.notes = self.comment
+        if self.decision == "REJECTED" and self.comment and not self.reason:
+            self.reason = self.comment
+        if self.status is None:
+            self.status = self.task_status
+        return self
 
 
 class TaskEventResponse(BaseModel):
     """Ordered timeline & audit event record (Docs/week3.md §6 F38 & F39)."""
 
+    id: str = ""
     event_id: str
     task_id: str
     event_type: str
     actor_id: str | None = None
+    user_id: str | None = None
     from_status: str | None = None
     to_status: str | None = None
     summary: str
+    description: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
+    details: dict[str, Any] = Field(default_factory=dict)
     created_at: str
+
+    @model_validator(mode="after")
+    def _sync_event_aliases(self) -> "TaskEventResponse":
+        if not self.id:
+            self.id = self.event_id
+        if not self.user_id and self.actor_id:
+            self.user_id = self.actor_id
+        if not self.description and self.summary:
+            self.description = self.summary
+        elif not self.summary and self.description:
+            self.summary = self.description
+        if self.payload and not self.details:
+            self.details = dict(self.payload)
+        elif self.details and not self.payload:
+            self.payload = dict(self.details)
+        return self
 
 
 __all__ = [

@@ -80,6 +80,8 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/tasks/?$"), 30, 60, "user"),
         RateLimitRule("task_plan", frozenset({"POST"}),
                       re.compile(rf"^{p}/tasks/[^/]+/plan/?$"), 15, 60, "user"),
+        RateLimitRule("task_execute", frozenset({"POST"}),
+                      re.compile(rf"^{p}/tasks/[^/]+/(?:execute|tests|repair|tools/[^/]+)/?$"), 20, 60, "user"),
     )
 
 

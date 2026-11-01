@@ -34,7 +34,12 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=512), nullable=False),
         sa.Column("body", sa.Text(), nullable=False, server_default=""),
         sa.Column("state", sa.String(length=32), nullable=False, server_default="open"),
-        sa.Column("labels", sa.JSON(), nullable=False),
+        sa.Column(
+            "labels",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
+        ),
         sa.Column("html_url", sa.String(length=1024), nullable=False),
         sa.Column("author", sa.String(length=255), nullable=True),
         sa.Column(
@@ -49,6 +54,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_github_issues_repository_id", "github_issues", ["repository_id"], unique=False)
     op.create_index("ix_github_issues_origin_finding_id", "github_issues", ["origin_finding_id"], unique=False)
+    op.create_index("ix_github_issues_repo_number", "github_issues", ["repository_id", "issue_number"], unique=False)
 
     # 2. Add Week 3 Day 2 extensions to tasks table
     op.add_column(
@@ -218,6 +224,7 @@ def downgrade() -> None:
     op.drop_column("tasks", "github_issue_id")
 
     # 1. Drop github_issues table
+    op.drop_index("ix_github_issues_repo_number", table_name="github_issues")
     op.drop_index("ix_github_issues_origin_finding_id", table_name="github_issues")
     op.drop_index("ix_github_issues_repository_id", table_name="github_issues")
     op.drop_table("github_issues")

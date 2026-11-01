@@ -48,7 +48,15 @@ EXPECTED_TABLES = frozenset({
     "tasks",
     "task_plans",
     "task_approvals",
+    "workspaces",
+    "task_executions",
+    "tool_invocations",
+    "test_runs",
+    "repair_attempts",
+    "verification_results",
+    "task_checkpoints",
     "task_events",
+    "task_pull_requests",
 })
 
 EXPECTED_MILESTONE_REVISIONS = (
