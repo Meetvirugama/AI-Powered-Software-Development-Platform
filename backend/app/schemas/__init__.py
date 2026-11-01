@@ -119,6 +119,7 @@ from app.schemas.task import (
 from app.schemas.verification import (
     VerificationCheckItem,
     VerificationCheckStatus,
+    VerificationContext,
     VerificationFinding,
     VerificationOverallStatus,
     VerificationResult,
@@ -291,6 +292,7 @@ __all__ = [
     "ValidationStrategy",
     "VerificationCheckItem",
     "VerificationCheckStatus",
+    "VerificationContext",
     "VerificationFinding",
     "VerificationOverallStatus",
     "VerificationResult",
