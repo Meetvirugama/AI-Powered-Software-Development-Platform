@@ -269,6 +269,44 @@ class TaskPullRequestResponse(BaseModel):
     created_at: Optional[str] = None
 
 
+
+
+class PublicationAuthorizationRequest(BaseModel):
+    """Request model for authorizing branch publication and PR creation (Day 5)."""
+
+    head_sha: str
+    notes: Optional[str] = None
+
+
+class PublicationAuthorizationResponse(BaseModel):
+    """Response envelope confirming publication authorization (Day 5)."""
+
+    task_id: str
+    status: str
+    head_sha: str
+    authorized: bool = True
+    user_id: Optional[str] = None
+    authorized_at: Optional[str] = None
+
+
+class TaskTraceabilityResponse(BaseModel):
+    """Complete end-to-end audit traceability from finding/issue to draft PR (Day 5)."""
+
+    task: TaskResponse
+    finding: Optional[dict[str, Any]] = None
+    latest_plan: Optional[TaskPlanResponse] = None
+    latest_approval: Optional[TaskApprovalResponse] = None
+    workspace: Optional[WorkspaceResponse] = None
+    latest_execution: Optional[TaskExecutionResponse] = None
+    latest_test_run: Optional[TestRunResponse] = None
+    repair_attempts_used: int = 0
+    latest_repair: Optional[RepairAttemptResponse] = None
+    latest_verification: Optional[VerificationResultResponse] = None
+    pull_request: Optional[TaskPullRequestResponse] = None
+    timeline: List[TaskEventResponse] = []
+    traceability_status: str
+
+
 __all__ = [
     "TaskSourceReference",
     "WorkspaceResponse",
@@ -288,4 +326,7 @@ __all__ = [
     "TaskEventResponse",
     "VerificationResultResponse",
     "TaskPullRequestResponse",
+    "PublicationAuthorizationRequest",
+    "PublicationAuthorizationResponse",
+    "TaskTraceabilityResponse",
 ]

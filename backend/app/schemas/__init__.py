@@ -53,6 +53,9 @@ from app.schemas.task import (
     ToolInvocationResponse,
     TestRunResponse,
     RepairAttemptResponse,
+    PublicationAuthorizationRequest,
+    PublicationAuthorizationResponse,
+    TaskTraceabilityResponse,
 )
 
 __all__ = [
@@ -106,4 +109,7 @@ __all__ = [
     "ToolInvocationResponse",
     "TestRunResponse",
     "RepairAttemptResponse",
+    "PublicationAuthorizationRequest",
+    "PublicationAuthorizationResponse",
+    "TaskTraceabilityResponse",
 ]

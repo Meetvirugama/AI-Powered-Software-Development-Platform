@@ -674,6 +674,20 @@ class VerificationResult(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="verification_results")
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert VerificationResult model to canonical response envelope dictionary."""
+        return {
+            "verification_id": str(self.id),
+            "task_id": str(self.task_id),
+            "verified_revision": self.verified_revision,
+            "status": self.status,
+            "checks": self.checks or [],
+            "blocking_findings": self.blocking_findings or [],
+            "warnings": self.warnings or [],
+            "summary": self.summary,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class TaskCheckpoint(TimestampedModel, Base):
     """Persisted snapshot state for safe worker restart recovery (secret-scrubbed)."""

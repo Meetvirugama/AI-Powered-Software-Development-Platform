@@ -587,3 +587,130 @@ class TaskHistoryService:
         with self._get_session(db) as session:
             repo = TaskRepository(session)
             return repo.get_repair_attempts(task_id, repository_id)
+
+
+    # -----------------------------------------------------------------------
+    # 6. Independent Verification, Publication Authorization & Draft PR (Day 5)
+    # -----------------------------------------------------------------------
+
+    def record_verification_result(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        verified_revision: str,
+        status: VerificationStatus | str,
+        checks: Optional[list[dict[str, Any]]] = None,
+        blocking_findings: Optional[list[dict[str, Any]]] = None,
+        warnings: Optional[list[dict[str, Any]]] = None,
+        summary: Optional[str] = None,
+        db: Optional[Session] = None,
+    ) -> VerificationResult:
+        """Record independent verification outcome and update task status based on checks (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.record_verification_result(
+                task_id=task_id,
+                repository_id=repository_id,
+                verified_revision=verified_revision,
+                status=status,
+                checks=checks,
+                blocking_findings=blocking_findings,
+                warnings=warnings,
+                summary=summary,
+            )
+
+    def get_verification_results(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        db: Optional[Session] = None,
+    ) -> list[VerificationResult]:
+        """Fetch all verification results for an authorized task ordered newest-first (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.get_verification_results(task_id, repository_id)
+
+    def get_latest_verification_result(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        db: Optional[Session] = None,
+    ) -> Optional[VerificationResult]:
+        """Fetch the most recent verification result for an authorized task (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.get_latest_verification_result(task_id, repository_id)
+
+    def authorize_publication(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        head_sha: str,
+        user_id: Optional[uuid.UUID | str] = None,
+        notes: Optional[str] = None,
+        db: Optional[Session] = None,
+    ) -> Task:
+        """Authorize branch publication after validating passing verification and zero blocking findings (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.authorize_publication(
+                task_id=task_id,
+                repository_id=repository_id,
+                head_sha=head_sha,
+                user_id=user_id,
+                notes=notes,
+            )
+
+    def record_pull_request(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        pr_url: str,
+        base_branch: str,
+        head_branch: str,
+        head_sha: str,
+        title: str,
+        body: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        github_pr_id: Optional[int] = None,
+        is_draft: bool = True,
+        db: Optional[Session] = None,
+    ) -> TaskPullRequest:
+        """Record published Draft PR and advance task status to DRAFT_PR_CREATED (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.record_pull_request(
+                task_id=task_id,
+                repository_id=repository_id,
+                pr_url=pr_url,
+                base_branch=base_branch,
+                head_branch=head_branch,
+                head_sha=head_sha,
+                title=title,
+                body=body,
+                pr_number=pr_number,
+                github_pr_id=github_pr_id,
+                is_draft=is_draft,
+            )
+
+    def get_pull_request(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        db: Optional[Session] = None,
+    ) -> Optional[TaskPullRequest]:
+        """Fetch recorded Pull Request for an authorized task (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.get_pull_request(task_id, repository_id)
+
+    def get_task_traceability(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        db: Optional[Session] = None,
+    ) -> dict[str, Any]:
+        """Return complete end-to-end traceability linking finding -> issue -> task -> plan -> workspace -> execution -> tests -> repair -> verification -> Draft PR (Day 5)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.get_task_traceability(task_id, repository_id)

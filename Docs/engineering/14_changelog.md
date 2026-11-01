@@ -699,3 +699,35 @@ ecord_test_run, get_test_runs, get_latest_test_run, increment_repair_attempt, ge
 **Impact:** Provides the core persistence foundation for Prit (WorkspaceManager), Devu (ToolRouter & PolicyEngine), Meet (Agent Execution Loop & Bounded Repair), and Dev (Test Strategy & Diagnosis). All workspace lifecycles, execution states, tool audit trails, test runs, and repair attempts are reliably persisted with tamper-proof budget bounds.
 
 **Related Docs:** Docs/persistence_week3_day3_day4_report.md, Docs/week3.md, Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md
+
+---
+
+### [W3-Day5] 2026-10-29 - Independent Verification, Publication Gate, Draft PR Persistence & End-to-End Traceability
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- \ackend/app/models/task.py\:
+  - Added canonical \	o_dict()\ serialization method to \VerificationResult\ matching \VerificationResultResponse\ schema.
+- \ackend/app/schemas/task.py\, \ackend/app/schemas/__init__.py\:
+  - Added and exported \PublicationAuthorizationRequest\, \PublicationAuthorizationResponse\, and \TaskTraceabilityResponse\ schemas with comprehensive field definitions and documentation.
+- \ackend/app/repositories/task_repository.py\:
+  - Eagerly loads \Task.finding\ with \selectinload(Task.finding)\ in \get_task()\.
+  - Enhanced ecord_verification_result()\: validates non-terminal task status, sets \	ask.status = READY_FOR_PUBLICATION\ if \PASSED\ without blockers, sets \	ask.status = BLOCKED\ if \FAILED\ or has blocking findings, and logs \VERIFICATION_COMPLETED\ event.
+  - Added \get_verification_results()\ and \get_latest_verification_result()\.
+  - Added \uthorize_publication()\: verifies \READY_FOR_PUBLICATION\, enforces \head_sha\ match with latest verified revision with \PASSED\ status and zero blockers, transitions task to \PUBLISHING\, and logs \PUBLICATION_AUTHORIZED\ event.
+  - Enhanced ecord_pull_request()\: validates \PUBLISHING\ or \READY_FOR_PUBLICATION\ status, guarantees idempotency on retry, transitions task to \DRAFT_PR_CREATED\, and logs \DRAFT_PR_CREATED\ event.
+  - Added \get_pull_request()\.
+  - Added \get_task_traceability()\: constructs complete end-to-end graph (\	ask\, \inding\, \latest_plan\, \latest_approval\, \workspace\, \latest_execution\, \latest_test_run\, epair_attempts_used\, \latest_repair\, \latest_verification\, \pull_request\, \	imeline\, \	raceability_status\).
+  - Added idempotent self-transition in \	ransition_status()\.
+- \ackend/app/services/task_history_service.py\:
+  - Added Day 5 orchestration methods wrapping TaskRepository with session management: ecord_verification_result\, \get_verification_results\, \get_latest_verification_result\, \uthorize_publication\, ecord_pull_request\, \get_pull_request\, \get_task_traceability\.
+- \ackend/tests/test_om_w3_d5_verification_pr_traceability.py\:
+  - Authored 15 comprehensive automated tests (100% passing) verifying verification persistence, publication authorization gate, draft PR persistence, end-to-end traceability graph, multi-tenant isolation, and Pydantic schema validation.
+- \Docs/daily_tasks.md\, \Docs/engineering/10_development_tasks.md\:
+  - Marked Om's Day 5 deliverables complete with all 54 Week 3 tests passing.
+- \Docs/persistence_week3_day5_report.md\:
+  - Published formal Week 3 Day 5 Persistence Deliverable Report.
+
+**Impact:** Provides the core persistence foundation and state machine gates for Dev & Keval (W3-08 Independent Verification), Parth & Yug (W3-09 Authorized Push & Draft PR Creator), and Dhramraj (W3-10 Task Dashboard, Progress & Timeline UI). All artifacts from original finding to GitHub Draft PR are interconnected in an auditable, tamper-resistant graph.
+
+**Related Docs:** \Docs/persistence_week3_day5_report.md\, \Docs/week3.md\, \Docs/daily_tasks.md\, \Docs/engineering/10_development_tasks.md

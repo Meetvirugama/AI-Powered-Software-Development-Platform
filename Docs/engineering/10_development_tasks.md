@@ -86,7 +86,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval | P0 | TODO | Separate verification check, static scan, AI code review |
 | W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug | P0 | TODO | Human push authorization, GitHub Draft PR with summary |
 | W3-10 | Task Dashboard, Progress & Timeline UI (F38) | Dhramraj | P0 | TODO | Live task progress, timeline events, side-by-side diff |
-| W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug | P0 | IN PROGRESS | Day 1-4 Complete: Workspace tracking, execution & tool auditing, test run logging, bounded repair (3-attempt ceiling), 39/39 tests passing |
+| W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug | P0 | IN PROGRESS | Day 1-5 Complete: Verification persistence, publication authorization gate, GitHub Draft PR metadata, end-to-end traceability graph, 54/54 tests passing |
 | W3-12 | Security Attack Matrix & Release Sign-off (F40) | Sukun / Keval | P0 | TODO | Prompt-injection attacks, path traversal, full E2E demo |
 
 ---
@@ -99,7 +99,7 @@ Convert verified developer intelligence into a controlled development workflow: 
 | **Dev** | Output Schemas & AI Engine Services | Pydantic models for Explanation, Bugs, Tests, and Review |
 | **Dhramraj** | Workbench UI & Feature Drawers | Code intelligence panels in fixed-viewport React 19 layout |
 | **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
-| **Om** | Workflow Automation, Execution & Bounded Repair Persistence | Workspace tracking, tool audit logging, test run persistence, bounded repair budget (Week 3 Day 1-4 complete, 39/39 tests passing) |
+| **Om** | Workflow Automation, Verification & Traceability Persistence | Verification results, publication authorization gate, draft PR persistence, end-to-end traceability graph (Week 3 Day 1-5 complete, 54/54 tests passing) |
 | **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
 | **Prit** | AST Symbol, Scanner & Review Source Mapper | `ReviewSourceMapper`, `FrameworkDetector`, `ASTBugAnalyzer`, `TargetSelector` |
 | **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |

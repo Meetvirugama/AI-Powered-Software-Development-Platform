@@ -281,6 +281,7 @@ class TaskRepository:
                 selectinload(Task.repair_attempts),
                 selectinload(Task.verification_results),
                 selectinload(Task.pull_request),
+                selectinload(Task.finding),
             )
         )
         return self.session.execute(stmt).scalar_one_or_none()
@@ -335,6 +336,9 @@ class TaskRepository:
 
         target_status_enum = TaskStatus(new_status) if isinstance(new_status, str) else new_status
         current_status_enum = TaskStatus(task.status)
+
+        if target_status_enum == current_status_enum:
+            return task
 
         allowed_targets = VALID_TRANSITIONS.get(current_status_enum, set())
         if target_status_enum not in allowed_targets:
@@ -1142,10 +1146,15 @@ class TaskRepository:
         warnings: Optional[list[dict[str, Any]]] = None,
         summary: Optional[str] = None,
     ) -> VerificationResult:
-        """Record independent verification outcome strictly bound to verified revision."""
+        """Record independent verification outcome strictly bound to verified revision (Day 5)."""
         task = self.get_task(task_id, repository_id)
         if not task:
             raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        if task.status in {TaskStatus.FAILED.value, TaskStatus.CANCELLED.value}:
+            raise InvalidStateTransitionError(
+                f"Cannot record verification result for task in terminal status '{task.status}'."
+            )
 
         status_val = status.value if isinstance(status, VerificationStatus) else str(status)
 
@@ -1160,6 +1169,14 @@ class TaskRepository:
             summary=scrub_sensitive_text(summary),
         )
         self.session.add(res)
+
+        # State transition based on verification outcome (§7.1, §7.2)
+        has_blocking = bool(blocking_findings and len(blocking_findings) > 0)
+        if status_val == VerificationStatus.PASSED.value and not has_blocking:
+            task.status = TaskStatus.READY_FOR_PUBLICATION.value
+        elif status_val == VerificationStatus.FAILED.value or has_blocking:
+            task.status = TaskStatus.BLOCKED.value
+
         self.session.flush()
 
         self.record_event(
@@ -1170,14 +1187,94 @@ class TaskRepository:
                 "verified_revision": verified_revision,
                 "status": status_val,
                 "blocking_count": len(blocking_findings or []),
+                "task_status": task.status,
             },
         )
         self.session.commit()
         self.session.refresh(res)
         return res
 
+    def get_verification_results(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+    ) -> list[VerificationResult]:
+        """Fetch all verification results for an authorized task ordered newest-first (Day 5)."""
+        task = self.get_task(task_id, repository_id)
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        stmt = (
+            select(VerificationResult)
+            .where(VerificationResult.task_id == task.id)
+            .order_by(VerificationResult.created_at.desc())
+        )
+        return list(self.session.execute(stmt).scalars().all())
+
+    def get_latest_verification_result(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+    ) -> Optional[VerificationResult]:
+        """Fetch the most recent verification result for an authorized task (Day 5)."""
+        results = self.get_verification_results(task_id, repository_id)
+        return results[0] if results else None
+
+    def authorize_publication(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        head_sha: str,
+        user_id: Optional[uuid.UUID | str] = None,
+        notes: Optional[str] = None,
+    ) -> Task:
+        """Authorize branch publication and transition task from READY_FOR_PUBLICATION to PUBLISHING (Day 5)."""
+        task = self.get_task(task_id, repository_id)
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        if task.status != TaskStatus.READY_FOR_PUBLICATION.value:
+            raise InvalidStateTransitionError(
+                f"Task {task.id} is in status '{task.status}', but publication authorization requires READY_FOR_PUBLICATION."
+            )
+
+        latest_ver = self.get_latest_verification_result(task_id, repository_id)
+        if not latest_ver:
+            raise InvalidStateTransitionError(
+                f"Task {task.id} cannot be authorized for publication without passing verification."
+            )
+
+        if latest_ver.verified_revision != head_sha:
+            raise InvalidStateTransitionError(
+                f"Authorized revision '{head_sha}' does not match latest verified revision '{latest_ver.verified_revision}'."
+            )
+
+        has_blocking = bool(latest_ver.blocking_findings and len(latest_ver.blocking_findings) > 0)
+        if latest_ver.status != VerificationStatus.PASSED.value or has_blocking:
+            raise InvalidStateTransitionError(
+                f"Cannot authorize publication: verification status is '{latest_ver.status}' with {len(latest_ver.blocking_findings or [])} blocking findings."
+            )
+
+        task.status = TaskStatus.PUBLISHING.value
+        self.session.flush()
+
+        self.record_event(
+            task_id=task.id,
+            repository_id=task.repository_id,
+            event_type=TaskEventType.PUBLICATION_AUTHORIZED.value,
+            event_data={
+                "authorized_head_sha": head_sha,
+                "notes": scrub_sensitive_text(notes),
+                "verified_revision": latest_ver.verified_revision,
+            },
+            user_id=user_id,
+        )
+        self.session.commit()
+        self.session.refresh(task)
+        return task
+
     # -----------------------------------------------------------------------
-    # Pull Requests & Event Timeline
+    # Pull Requests, End-to-End Traceability & Event Timeline (Day 5)
     # -----------------------------------------------------------------------
 
     def record_pull_request(
@@ -1194,26 +1291,46 @@ class TaskRepository:
         github_pr_id: Optional[int] = None,
         is_draft: bool = True,
     ) -> TaskPullRequest:
-        """Record published Draft PR and advance task to DRAFT_PR_CREATED."""
+        """Record published Draft PR and advance task to DRAFT_PR_CREATED (Day 5)."""
         task = self.get_task(task_id, repository_id)
         if not task:
             raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
 
-        pr = TaskPullRequest(
-            id=uuid.uuid4(),
-            task_id=task.id,
-            repository_id=task.repository_id,
-            github_pr_id=github_pr_id,
-            pr_number=pr_number,
-            pr_url=pr_url,
-            base_branch=base_branch,
-            head_branch=head_branch,
-            head_sha=head_sha,
-            is_draft=is_draft,
-            title=title.strip(),
-            body=scrub_sensitive_text(body),
-        )
-        self.session.add(pr)
+        if task.status not in {TaskStatus.PUBLISHING.value, TaskStatus.READY_FOR_PUBLICATION.value, TaskStatus.DRAFT_PR_CREATED.value}:
+            raise InvalidStateTransitionError(
+                f"Cannot record Pull Request for task in status '{task.status}'. Publication authorization is required."
+            )
+
+        existing_pr = self.session.execute(
+            select(TaskPullRequest).where(TaskPullRequest.task_id == task.id)
+        ).scalar_one_or_none()
+
+        if existing_pr:
+            existing_pr.pr_url = pr_url
+            existing_pr.pr_number = pr_number or existing_pr.pr_number
+            existing_pr.base_branch = base_branch
+            existing_pr.head_branch = head_branch
+            existing_pr.head_sha = head_sha
+            existing_pr.title = scrub_sensitive_text(title.strip())
+            existing_pr.body = scrub_sensitive_text(body)
+            existing_pr.is_draft = is_draft
+            pr = existing_pr
+        else:
+            pr = TaskPullRequest(
+                id=uuid.uuid4(),
+                task_id=task.id,
+                repository_id=task.repository_id,
+                github_pr_id=github_pr_id,
+                pr_number=pr_number,
+                pr_url=pr_url,
+                base_branch=base_branch,
+                head_branch=head_branch,
+                head_sha=head_sha,
+                is_draft=is_draft,
+                title=scrub_sensitive_text(title.strip()),
+                body=scrub_sensitive_text(body),
+            )
+            self.session.add(pr)
 
         task.status = TaskStatus.DRAFT_PR_CREATED.value
         self.session.flush()
@@ -1233,6 +1350,78 @@ class TaskRepository:
         self.session.commit()
         self.session.refresh(pr)
         return pr
+
+    def get_pull_request(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+    ) -> Optional[TaskPullRequest]:
+        """Fetch recorded Pull Request for an authorized task (Day 5)."""
+        task = self.get_task(task_id, repository_id)
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        stmt = select(TaskPullRequest).where(TaskPullRequest.task_id == task.id)
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_task_traceability(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+    ) -> dict[str, Any]:
+        """Return complete end-to-end traceability linking finding -> issue -> task -> plan -> workspace -> execution -> tests -> repair -> verification -> Draft PR (Day 5)."""
+        task = self.get_task(task_id, repository_id)
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        latest_plan = self.get_plan(task.id, repository_id, version=None)
+        latest_approval = self.get_approval(task.id, repository_id)
+        workspace = self.get_workspace(task.id, repository_id)
+        executions = self.get_executions(task.id, repository_id)
+        latest_execution = executions[-1] if executions else None
+        latest_test = self.get_latest_test_run(task.id, repository_id)
+        repairs = self.get_repair_attempts(task.id, repository_id)
+        latest_repair = repairs[-1] if repairs else None
+        latest_ver = self.get_latest_verification_result(task.id, repository_id)
+        pr = self.get_pull_request(task.id, repository_id)
+        timeline = self.get_task_timeline(task.id, repository_id)
+
+        finding_data = None
+        if task.finding:
+            finding_data = {
+                "finding_id": str(task.finding.id),
+                "title": task.finding.title,
+                "category": task.finding.category,
+                "severity": task.finding.severity,
+                "file_path": task.finding.file_path,
+                "start_line": task.finding.start_line,
+                "end_line": task.finding.end_line,
+                "source_reference": task.finding.source_reference,
+            }
+
+        status_str = "IN_PROGRESS"
+        if task.status == TaskStatus.DRAFT_PR_CREATED.value:
+            status_str = "COMPLETE"
+        elif task.status in {TaskStatus.FAILED.value, TaskStatus.BLOCKED.value, TaskStatus.REJECTED.value}:
+            status_str = task.status
+        elif task.status in {TaskStatus.READY_FOR_PUBLICATION.value, TaskStatus.PUBLISHING.value}:
+            status_str = "READY_FOR_PR"
+
+        return {
+            "task": task.to_dict(),
+            "finding": finding_data,
+            "latest_plan": latest_plan.to_dict() if latest_plan else None,
+            "latest_approval": latest_approval.to_dict() if latest_approval else None,
+            "workspace": workspace.to_dict() if workspace else None,
+            "latest_execution": latest_execution.to_dict() if latest_execution else None,
+            "latest_test_run": latest_test.to_dict() if latest_test else None,
+            "repair_attempts_used": task.repair_attempts_used,
+            "latest_repair": latest_repair.to_dict() if latest_repair else None,
+            "latest_verification": latest_ver.to_dict() if latest_ver else None,
+            "pull_request": pr.to_dict() if pr else None,
+            "timeline": [ev.to_dict() for ev in timeline],
+            "traceability_status": status_str,
+        }
 
     def record_event(
         self,
