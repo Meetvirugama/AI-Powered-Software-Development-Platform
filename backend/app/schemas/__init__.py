@@ -1,5 +1,12 @@
 """Pydantic request and response schemas shared by API routes."""
 
+from app.schemas.ai_quality import (
+    AIQualityReport,
+    PermittedProviderName,
+    ProviderValidationCheck,
+    ProviderValidationStatus,
+    QualityBenchmarkSample,
+)
 from app.schemas.analysis import (
     AnalysisFeatureType,
     AnalysisOptions,
@@ -180,6 +187,7 @@ from app.schemas.workspace import (
 )
 
 __all__ = [
+    "AIQualityReport",
     "AffectedSymbol",
     "AnalysisFeatureType",
     "AnalysisOptions",
@@ -231,6 +239,10 @@ __all__ = [
     "PlanStep",
     "PlanStepActionType",
     "PlannerSchema",
+    "PermittedProviderName",
+    "ProviderValidationCheck",
+    "ProviderValidationStatus",
+    "QualityBenchmarkSample",
     "ProposedTest",
     "RepairAttemptRecord",
     "RepairLoopState",
