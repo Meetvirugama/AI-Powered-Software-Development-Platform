@@ -190,3 +190,4 @@ def to_dict(self) -> dict[str, Any]:
    - Once authorized (`PUBLISHING`), GitHub Draft PR creation is persisted via `task_history_service.record_pull_request()`, safely transitioning the task to `DRAFT_PR_CREATED`.
 3. **Dhramraj (W3-10 Task Dashboard, Progress & Timeline UI):**
    - Call `task_history_service.get_task_traceability()` to obtain the unified end-to-end graph connecting the original AST Finding, Plan version, Approval record, Workspace, Execution duration, Test Run logs, Repair attempts, Verification summary, and GitHub Draft PR URL.
+

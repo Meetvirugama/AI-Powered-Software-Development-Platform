@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   FileCheck,
   ShieldAlert,
@@ -205,8 +205,15 @@ export function CodeReviewView({
   const [selectedCategory, setSelectedCategory] = useState<ReviewCategory | 'ALL'>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [navWarning, setNavWarning] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
@@ -280,10 +287,11 @@ export function CodeReviewView({
 
   async function handleCopyFix(findingId: string, fixText: string) {
     if (!navigator?.clipboard?.writeText) return;
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     try {
       await navigator.clipboard.writeText(fixText);
       setCopiedId(findingId);
-      setTimeout(() => setCopiedId(null), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopiedId(null), 2000);
     } catch {
       // Ignore clipboard write failure honestly without setting copiedId
     }
@@ -1208,9 +1216,9 @@ export function ReviewHistoryDrawer({
             setRuns(res.items || []);
           }
         })
-        .catch((err: any) => {
+        .catch((err: unknown) => {
           if (!ignore) {
-            setError(err?.message || 'Failed to load review history.');
+            setError(err instanceof Error ? err.message : 'Failed to load review history.');
           }
         })
         .finally(() => {
@@ -1230,8 +1238,9 @@ export function ReviewHistoryDrawer({
     setReopeningId(runId);
     try {
       const detail = await reopenCodeReview(runId);
-      const payloadReport = (detail.result_payload as any)?.report;
-      const payloadTarget = (detail.result_payload as any)?.target;
+      const payload = (detail.result_payload && typeof detail.result_payload === 'object' ? detail.result_payload : {}) as Record<string, unknown>;
+      const payloadReport = payload.report as ReviewReportResponse['report'] | undefined;
+      const payloadTarget = payload.target as ReviewReportResponse['target'] | undefined;
 
       const reconstructed: ReviewReportResponse = {
         run_id: detail.id,
@@ -1243,19 +1252,19 @@ export function ReviewHistoryDrawer({
         },
         report: payloadReport || {
           summary: `Reopened historical review from ${new Date(detail.created_at).toLocaleString()}`,
-          risk_level: payloadReport?.risk_level || (detail.findings_count > 0 ? 'MEDIUM' : 'NONE'),
+          risk_level: detail.findings_count > 0 ? 'MEDIUM' : 'NONE',
           findings: (detail.findings || []) as ReviewFinding[],
           total_findings: detail.findings_count,
-          category_counts: payloadReport?.category_counts || {},
-          missing_context: payloadReport?.missing_context || [],
+          category_counts: {},
+          missing_context: [],
         },
         created_at: detail.created_at,
       };
 
       onReopenReview?.(reconstructed);
       onClose();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to reopen historical review run.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to reopen historical review run.');
     } finally {
       setReopeningId(null);
     }

@@ -776,10 +776,22 @@ def test_api_review_code_persistence_and_retrieval(
         sync_status=SyncStatus.SYNCED,
     )
     db_session.add(repo)
+    repo_file = RepositoryFile(
+        id=uuid.uuid4(),
+        repository_id=repo.id,
+        path="src/api/auth.py",
+        size_bytes=1024,
+        line_count=100,
+        content_hash="hash_auth",
+        language="python",
+    )
+    db_session.add(repo_file)
     db_session.commit()
     db_session.refresh(repo)
 
     findings = _sample_review_findings()[:3]
+    for f in findings:
+        f["source_reference"]["file_path"] = "src/api/auth.py"
     sample_report = {
         "summary": "API Code Review completed successfully with 3 findings.",
         "risk_level": "HIGH",
@@ -890,6 +902,16 @@ def test_api_review_code_failure_recording(
         sync_status=SyncStatus.SYNCED,
     )
     db_session.add(repo)
+    repo_file = RepositoryFile(
+        id=uuid.uuid4(),
+        repository_id=repo.id,
+        path="src/fail_test.py",
+        size_bytes=1024,
+        line_count=50,
+        content_hash="hash_fail",
+        language="python",
+    )
+    db_session.add(repo_file)
     db_session.commit()
     db_session.refresh(repo)
 

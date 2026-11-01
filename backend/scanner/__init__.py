@@ -16,10 +16,13 @@ from .source_mapper import (
     ReviewSourceMapResult,
     SymbolSummary,
 )
+from .symbol_blast_radius import SymbolBlastRadiusEngine
 from .symbols import FileInfo, ParseResult, ScanResult, SourceRange, Symbol, SymbolEdge
 from .target_selector import TargetSelectionResult, TargetSelector
+from .task_test_planner import TaskTestPlanner
 from .test_mapper import FileTestMapper
 from .walker import FileWalker
+from .workspace_preflight import WorkspaceBaseValidator, WorkspacePreflightResult
 
 __all__ = [
     "ASTBugAnalyzer",
@@ -27,34 +30,39 @@ __all__ = [
     "ASTRuleAnalysisResult",
     "BaseASTRule",
     "DEFAULT_RULES",
-    "FileSourceMapping",
-    "FrameworkDetector",
-    "FrameworkDetectionResult",
-    "HunkASTContext",
-    "HunkMapping",
-    "LanguageDetector",
-    "MappingLimitation",
-    "ReviewSourceMapper",
-    "ReviewSourceMapResult",
-    "SymbolExtractor",
-    "SymbolSummary",
     "DependencyGraphBuilder",
-    "ImportTracker",
-    "ImportedSymbol",
-    "FileImportMap",
-    "Parser",
     "FileInfo",
-    "ScanResult",
-    "SourceRange",
-    "ParseResult",
-    "ResolutionResult",
-    "SourceLocationResolver",
-    "Symbol",
-    "SymbolEdge",
-    "TargetSelector",
-    "TargetSelectionResult",
+    "FileImportMap",
+    "FileSourceMapping",
     "FileTestMapper",
     "FileWalker",
+    "FrameworkDetectionResult",
+    "FrameworkDetector",
+    "HunkASTContext",
+    "HunkMapping",
+    "ImportTracker",
+    "ImportedSymbol",
+    "LanguageDetector",
+    "MappingLimitation",
+    "ParseResult",
+    "Parser",
+    "ResolutionResult",
+    "ReviewSourceMapResult",
+    "ReviewSourceMapper",
+    "ScanResult",
+    "SourceLocationResolver",
+    "SourceRange",
+    "Symbol",
+    "SymbolBlastRadiusEngine",
+    "SymbolEdge",
+    "SymbolExtractor",
+    "SymbolSummary",
+    "TargetSelectionResult",
+    "TargetSelector",
+    "TaskTestPlanner",
+    "WorkspaceBaseValidator",
+    "WorkspacePreflightResult",
 ]
+
 
 

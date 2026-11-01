@@ -25,19 +25,26 @@ from typing import Any, List, Optional, Sequence, Tuple
 from sqlalchemy import delete, desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact, redact_obj
 from app.models.analysis_finding import AnalysisFinding
 from app.models.task import (
+    AgentTask,
     ApprovalDecision,
     ExecutionStatus,
+    GitHubIssue,
     RepairAttempt,
     RepairResult,
     Task,
     TaskApproval,
+    TaskApprovalRecord,
     TaskCheckpoint,
     TaskEvent,
+    TaskEventRecord,
     TaskEventType,
     TaskExecution,
     TaskPlan,
+    TaskPlanRecord,
     TaskPlanStatus,
     TaskPullRequest,
     TaskSourceType,
@@ -51,21 +58,53 @@ from app.models.task import (
     Workspace,
     WorkspaceStatus,
 )
+from app.schemas.plan import PlannerSchema
+from app.schemas.task import TaskIntakePayload, can_transition
 
 
-class InvalidStateTransitionError(ValueError):
+class InvalidStateTransitionError(APIError, ValueError):
     """Raised when an illegal lifecycle state transition is requested."""
-    pass
+
+    def __init__(
+        self,
+        message: str = "Invalid state transition.",
+        status_code: int = 409,
+        code: str = ErrorCode.INVALID_STATE_TRANSITION,
+        *,
+        retryable: bool = False,
+    ):
+        APIError.__init__(self, status_code=status_code, code=code, message=message, retryable=retryable)
+        ValueError.__init__(self, message)
 
 
-class TaskNotFoundError(LookupError):
+class TaskNotFoundError(APIError, LookupError):
     """Raised when a task cannot be found in the specified repository."""
-    pass
+
+    def __init__(
+        self,
+        message: str = "Task not found.",
+        status_code: int = 404,
+        code: str = ErrorCode.TASK_NOT_FOUND,
+        *,
+        retryable: bool = False,
+    ):
+        APIError.__init__(self, status_code=status_code, code=code, message=message, retryable=retryable)
+        LookupError.__init__(self, message)
 
 
-class PlanNotFoundError(LookupError):
+class PlanNotFoundError(APIError, LookupError):
     """Raised when a referenced plan version does not exist."""
-    pass
+
+    def __init__(
+        self,
+        message: str = "Plan not found.",
+        status_code: int = 404,
+        code: str = ErrorCode.NOT_FOUND,
+        *,
+        retryable: bool = False,
+    ):
+        APIError.__init__(self, status_code=status_code, code=code, message=message, retryable=retryable)
+        LookupError.__init__(self, message)
 
 
 # ---------------------------------------------------------------------------
@@ -184,23 +223,57 @@ class TaskRepository:
 
     def create_task(
         self,
-        repository_id: uuid.UUID | str,
-        title: str,
-        source_type: TaskSourceType | str = TaskSourceType.GITHUB_ISSUE,
+        repository_id: uuid.UUID | str | None = None,
+        title: Optional[str] = None,
+        source_type: TaskSourceType | str = TaskSourceType.DIRECT,
         description: Optional[str] = None,
         source_id: Optional[str] = None,
         source_metadata: Optional[dict[str, Any]] = None,
         finding_id: Optional[uuid.UUID | str] = None,
         user_id: Optional[uuid.UUID | str] = None,
-        base_revision: str = "main",
+        base_revision: Optional[str] = None,
+        *,
+        intake: Optional[TaskIntakePayload] = None,
+        github_issue_id: uuid.UUID | str | None = None,
+        origin_finding_id: uuid.UUID | str | None = None,
+        initial_event_type: Optional[str] = None,
+        initial_event_summary: Optional[str] = None,
     ) -> Task:
         """Create and persist a new workflow task with source and finding traceability."""
-        repo_uuid = _ensure_uuid(repository_id)
+        if intake is not None:
+            repo_val = intake.repository_id
+            title_val = intake.title
+            desc_val = intake.description
+            source_type_val = intake.source.type
+            source_dict = scrub_sensitive_data(intake.source.model_dump(mode="json"))
+            source_metadata = source_dict if isinstance(source_dict, dict) else {}
+            reqs_list = scrub_sensitive_data([r.model_dump(mode="json") for r in intake.requirements])
+            asms_list = scrub_sensitive_data([a.model_dump(mode="json") for a in intake.assumptions])
+            csts_list = scrub_sensitive_data([c.model_dump(mode="json") for c in intake.constraints])
+            base_rev_val = intake.base_revision or intake.source.base_revision or base_revision or "main"
+            finding_val = origin_finding_id or intake.source.finding_id or finding_id
+            issue_val = github_issue_id
+            source_id_val = source_id or (str(intake.source.issue_number) if intake.source.issue_number else None)
+        else:
+            repo_val = repository_id
+            title_val = title
+            desc_val = description
+            source_type_val = source_type.value if isinstance(source_type, TaskSourceType) else str(source_type)
+            reqs_list = []
+            asms_list = []
+            csts_list = []
+            base_rev_val = base_revision or "main"
+            finding_val = finding_id or origin_finding_id
+            issue_val = github_issue_id
+            source_id_val = source_id
+
+        repo_uuid = _ensure_uuid(repo_val)
         if not repo_uuid:
             raise ValueError("A valid repository_id is required.")
 
         user_uuid = _ensure_uuid(user_id)
-        finding_uuid = _ensure_uuid(finding_id)
+        finding_uuid = _ensure_uuid(finding_val)
+        issue_uuid = _ensure_uuid(issue_val)
 
         # Validate finding ownership if supplied
         if finding_uuid:
@@ -214,20 +287,27 @@ class TaskRepository:
                 raise ValueError("Referenced finding does not belong to this repository.")
 
         clean_metadata = scrub_sensitive_data(source_metadata) if source_metadata else None
-        source_type_val = source_type.value if isinstance(source_type, TaskSourceType) else str(source_type)
+        safe_title = scrub_sensitive_text((title_val or "").strip()) or "Untitled Task"
+        safe_desc = scrub_sensitive_text(desc_val)
 
         task = Task(
             id=uuid.uuid4(),
             repository_id=repo_uuid,
             user_id=user_uuid,
-            title=title.strip(),
-            description=scrub_sensitive_text(description),
+            github_issue_id=issue_uuid,
+            finding_id=finding_uuid,
+            origin_finding_id=finding_uuid,
+            title=safe_title,
+            description=safe_desc,
             status=TaskStatus.CREATED.value,
             source_type=source_type_val,
-            source_id=source_id,
+            source_id=source_id_val,
             source_metadata=clean_metadata,
-            finding_id=finding_uuid,
-            base_revision=base_revision,
+            source_ref=clean_metadata or {},
+            requirements=reqs_list if isinstance(reqs_list, list) else [],
+            assumptions=asms_list if isinstance(asms_list, list) else [],
+            constraints=csts_list if isinstance(csts_list, list) else [],
+            base_revision=base_rev_val,
             plan_version=1,
             approved_plan_version=None,
             repair_attempts_used=0,
@@ -236,16 +316,18 @@ class TaskRepository:
         self.session.add(task)
         self.session.flush()
 
-        # Emit initial timeline event
-        event_type = (
-            TaskEventType.ISSUE_IMPORTED.value
-            if source_type_val == TaskSourceType.GITHUB_ISSUE.value
-            else TaskEventType.TASK_CREATED.value
+        evt_type = (
+            initial_event_type
+            or (
+                TaskEventType.ISSUE_IMPORTED.value
+                if source_type_val in (TaskSourceType.GITHUB_ISSUE.value, "GITHUB_ISSUE")
+                else TaskEventType.TASK_CREATED.value
+            )
         )
         self.record_event(
             task_id=task.id,
             repository_id=repo_uuid,
-            event_type=event_type,
+            event_type=evt_type,
             event_data={
                 "title": task.title,
                 "source_type": task.source_type,
@@ -1426,21 +1508,32 @@ class TaskRepository:
     def record_event(
         self,
         task_id: uuid.UUID | str,
-        repository_id: uuid.UUID | str,
-        event_type: str,
+        repository_id: uuid.UUID | str | None = None,
+        event_type: str = "EVENT",
         event_data: Optional[dict[str, Any]] = None,
         user_id: Optional[uuid.UUID | str] = None,
+        *,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        summary: str = "",
     ) -> TaskEvent:
         """Append ordered timeline audit event."""
         t_uuid = _ensure_uuid(task_id)
         u_uuid = _ensure_uuid(user_id)
 
+        clean_event_data = scrub_sensitive_data(event_data)
+        safe_summary = scrub_sensitive_text(summary) or ""
+
         event = TaskEvent(
             id=uuid.uuid4(),
             task_id=t_uuid,
             event_type=event_type,
-            event_data=scrub_sensitive_data(event_data),
+            event_data=clean_event_data,
             user_id=u_uuid,
+            actor_id=u_uuid,
+            from_status=from_status,
+            to_status=to_status,
+            summary=safe_summary,
         )
         self.session.add(event)
         self.session.flush()
@@ -1464,6 +1557,380 @@ class TaskRepository:
             .order_by(TaskEvent.created_at.asc())
         )
         return list(self.session.execute(stmt).scalars().all())
+
+    def upsert_github_issue(
+        self,
+        *,
+        repository_id: uuid.UUID | str,
+        issue_number: int,
+        title: str,
+        body: str = "",
+        state: str = "open",
+        labels: Sequence[str] | None = None,
+        html_url: str,
+        author: str | None = None,
+        origin_finding_id: uuid.UUID | str | None = None,
+    ) -> tuple[GitHubIssue, bool]:
+        """Insert or update a GitHubIssue record. Returns `(issue, created_new)`."""
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            raise ValueError(f"Invalid repository_id: {repository_id}")
+
+        finding_uuid = _ensure_uuid(origin_finding_id)
+        safe_title = scrub_sensitive_text((title or "").strip()) or f"Issue #{issue_number}"
+        safe_body = scrub_sensitive_text(body or "") or ""
+        safe_labels = [scrub_sensitive_text(str(lbl).strip()) for lbl in (labels or []) if str(lbl).strip()]
+        safe_url = (html_url or "").strip()
+
+        existing = self.get_issue_by_number(repo_uuid, issue_number)
+        if existing is not None:
+            existing.title = safe_title
+            existing.body = safe_body
+            existing.state = state or existing.state
+            existing.labels = safe_labels
+            if safe_url:
+                existing.html_url = safe_url
+            if author is not None:
+                existing.author = author
+            if finding_uuid is not None and existing.origin_finding_id is None:
+                existing.origin_finding_id = finding_uuid
+            self.session.commit()
+            self.session.refresh(existing)
+            return existing, False
+
+        issue = GitHubIssue(
+            repository_id=repo_uuid,
+            issue_number=int(issue_number),
+            title=safe_title,
+            body=safe_body,
+            state=state or "open",
+            labels=safe_labels,
+            html_url=safe_url,
+            author=author,
+            origin_finding_id=finding_uuid,
+        )
+        self.session.add(issue)
+        self.session.commit()
+        self.session.refresh(issue)
+        return issue, True
+
+    def get_issue_by_number(
+        self,
+        repository_id: uuid.UUID | str,
+        issue_number: int,
+    ) -> Optional[GitHubIssue]:
+        """Find an existing GitHubIssue by `(repository_id, issue_number)`."""
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            return None
+        stmt = select(GitHubIssue).where(
+            GitHubIssue.repository_id == repo_uuid,
+            GitHubIssue.issue_number == int(issue_number),
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_issues_by_repository(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[GitHubIssue]:
+        """List persisted GitHub issues for a repository, ordered by issue_number desc."""
+        repo_uuid = _ensure_uuid(repository_id)
+        if repo_uuid is None:
+            return []
+        stmt = (
+            select(GitHubIssue)
+            .where(GitHubIssue.repository_id == repo_uuid)
+            .order_by(GitHubIssue.issue_number.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def get_task_by_issue(
+        self,
+        repository_id: uuid.UUID | str,
+        github_issue_id: uuid.UUID | str,
+    ) -> Optional[Task]:
+        """Return an existing active task linked to `(repository_id, github_issue_id)`."""
+        repo_uuid = _ensure_uuid(repository_id)
+        issue_uuid = _ensure_uuid(github_issue_id)
+        if repo_uuid is None or issue_uuid is None:
+            return None
+        stmt = (
+            select(Task)
+            .where(
+                Task.repository_id == repo_uuid,
+                Task.github_issue_id == issue_uuid,
+            )
+            .order_by(Task.created_at.desc())
+            .options(
+                selectinload(Task.plans),
+                selectinload(Task.approvals),
+                selectinload(Task.events),
+                selectinload(Task.workspace),
+                selectinload(Task.executions),
+            )
+        )
+        return self.session.scalars(stmt).first()
+
+    # ------------------------------------------------------------------
+    # 2. Tasks & Intake (F31, F32, F39)
+    # ------------------------------------------------------------------
+
+    def get_task_for_user(
+        self,
+        task_id: uuid.UUID | str,
+        user_id: uuid.UUID | str,
+    ) -> Optional[Task]:
+        """Fetch a task verifying user ownership."""
+        t_uuid = _ensure_uuid(task_id)
+        u_uuid = _ensure_uuid(user_id)
+        if not t_uuid or not u_uuid:
+            return None
+
+        stmt = (
+            select(Task)
+            .where(Task.id == t_uuid, Task.user_id == u_uuid)
+            .options(
+                selectinload(Task.plans),
+                selectinload(Task.approvals),
+                selectinload(Task.events),
+                selectinload(Task.workspace),
+                selectinload(Task.executions),
+            )
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_tasks_for_user(
+        self,
+        user_id: uuid.UUID | str,
+        *,
+        repository_id: uuid.UUID | str | None = None,
+        status: Optional[TaskStatus | str] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[Task], int]:
+        """List tasks owned by a user with pagination and total count."""
+        u_uuid = _ensure_uuid(user_id)
+        if not u_uuid:
+            return [], 0
+
+        filters = [Task.user_id == u_uuid]
+        if repository_id is not None:
+            r_uuid = _ensure_uuid(repository_id)
+            if r_uuid:
+                filters.append(Task.repository_id == r_uuid)
+        if status is not None:
+            status_val = status.value if isinstance(status, TaskStatus) else str(status)
+            filters.append(Task.status == status_val)
+
+        count_stmt = select(func.count(Task.id)).where(*filters)
+        total = self.session.scalar(count_stmt) or 0
+
+        stmt = (
+            select(Task)
+            .where(*filters)
+            .order_by(Task.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .options(
+                selectinload(Task.plans),
+                selectinload(Task.approvals),
+                selectinload(Task.events),
+            )
+        )
+        items = list(self.session.scalars(stmt).all())
+        return items, int(total)
+
+    def verify_execution_approval_gate(self, task: Task) -> TaskPlan:
+        """Server-enforced approval gate (Sukun W3 Day 2 — Docs/week3.md §6 F32 & §7.2).
+
+        Blocks execution unless:
+        1. `task.status` is `APPROVED` (or `WORKSPACE_SETUP` / `EXECUTING` when already started).
+        2. `task.approved_plan_version` is non-null and equals `task.plan_version`.
+        3. The latest `TaskPlan` matches `task.approved_plan_version` and `task.base_revision`.
+        4. An immutable `TaskApproval` with `decision == 'APPROVED'` exists for `(task.id, latest_plan.plan_version, latest_plan.plan_hash)`.
+        5. Recomputes the structural SHA-256 `plan_hash` from the persisted `latest_plan` steps/files/base_revision to detect any post-approval tampering.
+        """
+        curr_status = TaskStatus(task.status)
+        if curr_status in (TaskStatus.CREATED, TaskStatus.PLANNING, TaskStatus.PENDING_APPROVAL):
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                "The task cannot execute until the implementation plan is explicitly approved by a human.",
+            )
+        if curr_status == TaskStatus.REJECTED:
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                "The implementation plan was rejected. Generate and approve a revised plan before executing.",
+            )
+        if curr_status in (TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED):
+            raise APIError(
+                409,
+                ErrorCode.INVALID_STATE_TRANSITION,
+                f"Task in terminal/blocked status '{curr_status.value}' cannot be executed.",
+            )
+
+        if task.approved_plan_version is None:
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                "Task has no approved plan version. Human approval is required before execution.",
+            )
+
+        if task.approved_plan_version != task.plan_version:
+            raise APIError(
+                409,
+                ErrorCode.PLAN_VERSION_MISMATCH,
+                f"Approved plan version (v{task.approved_plan_version}) does not match current plan version (v{task.plan_version}). Renewed approval is required.",
+            )
+
+        latest_plan = self.get_latest_plan(task.id)
+        if latest_plan is None:
+            raise APIError(
+                404,
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"No plan records found for task {task.id}.",
+            )
+
+        if latest_plan.plan_version != task.approved_plan_version:
+            raise APIError(
+                409,
+                ErrorCode.PLAN_VERSION_MISMATCH,
+                f"Latest plan version (v{latest_plan.plan_version}) does not match approved version (v{task.approved_plan_version}).",
+            )
+
+        if task.base_revision and latest_plan.base_revision and task.base_revision != latest_plan.base_revision:
+            raise APIError(
+                409,
+                ErrorCode.PLAN_VERSION_MISMATCH,
+                f"Task base revision '{task.base_revision}' differs from plan base revision '{latest_plan.base_revision}'. Re-plan and renewed approval required.",
+            )
+
+        # Confirm that an immutable approval record exists
+        stmt = (
+            select(TaskApproval)
+            .where(
+                TaskApproval.task_id == task.id,
+                TaskApproval.plan_version == latest_plan.plan_version,
+                TaskApproval.decision == "APPROVED",
+            )
+            .order_by(TaskApproval.created_at.desc())
+        )
+        approval_rec = self.session.scalars(stmt).first()
+        if approval_rec is None:
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                f"No valid immutable approval record found for plan v{latest_plan.plan_version}.",
+            )
+
+        if latest_plan.plan_hash and approval_rec.plan_hash and latest_plan.plan_hash != approval_rec.plan_hash:
+            raise APIError(
+                409,
+                ErrorCode.PLAN_VERSION_MISMATCH,
+                "Tampering detected: plan hash does not match approval record hash. Renewed approval required.",
+            )
+
+        # Tampering check: recompute plan hash if schema can be constructed
+        if latest_plan.plan_hash:
+            try:
+                reconstructed_schema = PlannerSchema(
+                    summary=latest_plan.summary,
+                    problem_statement=latest_plan.problem_statement or "",
+                    assumptions=latest_plan.assumptions or [],
+                    relevant_files=latest_plan.relevant_files or [],
+                    relevant_symbols=latest_plan.relevant_symbols or [],
+                    steps=latest_plan.steps or [],
+                    expected_files=latest_plan.expected_files or [],
+                    tests_to_run=latest_plan.tests_to_run or [],
+                    validation_strategy=latest_plan.validation_strategy if isinstance(latest_plan.validation_strategy, list) else ([latest_plan.validation_strategy] if latest_plan.validation_strategy else []),
+                    risks=latest_plan.risks or [],
+                    required_permissions=latest_plan.required_permissions or [],
+                    resource_budget=latest_plan.resource_budget or {},
+                )
+                computed_hash = reconstructed_schema.compute_plan_hash(latest_plan.base_revision)
+                if computed_hash != latest_plan.plan_hash:
+                    raise APIError(
+                        409,
+                        ErrorCode.PLAN_VERSION_MISMATCH,
+                        "Plan tampering detected: recomputed plan hash does not match stored hash. Execution halted.",
+                    )
+            except APIError:
+                raise
+            except Exception:
+                pass
+
+        return latest_plan
+
+    # ------------------------------------------------------------------
+    # 4. Checkpoints, Bounded Repair & Recovery (F39)
+    # ------------------------------------------------------------------
+
+    def get_latest_plan(self, task_id: uuid.UUID | str) -> Optional[TaskPlan]:
+        """Return the most recent plan version for a task."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        stmt = (
+            select(TaskPlan)
+            .where(TaskPlan.task_id == t_uuid)
+            .order_by(TaskPlan.version.desc())
+        )
+        return self.session.scalars(stmt).first()
+
+    def get_plan_by_version(
+        self,
+        task_id: uuid.UUID | str,
+        plan_version: int,
+    ) -> Optional[TaskPlan]:
+        """Return a specific version of a plan for a task."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        stmt = select(TaskPlan).where(
+            TaskPlan.task_id == t_uuid,
+            TaskPlan.version == int(plan_version),
+        )
+        return self.session.scalars(stmt).first()
+
+    def _append_event(
+        self,
+        *,
+        task_id: uuid.UUID | str,
+        event_type: str,
+        actor_id: uuid.UUID | str | None = None,
+        from_status: str | None = None,
+        to_status: str | None = None,
+        summary: str = "",
+        payload: dict[str, Any] | None = None,
+    ) -> TaskEvent:
+        """Internal helper alias for appending timeline events."""
+        return self.record_event(
+            task_id=task_id,
+            event_type=event_type,
+            event_data=payload,
+            user_id=actor_id,
+            from_status=from_status,
+            to_status=to_status,
+            summary=summary,
+        )
+
+    def list_events(self, task_id: uuid.UUID | str) -> list[TaskEvent]:
+        """List all events for a task, ordered by created_at asc."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return []
+        stmt = (
+            select(TaskEvent)
+            .where(TaskEvent.task_id == t_uuid)
+            .order_by(TaskEvent.created_at.asc())
+        )
+        return list(self.session.scalars(stmt).all())
 
 
 __all__ = [

@@ -269,8 +269,18 @@ class AnalysisRunRepository:
             item.evidence = scrub_sensitive_text(item.evidence) or ""
             if item.suggested_fix:
                 item.suggested_fix = scrub_sensitive_text(item.suggested_fix)
-            if item.finding_metadata:
-                item.finding_metadata = scrub_sensitive_data(item.finding_metadata)
+            meta = dict(item.finding_metadata or {})
+            if "provenance" not in meta:
+                st = str(item.source_type or "AI").upper()
+                meta["provenance"] = "static_rule" if st == "STATIC" else ("combined" if st == "COMBINED" else "llm")
+            if "evidence_hash" not in meta and item.evidence:
+                import hashlib
+                meta["evidence_hash"] = hashlib.sha256(item.evidence.strip().encode("utf-8")).hexdigest()[:16]
+            if "deduplication_key" not in meta:
+                cat = str(item.category or "general").lower()
+                r_id = item.rule_id or "none"
+                meta["deduplication_key"] = f"{item.file_path}:{item.start_line or 0}-{item.end_line or 0}:{cat}:{r_id}"
+            item.finding_metadata = scrub_sensitive_data(meta)
             self.session.add(item)
             return item
 
@@ -298,7 +308,21 @@ class AnalysisRunRepository:
         rev = raw.get("source_revision") or source_ref.get("revision") or run.source_revision
         sym = raw.get("symbol_name") or source_ref.get("symbol_name") or run.target_symbol
 
-        raw_meta = raw.get("metadata") or raw.get("finding_metadata")
+        raw_meta = dict(raw.get("metadata") or raw.get("finding_metadata") or {})
+        for field_name in ("provenance", "deduplication_key", "evidence_hash", "rule_version", "model_version"):
+            if field_name in raw and field_name not in raw_meta and raw[field_name] is not None:
+                raw_meta[field_name] = raw[field_name]
+
+        if "provenance" not in raw_meta:
+            st = str(raw.get("source_type", "AI")).upper()
+            raw_meta["provenance"] = "static_rule" if st == "STATIC" else ("combined" if st == "COMBINED" else "llm")
+        if "evidence_hash" not in raw_meta and raw.get("evidence"):
+            import hashlib
+            raw_meta["evidence_hash"] = hashlib.sha256(str(raw["evidence"]).strip().encode("utf-8")).hexdigest()[:16]
+        if "deduplication_key" not in raw_meta:
+            cat = str(raw.get("category", "general")).lower()
+            r_id = raw.get("rule_id") or "none"
+            raw_meta["deduplication_key"] = f"{file_path}:{start_line or 0}-{end_line or 0}:{cat}:{r_id}"
 
         finding = AnalysisFinding(
             id=finding_uuid,

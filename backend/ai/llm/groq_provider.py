@@ -288,6 +288,17 @@ class GroqProvider(LLMProvider):
             if len(lines) >= 2 and lines[0].startswith("```"):
                 raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
 
+        first_brace = raw.find("{")
+        first_bracket = raw.find("[")
+        if (
+            first_bracket != -1
+            and (first_brace == -1 or first_bracket < first_brace)
+            and "]" in raw
+        ):
+            raw = raw[first_bracket : raw.rfind("]") + 1]
+        elif first_brace != -1 and "}" in raw:
+            raw = raw[first_brace : raw.rfind("}") + 1]
+
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
@@ -296,6 +307,13 @@ class GroqProvider(LLMProvider):
                 provider="groq",
                 raw_response=content,
             ) from exc
+
+        if (
+            isinstance(parsed, list)
+            and hasattr(schema, "model_fields")
+            and "findings" in getattr(schema, "model_fields", {})
+        ):
+            parsed = {"findings": parsed}
 
         try:
             schema.model_validate(parsed)

@@ -17,13 +17,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+
+from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy import select
 
 from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
 from ai.embeddings.service import EmbeddingService
@@ -33,6 +36,7 @@ from app.core.redis import get_redis_async
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
+from app.services.repository_sync import reconcile_stale_sync_jobs
 from indexer.incremental import IncrementalIndexer
 from scanner.walker import FileWalker
 
@@ -131,13 +135,14 @@ async def process_sync_job(
             embedding_service=embedding_service,
         )
 
-        stats = await indexer.sync(
-            repository_id=repository_id,
-            scanned_files=scanned_files,
-            root_path=str(clone_dir),
-        )
-
-        await embedding_service.aclose()
+        try:
+            stats = await indexer.sync(
+                repository_id=repository_id,
+                scanned_files=scanned_files,
+                root_path=str(clone_dir),
+            )
+        finally:
+            await embedding_service.aclose()
 
         # Mark completed
         with SessionLocal() as db:
@@ -151,7 +156,7 @@ async def process_sync_job(
 
         # Notify connected frontend clients via Redis pub/sub
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -163,7 +168,15 @@ async def process_sync_job(
                 ),
             )
         except Exception as pub_exc:
-            logger.debug("Failed to publish repository.updated event: %s", pub_exc)
+            logger.warning(
+                "event_publication_failed",
+                extra={
+                    "event": "repository.updated",
+                    "job_id": str(job_id),
+                    "repository_id": str(repository_id),
+                    "error": str(pub_exc),
+                },
+            )
 
         logger.info(
             "sync_worker_job_completed",
@@ -186,7 +199,7 @@ async def process_sync_job(
                 db.commit()
 
         try:
-            redis = await get_redis_async()
+            redis: Any = await get_redis_async()
             await redis.publish(
                 "platform_events",
                 json.dumps(
@@ -197,39 +210,197 @@ async def process_sync_job(
                     }
                 ),
             )
-        except Exception:
-            pass
+        except Exception as pub_exc:
+            logger.warning(
+                "event_publication_failed",
+                extra={
+                    "event": "repository.updated",
+                    "job_id": str(job_id),
+                    "repository_id": str(repository_id),
+                    "error": str(pub_exc),
+                },
+            )
 
     finally:
         if clone_dir and clone_dir.exists():
             shutil.rmtree(clone_dir, ignore_errors=True)
 
 
-async def sync_worker_loop(app: Any) -> None:
+async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) -> list[str]:
+    """Recover items stuck in `sync_jobs:processing` that exceeded timeout_seconds."""
+    recovered: list[str] = []
+    try:
+        if not hasattr(redis, "lrange"):
+            return []
+        items = await redis.lrange("sync_jobs:processing", 0, -1)
+        if not items:
+            return []
+
+        with SessionLocal() as db:
+            for raw_item in items:
+                decoded = raw_item.decode("utf-8") if isinstance(raw_item, bytes) else str(raw_item)
+                try:
+                    payload = json.loads(decoded)
+                    job_id = UUID(payload["job_id"])
+                    job = db.get(SyncJob, job_id)
+                    # If job doesn't exist, is completed, or is failed, remove from processing queue
+                    if not job or job.status in (SyncJobStatus.COMPLETED, SyncJobStatus.FAILED):
+                        if hasattr(redis, "lrem"):
+                            await redis.lrem("sync_jobs:processing", 1, raw_item)
+                        continue
+
+                    now = datetime.now(timezone.utc)
+                    job_time = getattr(job, "updated_at", None) or getattr(job, "created_at", None)
+                    if job_time and job_time.tzinfo is None:
+                        job_time = job_time.replace(tzinfo=timezone.utc)
+                    age = (now - job_time).total_seconds() if job_time else 0.0
+
+                    if age >= timeout_seconds:
+                        logger.warning(
+                            "recovering_stalled_processing_sync_job",
+                            extra={"job_id": str(job_id), "age_seconds": round(age, 1)},
+                        )
+                        if hasattr(redis, "lrem"):
+                            await redis.lrem("sync_jobs:processing", 1, raw_item)
+                        if hasattr(redis, "rpush"):
+                            await redis.rpush("sync_jobs", decoded)
+                        recovered.append(str(job_id))
+                except Exception as parse_err:
+                    logger.warning("stale_processing_job_parse_error", extra={"error": str(parse_err)})
+                    if hasattr(redis, "lrem"):
+                        await redis.lrem("sync_jobs:processing", 1, raw_item)
+    except Exception as exc:
+        logger.warning("recover_stale_processing_jobs_error", extra={"error": str(exc)})
+    return recovered
+
+
+async def sync_worker_loop(app_or_service: Any = None) -> None:
     """Continuously poll Redis `sync_jobs` queue and process sync jobs asynchronously."""
     logger.info("sync_worker_loop_started")
-    redis = await get_redis_async()
+    redis: Any = await get_redis_async()
+    last_sweep_time = time.monotonic()
+
+    # Resolve GitHubService
+    gh_service = None
+    if app_or_service is not None:
+        if hasattr(app_or_service, "state") and hasattr(app_or_service.state, "github_service"):
+            gh_service = app_or_service.state.github_service
+        else:
+            gh_service = app_or_service
+
+    if gh_service is None:
+        try:
+            from app.integrations.github.service import GitHubService
+            gh_service = GitHubService(redis=redis, settings=get_settings())
+        except Exception as exc:
+            logger.warning("sync_worker_github_service_init_warning", extra={"error": str(exc)})
+
+    # Initial recovery: reconcile stale jobs and re-enqueue queued jobs into Redis
+    try:
+        with SessionLocal() as init_db:
+            reconcile_stale_sync_jobs(init_db, timeout_seconds=300)
+            pending_jobs = list(init_db.scalars(select(SyncJob).where(SyncJob.status == SyncJobStatus.QUEUED)).all())
+            for pj in pending_jobs:
+                p_repo = init_db.get(Repository, pj.repository_id)
+                if p_repo and hasattr(redis, "rpush"):
+                    p_load = {
+                        "job_id": str(pj.id),
+                        "repository_id": str(p_repo.id),
+                        "user_id": str(pj.user_id),
+                        "installation_id": str(p_repo.installation_id),
+                        "owner": p_repo.owner,
+                        "name": p_repo.name,
+                        "branch": p_repo.default_branch,
+                    }
+                    await redis.rpush("sync_jobs", json.dumps(p_load))
+                    logger.info("re_enqueued_pending_sync_job_at_startup", extra={"job_id": str(pj.id), "repo_id": str(p_repo.id)})
+    except Exception as init_err:
+        logger.warning("sync_worker_init_recovery_warning", extra={"error": str(init_err)})
 
     while True:
         try:
-            # Pop job from Redis queue with 2 second timeout
-            item = await redis.blpop("sync_jobs", timeout=2)
-            if item:
-                _, raw_data = item
-                if isinstance(raw_data, bytes):
-                    raw_data = raw_data.decode("utf-8")
-                payload = json.loads(raw_data)
-                job_id = UUID(payload["job_id"])
-                repo_id = UUID(payload["repository_id"])
-                user_id = UUID(payload["user_id"])
-                gh_service = getattr(app.state, "github_service", None)
+            # Periodic sweep for stale/stalled sync jobs every 60 seconds
+            now_mono = time.monotonic()
+            if now_mono - last_sweep_time >= 60.0:
+                last_sweep_time = now_mono
+                try:
+                    with SessionLocal() as db_session:
+                        reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+                        if reconciled:
+                            logger.info(
+                                "periodic_stale_sync_jobs_reconciled",
+                                extra={"count": len(reconciled), "job_ids": [str(j) for j in reconciled]},
+                            )
+                    recovered = await recover_stale_processing_jobs(redis, timeout_seconds=600)
+                    if recovered:
+                        logger.info(
+                            "periodic_processing_jobs_recovered",
+                            extra={"count": len(recovered), "job_ids": recovered},
+                        )
+                except Exception as sweep_exc:
+                    logger.warning("periodic_sync_reconciliation_error", extra={"error": str(sweep_exc)})
 
-                logger.info("sync_worker_dequeued_job", extra={"job_id": str(job_id), "repo_id": str(repo_id)})
-                await process_sync_job(job_id, repo_id, user_id, gh_service)
+            # Dequeue with reliable queue hand-off
+            raw_data = None
+            try:
+                if hasattr(redis, "brpoplpush"):
+                    raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=1)
+                elif hasattr(redis, "rpoplpush"):
+                    raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                    if not raw_data:
+                        await asyncio.sleep(1.0)
+                else:
+                    item = await redis.blpop("sync_jobs", timeout=1)
+                    if item:
+                        _, raw_data = item
+            except (RedisTimeoutError, asyncio.TimeoutError):
+                # Idle polling timeout with no jobs is normal; proceed cleanly
+                raw_data = None
+            except Exception:
+                # Fallback for Redis providers (like Upstash) where BRPOPLPUSH may be disallowed
+                try:
+                    if hasattr(redis, "rpoplpush"):
+                        raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
+                        if not raw_data:
+                            await asyncio.sleep(1.0)
+                    else:
+                        item = await redis.blpop("sync_jobs", timeout=1)
+                        if item:
+                            _, raw_data = item
+                except (RedisTimeoutError, asyncio.TimeoutError):
+                    raw_data = None
+                except Exception as fallback_exc:
+                    logger.warning(
+                        "sync_worker_dequeue_error: %s",
+                        fallback_exc,
+                        exc_info=True,
+                        extra={"error": str(fallback_exc)},
+                    )
+                    await asyncio.sleep(2.0)
+
+            if raw_data:
+                decoded = raw_data.decode("utf-8") if isinstance(raw_data, bytes) else str(raw_data)
+                try:
+                    payload = json.loads(decoded)
+                    job_id = UUID(payload["job_id"])
+                    repo_id = UUID(payload["repository_id"])
+                    user_id = UUID(payload["user_id"])
+
+                    logger.info("sync_worker_dequeued_job", extra={"job_id": str(job_id), "repo_id": str(repo_id)})
+                    await process_sync_job(job_id, repo_id, user_id, gh_service)
+                finally:
+                    # Acknowledge completion or handled failure by removing from processing list
+                    if hasattr(redis, "lrem"):
+                        try:
+                            await redis.lrem("sync_jobs:processing", 1, raw_data)
+                        except Exception as lrem_exc:
+                            logger.warning("sync_worker_ack_lrem_warning", extra={"error": str(lrem_exc)})
+            else:
+                await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             logger.info("sync_worker_loop_cancelled")
             break
         except Exception as exc:
-            logger.warning("sync_worker_loop_error", extra={"error": str(exc)})
-            await asyncio.sleep(2)
+            logger.warning("sync_worker_loop_error: %s", exc, exc_info=True, extra={"error": str(exc)})
+            await asyncio.sleep(2.0)

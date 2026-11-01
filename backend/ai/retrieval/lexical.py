@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .base import CodeChunk, Retriever
 
@@ -126,6 +127,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         content_hash=row.content_hash,      # type: ignore[attr-defined]
         score=score,
         file_path=row.file_path or "",      # type: ignore[attr-defined]
+        lexical_rank=score,
     )
 
 
@@ -137,7 +139,7 @@ class LexicalRetriever(Retriever):
     combine them fairly with vector similarity scores.
     """
 
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession | async_sessionmaker[AsyncSession] | Any) -> None:
         self._db = db
 
     async def retrieve(
@@ -171,11 +173,12 @@ class LexicalRetriever(Retriever):
             "repository_id": str(repo_uuid),
             "top_k": top_k,
         }
-        if hasattr(self._db, "execute"):
-            result = await self._db.execute(_LEXICAL_SEARCH_SQL, params)
+        db_obj: Any = self._db
+        if hasattr(db_obj, "execute"):
+            result = await db_obj.execute(_LEXICAL_SEARCH_SQL, params)
             rows = result.fetchall()
         else:
-            async with self._db() as session:
+            async with db_obj() as session:
                 result = await session.execute(_LEXICAL_SEARCH_SQL, params)
                 rows = result.fetchall()
 

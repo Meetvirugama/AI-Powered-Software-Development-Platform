@@ -113,12 +113,41 @@ def clear_prompt_cache() -> None:
     load_prompt.cache_clear()
 
 
+REQUIRED_PROMPTS: list[str] = [
+    "chat_system",
+    "explanation_system",
+    "bug_detection_system",
+    "test_generation_system",
+    "code_review_system",
+    "repair_system",
+    "grounding_system",
+]
+
+
+def validate_required_prompts(required: list[str] | None = None) -> list[str]:
+    """Verify that all required prompt template files exist and are non-empty.
+
+    Returns the list of validated prompt names.
+    Raises PromptNotFoundError if any required prompt template is missing or unreadable.
+    """
+    to_check = required or REQUIRED_PROMPTS
+    validated: list[str] = []
+    for name in to_check:
+        content = load_prompt(name)
+        if not content or not content.strip():
+            raise PromptRenderError(f"Required prompt template '{name}' is empty.")
+        validated.append(name)
+    return validated
+
+
 __all__ = [
     "PROMPTS_DIR",
     "PromptNotFoundError",
     "PromptRenderError",
+    "REQUIRED_PROMPTS",
     "clear_prompt_cache",
     "list_available_prompts",
     "load_prompt",
     "render_prompt",
+    "validate_required_prompts",
 ]

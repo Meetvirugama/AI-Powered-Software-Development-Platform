@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   FlaskConical,
   Copy,
@@ -98,6 +98,20 @@ export function TestGenerationView({
   const [copiedCommand, setCopiedCommand] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
+  const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(() => {
+    return () => {
+      timeoutsRef.current.forEach(clearTimeout);
+      timeoutsRef.current = [];
+    };
+  }, []);
+
+  const registerTimeout = (fn: () => void, ms: number) => {
+    const id = setTimeout(fn, ms);
+    timeoutsRef.current.push(id);
+    return id;
+  };
 
   // Determine effective path collision state (EXISTS, NEW, or UNKNOWN)
   const effectivePathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
@@ -174,7 +188,7 @@ export function TestGenerationView({
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
         await navigator.clipboard.writeText(test_content);
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        registerTimeout(() => setCopied(false), 2000);
       } else {
         // Fallback for non-secure contexts / headless browsers
         const textarea = document.createElement('textarea');
@@ -190,14 +204,14 @@ export function TestGenerationView({
         document.body.removeChild(textarea);
         if (successful) {
           setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
+          registerTimeout(() => setCopied(false), 2000);
         } else {
           throw new Error('execCommand copy failed');
         }
       }
     } catch {
       setCopyError('Unable to access clipboard. Please copy manually from the preview below.');
-      setTimeout(() => setCopyError(null), 4000);
+      registerTimeout(() => setCopyError(null), 4000);
     }
   }
 
@@ -213,9 +227,9 @@ export function TestGenerationView({
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      registerTimeout(() => URL.revokeObjectURL(url), 1000);
       setDownloadSuccess(true);
-      setTimeout(() => setDownloadSuccess(false), 2500);
+      registerTimeout(() => setDownloadSuccess(false), 2500);
     } catch {
       // Ignore download trigger errors
     }
@@ -239,7 +253,7 @@ export function TestGenerationView({
         document.body.removeChild(textarea);
       }
       setCopiedCommand(true);
-      setTimeout(() => setCopiedCommand(false), 2000);
+      registerTimeout(() => setCopiedCommand(false), 2000);
     } catch {
       // Ignore clipboard write failures
     }

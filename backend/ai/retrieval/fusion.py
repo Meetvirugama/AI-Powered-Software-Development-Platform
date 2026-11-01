@@ -104,7 +104,11 @@ class RRFFusion:
         top_ids = sorted_ids[:top_n]
 
         fused: list[CodeChunk] = [
-            dataclasses.replace(chunk_map[cid], score=round(scores[cid], 6))
+            dataclasses.replace(
+                chunk_map[cid],
+                score=round(scores[cid], 6),
+                rrf_score=round(scores[cid], 6),
+            )
             for cid in top_ids
         ]
 

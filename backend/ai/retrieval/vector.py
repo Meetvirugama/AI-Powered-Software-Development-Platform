@@ -21,11 +21,11 @@ team_rules.md:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .base import CodeChunk, Retriever
 
@@ -63,12 +63,22 @@ _VECTOR_SEARCH_SQL = text(
 )
 
 
-def _vec_to_pg_literal(vector: list[float]) -> str:
+def _vec_to_pg_literal(vector: list[float], expected_dim: int | None = None) -> str:
+    """Serialise a Python float list to the PostgreSQL vector literal format.
+
+    Validates that:
+    1. The vector is non-empty and has the expected dimension (if specified).
+    2. Every float value is finite (rejects NaN, +Inf, -Inf).
     """
-    Serialise a Python float list to the PostgreSQL vector literal format.
-    e.g. [0.1, 0.2, 0.3] → '[0.1,0.2,0.3]'
-    pgvector accepts this format when the value is cast to vector.
-    """
+    import math
+
+    if not vector:
+        raise ValueError("Vector cannot be empty.")
+    if expected_dim is not None and len(vector) != expected_dim:
+        raise ValueError(f"Vector dimension mismatch: expected {expected_dim}, got {len(vector)}")
+    for i, v in enumerate(vector):
+        if not math.isfinite(v):
+            raise ValueError(f"Vector contains non-finite value at index {i}: {v}")
     return "[" + ",".join(str(v) for v in vector) + "]"
 
 
@@ -86,6 +96,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         content_hash=row.content_hash,  # type: ignore[attr-defined]
         score=score,
         file_path=row.file_path or "",  # type: ignore[attr-defined]
+        vector_similarity=score,
     )
 
 
@@ -114,7 +125,7 @@ class VectorRetriever(Retriever):
 
     def __init__(
         self,
-        db: AsyncSession,
+        db: AsyncSession | async_sessionmaker[AsyncSession] | Any,
         embedding_service: EmbeddingService,
     ) -> None:
         self._db = db
@@ -155,7 +166,9 @@ class VectorRetriever(Retriever):
 
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
-        query_vec_literal = _vec_to_pg_literal(query_vector)
+        raw_dim = getattr(self._embedding_service, "dimension", None)
+        expected_dim = raw_dim if isinstance(raw_dim, int) else None
+        query_vec_literal = _vec_to_pg_literal(query_vector, expected_dim=expected_dim)
 
         # Step 2 — cosine distance search in pgvector
         params = {
@@ -163,11 +176,12 @@ class VectorRetriever(Retriever):
             "repository_id": str(repo_uuid),
             "top_k": top_k,
         }
-        if hasattr(self._db, "execute"):
-            result = await self._db.execute(_VECTOR_SEARCH_SQL, params)
+        db_obj: Any = self._db
+        if hasattr(db_obj, "execute"):
+            result = await db_obj.execute(_VECTOR_SEARCH_SQL, params)
             rows = result.fetchall()
         else:
-            async with self._db() as session:
+            async with db_obj() as session:
                 result = await session.execute(_VECTOR_SEARCH_SQL, params)
                 rows = result.fetchall()
 

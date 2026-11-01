@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Sequence
 from typing import Self
 
-from .client import DimensionMismatchError, EmbeddingProvider
+from .client import DimensionMismatchError, EmbeddingError, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,11 @@ class EmbeddingService:
     def max_concurrency(self) -> int:
         """Maximum concurrent API requests permitted."""
         return self._max_concurrency
+
+    @property
+    def model_name(self) -> str:
+        """Configured model name from underlying provider."""
+        return getattr(self._provider, "model_name", "models/gemini-embedding-001")
 
     # ------------------------------------------------------------------
     # Public API
@@ -166,12 +172,21 @@ class EmbeddingService:
             *[_run_sub_batch(batch) for batch in sub_batches]
         )
 
-        # Flatten while validating dimensionality
+        # Flatten while validating dimensionality and 1:1 count alignment (AI-06)
         all_vectors: list[list[float]] = []
-        for batch_vectors in batch_results:
+        for idx, (batch, batch_vectors) in enumerate(zip(sub_batches, batch_results)):
+            if len(batch_vectors) != len(batch):
+                raise EmbeddingError(
+                    f"Provider returned {len(batch_vectors)} vectors for sub-batch {idx} of {len(batch)} inputs."
+                )
             for vector in batch_vectors:
                 self._validate_dimensions(vector)
                 all_vectors.append(vector)
+
+        if len(all_vectors) != total_count:
+            raise EmbeddingError(
+                f"EmbeddingService total vector count mismatch: expected {total_count}, got {len(all_vectors)}."
+            )
 
         duration_ms = (time.perf_counter() - start_time) * 1000.0
         logger.info(
@@ -206,10 +221,11 @@ class EmbeddingService:
 
     def _validate_dimensions(self, vector: list[float]) -> None:
         """
-        Assert the returned vector matches the provider's declared dimension.
+        Assert the returned vector matches the provider's declared dimension and contains finite numbers.
 
         Raises:
             DimensionMismatchError: (retryable=False) on vector length mismatch.
+            EmbeddingError: on non-finite numeric values (NaN / Inf).
         """
         expected = self._provider.embedding_dimensions
         actual = len(vector)
@@ -219,3 +235,6 @@ class EmbeddingService:
                 actual=actual,
                 provider=self._provider.provider_name,
             )
+        for v in vector:
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise EmbeddingError("Vector contains non-finite or invalid numeric values (NaN/Inf).")

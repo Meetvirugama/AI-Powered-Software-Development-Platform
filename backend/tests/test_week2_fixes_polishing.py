@@ -382,6 +382,18 @@ def test_all_four_analysis_endpoints_record_failed_run_and_return_500_on_unexpec
     app.state.test_generation_service = _ExplodingService
     app.state.code_review_service = _ExplodingService
 
+    sqlite_session.add(
+        RepositoryFile(
+            id=uuid4(),
+            repository_id=REPO_ID,
+            path="src/app.py",
+            size_bytes=100,
+            line_count=10,
+            content_hash="hash_src_app_py",
+        )
+    )
+    sqlite_session.commit()
+
     client = TestClient(app, raise_server_exceptions=False)
 
     endpoints_and_payloads = [

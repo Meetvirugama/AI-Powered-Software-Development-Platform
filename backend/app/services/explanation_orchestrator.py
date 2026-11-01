@@ -102,7 +102,7 @@ def resolve_target_and_build_context(
     revision = target.revision or getattr(repo, "default_branch", None) or "main"
     missing_context: list[str] = []
 
-    if not hasattr(db, "query"):
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
         # Unit-test mode with mock DB session (`object()`)
         snippet = TargetSnippet(
             file_path=safe_path,
@@ -134,32 +134,30 @@ def resolve_target_and_build_context(
             .order_by(RepositoryFile.path)
             .all()
         )
-    except Exception:
-        all_repo_files = []
+    except Exception as exc:
+        logger.error(
+            "resolve_target_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target resolution.",
+            retryable=True,
+        ) from exc
 
     if not all_repo_files:
-        # Repository has no indexed file rows in DB (e.g. lightweight mock fixture)
-        snippet = TargetSnippet(
-            file_path=safe_path,
-            content="",
-            start_line=target.start_line or 1,
-            end_line=target.end_line or (target.start_line or 1),
-            symbol_name=target.symbol,
-            language="text",
-        )
-        ctx = ContextBuilder().build_intelligence_context(
-            target=snippet,
-            token_budget=payload.options.max_context_tokens,
-        )
-        return ResolvedExplanationTarget(
-            target=target,
-            revision=revision,
-            file_record=None,
-            resolved_symbol=None,
-            code_content="",
-            intelligence_context=ctx,
-            missing_context=["Repository files are not yet indexed in the database."],
-            indexed_paths={},
+        sync_status = getattr(repo, "sync_status", None)
+        if sync_status in ("NOT_SYNCED", "SYNCING"):
+            raise APIError(
+                409,
+                ErrorCode.CONFLICT,
+                f"Repository indexing is in progress or not yet synced (status: {sync_status}). Please wait for indexing to complete.",
+            )
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
         )
 
     indexed_paths = {f.path: (f.line_count or 0) for f in all_repo_files}
@@ -189,8 +187,17 @@ def resolve_target_and_build_context(
             .order_by(CodeSymbol.start_line)
             .all()
         )
-    except Exception:
-        file_symbols = []
+    except Exception as exc:
+        logger.error(
+            "resolve_symbols_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file symbols.",
+            retryable=True,
+        ) from exc
 
     # Step 3b: Symbol Resolution (if symbol is specified)
     resolved_symbol: CodeSymbol | None = None
@@ -247,8 +254,17 @@ def resolve_target_and_build_context(
             .order_by(CodeChunk.start_line)
             .all()
         )
-    except Exception:
-        file_chunks = []
+    except Exception as exc:
+        logger.error(
+            "resolve_chunks_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file chunks.",
+            retryable=True,
+        ) from exc
 
     eff_start = target.start_line or 1
     eff_end = target.end_line or (line_count if line_count > 0 else max((c.end_line for c in file_chunks), default=1))
@@ -413,16 +429,21 @@ def ground_explanation_sources(
             ungrounded_count += 1
             continue
 
+        s_line = src.start_line
+        e_line = src.end_line
+        if s_line is not None and e_line is not None and s_line > e_line:
+            s_line, e_line = min(s_line, e_line), max(s_line, e_line)
+
         if resolved.indexed_paths:
             if clean_path not in resolved.indexed_paths:
                 ungrounded_count += 1
                 continue
             max_lines = resolved.indexed_paths[clean_path]
             if max_lines > 0:
-                if src.start_line is not None and src.start_line > max_lines:
+                if s_line is not None and s_line > max_lines:
                     ungrounded_count += 1
                     continue
-                if src.end_line is not None and src.end_line > max_lines:
+                if e_line is not None and e_line > max_lines:
                     ungrounded_count += 1
                     continue
 
@@ -431,7 +452,9 @@ def ground_explanation_sources(
                 update={
                     "repository_id": str(repository_id),
                     "file_path": clean_path,
-                    "revision": src.revision or resolved.revision,
+                    "start_line": s_line,
+                    "end_line": e_line,
+                    "revision": resolved.revision or src.revision,
                 }
             )
         )

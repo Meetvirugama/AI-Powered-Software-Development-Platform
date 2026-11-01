@@ -236,6 +236,7 @@ class PullRequestInfo(BaseModel):
     number: int
     title: str
     state: str
+    draft: bool = False
     author: Optional[str] = None
     base_ref: Optional[str] = None
     head_ref: Optional[str] = None
@@ -339,3 +340,105 @@ class PRMetadata(BaseModel):
     status: str = "prepared"
 
 
+# ---------------------------------------------------------------------------
+# Week 3 Day 2: Diff Line Ranges & Branch Isolation for Blast Radius
+# ---------------------------------------------------------------------------
+
+class LineRange(BaseModel):
+    """Inclusive 1-indexed line range affected by a diff hunk.
+
+    Used by AST symbol mappers (Prit Day 2) to match diff hunks with symbols:
+    code_symbols.start_line <= range.end_line AND code_symbols.end_line >= range.start_line.
+    """
+    start_line: int = Field(..., ge=1, description="First modified line in new file (1-indexed, inclusive)")
+    end_line: int = Field(..., ge=1, description="Last modified line in new file (1-indexed, inclusive)")
+    change_type: str = Field(default="modified", description="Type of change: added, modified, deleted")
+
+    @field_validator("end_line")
+    @classmethod
+    def end_ge_start(cls, v: int, info) -> int:
+        start = info.data.get("start_line")
+        if start is not None and v < start:
+            raise ValueError("end_line must be >= start_line")
+        return v
+
+
+class FileDiffRange(BaseModel):
+    """File-level diff details with exact modified line ranges for AST symbol mapping."""
+    file_path: str = Field(..., description="Target file path relative to repo root")
+    status: DiffStatus = Field(default=DiffStatus.MODIFIED, description="Diff change status")
+    diff_ranges: list[LineRange] = Field(default_factory=list, description="List of inclusive line ranges modified")
+    additions: int = 0
+    deletions: int = 0
+    patch: Optional[str] = None
+
+
+class TaskDiffRanges(BaseModel):
+    """Collection of modified files and line ranges for an agent task, consumed by BlastRadiusEngine."""
+    task_id: UUID
+    repository_id: Optional[UUID] = None
+    base_branch: str = "main"
+    head_branch: str = ""
+    files: list[FileDiffRange] = Field(default_factory=list)
+    total_files_changed: int = 0
+    total_additions: int = 0
+    total_deletions: int = 0
+
+
+class BranchIsolationCheck(BaseModel):
+    """Validation result for agent branch isolation before task plan approval (Day 2 approval gate)."""
+    task_id: UUID
+    repository_id: UUID
+    branch_name: str
+    base_branch: str
+    is_isolated: bool
+    base_sha: Optional[str] = None
+    conflicts_with_protected: bool = False
+    error_message: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 3: Task Branch Isolation & Base Revision Validation (F33 / W3-04)
+# ---------------------------------------------------------------------------
+
+class TaskBranchIsolationRequest(BaseModel):
+    """Request to isolate task branch agent/task-{id} from a specified base revision."""
+    task_id: UUID | str = Field(..., description="Task identifier for agent branch name (agent/task-{id})")
+    base_revision: Optional[str] = Field(
+        default=None,
+        description="Base branch, tag, or commit SHA from which the agent branch is created",
+    )
+    workspace_path: Optional[str] = Field(
+        default=None,
+        description="Optional local workspace directory path (.workspaces/task-{id}) to checkout the branch",
+    )
+    create_workspace: bool = Field(
+        default=False,
+        description="Whether to create the isolated workspace directory if it does not exist",
+    )
+
+
+class TaskBranchIsolationResponse(BaseModel):
+    """Result of task branch isolation across GitHub remote and local workspace."""
+    task_id: UUID
+    repository_id: UUID
+    branch_name: str
+    base_branch: str
+    base_sha: str
+    workspace_path: Optional[str] = None
+    is_isolated: bool = True
+    status: str = "isolated"  # "created" | "ready" | "isolated"
+
+
+class BaseRevisionValidationRequest(BaseModel):
+    """Request to validate existence and resolve commit SHA of a proposed base revision."""
+    base_revision: str = Field(..., min_length=1, description="Branch name or commit SHA to validate")
+
+
+class BaseRevisionValidationResponse(BaseModel):
+    """Result of base revision validation and SHA resolution."""
+    repository_id: UUID
+    base_revision: str
+    commit_sha: str
+    ref_type: str = "branch"  # "branch" | "commit" | "tag"
+    is_valid: bool = True

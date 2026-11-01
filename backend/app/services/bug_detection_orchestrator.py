@@ -33,6 +33,7 @@ Implements the complete Day 3 requirements from `Docs/week2.md` §7 & §12 (Scen
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import logging
@@ -658,6 +659,11 @@ def normalize_and_ground_findings(
             dropped += 1
             continue
 
+        s_line = finding.source_reference.start_line
+        e_line = finding.source_reference.end_line
+        if s_line is not None and e_line is not None and s_line > e_line:
+            s_line, e_line = min(s_line, e_line), max(s_line, e_line)
+
         # 2. Ground against indexed_paths when repository files exist in DB
         if resolved.indexed_paths:
             if clean_path not in resolved.indexed_paths:
@@ -665,8 +671,6 @@ def normalize_and_ground_findings(
                 continue
             max_lines = resolved.indexed_paths[clean_path]
             if max_lines > 0:
-                s_line = finding.source_reference.start_line
-                e_line = finding.source_reference.end_line
                 if s_line is not None and s_line > max_lines:
                     dropped += 1
                     continue
@@ -674,14 +678,40 @@ def normalize_and_ground_findings(
                     dropped += 1
                     continue
 
+        # 3. Provenance & metadata computation (B-16)
+        prov = finding.provenance or (
+            "static_rule" if finding.source_type == "STATIC" else ("combined" if finding.source_type == "COMBINED" else "llm")
+        )
+        ev_hash = finding.evidence_hash or (
+            hashlib.sha256(finding.evidence.strip().encode("utf-8")).hexdigest()[:16] if finding.evidence else None
+        )
+        dedup_key = finding.deduplication_key or f"{clean_path}:{s_line or 0}-{e_line or 0}:{str(finding.category).lower()}:{finding.rule_id or 'ai'}"
+        rule_ver = finding.rule_version or ("1.0.0" if finding.rule_id else None)
+
+        # 4. Severity inflation guard (B-16)
+        sev = finding.severity
+        if finding.source_type == "AI" and (finding.is_uncertain or finding.confidence == "low") and sev == "CRITICAL":
+            sev = "MEDIUM"
+
         updated_ref = finding.source_reference.model_copy(
             update={
                 "repository_id": str(repository_id),
                 "file_path": clean_path,
-                "revision": finding.source_reference.revision or resolved.revision,
+                "start_line": s_line,
+                "end_line": e_line,
+                "revision": resolved.revision or finding.source_reference.revision,
             }
         )
-        finding = finding.model_copy(update={"source_reference": updated_ref})
+        finding = finding.model_copy(
+            update={
+                "source_reference": updated_ref,
+                "severity": sev,
+                "provenance": prov,
+                "evidence_hash": ev_hash,
+                "deduplication_key": dedup_key,
+                "rule_version": rule_ver,
+            }
+        )
         finding = sanitize_finding_secrets(finding)
         grounded.append(finding)
 
@@ -710,25 +740,39 @@ def _categories_compatible(cat_a: str, cat_b: str) -> bool:
 
 def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFinding:
     """Merge two equivalent findings, preserving both origins (`COMBINED`) when static + AI match."""
-    higher_sev = (
-        primary.severity
-        if SEVERITY_RANK.get(primary.severity, 0) >= SEVERITY_RANK.get(secondary.severity, 0)
-        else secondary.severity
-    )
-
     origins = {primary.source_type, secondary.source_type}
     if origins == {"STATIC", "AI"} or "COMBINED" in origins:
         merged_source_type = "COMBINED"
+        merged_provenance = "combined"
         merged_confidence = "high"
         merged_uncertain = False
+
+        # B-16 Guard: Never elevate severity solely because an LLM labels it high.
+        # If static rule categorized the defect as INFO or LOW, an LLM finding must not inflate it.
+        static_f = primary if primary.source_type == "STATIC" else (secondary if secondary.source_type == "STATIC" else None)
+        ai_f = primary if primary.source_type == "AI" else (secondary if secondary.source_type == "AI" else None)
+        if static_f and ai_f and static_f.severity in ("INFO", "LOW") and ai_f.severity in ("HIGH", "CRITICAL"):
+            higher_sev = static_f.severity
+        else:
+            higher_sev = (
+                primary.severity
+                if SEVERITY_RANK.get(primary.severity, 0) >= SEVERITY_RANK.get(secondary.severity, 0)
+                else secondary.severity
+            )
     else:
         merged_source_type = primary.source_type
+        merged_provenance = primary.provenance or ("static_rule" if merged_source_type == "STATIC" else "llm")
         merged_confidence = (
             primary.confidence
             if CONFIDENCE_RANK.get(primary.confidence, 0) >= CONFIDENCE_RANK.get(secondary.confidence, 0)
             else secondary.confidence
         )
         merged_uncertain = primary.is_uncertain and secondary.is_uncertain
+        higher_sev = (
+            primary.severity
+            if SEVERITY_RANK.get(primary.severity, 0) >= SEVERITY_RANK.get(secondary.severity, 0)
+            else secondary.severity
+        )
 
     rule_id = primary.rule_id or secondary.rule_id
 
@@ -755,13 +799,22 @@ def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFindin
 
     s_lines = [x for x in (primary.source_reference.start_line, secondary.source_reference.start_line) if x is not None]
     e_lines = [x for x in (primary.source_reference.end_line, secondary.source_reference.end_line) if x is not None]
+    s_min = min(s_lines) if s_lines else None
+    e_max = max(e_lines) if e_lines else None
     merged_ref = primary.source_reference.model_copy(
         update={
-            "start_line": min(s_lines) if s_lines else None,
-            "end_line": max(e_lines) if e_lines else None,
+            "start_line": s_min,
+            "end_line": e_max,
             "symbol_name": primary.source_reference.symbol_name or secondary.source_reference.symbol_name,
+            "revision": primary.source_reference.revision or secondary.source_reference.revision,
         }
     )
+
+    merged_hash = primary.evidence_hash or secondary.evidence_hash
+    if not merged_hash and merged_evidence:
+        merged_hash = hashlib.sha256(merged_evidence.strip().encode("utf-8")).hexdigest()[:16]
+
+    merged_dedup_key = f"{primary.source_reference.file_path}:{s_min or 0}-{e_max or 0}:{str(chosen_category).lower()}:{rule_id or 'combined'}"
 
     return primary.model_copy(
         update={
@@ -775,6 +828,11 @@ def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFindin
             "is_uncertain": merged_uncertain,
             "source_type": merged_source_type,
             "rule_id": rule_id,
+            "provenance": merged_provenance,
+            "rule_version": primary.rule_version or secondary.rule_version,
+            "model_version": primary.model_version or secondary.model_version,
+            "deduplication_key": merged_dedup_key,
+            "evidence_hash": merged_hash,
         }
     )
 
@@ -785,6 +843,14 @@ def merge_and_deduplicate_findings(findings: list[BugFinding]) -> list[BugFindin
     for candidate in findings:
         matched_idx: int | None = None
         for idx, existing in enumerate(merged):
+            # Check exact deduplication_key match first
+            if (
+                existing.deduplication_key
+                and candidate.deduplication_key
+                and existing.deduplication_key == candidate.deduplication_key
+            ):
+                matched_idx = idx
+                break
             # Never merge two distinct static analyzer rules
             if (
                 existing.rule_id

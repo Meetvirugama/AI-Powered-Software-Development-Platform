@@ -1,0 +1,529 @@
+"""Tests for sync-job recovery, reconciliation, and structured logs for best-effort failures.
+
+Week 2 Section 12:
+- Item 15: Sync-job recovery and reconciliation (B-12).
+- Item 16: Structured logs for swallowed best-effort failures (B-11, B-12).
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+from uuid import UUID, uuid4
+
+import pytest
+from app.core.database import SessionLocal
+from app.core.errors import APIError
+from app.models.repository import Repository, SyncStatus
+from app.models.sync_job import SyncJob, SyncJobStatus
+from app.models.user import User
+from app.repositories.repository_repository import RepositoryRepository
+from app.services.repository_sync import (
+    RedisSyncJobQueue,
+    RepositorySyncService,
+    reconcile_stale_sync_jobs,
+)
+
+
+class FakeRedisQueue:
+    def __init__(self) -> None:
+        self.enqueued: list[tuple[str, str]] = []
+
+    def rpush(self, name: str, payload: str) -> None:
+        self.enqueued.append((name, payload))
+
+
+def test_reconcile_stale_sync_jobs_transitions_stalled_jobs_to_failed(db_session):
+    """Verify that reconcile_stale_sync_jobs sweeps jobs older than timeout and unlocks repository."""
+    # Create test user and repository
+    user = User(
+        github_id=f"gh_{uuid4().hex[:8]}",
+        login=f"user_{uuid4().hex[:8]}",
+        email=f"sync_test_{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    repo = Repository(
+        user_id=user.id,
+        installation_id=uuid4(),
+        github_repo_id=f"github_{uuid4().hex[:8]}",
+        owner="test-owner",
+        name="test-repo",
+        default_branch="main",
+        sync_status=SyncStatus.SYNCING,
+    )
+    db_session.add(repo)
+    db_session.commit()
+    db_session.refresh(repo)
+
+    # Stale job older than 15 minutes (900 seconds)
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=900)
+    stale_job = SyncJob(
+        repository_id=repo.id,
+        user_id=user.id,
+        status=SyncJobStatus.RUNNING,
+    )
+    db_session.add(stale_job)
+    db_session.commit()
+    db_session.refresh(stale_job)
+
+    # Manually backdate updated_at and created_at to simulate a crash 15 minutes ago
+    db_session.execute(
+        SyncJob.__table__.update()
+        .where(SyncJob.id == stale_job.id)
+        .values(created_at=stale_time, updated_at=stale_time)
+    )
+    db_session.commit()
+
+    # Also add a fresh running job (< 60 seconds) that should NOT be touched
+    fresh_job = SyncJob(
+        repository_id=repo.id,
+        user_id=user.id,
+        status=SyncJobStatus.RUNNING,
+    )
+    db_session.add(fresh_job)
+    db_session.commit()
+    db_session.refresh(fresh_job)
+
+    # Run sweep with 600s (10 min) timeout threshold
+    reconciled_ids = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+
+    assert stale_job.id in reconciled_ids
+    assert fresh_job.id not in reconciled_ids
+
+    # Verify stale job is now FAILED
+    db_session.refresh(stale_job)
+    assert stale_job.status == SyncJobStatus.FAILED
+
+    # Verify fresh job is still RUNNING
+    db_session.refresh(fresh_job)
+    assert fresh_job.status == SyncJobStatus.RUNNING
+
+    # Clean up
+    db_session.delete(fresh_job)
+    db_session.delete(stale_job)
+    db_session.delete(repo)
+    db_session.delete(user)
+    db_session.commit()
+
+
+def test_request_sync_idempotency_reuses_in_flight_job():
+    """Verify repeat sync requests for an in-flight job return existing job without enqueueing duplicates."""
+    repo_id = uuid4()
+    user_id = uuid4()
+    existing_job_id = uuid4()
+
+    fake_repo = SimpleNamespace(
+        id=repo_id,
+        installation_id=uuid4(),
+        owner="owner",
+        name="repo",
+        default_branch="main",
+    )
+    active_job = SimpleNamespace(
+        id=existing_job_id,
+        repository_id=repo_id,
+        user_id=user_id,
+        status=SyncJobStatus.RUNNING,
+        created_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+        updated_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+    )
+
+    fake_repos = MagicMock()
+    fake_repos.get_for_user.return_value = fake_repo
+    fake_repos.get_active_sync_job.return_value = active_job
+
+    fake_redis = FakeRedisQueue()
+    fake_queue = RedisSyncJobQueue(fake_redis)
+    service = RepositorySyncService(fake_repos, fake_queue, timeout_seconds=600)
+
+    # First repeat call: should reuse active_job and NOT call enqueue or create_sync_job
+    result = service.request_sync(repo_id, user_id)
+
+    assert result.id == existing_job_id
+    assert len(fake_redis.enqueued) == 0
+    fake_repos.create_sync_job.assert_not_called()
+
+
+def test_request_sync_supersedes_stale_job_with_fresh_job():
+    """Verify that an active job older than timeout is marked FAILED and a fresh job is enqueued."""
+    repo_id = uuid4()
+    user_id = uuid4()
+    stale_job_id = uuid4()
+    fresh_job_id = uuid4()
+
+    fake_repo = SimpleNamespace(
+        id=repo_id,
+        installation_id=uuid4(),
+        owner="owner",
+        name="repo",
+        default_branch="main",
+    )
+    stale_job = SimpleNamespace(
+        id=stale_job_id,
+        repository_id=repo_id,
+        user_id=user_id,
+        status=SyncJobStatus.RUNNING,
+        created_at=datetime.now(timezone.utc) - timedelta(seconds=900),
+        updated_at=datetime.now(timezone.utc) - timedelta(seconds=900),
+    )
+    fresh_job = SimpleNamespace(
+        id=fresh_job_id,
+        repository_id=repo_id,
+        user_id=user_id,
+        status=SyncJobStatus.QUEUED,
+    )
+
+    fake_repos = MagicMock()
+    fake_repos.get_for_user.return_value = fake_repo
+    fake_repos.get_active_sync_job.return_value = stale_job
+    fake_repos.create_sync_job.return_value = fresh_job
+
+    fake_redis = FakeRedisQueue()
+    fake_queue = RedisSyncJobQueue(fake_redis)
+    service = RepositorySyncService(fake_repos, fake_queue, timeout_seconds=600)
+
+    result = service.request_sync(repo_id, user_id)
+
+    # Verify stale job was failed
+    fake_repos.mark_sync_job_failed.assert_called_once_with(stale_job_id)
+    # Verify fresh job was created and enqueued
+    fake_repos.create_sync_job.assert_called_once_with(repo_id, user_id)
+    assert result.id == fresh_job_id
+    assert len(fake_redis.enqueued) == 1
+
+
+def test_get_counts_for_repos_db_failure_logs_and_raises_503(monkeypatch, caplog):
+    """Verify B-11: DB failure in _get_counts_for_repos raises 503 retryable and logs structured error."""
+    import logging
+    from app.api.v1 import repositories as repo_module
+    from app.api.v1.repositories import _get_counts_for_repos
+
+    broken_db = MagicMock()
+    broken_db._is_mock_db = False
+    broken_db.query.side_effect = RuntimeError("Database connection pool exhausted")
+
+    fake_request = SimpleNamespace(state=SimpleNamespace(request_id="req-test-1234"))
+    repo_id = uuid4()
+
+    captured_logs: list[str] = []
+    original_error = repo_module.logger.error
+    monkeypatch.setattr(
+        repo_module.logger,
+        "error",
+        lambda msg, *args, **kwargs: (captured_logs.append(str(msg)), original_error(msg, *args, **kwargs)),
+    )
+
+    with pytest.raises(APIError) as exc_info:
+        _get_counts_for_repos([repo_id], broken_db, request=fake_request)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.retryable is True
+    assert "Database service is temporarily unavailable" in exc_info.value.message
+
+    # Verify structured error log was emitted
+    assert any("repo_counts_query_failed" in m for m in captured_logs) or any(
+        "repo_counts_query_failed" in (getattr(r, "message", None) or r.getMessage() or str(r.msg))
+        for r in caplog.records
+    )
+
+
+def test_event_publication_failure_logs_structured_warning(monkeypatch, caplog):
+    """Verify B-12: Redis event publication failure in sync endpoint logs structured warning."""
+    import logging
+    from fastapi.testclient import TestClient
+    from app.core.config import get_settings
+    from app.core.database import get_db
+    from app.core.security import create_access_token
+    from app.main import app
+
+    class FailingRedis:
+        def exists(self, _):
+            return 0
+
+        def rpush(self, *args, **kwargs):
+            pass
+
+        def publish(self, *args, **kwargs):
+            raise ConnectionError("Redis pubsub connection reset by peer")
+
+        def pipeline(self):
+            class _Pipe:
+                def incr(self, _k):
+                    pass
+
+                def expire(self, _k, _s):
+                    pass
+
+                def execute(self):
+                    return [1, True]
+
+            return _Pipe()
+
+    failing_redis = FailingRedis()
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-12345")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.core.auth.get_redis", lambda: failing_redis)
+    monkeypatch.setattr("app.core.redis.get_redis", lambda: failing_redis)
+    monkeypatch.setattr("app.api.v1.repositories.get_redis", lambda: failing_redis)
+
+    user_id = "0e969876-16d2-4c9f-8fe1-a849f32fa605"
+    token, _ = create_access_token(user_id)
+    repo_id = uuid4()
+
+    fake_repo = SimpleNamespace(
+        id=repo_id,
+        user_id=UUID(user_id),
+        installation_id=uuid4(),
+        owner="test-owner",
+        name="test-repo",
+        default_branch="main",
+        sync_status=SyncStatus.NOT_SYNCED,
+    )
+    fake_job = SimpleNamespace(id=uuid4(), repository_id=repo_id, user_id=UUID(user_id), status=SyncJobStatus.QUEUED)
+
+    monkeypatch.setattr("app.api.v1.repositories._owned_repository", lambda *a, **kw: fake_repo)
+    monkeypatch.setattr("app.repositories.repository_repository.RepositoryRepository.get_for_user", lambda *a, **kw: fake_repo)
+    monkeypatch.setattr("app.repositories.repository_repository.RepositoryRepository.create_sync_job", lambda *a, **kw: fake_job)
+    monkeypatch.setattr("app.repositories.repository_repository.RepositoryRepository.update_sync_status", lambda *a, **kw: None)
+
+    from app.api.v1 import repositories as repo_module
+
+    captured_warnings: list[str] = []
+    original_warning = repo_module.logger.warning
+    monkeypatch.setattr(
+        repo_module.logger,
+        "warning",
+        lambda msg, *args, **kwargs: (captured_warnings.append(str(msg)), original_warning(msg, *args, **kwargs)),
+    )
+
+    app.dependency_overrides[get_db] = lambda: object()
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            f"/api/v1/repositories/{repo_id}/sync",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        # The sync request succeeds with 202 ACCEPTED
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] == str(fake_job.id)
+
+        # But event_publication_failed warning was logged with structured extra
+        assert any("event_publication_failed" in m for m in captured_warnings) or any(
+            "event_publication_failed" in (getattr(r, "message", None) or r.getMessage() or str(r.msg))
+            for r in caplog.records
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_json_formatter_serializes_exceptions_and_extra_fields() -> None:
+    """Verify JsonFormatter outputs exception stack and extra fields in JSON."""
+    import logging
+    from app.core.logging import JsonFormatter
+
+    formatter = JsonFormatter()
+    logger = logging.getLogger("test.json.formatter")
+
+    record = None
+    try:
+        raise ValueError("Simulated failure for logging")
+    except ValueError:
+        import sys
+        record = logger.makeRecord(
+            name="test.logger",
+            level=logging.ERROR,
+            fn="test_file.py",
+            lno=42,
+            msg="database_connection_failed",
+            args=(),
+            exc_info=sys.exc_info(),
+            extra={"repo_id": "test-repo-123", "retry_count": 3},
+        )
+
+    formatted_json = formatter.format(record)
+    parsed = json.loads(formatted_json)
+
+    assert parsed["message"] == "database_connection_failed"
+    assert parsed["level"] == "ERROR"
+    assert parsed["repo_id"] == "test-repo-123"
+    assert parsed["retry_count"] == 3
+    assert "exception" in parsed
+    assert "Simulated failure for logging" in parsed["exception"]
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_loop_handles_idle_redis_timeout_without_warning(monkeypatch) -> None:
+    """Verify sync_worker_loop suppresses normal idle TimeoutError and does not log sync_worker_loop_error."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from app.services.sync_worker import sync_worker_loop
+
+    mock_redis = AsyncMock()
+    mock_redis.brpoplpush = AsyncMock(side_effect=RedisTimeoutError("Timeout reading from socket"))
+    monkeypatch.setattr("app.services.sync_worker.get_redis_async", AsyncMock(return_value=mock_redis))
+
+    captured_warnings = []
+    import app.services.sync_worker as sw_mod
+    orig_warn = sw_mod.logger.warning
+    monkeypatch.setattr(
+        sw_mod.logger,
+        "warning",
+        lambda msg, *a, **kw: (captured_warnings.append(str(msg)), orig_warn(msg, *a, **kw)),
+    )
+
+    task = asyncio.create_task(sync_worker_loop(app_or_service=MagicMock()))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+    assert mock_redis.brpoplpush.call_count >= 1
+    # Verify no loop error warning was emitted for idle timeout
+    assert not any("sync_worker_loop_error" in w for w in captured_warnings)
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_falls_back_when_git_missing(tmp_path: Path, monkeypatch) -> None:
+    """Verify clone_repository uses GitHub zipball download when git CLI is not installed."""
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = ws_root / "repo_target"
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+
+    # Simulate environment where git binary is not found in PATH
+    monkeypatch.setattr("shutil.which", lambda cmd: None)
+
+    download_called = False
+
+    async def fake_download(installation_id, owner, repo, branch, target):
+        nonlocal download_called
+        download_called = True
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "app.py").write_text("print('extracted')")
+
+    monkeypatch.setattr(service, "_download_zipball", fake_download)
+
+    res = await service.clone_repository(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        workspace_path=str(target),
+    )
+
+    assert download_called is True
+    assert res == str(target.resolve())
+    assert (target / "app.py").exists()
+
+
+@pytest.mark.asyncio
+async def test_clone_repository_falls_back_on_filenotfounderror(tmp_path: Path, monkeypatch) -> None:
+    """Verify clone_repository falls back to zipball download when subprocess raises FileNotFoundError."""
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = ws_root / "repo_target_2"
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/git")
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=FileNotFoundError(2, "No such file or directory")),
+    )
+
+    download_called = False
+
+    async def fake_download(installation_id, owner, repo, branch, target):
+        nonlocal download_called
+        download_called = True
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "index.ts").write_text("export const a = 1;")
+
+    monkeypatch.setattr(service, "_download_zipball", fake_download)
+
+    res = await service.clone_repository(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        workspace_path=str(target),
+    )
+
+    assert download_called is True
+    assert res == str(target.resolve())
+    assert (target / "index.ts").exists()
+
+
+@pytest.mark.asyncio
+async def test_download_zipball_extracts_files_and_strips_prefix(tmp_path: Path, monkeypatch) -> None:
+    """Verify _download_zipball fetches zip archive, strips GitHub prefix, and extracts files safely."""
+    import io
+    import zipfile
+    import httpx
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubService
+
+    ws_root = tmp_path / "workspaces"
+    ws_root.mkdir(parents=True, exist_ok=True)
+    target = (ws_root / "extracted_repo").resolve()
+
+    # Build an in-memory zip resembling GitHub API zipball output
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w") as zf:
+        zf.writestr("octocat-hello-world-7d151c1/", "")
+        zf.writestr("octocat-hello-world-7d151c1/README.md", "# Hello World")
+        zf.writestr("octocat-hello-world-7d151c1/src/index.js", "console.log('hi');")
+    zip_bytes = buf.getvalue()
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=ws_root)
+    monkeypatch.setattr(service._token_manager, "get_token", AsyncMock(return_value="mock_token"))
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def get(self, url, headers=None):
+            return httpx.Response(200, content=zip_bytes, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("httpx.AsyncClient", lambda **kwargs: FakeClient())
+
+    await service._download_zipball(
+        installation_id=1,
+        owner="octocat",
+        repo="hello-world",
+        branch="main",
+        target=target,
+    )
+
+    assert (target / "README.md").exists()
+    assert (target / "README.md").read_text() == "# Hello World"
+    assert (target / "src" / "index.js").exists()
+    assert (target / "src" / "index.js").read_text() == "console.log('hi');"
+

@@ -4,7 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { useAuth } from '../hooks/useAuth';
 import { useRealtimeRepositories } from '../hooks/useRealtimeRepositories';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
-import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu } from 'lucide-react';
+import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu, ListTodo } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function AppLayout() {
@@ -17,8 +17,8 @@ export function AppLayout() {
   // Maintain the SSE connection for the duration of the authenticated session.
   useRealtimeRepositories();
 
-  const isChatRoute = location.pathname.endsWith('/chat');
-  const isDetailRoute = /^\/app\/repositories\/[^/]+$/.test(location.pathname);
+  // Check if we are inside any repository workspace studio
+  const isRepositoryWorkspace = location.pathname.includes('/repositories/');
 
 
   async function handleLogout() {
@@ -65,6 +65,12 @@ export function AppLayout() {
             to="/app/repositories"
             icon={<FolderGit2 className="h-4 w-4 flex-shrink-0" />}
             label="Repositories"
+            collapsed={!sidebarOpen}
+          />
+          <SidebarLink
+            to="/app/tasks"
+            icon={<ListTodo className="h-4 w-4 flex-shrink-0" />}
+            label="Tasks"
             collapsed={!sidebarOpen}
           />
         </nav>
@@ -119,12 +125,8 @@ export function AppLayout() {
         {/* Content area */}
         <main className="flex-1 bg-background min-w-0 overflow-hidden flex flex-col h-full">
           <ErrorBoundary>
-            {isChatRoute ? (
-              <div className="h-full flex flex-col min-h-0">
-                <Outlet />
-              </div>
-            ) : isDetailRoute ? (
-              <div className="h-full flex flex-col min-h-0 p-3 sm:p-4 lg:p-5 overflow-hidden">
+            {isRepositoryWorkspace ? (
+              <div className="h-full flex flex-col min-h-0 overflow-hidden">
                 <Outlet />
               </div>
             ) : (

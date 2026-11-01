@@ -206,8 +206,15 @@ export function CodeViewer({
 }: CodeViewerProps) {
   const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
   const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [anchorLine, setAnchorLine] = useState<number | null>(null);
   const codeContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   const content = fileData?.content;
   const lines = useMemo(() => (content ? content.split('\n') : []), [content]);
@@ -235,10 +242,11 @@ export function CodeViewer({
 
   async function handleCopy() {
     if (!content) return;
+    if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
     try {
       await navigator.clipboard.writeText(content);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // Ignore clipboard write failures
     }

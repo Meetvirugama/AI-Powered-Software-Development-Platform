@@ -18,6 +18,22 @@ from typing import Any, Self
 from uuid import UUID
 
 
+class RetrievalUnavailableError(RuntimeError):
+    """Raised when all configured retrieval backends fail (e.g. both vector and lexical search error)."""
+
+    def __init__(
+        self,
+        message: str = "Retrieval service unavailable: both vector and lexical search failed.",
+        vector_error: Exception | None = None,
+        lexical_error: Exception | None = None,
+        repo_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.vector_error = vector_error
+        self.lexical_error = lexical_error
+        self.repo_id = repo_id
+
+
 @dataclass
 class CodeChunk:
     """
@@ -36,6 +52,10 @@ class CodeChunk:
     content_hash: str
     score: float  # Relevance score from retriever (cosine sim, ts_rank, RRF, or reranker logit)
     file_path: str  # Denormalised for context builder convenience
+    rrf_score: float | None = None
+    reranker_logit: float | None = None
+    vector_similarity: float | None = None
+    lexical_rank: float | None = None
 
     def __post_init__(self) -> None:
         """Defensively ensure UUID types for primary identification fields."""
@@ -78,6 +98,10 @@ class CodeChunk:
             content_hash=str(data.get("content_hash", "")),
             score=float(data.get("score", 0.0)),
             file_path=str(data.get("file_path", "")),
+            rrf_score=float(data["rrf_score"]) if data.get("rrf_score") is not None else None,
+            reranker_logit=float(data["reranker_logit"]) if data.get("reranker_logit") is not None else None,
+            vector_similarity=float(data["vector_similarity"]) if data.get("vector_similarity") is not None else None,
+            lexical_rank=float(data["lexical_rank"]) if data.get("lexical_rank") is not None else None,
         )
 
     @classmethod
@@ -103,6 +127,10 @@ class CodeChunk:
             content_hash=str(getattr(item, "content_hash", "")),
             score=float(getattr(item, "score", 0.0)),
             file_path=str(getattr(item, "file_path", "")),
+            rrf_score=getattr(item, "rrf_score", None),
+            reranker_logit=getattr(item, "reranker_logit", None),
+            vector_similarity=getattr(item, "vector_similarity", None),
+            lexical_rank=getattr(item, "lexical_rank", None),
         )
 
 

@@ -113,6 +113,27 @@ class AnalysisSourceReference(BaseModel):
         description="Optional function, class, or method name at this location.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_source(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            m = re.match(r"^([^(\s:]+)(?:\s*(?:\(lines\s*|:)\s*(\d+)(?:[-–](\d+))?\s*\)?)?", data.strip())
+            if m:
+                path = m.group(1).strip()
+                start = int(m.group(2)) if m.group(2) else None
+                end = int(m.group(3)) if m.group(3) else start
+                return {"file_path": path, "start_line": start, "end_line": end}
+            return {"file_path": data.strip()}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "file_path" not in d:
+                for alt in ("path", "file", "filename", "source", "filepath"):
+                    if alt in d and d[alt]:
+                        d["file_path"] = str(d[alt]).strip()
+                        break
+            return d
+        return data
+
     @field_validator("file_path")
     @classmethod
     def _clean_file_path(cls, value: str) -> str:
@@ -124,10 +145,10 @@ class AnalysisSourceReference(BaseModel):
     @model_validator(mode="after")
     def _validate_line_bounds(self) -> "AnalysisSourceReference":
         if self.end_line is not None and self.start_line is None:
-            raise ValueError("start_line is required when end_line is specified.")
+            self.start_line = self.end_line
         if self.start_line is not None and self.end_line is not None:
             if self.end_line < self.start_line:
-                raise ValueError("end_line must be greater than or equal to start_line.")
+                self.start_line, self.end_line = self.end_line, self.start_line
         return self
 
 
@@ -207,6 +228,13 @@ class AnalysisTarget(BaseModel):
         return self
 
 
+# Per-feature context budget defaults (Week 2 Section 12 Item 17, B-14)
+DEFAULT_EXPLAIN_CONTEXT_TOKENS: int = 4_000
+DEFAULT_BUGS_CONTEXT_TOKENS: int = 6_000
+DEFAULT_TESTS_CONTEXT_TOKENS: int = 6_000
+DEFAULT_REVIEW_CONTEXT_TOKENS: int = 8_000
+
+
 class AnalysisOptions(BaseModel):
     """Bounded execution and context options shared by intelligence endpoints."""
 
@@ -266,7 +294,9 @@ class ExplainCodeRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/explain`."""
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_EXPLAIN_CONTEXT_TOKENS)
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -282,9 +312,35 @@ class SymbolSummary(BaseModel):
         default="symbol",
         description="Symbol kind, e.g. 'function', 'class', 'method', 'variable', 'type'.",
     )
-    role: str = Field(..., min_length=1, description="How this symbol contributes to the code.")
+    role: str = Field(
+        default="Referenced in target code",
+        min_length=1,
+        description="How this symbol contributes to the code.",
+    )
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_symbol(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            clean = data.strip() or "symbol"
+            return {"name": clean, "kind": "symbol", "role": "Referenced in target code"}
+        if isinstance(data, dict):
+            d = dict(data)
+            if "name" not in d or not str(d.get("name", "")).strip():
+                for alt in ("symbol", "identifier", "selector", "title", "label"):
+                    if alt in d and d[alt]:
+                        d["name"] = str(d[alt]).strip()
+                        break
+                if not d.get("name"):
+                    d["name"] = "symbol"
+            if not d.get("role"):
+                d["role"] = d.get("description") or "Referenced in target code"
+            if not d.get("kind"):
+                d["kind"] = "symbol"
+            return d
+        return data
 
 
 class CodeExplanation(BaseModel):
@@ -329,6 +385,75 @@ class CodeExplanation(BaseModel):
         description="Explicit list of unavailable files, callers, or context items.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_explanation(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        d = dict(data)
+
+        # 1. purpose
+        p = d.get("purpose")
+        if p is not None and isinstance(p, str):
+            d["purpose"] = p.strip()
+
+        # 2. logic_flow
+        lf = d.get("logic_flow")
+        if isinstance(lf, str):
+            lf_str = lf.strip()
+            parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", lf_str) if part.strip()]
+            d["logic_flow"] = parts if parts else [lf_str]
+        elif not isinstance(lf, list):
+            d["logic_flow"] = []
+
+        # 3. inputs_and_outputs
+        io = d.get("inputs_and_outputs")
+        if isinstance(io, dict):
+            parts = []
+            if "inputs" in io and io["inputs"]:
+                parts.append(f"Inputs: {io['inputs']}")
+            if "outputs" in io and io["outputs"]:
+                parts.append(f"Outputs: {io['outputs']}")
+            d["inputs_and_outputs"] = " | ".join(parts) if parts else "; ".join(f"{k}: {v}" for k, v in io.items())
+        elif isinstance(io, str):
+            d["inputs_and_outputs"] = io.strip()
+
+        # 4. dependencies
+        deps = d.get("dependencies")
+        if isinstance(deps, dict):
+            d["dependencies"] = [f"{k}: {v}" for k, v in deps.items()]
+        elif isinstance(deps, str):
+            d["dependencies"] = [deps.strip()] if deps.strip() else []
+        elif not isinstance(deps, list):
+            d["dependencies"] = []
+
+        # 5. assumptions_and_limitations
+        al = d.get("assumptions_and_limitations")
+        if isinstance(al, dict):
+            d["assumptions_and_limitations"] = [f"{k}: {v}" for k, v in al.items()]
+        elif isinstance(al, str):
+            d["assumptions_and_limitations"] = [al.strip()] if al.strip() else []
+        elif not isinstance(al, list):
+            d["assumptions_and_limitations"] = []
+
+        # 6. missing_context
+        mc = d.get("missing_context")
+        if isinstance(mc, str):
+            if mc.strip().lower() in ("none", "n/a", "no missing context", ""):
+                d["missing_context"] = []
+            else:
+                d["missing_context"] = [mc.strip()]
+        elif not isinstance(mc, list):
+            d["missing_context"] = []
+
+        # 7. confidence
+        conf = str(d.get("confidence", "medium")).lower().strip()
+        if conf not in ("high", "medium", "low"):
+            conf = "medium"
+        d["confidence"] = conf
+
+        return d
+
     @field_validator("purpose", "inputs_and_outputs")
     @classmethod
     def _non_blank_text(cls, value: str) -> str:
@@ -348,6 +473,7 @@ class CodeExplanationResponse(BaseModel):
     revision: str | None = None
     explanation: CodeExplanation
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +484,9 @@ class BugDetectionRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/detect-bugs`."""
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_BUGS_CONTEXT_TOKENS)
+    )
     include_static: bool = Field(
         default=True,
         description="Run configured static analysis adapters (Ruff/Bandit/secret checks).",
@@ -427,6 +555,30 @@ class BugFinding(BaseModel):
         max_length=128,
         description="Static analyzer rule identifier (e.g. 'F821', 'B105') when applicable.",
     )
+    provenance: str | None = Field(
+        default=None,
+        description="Finding origin provenance: 'static_rule', 'llm', or 'combined'.",
+    )
+    rule_version: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Static rule or analyzer version.",
+    )
+    model_version: str | None = Field(
+        default=None,
+        max_length=128,
+        description="LLM provider or model name when AI-generated.",
+    )
+    deduplication_key: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Stable deduplication key across runs and engines.",
+    )
+    evidence_hash: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Cryptographic SHA-256 hash of the evidence snippet.",
+    )
 
 
 class BugDetectionResponse(BaseModel):
@@ -443,6 +595,7 @@ class BugDetectionResponse(BaseModel):
     ai_findings_count: int = Field(default=0, ge=0)
     missing_context: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -455,7 +608,9 @@ class TestGenerationRequest(BaseModel):
     __test__ = False
 
     target: AnalysisTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_TESTS_CONTEXT_TOKENS)
+    )
     framework: SupportedTestFramework | None = Field(
         default=None,
         description="Optional explicit test framework override ('pytest', 'unittest', 'jest').",
@@ -513,6 +668,30 @@ class TestGenerationResult(BaseModel):
         default_factory=list,
         description="Normalized syntax or structural validation errors, if any.",
     )
+    validation_stage: str = Field(
+        default="generated and statically validated",
+        description="Truthful validation status: e.g. 'generated and statically validated', 'not executed', or 'verified passing' if sandboxed.",
+    )
+    schema_valid: bool = Field(
+        default=True,
+        description="Whether the generated output strictly conforms to the expected schema.",
+    )
+    code_syntactically_valid: bool = Field(
+        default=True,
+        description="Whether the generated test source parses cleanly without syntax errors.",
+    )
+    framework_recognized: bool = Field(
+        default=True,
+        description="Whether test runner conventions and imports match the detected repository framework.",
+    )
+    execution_attempted: bool = Field(
+        default=False,
+        description="Whether sandboxed test execution was attempted.",
+    )
+    execution_status: str = Field(
+        default="NOT_EXECUTED",
+        description="Outcome of execution: 'NOT_EXECUTED', 'PASSED', 'FAILED', or 'TIMED_OUT'.",
+    )
     sources: list[AnalysisSourceReference] = Field(
         default_factory=list,
         description="Source references used to construct the test suite.",
@@ -544,6 +723,7 @@ class TestGenerationResponse(BaseModel):
     revision: str | None = None
     result: TestGenerationResult
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -607,7 +787,9 @@ class CodeReviewRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/review`."""
 
     target: ReviewTarget
-    options: AnalysisOptions = Field(default_factory=AnalysisOptions)
+    options: AnalysisOptions = Field(
+        default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_REVIEW_CONTEXT_TOKENS)
+    )
     include_static: bool = Field(
         default=True,
         description="Run static linters and secret checks on reviewed files.",
@@ -679,6 +861,30 @@ class ReviewFinding(BaseModel):
     )
     source_type: FindingSourceType = Field(default="AI")
     rule_id: str | None = Field(default=None, max_length=128)
+    provenance: str | None = Field(
+        default=None,
+        description="Finding origin provenance: 'static_rule', 'llm', or 'combined'.",
+    )
+    rule_version: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Static rule or analyzer version.",
+    )
+    model_version: str | None = Field(
+        default=None,
+        max_length=128,
+        description="LLM provider or model name when AI-generated.",
+    )
+    deduplication_key: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Stable deduplication key across runs and engines.",
+    )
+    evidence_hash: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Cryptographic SHA-256 hash of the evidence snippet.",
+    )
 
 
 class ReviewReport(BaseModel):
@@ -709,6 +915,7 @@ class ReviewReportResponse(BaseModel):
     target: ReviewTarget
     report: ReviewReport
     created_at: datetime = Field(default_factory=_utc_now)
+    stage_metrics: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

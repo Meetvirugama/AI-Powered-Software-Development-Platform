@@ -32,6 +32,7 @@ from app.core.errors import APIError, ErrorCode
 from app.integrations.github.cache import SourceRevisionCache
 from app.integrations.github.client import GitHubAPIError, GitHubClient
 from app.integrations.github.schemas import (
+    BaseRevisionValidationResponse,
     CommitAuthor,
     CommitDetail,
     CommitFileChange,
@@ -39,11 +40,13 @@ from app.integrations.github.schemas import (
     DiffStatus,
     FileContentRequest,
     FileContentResponse,
+    FileDiffRange,
     FileTreeResponse,
     PullRequestDiffResponse,
     PullRequestFile,
     PullRequestInfo,
     SourceReference,
+    TaskBranchIsolationResponse,
     TreeEntry,
 )
 from app.models.github_installation import GitHubInstallation
@@ -84,7 +87,14 @@ class GitHubSourceService:
 
     def __init__(self, db: Session, cache: SourceRevisionCache | None = None) -> None:
         self._db = db
-        self._cache = cache if cache is not None else SourceRevisionCache()
+        if cache is not None:
+            self._cache = cache
+        else:
+            try:
+                from app.core.redis import get_redis
+                self._cache = SourceRevisionCache(redis_client=get_redis())
+            except Exception:
+                self._cache = SourceRevisionCache()
 
     # ----- Authorization helpers -------------------------------------------
 
@@ -604,6 +614,56 @@ class GitHubSourceService:
             total_changes=total_additions + total_deletions,
         )
 
+    async def get_pull_request_diff_ranges(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        pr_number: int,
+    ) -> list[FileDiffRange]:
+        """Retrieve exact modified line ranges for files changed in a pull request.
+
+        Parses unified diff patches from each PR file to provide symbol-level blast
+        radius inputs (Week 3 Day 2).
+        """
+        from app.services.git_branch import parse_unified_diff
+
+        pr_diff = await self.get_pull_request_diff(repository_id, user_id, pr_number)
+        result: list[FileDiffRange] = []
+
+        for pr_file in pr_diff.files:
+            if pr_file.patch:
+                parsed = parse_unified_diff(pr_file.patch)
+                if parsed:
+                    for f in parsed:
+                        if f.file_path == "unknown":
+                            f.file_path = pr_file.filename
+                        f.status = pr_file.status
+                    result.extend(parsed)
+                else:
+                    result.append(
+                        FileDiffRange(
+                            file_path=pr_file.filename,
+                            status=pr_file.status,
+                            diff_ranges=[],
+                            additions=pr_file.additions,
+                            deletions=pr_file.deletions,
+                            patch=pr_file.patch,
+                        )
+                    )
+            else:
+                result.append(
+                    FileDiffRange(
+                        file_path=pr_file.filename,
+                        status=pr_file.status,
+                        diff_ranges=[],
+                        additions=pr_file.additions,
+                        deletions=pr_file.deletions,
+                    )
+                )
+
+        return result
+
+
     async def list_pull_requests(
         self,
         repository_id: UUID,
@@ -634,6 +694,55 @@ class GitHubSourceService:
             ) from exc
 
         return [self._parse_pull_request(pr) for pr in data]
+
+    # ----- Week 3 Day 3: Task Branch Isolation & Base Revision Validation ----
+
+    async def validate_base_revision(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        base_revision: str,
+    ) -> BaseRevisionValidationResponse:
+        """Validate that a base revision exists in the repository and resolve its commit SHA."""
+        from app.services.git_branch import GitBranchService
+
+        repository = self._get_authorized_repository(repository_id, user_id)
+        git_svc = GitBranchService(self._db)
+        clean_ref, sha, ref_type = await git_svc.resolve_base_revision(
+            repository_id=repository.id,
+            base_revision=base_revision,
+            user_id=user_id,
+        )
+        return BaseRevisionValidationResponse(
+            repository_id=repository.id,
+            base_revision=clean_ref,
+            commit_sha=sha,
+            ref_type=ref_type,
+            is_valid=True,
+        )
+
+    async def setup_task_branch(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        task_id: UUID | str,
+        base_revision: str | None = None,
+        workspace_path: str | None = None,
+        create_workspace: bool = False,
+    ) -> TaskBranchIsolationResponse:
+        """Isolate task branch agent/task-{id} from base revision across GitHub and workspace."""
+        from app.services.git_branch import GitBranchService
+
+        repository = self._get_authorized_repository(repository_id, user_id)
+        git_svc = GitBranchService(self._db)
+        return await git_svc.setup_task_branch_isolation(
+            repository_id=repository.id,
+            task_id=task_id,
+            base_revision=base_revision,
+            workspace_path=workspace_path,
+            user_id=user_id,
+            create_workspace=create_workspace,
+        )
 
     # ----- Private parsing helpers -----------------------------------------
 
@@ -715,6 +824,7 @@ class GitHubSourceService:
             number=data.get("number", 0),
             title=redact(data.get("title", "")),
             state=data.get("state", "unknown"),
+            draft=bool(data.get("draft", False)),
             author=user.get("login") if isinstance(user, dict) else None,
             base_ref=base.get("ref") if isinstance(base, dict) else None,
             head_ref=head.get("ref") if isinstance(head, dict) else None,

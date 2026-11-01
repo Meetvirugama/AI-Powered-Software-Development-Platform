@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ai.schemas.output import RepositoryAnswer, SourceReference
@@ -128,3 +129,75 @@ def test_chat_returns_404_when_user_does_not_own_repository(monkeypatch) -> None
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "REPOSITORY_NOT_FOUND"
     pipeline.chat.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_chat_ownership_checks(monkeypatch) -> None:
+    """F-03: Concurrent repository chat requests safely manage their own session lifecycle."""
+    import asyncio
+    import httpx
+    from uuid import uuid4
+
+    token = _configure_auth(monkeypatch)
+    owned_repo_id = uuid4()
+    foreign_repo_id = uuid4()
+
+    sessions_opened = 0
+    sessions_closed = 0
+
+    def mock_get_db():
+        nonlocal sessions_opened, sessions_closed
+        sessions_opened += 1
+        try:
+            yield object()
+        finally:
+            sessions_closed += 1
+
+    class ConcurrencySafeRepoRepository:
+        """Mock RepositoryRepository: returns repo for owned_repo_id, None for foreign."""
+
+        def __init__(self, _: object) -> None:
+            pass
+
+        def get_for_user(self, requested_id, user_id):
+            if requested_id == owned_repo_id:
+                return SimpleNamespace(id=owned_repo_id)
+            return None
+
+    app.dependency_overrides[get_db] = mock_get_db
+    monkeypatch.setattr("app.api.v1.chat.RepositoryRepository", ConcurrencySafeRepoRepository)
+
+    answer = RepositoryAnswer(answer="Concurrency safe answer", sources=[], confidence="high")
+    pipeline = SimpleNamespace(chat=AsyncMock(return_value=answer))
+    app.state.rag_pipeline = pipeline
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+        ) as ac:
+            async def send_req(repo_id: UUID):
+                return await ac.post(
+                    f"/api/v1/repositories/{repo_id}/chat",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"question": "Concurrency test?"},
+                )
+
+            # Fire 10 concurrent requests (5 owned, 5 foreign)
+            tasks = [
+                send_req(owned_repo_id if i % 2 == 0 else foreign_repo_id)
+                for i in range(10)
+            ]
+            responses = await asyncio.gather(*tasks)
+
+            assert len(responses) == 10
+            owned_responses = [r for r in responses if r.status_code == 200]
+            foreign_responses = [r for r in responses if r.status_code == 404]
+
+            assert len(owned_responses) == 5
+            assert len(foreign_responses) == 5
+            assert sessions_opened == 10
+            assert sessions_closed == 10
+    finally:
+        app.dependency_overrides.clear()
+        del app.state.rag_pipeline

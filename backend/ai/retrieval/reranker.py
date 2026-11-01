@@ -54,6 +54,12 @@ class CrossEncoderReranker:
     ) -> None:
         self._model_name = model_name
         self._model: object | None = model  # Supports dependency injection
+        self.last_status: str = "initialized"
+
+    @property
+    def status(self) -> str:
+        """Observable degradation status of the reranker (AI-08)."""
+        return self.last_status
 
     # ------------------------------------------------------------------
     # Public interface
@@ -97,9 +103,10 @@ class CrossEncoderReranker:
         try:
             model = self._get_model()
         except RuntimeError as exc:
+            self.last_status = "fallback_model_missing"
             logger.warning(
                 "reranker_model_unavailable_falling_back",
-                extra={"error": str(exc), "candidates_count": len(candidates)},
+                extra={"error": str(exc), "candidates_count": len(candidates), "status": self.last_status},
             )
             return candidates[:top_n]
 
@@ -110,11 +117,14 @@ class CrossEncoderReranker:
             # Batch predict — returns numpy array of float32 logit scores
             raw_scores = model.predict(pairs)  # type: ignore[union-attr]
         except Exception as exc:  # noqa: BLE001
+            self.last_status = "fallback_inference_error"
             logger.error(
                 "reranker_inference_failed_falling_back",
-                extra={"error": str(exc), "candidates_count": len(candidates)},
+                extra={"error": str(exc), "candidates_count": len(candidates), "status": self.last_status},
             )
             return candidates[:top_n]
+
+        self.last_status = "reranked"
 
         # Sort by score descending and take top_n
         ranked = sorted(
@@ -125,7 +135,11 @@ class CrossEncoderReranker:
         top_ranked = ranked[:top_n]
 
         reranked: list[CodeChunk] = [
-            dataclasses.replace(chunk, score=round(float(score), 4))
+            dataclasses.replace(
+                chunk,
+                score=round(float(score), 4),
+                reranker_logit=round(float(score), 4),
+            )
             for score, chunk in top_ranked
         ]
 

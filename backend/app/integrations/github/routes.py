@@ -32,15 +32,22 @@ from app.core.secret_redaction import redact_obj
 from app.integrations.github.schemas import (
     AgentBranchRequest,
     AgentBranchResponse,
+    BaseRevisionValidationRequest,
+    BaseRevisionValidationResponse,
+    BranchIsolationCheck,
     CommitDetail,
     CommitListResponse,
     CommitStagingRequest,
     CommitStagingResponse,
     FileContentResponse,
+    FileDiffRange,
     FileTreeResponse,
     PRMetadata,
     PullRequestDiffResponse,
     PullRequestInfo,
+    TaskBranchIsolationRequest,
+    TaskBranchIsolationResponse,
+    TaskDiffRanges,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -375,3 +382,134 @@ def get_pr_metadata_endpoint(
         repository_id=repository_id,
     )
     return PRMetadata.model_validate(redact_obj(meta.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 2: Diff Line Ranges & Branch Isolation Gate
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{repository_id}/source/diff-ranges",
+    response_model=list[FileDiffRange],
+    summary="Get modified line ranges for PR or branch diff",
+    description="Provides file paths and 1-indexed line ranges for AST symbol mapping and blast radius computation.",
+)
+async def get_diff_ranges_endpoint(
+    repository_id: UUID,
+    request: Request,
+    pr_number: int = Query(..., ge=1, description="Pull request number"),
+    db: Session = Depends(get_db),
+) -> list[FileDiffRange]:
+    service = GitHubSourceService(db)
+    diff_ranges = await service.get_pull_request_diff_ranges(
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+        pr_number=pr_number,
+    )
+    return [FileDiffRange.model_validate(redact_obj(f.model_dump(mode="json"))) for f in diff_ranges]
+
+
+@router.get(
+    "/{repository_id}/source/diff-ranges/task/{task_id}",
+    response_model=TaskDiffRanges,
+    summary="Get task workspace diff line ranges",
+    description="Inspects active task branch diff to supply affected line ranges for BlastRadiusEngine and Yug's affected-files API.",
+)
+async def get_task_diff_ranges_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    base_branch: str | None = Query(default=None, description="Optional base branch"),
+    workspace_path: str | None = Query(default=None, description="Optional workspace path"),
+    db: Session = Depends(get_db),
+) -> TaskDiffRanges:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    summary = await service.get_task_diff_ranges(
+        task_id=task_id,
+        workspace_path=workspace_path,
+        base_branch=base_branch,
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+    )
+    return TaskDiffRanges.model_validate(redact_obj(summary.model_dump(mode="json")))
+
+
+@router.get(
+    "/{repository_id}/source/branch-isolation/{task_id}",
+    response_model=BranchIsolationCheck,
+    summary="Verify branch isolation for Task Plan Approval Gate",
+    description="Verifies that agent/task-{id} is properly isolated and does not collide with protected branches.",
+)
+def verify_branch_isolation_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    base_branch: str | None = Query(default=None, description="Optional base branch"),
+    db: Session = Depends(get_db),
+) -> BranchIsolationCheck:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    check = service.verify_branch_isolation(
+        repository_id=repository_id,
+        task_id=task_id,
+        base_branch=base_branch,
+        user_id=_request_user_id(request),
+    )
+    return BranchIsolationCheck.model_validate(redact_obj(check.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 3: Task Branch Isolation & Base Revision Validation (F33 / W3-04)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task-branch/isolate",
+    response_model=TaskBranchIsolationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Isolate task branch from base revision",
+    description="Creates or isolates agent/task-{id} from base revision on remote and/or workspace directory.",
+)
+async def isolate_task_branch_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskBranchIsolationRequest,
+    db: Session = Depends(get_db),
+) -> TaskBranchIsolationResponse:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    result = await service.setup_task_branch_isolation(
+        repository_id=repository_id,
+        task_id=payload.task_id,
+        base_revision=payload.base_revision,
+        workspace_path=payload.workspace_path,
+        user_id=_request_user_id(request),
+        create_workspace=payload.create_workspace,
+    )
+    return TaskBranchIsolationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
+
+
+@router.post(
+    "/{repository_id}/source/task-branch/validate-base",
+    response_model=BaseRevisionValidationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Validate base revision for task workspace",
+    description="Validates that a base revision (branch name or commit SHA) exists in the repository and resolves its commit SHA.",
+)
+async def validate_base_revision_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: BaseRevisionValidationRequest,
+    db: Session = Depends(get_db),
+) -> BaseRevisionValidationResponse:
+    service = GitHubSourceService(db)
+    result = await service.validate_base_revision(
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+        base_revision=payload.base_revision,
+    )
+    return BaseRevisionValidationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
+

@@ -84,3 +84,43 @@ def test_revoked_token_returns_401(client: TestClient, fake_redis, monkeypatch) 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
     assert "revoked" in response.json()["error"]["message"]
+
+
+def test_auth_redis_outage_returns_503(client: TestClient, monkeypatch) -> None:
+    """F-02: When Redis times out or fails during auth blocklist check, return 503 instead of stalling."""
+    import time
+    token, _ = create_access_token(user_id=str(uuid.uuid4()))
+
+    class StalledRedis:
+        def exists(self, key: str) -> int:
+            raise ConnectionError("Redis cluster connection refused")
+
+    monkeypatch.setattr("app.core.auth.get_redis", lambda: StalledRedis())
+
+    response = client.get(
+        "/api/v1/repositories",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_auth_async_redis_client_support(client: TestClient, monkeypatch) -> None:
+    """F-02: Support async Redis coroutine exists() without blocking."""
+    from app.core.security import decode_access_token
+    token, _ = create_access_token(user_id=str(uuid.uuid4()))
+    claims = decode_access_token(token)
+    jti = str(claims["jti"])
+
+    class AsyncMockRedis:
+        async def exists(self, key: str) -> int:
+            return 1 if key == f"auth:blocklist:{jti}" else 0
+
+    monkeypatch.setattr("app.core.auth.get_redis", lambda: AsyncMockRedis())
+
+    response = client.get(
+        "/api/v1/repositories",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 401
+    assert "revoked" in response.json()["error"]["message"]

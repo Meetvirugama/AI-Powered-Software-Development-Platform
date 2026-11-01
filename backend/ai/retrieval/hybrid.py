@@ -21,11 +21,13 @@ import logging
 from typing import Self
 from uuid import UUID
 
-from .base import CodeChunk, Retriever
+from .base import CodeChunk, RetrievalUnavailableError, Retriever
 from .fusion import RRFFusion
 from .reranker import CrossEncoderReranker
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["HybridRetriever", "RetrievalUnavailableError"]
 
 
 class HybridRetriever(Retriever):
@@ -102,27 +104,74 @@ class HybridRetriever(Retriever):
         )
 
         vector_chunks: list[CodeChunk] = []
+        vector_failed = False
+        vector_err_str: str | None = None
         if isinstance(vector_res, Exception):
+            vector_failed = True
+            vector_err_str = str(vector_res)
             logger.error(
                 "hybrid_retrieval_vector_failed",
-                extra={"error": str(vector_res), "repo_id": str(repo_uuid)},
+                extra={"error": vector_err_str, "repo_id": str(repo_uuid)},
             )
         else:
-            vector_chunks = vector_res
+            vector_chunks = vector_res or []
 
         lexical_chunks: list[CodeChunk] = []
+        lexical_failed = False
+        lexical_err_str: str | None = None
         if isinstance(lexical_res, Exception):
+            lexical_failed = True
+            lexical_err_str = str(lexical_res)
             logger.error(
                 "hybrid_retrieval_lexical_failed",
-                extra={"error": str(lexical_res), "repo_id": str(repo_uuid)},
+                extra={"error": lexical_err_str, "repo_id": str(repo_uuid)},
             )
         else:
-            lexical_chunks = lexical_res
+            lexical_chunks = lexical_res or []
 
+        # If both retrievers failed, this is an infrastructure outage, NOT zero matching code.
+        if vector_failed and lexical_failed:
+            logger.error(
+                "hybrid_retrieval_all_sources_failed",
+                extra={
+                    "repo_id": str(repo_uuid),
+                    "vector_error": vector_err_str,
+                    "lexical_error": lexical_err_str,
+                },
+            )
+            raise RetrievalUnavailableError(
+                message=f"Hybrid retrieval failed for repo {repo_uuid}: both vector and lexical search failed.",
+                vector_error=vector_res if isinstance(vector_res, Exception) else None,
+                lexical_error=lexical_res if isinstance(lexical_res, Exception) else None,
+                repo_id=str(repo_uuid),
+            )
+
+        fallback_used = vector_failed or lexical_failed
+        if fallback_used:
+            surviving = "lexical" if vector_failed else "vector"
+            failed_source = "vector" if vector_failed else "lexical"
+            logger.warning(
+                "hybrid_retrieval_fallback_active",
+                extra={
+                    "repo_id": str(repo_uuid),
+                    "failed_source": failed_source,
+                    "surviving_source": surviving,
+                    "vector_error": vector_err_str,
+                    "lexical_error": lexical_err_str,
+                },
+            )
+
+        # Legitimate empty result: at least one source succeeded without error, but 0 matches were found.
         if not vector_chunks and not lexical_chunks:
             logger.debug(
                 "hybrid_retrieval_empty",
-                extra={"repo_id": str(repo_uuid), "query_preview": query[:80]},
+                extra={
+                    "repo_id": str(repo_uuid),
+                    "query_preview": query[:80],
+                    "vector_status": "failed" if vector_failed else "success",
+                    "lexical_status": "failed" if lexical_failed else "success",
+                    "fallback_used": fallback_used,
+                },
             )
             return []
 

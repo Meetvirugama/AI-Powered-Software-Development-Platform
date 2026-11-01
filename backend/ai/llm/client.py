@@ -114,6 +114,7 @@ class LLMGateway:
         response: LLMResponse | None = None
         error_type: str | None = None
         effective_provider = self._provider
+        effective_model = request.model
 
         try:
             try:
@@ -130,7 +131,7 @@ class LLMGateway:
                         extra={
                             "primary": self._provider.provider_name,
                             "fallback": self._fallback_provider.provider_name,
-                            "error": str(exc),
+                            "error_type": type(exc).__name__,
                         },
                     )
                     effective_provider = self._fallback_provider
@@ -156,6 +157,7 @@ class LLMGateway:
                             max_tokens=request.max_tokens,
                             response_schema=request.response_schema,
                         )
+                    effective_model = fallback_request.model
                     response = await self._fallback_provider.generate(fallback_request)
                 else:
                     raise
@@ -179,7 +181,12 @@ class LLMGateway:
                 "llm_call",
                 extra={
                     "provider": effective_provider.provider_name,
-                    "model": request.model,
+                    "effective_provider": effective_provider.provider_name,
+                    "requested_provider": self._provider.provider_name,
+                    "model": effective_model,
+                    "effective_model": effective_model,
+                    "requested_model": request.model,
+                    "fallback_used": effective_provider != self._provider,
                     "input_tokens": response.input_tokens if response else None,
                     "output_tokens": response.output_tokens if response else None,
                     "total_tokens": response.total_tokens if response else None,

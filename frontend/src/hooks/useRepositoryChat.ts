@@ -334,8 +334,8 @@ export function useRepositoryChat(
           const message =
             err instanceof Error
               ? err.message
-              : typeof err === 'object' && err !== null && 'message' in err && typeof (err as any).message === 'string'
-              ? (err as any).message
+              : typeof err === 'object' && err !== null && 'message' in err && typeof (err as { message: unknown }).message === 'string'
+              ? (err as { message: string }).message
               : 'The assistant could not complete the response. Please try again.';
 
           // Remove the failed placeholder message

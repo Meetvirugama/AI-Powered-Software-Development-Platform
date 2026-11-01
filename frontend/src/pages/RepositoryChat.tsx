@@ -526,17 +526,25 @@ function MessageContent({ content }: { content: string }) {
 function CodeBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   /** Copy the code, catching clipboard failures and showing feedback in the button. */
   const handleCopy = async () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       setCopyFailed(false);
-      setTimeout(() => setCopied(false), 2000);
+      timeoutRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       setCopyFailed(true);
-      setTimeout(() => setCopyFailed(false), 2500);
+      timeoutRef.current = setTimeout(() => setCopyFailed(false), 2500);
     }
   };
 

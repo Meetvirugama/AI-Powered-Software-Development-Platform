@@ -1,38 +1,14 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { realtimeClient } from '../realtime/index';
-import { REPO_UPDATED } from '../realtime/events';
+import { REPO_UPDATED, type RepoUpdatedPayload } from '../realtime/events';
 import { repositoryKeys } from './useRepositories';
 
 /**
- * useRealtimeRepositories — connects SSE to TanStack Query for repository data.
+ * useRealtimeRepositories — connects SSE to TanStack Query for repository data (F-09).
  *
- * Data flow:
- *   SSE connection (EventSource)
- *     ↓ repository.updated event
- *   queryClient.invalidateQueries(repositoryKeys.all)
- *     ↓ TanStack Query refetches
- *   GET /api/v1/repositories
- *     ↓ cache updated
- *   Dashboard re-renders automatically
- *
- * Design decisions:
- *  - The SSE layer does NOT store repository data. It only triggers a cache
- *    invalidation, letting TanStack Query manage the actual server state.
- *  - `repositoryKeys.all` invalidates every repository query (all pages, all
- *    detail views) so no page is left stale after a sync-status change.
- *  - The connection is opened when this hook mounts and closed on cleanup.
- *    Mount/unmount lifecycle is managed by the caller (AppLayout or a page
- *    that is mounted for the duration of the authenticated session).
- *
- * Usage:
- *   Call once from a component that lives for the entire authenticated
- *   session (e.g. AppLayout) so the connection is not repeatedly torn down.
- *
- *   function AppLayout() {
- *     useRealtimeRepositories();
- *     ...
- *   }
+ * Uses targeted cache invalidation so updates to repository A do not trigger
+ * unnecessary refetches for repository B or cause full-app query refetch storms.
  */
 export function useRealtimeRepositories() {
   const queryClient = useQueryClient();
@@ -40,21 +16,28 @@ export function useRealtimeRepositories() {
   useEffect(() => {
     realtimeClient.connect(
       {
-        [REPO_UPDATED]: (_payload) => {
-          // A repository's status/data changed on the backend.
-          // Invalidate all repository queries so every page refetches.
-          // We use repositoryKeys.all (the prefix) so TanStack Query
-          // invalidates ['repositories', 'list', ...] and ['repositories', 'detail', ...]
-          // simultaneously.
-          queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+        [REPO_UPDATED]: (payload: RepoUpdatedPayload) => {
+          // F-09: Targeted invalidation:
+          // Invalidate the specific repository's detail query and list queries (for status badges),
+          // preventing broad refetch storms.
+          if (payload?.repository_id) {
+            queryClient.invalidateQueries({
+              queryKey: repositoryKeys.detail(payload.repository_id),
+            });
+            queryClient.invalidateQueries({
+              queryKey: repositoryKeys.lists(),
+            });
+          } else {
+            // Fallback for global broadcasts without repository ID
+            queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+          }
         },
       },
-      (_error) => {
-        // SSE connection error — the client has already disconnected.
-        // No reconnection here; the next navigation or page refresh
-        // will re-mount this hook and reconnect.
-        // TODO: add exponential backoff reconnection if needed in a future prompt.
-      },
+      (error) => {
+        if (import.meta.env.DEV) {
+          console.debug('[SSE] EventSource error encountered; backoff reconnection active', error);
+        }
+      }
     );
 
     return () => {

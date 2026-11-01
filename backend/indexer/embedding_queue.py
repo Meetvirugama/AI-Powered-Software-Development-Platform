@@ -37,7 +37,12 @@ class EmbeddingQueue:
             self.redis.rpush(QUEUE_NAME, json.dumps(payload))
 
     async def process_batch(self, db_session: Any = None) -> list[list[float]]:
-        """Durably process up to BATCH_SIZE queued chunks and persist vectors."""
+        """Durably process up to BATCH_SIZE queued chunks and persist vectors.
+        
+        Only acknowledges (removes from PROCESSING_QUEUE) after embedding generation
+        AND database persistence successfully commit.
+        """
+        raw_items: list[str] = []
         items: list[dict[str, Any]] = []
 
         for _ in range(BATCH_SIZE):
@@ -55,6 +60,7 @@ class EmbeddingQueue:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8")
 
+            raw_items.append(raw)
             items.append(json.loads(raw))
 
         if not items:
@@ -66,19 +72,24 @@ class EmbeddingQueue:
         for attempt in range(MAX_RETRIES):
             try:
                 embeddings = await self.embedding_service.embed_batch(texts)
+                # Validate batch count integrity
+                if len(embeddings) != len(items):
+                    raise ValueError(
+                        f"Embedding batch count mismatch: expected {len(items)}, got {len(embeddings)}"
+                    )
                 break
             except Exception as exc:
                 if attempt == MAX_RETRIES - 1:
                     logger.error("embedding_queue_batch_failed", extra={"error": str(exc), "count": len(items)})
-                    # Push items back to head of queue on permanent failure so they are not lost
-                    for item in reversed(items):
-                        self.redis.lpush(QUEUE_NAME, json.dumps(item))
-                        self.redis.lrem(PROCESSING_QUEUE, 1, json.dumps(item))
+                    # Push items back to head of queue on permanent failure
+                    for raw in reversed(raw_items):
+                        self.redis.lpush(QUEUE_NAME, raw)
+                        self.redis.lrem(PROCESSING_QUEUE, 1, raw)
                     raise
                 await asyncio.sleep(2**attempt)
 
         # If db_session provided, persist vectors into CodeChunk
-        if db_session and embeddings:
+        if db_session:
             try:
                 for item, vector in zip(items, embeddings):
                     chunk_id = item.get("chunk_id")
@@ -95,10 +106,26 @@ class EmbeddingQueue:
                 logger.error("persist_embeddings_failed", extra={"error": str(exc)})
                 if hasattr(db_session, "rollback"):
                     db_session.rollback()
+                # Re-queue items back to main queue on DB persistence failure so work is not lost
+                for raw in reversed(raw_items):
+                    self.redis.lpush(QUEUE_NAME, raw)
+                    self.redis.lrem(PROCESSING_QUEUE, 1, raw)
+                raise RuntimeError(f"Database persistence failed: {exc}") from exc
 
-        # Acknowledge and clear processed items from PROCESSING_QUEUE
-        for item in items:
-            raw_str = json.dumps(item)
-            self.redis.lrem(PROCESSING_QUEUE, 1, raw_str)
+        # ONLY acknowledge and clear processed items from PROCESSING_QUEUE on success
+        for raw in raw_items:
+            self.redis.lrem(PROCESSING_QUEUE, 1, raw)
 
         return embeddings
+
+    def recover_stale_processing(self) -> int:
+        """Recover unacknowledged items from PROCESSING_QUEUE back to QUEUE_NAME."""
+        recovered = 0
+        while True:
+            raw = self.redis.rpoplpush(PROCESSING_QUEUE, QUEUE_NAME) if hasattr(self.redis, "rpoplpush") else self.redis.lpop(PROCESSING_QUEUE)
+            if raw is None:
+                break
+            if not hasattr(self.redis, "rpoplpush"):
+                self.redis.rpush(QUEUE_NAME, raw)
+            recovered += 1
+        return recovered

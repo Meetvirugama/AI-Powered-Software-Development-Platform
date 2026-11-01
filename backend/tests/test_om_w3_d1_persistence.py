@@ -643,12 +643,12 @@ class TestWeek3Day1MigrationConsistency:
             "cb4e2a7d0f31",  # sync jobs
             "e7b8c9d0f1a2",  # chunks & memory
             "f1c2d3e4b5a6",  # analysis runs & findings
-            "a1b2c3d4e5f6",  # pull requests (Week 2)
+            "b627460d74e0",  # pull requests (Week 2)
             "b3c4d5e6f7a8",  # workflow automation & tasks (Week 3 Day 1)
         ]
         for milestone in expected_milestones:
             assert milestone in revisions, f"Milestone revision {milestone} missing from migration graph."
 
         # Verify linear continuity up to b3c4d5e6f7a8
-        assert revisions["a1b2c3d4e5f6"] == "f1c2d3e4b5a6"
-        assert revisions["b3c4d5e6f7a8"] == "a1b2c3d4e5f6"
+        assert revisions["b627460d74e0"] == "f1c2d3e4b5a6"
+        assert revisions["b3c4d5e6f7a8"] == "b627460d74e0"

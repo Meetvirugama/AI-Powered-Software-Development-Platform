@@ -16,7 +16,7 @@ As the Database & Persistence Lead for the AI-Powered Software Development Platf
 2. **Table Mapping & Gap Analysis:** Mapped existing Week 1 and Week 2 tables (`users`, `repositories`, `analysis_runs`, `analysis_findings`) to the Week 3 automated development lifecycle, identifying all missing persistence and recovery fields.
 3. **Issue-to-Task Persistence & Foreign Keys:** Designed and implemented relational foreign keys connecting Week 2 defects (`analysis_findings.id`) and GitHub issues to `tasks`.
 4. **Week 3 Workflow Schema & ORM Models:** Implemented all 12 core persistence entities in [`app/models/task.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/app/models/task.py).
-5. **Linear Alembic Migration:** Authored migration [`b3c4d5e6f7a8_add_workflow_automation_tables.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/migrations/versions/b3c4d5e6f7a8_add_workflow_automation_tables.py), extending the acyclic 7-node chain (`a1b2c3d4e5f6`) to an 8-node chain with zero cycles and full downgrade capability.
+5. **Linear Alembic Migration:** Authored migration [`b3c4d5e6f7a8_add_workflow_automation_tables.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/migrations/versions/b3c4d5e6f7a8_add_workflow_automation_tables.py), extending the acyclic 7-node chain (`b627460d74e0`) to an 8-node chain with zero cycles and full downgrade capability.
 6. **TaskRepository Query Layer:** Implemented [`app/repositories/task_repository.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/app/repositories/task_repository.py) providing strict state-transition validation (§7.1, §7.2), plan versioning, immutable approvals, approval invalidation upon plan edits, bounded repair counters (maximum 3 attempts), automated credential scrubbing, and ordered audit timelines.
 7. **Canonical Pydantic Schemas:** Implemented [`app/schemas/task.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/app/schemas/task.py) establishing Day 1 agreed contracts (§7.3, §7.4).
 8. **Automated Test Suite:** Created [`backend/tests/test_om_w3_d1_persistence.py`](file:///c:/Users/DC/OneDrive/Desktop/AI-Powered-Software-Development-Platform/backend/tests/test_om_w3_d1_persistence.py) with 13 comprehensive test cases. All 13 pass synchronously, with 0 regressions across all 87 Week 2 persistence tests.
@@ -217,7 +217,7 @@ e7b8c9d0f1a2 (memory entries & chunk vector enhancements)
 f1c2d3e4b5a6 (developer intelligence: analysis runs & findings)
      |
      v
-a1b2c3d4e5f6 (pull requests & commit staging)
+b627460d74e0 (pull requests & commit staging)
      |
      v
 b3c4d5e6f7a8 (Week 3 Day 1: workflow automation, tasks, plans, checkpoints) [HEAD]
