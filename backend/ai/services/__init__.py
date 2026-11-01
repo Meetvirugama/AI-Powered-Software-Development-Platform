@@ -1,5 +1,6 @@
 """Standalone AI services for Developer Intelligence & Week 3 Workflow Automation."""
 
+from ai.services.ai_quality_evaluator import AIQualityEvaluator
 from ai.services.agent_execution_loop import (
     AgentExecutionLoop,
     AgentExecutionResult,
@@ -36,6 +37,7 @@ from ai.services.test_generation_service import TestGenerationService
 
 __all__ = [
     "AICodeReviewEngine",
+    "AIQualityEvaluator",
     "AgentExecutionLoop",
     "AgentExecutionResult",
     "AgentTokenBudgetManager",
