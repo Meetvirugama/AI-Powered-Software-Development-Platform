@@ -189,6 +189,10 @@ async def lifespan(app: FastAPI):
 
         app.state.analysis_run_service = AnalysisRunHistoryService(session_factory=SessionLocal)
         logger.info("analysis_run_service_ready")
+        # ── Week 3 Day 2: Workflow Automation & Planning Persistence (Om) ───
+        from app.services.task_history_service import TaskHistoryService
+        app.state.task_history_service = TaskHistoryService(session_factory=SessionLocal)
+        logger.info("task_history_service_ready")
     except Exception as exc:
         logger.error("rag_pipeline_init_failed", extra={"error": str(exc)})
         app.state.rag_pipeline = None

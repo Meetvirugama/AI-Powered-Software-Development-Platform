@@ -625,11 +625,77 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+## Week 3 Changes
+
+---
+
+### [W3-Day2] 2026-10-27 — Task Planning, Plan Versioning & Human Approval Persistence
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- `backend/app/models/task.py`:
+  - Added canonical `to_dict()` serialization methods across `TaskPlan`, `TaskApproval`, `Workspace`, `TaskCheckpoint`, `TaskEvent`, and `TaskPullRequest`, guaranteeing exact conformity with Week 3 Pydantic response schemas.
+- `backend/app/repositories/task_repository.py`:
+  - Enhanced `save_plan()` to automatically mark older proposed/approved plans as `SUPERSEDED`, invalidate prior approvals (`task.approved_plan_version = None`), and transition task status to `PENDING_APPROVAL`.
+  - Implemented `get_plan()` supporting both latest and specific plan version retrieval.
+  - Implemented `list_plans()` returning all historical plan versions ordered ascending.
+  - Implemented `approve_plan()` and `reject_plan()` with immutable decision recording and human feedback.
+  - Implemented `get_approval()` and `list_approvals()` for decision history inspection.
+  - Implemented `update_task_context()` linking Week 2 intelligence context with automated credential scrubbing.
+- `backend/app/services/task_history_service.py`:
+  - Implemented `TaskHistoryService` providing production-grade session management, multi-tenant isolation, and high-level orchestration across task intake, planning, approvals, and recovery.
+- `backend/app/services/__init__.py`:
+  - Exported `TaskHistoryService` in public service API.
+- `backend/app/main.py`:
+  - Registered `app.state.task_history_service` in FastAPI application lifespan.
+- `backend/tests/test_om_w3_d2_planning_persistence.py`:
+  - Added 15 comprehensive unit and integration tests (100% pass rate) verifying plan versioning, approval/rejection lifecycle, approval invalidation upon plan revision, multi-tenant boundaries, secret scrubbing, and Pydantic schema validation.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`:
+  - Updated Week 3 Day 2 milestone tasks and active team assignments.
+- `Docs/persistence_week3_day2_report.md`:
+  - Authored and published formal Week 3 Day 2 Persistence Deliverable Report.
+
+**Impact:** Establishes a rock-solid persistence and service layer for Day 2 task planning and human approval gating, enabling Meet (TaskPlanner), Yug (API Orchestration), and Dhramraj (Frontend Plan Review) to build seamlessly against persisted task plans and approvals.
+
+**Related Docs:** `Docs/persistence_week3_day2_report.md`, `Docs/week3.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
 
+---
 
+### [W3-Day3-Day4] 2026-10-28 — Workspace Tracking, Tool Auditing, Test Run Logging & Bounded Repair Persistence
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- ackend/app/models/task.py:
+  - Added canonical 	o_dict() serialization methods to TaskExecution, ToolInvocation, TestRun, and RepairAttempt conforming to Pydantic responses.
+  - Added __test__ = False on TestRun and TestRunResponse to prevent pytest collection warnings.
+- ackend/app/schemas/task.py:
+  - Added Pydantic response models: WorkspaceResponse, TaskExecutionResponse, ToolInvocationResponse, TestRunResponse (__test__ = False), and RepairAttemptResponse. Added to __all__.
+- ackend/app/repositories/task_repository.py:
+  - Day 3 Workspace & Execution: get_workspace(), update_workspace_status(), 
+ecord_execution_start(), 
+ecord_execution_finish(), get_executions(), and get_tool_invocations().
+  - Day 3 Precondition Enforcement: Blocked EXECUTING state without pproved_plan_version and initialized workspace.
+  - Day 3 Tool Auditing: Credential scrubbing (ghp_*, sk-*, eyJ*) in arguments and output summaries.
+  - Day 4 Test Run Logging: 
+ecord_test_run(), get_test_runs(), get_latest_test_run() capturing test command, status, exit code, test counts, duration, sanitized logs, and target revision.
+  - Day 4 Bounded Repair Loop: Hardened increment_repair_attempt() and get_repair_attempts() enforcing the strict **3-attempt ceiling** (RETRY_EXHAUSTED -> FAILED), blocking transitions to REPAIRING when budget is exhausted, and ensuring retry counters survive worker/app restarts.
+- ackend/app/services/task_history_service.py:
+  - Added Day 3 & Day 4 orchestration methods wrapping TaskRepository with session management: 
+ecord_workspace, get_workspace, update_workspace_status, 
+ecord_execution_start, 
+ecord_execution_finish, get_executions, 
+ecord_tool_invocation, get_tool_invocations, 
+ecord_test_run, get_test_runs, get_latest_test_run, increment_repair_attempt, get_repair_attempts.
+- ackend/tests/test_om_w3_d3_d4_execution_persistence.py:
+  - Added 11 comprehensive automated tests (100% passing) verifying workspace lifecycle, execution tracking, tool auditing and secret scrubbing, execution start preconditions, test run logging, bounded repair loop 3-attempt ceiling, budget persistence across restarts, cross-repository multi-tenant isolation, ordered timeline events, and model-to-schema serialization.
+- Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md:
+  - Updated Week 3 Day 3 and Day 4 task boards and milestone progress.
+- Docs/persistence_week3_day3_day4_report.md:
+  - Authored formal Week 3 Day 3 & Day 4 Persistence Deliverable Report.
 
+**Impact:** Provides the core persistence foundation for Prit (WorkspaceManager), Devu (ToolRouter & PolicyEngine), Meet (Agent Execution Loop & Bounded Repair), and Dev (Test Strategy & Diagnosis). All workspace lifecycles, execution states, tool audit trails, test runs, and repair attempts are reliably persisted with tamper-proof budget bounds.
 
-
-
-
+**Related Docs:** Docs/persistence_week3_day3_day4_report.md, Docs/week3.md, Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md

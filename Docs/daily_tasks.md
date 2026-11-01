@@ -606,7 +606,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
 - ⬜ Meet: Issue-to-Task context adapter converting issue details into implementation objectives
 - ⬜ Dev: Validated task-intake schema separating requirements, assumptions, and constraints
-- ⬜ Om: Issue-to-task persistence relationships and foreign keys
+- ✅ Om: Issue-to-task persistence relationships, workflow models, migration `b3c4d5e6f7a8`, and `TaskRepository` (13/13 tests passing)
 - ⬜ Sukun: GitHub issue creation security checks & token confidentiality
 - ⬜ Keval: Acceptance tests for issue creation from bug and review findings
 
@@ -618,6 +618,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
 - ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
 - ⬜ Keval: Acceptance tests for valid plans, rejected plans, and unapproved execution attempts
+- ✅ Om: Plan versioning, immutable approval/rejection persistence, approval invalidation upon plan edits, `TaskHistoryService`, and test suite (`test_om_w3_d2_planning_persistence.py`, 15/15 tests passing)
 
 ## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
 
@@ -628,6 +629,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
 - ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs
 - ⬜ Sukun: Tool-level permission checks and workspace boundary security tests
+- ✅ Om: Workspace lifecycle persistence (READY, IN_USE, CLEANUP_PENDING, CLEANED), execution tracking start/finish, tool invocation audit logging with secret scrubbing, and execution precondition enforcement
 
 ## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
@@ -638,6 +640,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ⬜ Yug: Test and repair progress APIs and failure reporting
 - ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
 - ⬜ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling
+- ✅ Om: Test run execution logging (counts, exit codes, durations, sanitized logs), bounded repair loop accounting enforcing strict 3-attempt ceiling across worker restarts, and failure transition guards
 
 ## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 
