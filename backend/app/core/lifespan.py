@@ -264,6 +264,20 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["task_planner"] = False
         success = False
 
+    # Task Execution Orchestrator (Week 3 F33-F35)
+    try:
+        if getattr(app.state, "task_execution_orchestrator", None) is None:
+            from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
+            app.state.task_execution_orchestrator = TaskExecutionOrchestrator()
+            app.state.service_readiness["task_execution_orchestrator"] = True
+            logger.info("task_execution_orchestrator_ready")
+        else:
+            app.state.service_readiness["task_execution_orchestrator"] = True
+    except Exception as exc:
+        logger.error("task_execution_orchestrator_init_failed", extra={"error": str(exc)})
+        app.state.task_execution_orchestrator = None
+        app.state.service_readiness["task_execution_orchestrator"] = False
+
     return success
 
 
@@ -412,4 +426,3 @@ async def lifespan(app: FastAPI):
         logger.debug("db_dispose_error", extra={"error": str(exc)})
 
     logger.info("app_shutdown")
-

@@ -427,9 +427,13 @@ class TaskSummaryResponse(BaseModel):
     task_id: str
     repository_id: str
     title: str
+    description: str = ""
     status: TaskStatus
     source_type: TaskSourceType
     source: TaskSourceReference
+    requirements: list[TaskRequirement] = Field(default_factory=list)
+    assumptions: list[TaskAssumption] = Field(default_factory=list)
+    constraints: list[TaskConstraint] = Field(default_factory=list)
     base_revision: str | None = None
     plan_version: int = 1
     approved_plan_version: int | None = None

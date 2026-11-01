@@ -200,6 +200,15 @@ class PatchValidationResult(BaseModel):
         description="List of specific security, boundary, or policy violations detected.",
     )
 
+    @property
+    def rejection_reasons(self) -> list[str]:
+        """Compatibility alias returning all policy/validation rejection reasons."""
+        if self.violations:
+            return list(self.violations)
+        if self.rejection_reason:
+            return [self.rejection_reason]
+        return []
+
 
 class RepairLoopState(BaseModel):
     """Persisted repair budget and attempt state matching Docs/week3.md §6 F35."""
@@ -270,4 +279,3 @@ __all__ = [
     "TestFrameworkName",
     "TracebackDiagnosisResult",
 ]
-

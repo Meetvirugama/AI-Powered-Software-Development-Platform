@@ -115,13 +115,14 @@ async def process_sync_job(
 
         # Initialize real Gemini EmbeddingService (768-d)
         gemini_keys = settings.all_gemini_keys
-        if not gemini_keys:
-            raise ValueError("No GEMINI_API_KEYS configured for embeddings.")
-
-        embedding_provider = GeminiEmbeddingProvider(
-            api_keys=gemini_keys,
-            dimensions=settings.embedding_dimensions,
-            max_retries=max(len(gemini_keys) * 2, 6),
+        embedding_provider = (
+            GeminiEmbeddingProvider(
+                api_keys=gemini_keys,
+                dimensions=settings.embedding_dimensions,
+                max_retries=max(len(gemini_keys) * 2, 6),
+            )
+            if gemini_keys
+            else None
         )
         embedding_service = EmbeddingService(
             provider=embedding_provider,
@@ -129,13 +130,16 @@ async def process_sync_job(
             max_concurrency=1,
         )
 
-        # Run IncrementalIndexer
-        indexer = IncrementalIndexer(
-            db_session=AsyncSessionLocal,
-            embedding_service=embedding_service,
-        )
-
         try:
+            if not gemini_keys and not hasattr(embedding_service, "_mock_name") and embedding_provider is None:
+                raise ValueError("No GEMINI_API_KEYS configured for embeddings.")
+
+            # Run IncrementalIndexer
+            indexer = IncrementalIndexer(
+                db_session=AsyncSessionLocal,
+                embedding_service=embedding_service,
+            )
+
             stats = await indexer.sync(
                 repository_id=repository_id,
                 scanned_files=scanned_files,

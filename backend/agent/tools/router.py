@@ -1,5 +1,13 @@
+"""Tool definitions and policy-enforced routing for agent tools.
 
-"""Tool definitions and policy-enforced routing for agent tools."""
+Owner: Devu — Week 3 Day 3 & Day 4 Deliverable (Docs/daily_tasks.md lines 625, 635 & Docs/week3.md §6 F34)
+Responsibilities:
+1. Tool registration & JSON Schema argument validation.
+2. Command allowlist enforcement (exact template & safe prefix matching) and argument validation
+   (rejecting shell metacharacters, path traversal, and dangerous flags).
+3. PolicyEngine authorization checks before handler invocation.
+4. Secret redaction and output bounding on tool return payloads.
+"""
 
 from dataclasses import dataclass, field
 import json
@@ -44,6 +52,19 @@ class ToolRouter:
         re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
         re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
     )
+
+    SHELL_METACHAR_PATTERN = re.compile(r"[;&|`$><\n\r\x00]")
+    FORBIDDEN_FLAGS = frozenset({
+        "-c",
+        "--command",
+        "--upload-pack",
+        "--receive-pack",
+        "--exec",
+        "-o",
+        "--override-ini",
+        "--rootdir",
+        "--import-mode",
+    })
 
     def __init__(
         self,
@@ -219,12 +240,28 @@ class ToolRouter:
 
         return cls._validate_value(arguments, schema, "arguments")
 
+    @classmethod
+    def validate_argv_tokens(cls, argv: list[str]) -> str | None:
+        """Validate command argv tokens against shell metacharacters, path traversal, and dangerous flags."""
+        for token in argv:
+            if not isinstance(token, str) or not token.strip():
+                return "Command argv tokens must be non-empty strings"
+            if cls.SHELL_METACHAR_PATTERN.search(token):
+                return f"Forbidden shell metacharacter in command argument: {token!r}"
+            normalized = token.replace("\\", "/")
+            if ".." in normalized.split("/"):
+                return f"Path traversal ('..') is not permitted in command arguments: {token!r}"
+            flag_head = token.split("=", 1)[0].strip()
+            if flag_head in cls.FORBIDDEN_FLAGS:
+                return f"Forbidden command flag: {flag_head}"
+        return None
+
     def _validate_command(
         self,
         tool_name: str,
         arguments: dict,
     ) -> str | None:
-        """Validate argv against exact approved command templates."""
+        """Validate argv against approved command templates and argument safety rules."""
 
         if "command" in arguments:
             return "Shell command strings are not permitted; use argv"
@@ -241,18 +278,27 @@ class ToolRouter:
         ):
             return "Command argv must be a non-empty list of strings"
 
+        token_err = self.validate_argv_tokens(argv)
+        if token_err:
+            return token_err
+
         allowed = self._command_allowlist.get(tool_name, [])
 
         if not allowed:
             return f"No approved command templates for tool: {tool_name}"
 
-        if not any(
-            isinstance(template, list) and argv == template
-            for template in allowed
-        ):
-            return "Command is not in the approved command allowlist"
+        for template in allowed:
+            if not isinstance(template, list) or not template:
+                continue
+            if argv == template:
+                return None
+            # Support wildcard suffix marker '*' in template when explicitly configured
+            if template[-1] == "*" and len(argv) >= len(template) - 1:
+                prefix = template[:-1]
+                if argv[: len(prefix)] == prefix:
+                    return None
 
-        return None
+        return "Command is not in the approved command allowlist"
 
     def _authorize(
         self,
