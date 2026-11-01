@@ -107,6 +107,14 @@ from app.schemas.task import (
     VALID_TASK_TRANSITIONS,
     VerificationResultResponse,
     can_transition,
+    WorkspaceResponse,
+    TaskExecutionResponse,
+    ToolInvocationResponse,
+    TestRunResponse,
+    RepairAttemptResponse,
+    PublicationAuthorizationRequest,
+    PublicationAuthorizationResponse,
+    TaskTraceabilityResponse,
 )
 from app.schemas.verification import (
     VerificationCheckItem,
@@ -328,4 +336,12 @@ __all__ = [
     "WorkspaceToolPolicyResult",
     "can_transition",
     "can_transition_workspace",
+    "WorkspaceResponse",
+    "TaskExecutionResponse",
+    "ToolInvocationResponse",
+    "TestRunResponse",
+    "RepairAttemptResponse",
+    "PublicationAuthorizationRequest",
+    "PublicationAuthorizationResponse",
+    "TaskTraceabilityResponse",
 ]

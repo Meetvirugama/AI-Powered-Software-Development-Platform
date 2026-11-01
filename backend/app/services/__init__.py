@@ -15,6 +15,7 @@ from app.services.git_branch import (
     format_agent_branch_name,
 )
 from app.services.review_history_service import ReviewHistoryService
+from app.services.task_history_service import TaskHistoryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 from app.services.test_generation_orchestrator import LLMTestGenerationService
 
@@ -31,6 +32,7 @@ __all__ = [
     "LLMCodeReviewService",
     "LLMTestGenerationService",
     "ReviewHistoryService",
+    "TaskHistoryService",
     "TestGenerationHistoryService",
     "format_agent_branch_name",
 ]

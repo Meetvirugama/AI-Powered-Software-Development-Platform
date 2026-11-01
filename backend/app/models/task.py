@@ -443,6 +443,14 @@ class TaskPlan(TimestampedModel, Base):
     resource_budget: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     @property
+    def test_targets(self) -> list[str]:
+        return self.tests_to_run or []
+
+    @test_targets.setter
+    def test_targets(self, val: Optional[list[str]]) -> None:
+        self.tests_to_run = val
+
+    @property
     def plan_version(self) -> int:
         return self.version
 
@@ -462,6 +470,25 @@ class TaskPlan(TimestampedModel, Base):
     __table_args__ = (
         Index("ix_task_plans_task_version", "task_id", "version", unique=True),
     )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskPlan model to canonical response envelope dictionary."""
+        return {
+            "plan_id": str(self.id),
+            "task_id": str(self.task_id),
+            "version": self.version,
+            "base_revision": getattr(self, "base_revision", "main") or "main",
+            "status": self.status,
+            "summary": self.summary,
+            "problem_statement": getattr(self, "problem_statement", None),
+            "steps": self.steps or [],
+            "expected_files": self.expected_files or [],
+            "tests_to_run": getattr(self, "tests_to_run", []) or [],
+            "test_targets": self.test_targets or [],
+            "validation_strategy": self.validation_strategy,
+            "risks": self.risks or [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class TaskApproval(TimestampedModel, Base):
@@ -518,6 +545,18 @@ class TaskApproval(TimestampedModel, Base):
 # 3. Workspace & Execution Tracking
 # ---------------------------------------------------------------------------
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskApproval model to canonical response envelope dictionary."""
+        return {
+            "approval_id": str(self.id),
+            "task_id": str(self.task_id),
+            "plan_version": self.plan_version,
+            "decision": self.decision,
+            "feedback": self.feedback,
+            "approved_by": str(self.user_id) if self.user_id else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class Workspace(TimestampedModel, Base):
     """Dedicated workspace directory and Git worktree metadata for task execution."""
@@ -544,6 +583,20 @@ class Workspace(TimestampedModel, Base):
     cleanup_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="workspace")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert Workspace model to dictionary."""
+        return {
+            "workspace_id": str(self.id),
+            "task_id": str(self.task_id),
+            "workspace_path": self.workspace_path,
+            "task_branch": self.task_branch,
+            "base_revision": self.base_revision,
+            "current_revision": self.current_revision,
+            "status": self.status,
+            "cleanup_at": self.cleanup_at.isoformat() if self.cleanup_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class TaskExecution(TimestampedModel, Base):
@@ -579,6 +632,20 @@ class TaskExecution(TimestampedModel, Base):
 # 4. Tool Invocations, Test Runs & Repair Attempts
 # ---------------------------------------------------------------------------
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskExecution model to canonical dictionary."""
+        return {
+            "execution_id": str(self.id),
+            "task_id": str(self.task_id),
+            "attempt_number": self.attempt_number,
+            "worker_id": self.worker_id,
+            "status": self.status,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class ToolInvocation(TimestampedModel, Base):
     """Audit record for operations routed through the controlled ToolRouter."""
@@ -597,6 +664,19 @@ class ToolInvocation(TimestampedModel, Base):
     output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="tool_invocations")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert ToolInvocation model to canonical dictionary."""
+        return {
+            "invocation_id": str(self.id),
+            "task_id": str(self.task_id),
+            "tool_name": self.tool_name,
+            "sanitized_arguments": self.sanitized_arguments or {},
+            "status": self.status,
+            "duration_ms": self.duration_ms,
+            "output_summary": self.output_summary,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class TestRun(TimestampedModel, Base):
@@ -622,6 +702,25 @@ class TestRun(TimestampedModel, Base):
     target_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="test_runs")
+
+    __test__ = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TestRun model to canonical dictionary."""
+        return {
+            "test_run_id": str(self.id),
+            "task_id": str(self.task_id),
+            "command": self.command,
+            "status": self.status,
+            "exit_code": self.exit_code,
+            "duration_ms": self.duration_ms,
+            "tests_total": self.tests_total,
+            "tests_passed": self.tests_passed,
+            "tests_failed": self.tests_failed,
+            "sanitized_output": self.sanitized_output,
+            "target_revision": self.target_revision,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class RepairAttempt(TimestampedModel, Base):
@@ -651,6 +750,19 @@ class RepairAttempt(TimestampedModel, Base):
 # 5. Independent Verification, Checkpoints, Timeline & Pull Requests
 # ---------------------------------------------------------------------------
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert RepairAttempt model to canonical dictionary."""
+        return {
+            "repair_id": str(self.id),
+            "task_id": str(self.task_id),
+            "attempt_number": self.attempt_number,
+            "failure_classification": self.failure_classification,
+            "diagnosis": self.diagnosis,
+            "applied_patch": self.applied_patch,
+            "result": self.result,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class VerificationResult(TimestampedModel, Base):
     """Multi-dimensional verification result tied strictly to verified revision."""
@@ -672,6 +784,31 @@ class VerificationResult(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="verification_results")
 
+    @property
+    def target_revision(self) -> str:
+        return self.verified_revision
+
+    @property
+    def blocking_findings_count(self) -> int:
+        return len(self.blocking_findings or [])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert VerificationResult model to canonical response envelope dictionary."""
+        return {
+            "verification_id": str(self.id),
+            "id": str(self.id),
+            "task_id": str(self.task_id),
+            "verified_revision": self.verified_revision,
+            "target_revision": self.verified_revision,
+            "status": self.status,
+            "checks": self.checks or [],
+            "blocking_findings": self.blocking_findings or [],
+            "warnings": self.warnings or [],
+            "summary": self.summary,
+            "blocking_findings_count": len(self.blocking_findings or []),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class TaskCheckpoint(TimestampedModel, Base):
     """Persisted snapshot state for safe worker restart recovery (secret-scrubbed)."""
@@ -688,6 +825,17 @@ class TaskCheckpoint(TimestampedModel, Base):
     recovery_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="checkpoints")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskCheckpoint model to canonical response envelope dictionary."""
+        return {
+            "checkpoint_id": str(self.id),
+            "task_id": str(self.task_id),
+            "step_name": self.step_name,
+            "state_data": self.state_data or {},
+            "recovery_instructions": self.recovery_instructions,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 class TaskEvent(TimestampedModel, Base):
@@ -735,6 +883,17 @@ class TaskEvent(TimestampedModel, Base):
         Index("ix_task_events_task_created", "task_id", "created_at"),
     )
 
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskEvent model to canonical response envelope dictionary."""
+        return {
+            "event_id": str(self.id),
+            "task_id": str(self.task_id),
+            "event_type": self.event_type,
+            "event_data": self.event_data,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 
 class TaskPullRequest(TimestampedModel, Base):
     """Published GitHub Draft PR metadata and revision tracking."""
@@ -764,6 +923,23 @@ class TaskPullRequest(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="pull_request")
     repository: Mapped["Repository"] = relationship("Repository")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskPullRequest model to canonical response envelope dictionary."""
+        return {
+            "pr_id": str(self.id),
+            "task_id": str(self.task_id),
+            "repository_id": str(self.repository_id),
+            "pr_number": self.pr_number,
+            "pr_url": self.pr_url,
+            "base_branch": self.base_branch,
+            "head_branch": self.head_branch,
+            "head_sha": self.head_sha,
+            "is_draft": self.is_draft,
+            "title": self.title,
+            "body": self.body,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
 
 
 __all__ = [
