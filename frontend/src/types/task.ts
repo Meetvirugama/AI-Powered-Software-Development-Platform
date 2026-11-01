@@ -667,34 +667,128 @@ export function canRecoverTask(status: TaskStatus): boolean {
   );
 }
 
+export interface PublicationEligibilityOptions {
+  status: TaskStatus;
+  verification?: VerificationResult | null;
+  isStale?: boolean;
+  isLoadingVerification?: boolean;
+  hasVerificationError?: boolean;
+  isStaleCheckLoading?: boolean;
+  hasStaleCheckError?: boolean;
+  hasBranchMetadata?: boolean;
+  baseBranch?: string | null;
+}
+
 /**
  * Check if task is eligible for publication authorization.
- * Requires:
- * 1. Task status is READY_FOR_PUBLICATION (or VERIFYING / completed tests)
- * 2. Independent verification has PASS status
- * 3. Zero blocking findings
- * 4. Verification is not stale
+ * Strict fail-closed policy (ADR-010 & Week 3 Day 7):
+ * 1. Task status must be strictly READY_FOR_PUBLICATION
+ * 2. Independent verification data must be present (missing or loading data blocks publication)
+ * 3. Verification API errors strictly block publication
+ * 4. Verification overall status must be strictly PASS
+ * 5. Zero blocking findings permitted
+ * 6. Verified revision must be non-empty and current (not stale)
+ * 7. Stale check errors or pending stale check strictly block publication
+ * 8. Missing branch metadata or base branch blocks publication
  */
 export function isPublicationEligible(
-  status: TaskStatus,
+  statusOrContext: TaskStatus | PublicationEligibilityOptions,
   verification?: VerificationResult | null,
-  isStale?: boolean
+  isStale?: boolean,
+  isLoadingVerification?: boolean,
+  hasVerificationError?: boolean,
+  options?: {
+    isStaleCheckLoading?: boolean;
+    hasStaleCheckError?: boolean;
+    hasBranchMetadata?: boolean;
+    baseBranch?: string | null;
+  }
 ): boolean {
-  if (status === TaskStatus.DRAFT_PR_CREATED || status === TaskStatus.PUBLISHING) {
+  let status: TaskStatus;
+  let verif: VerificationResult | null | undefined;
+  let stale: boolean | undefined;
+  let loadingVerif: boolean | undefined;
+  let verifError: boolean | undefined;
+  let staleError: boolean | undefined;
+  let branchMeta: boolean | undefined;
+  let baseBr: string | null | undefined;
+
+  if (typeof statusOrContext === 'object' && statusOrContext !== null && 'status' in statusOrContext) {
+    status = statusOrContext.status;
+    verif = statusOrContext.verification;
+    stale = statusOrContext.isStale;
+    loadingVerif = statusOrContext.isLoadingVerification;
+    verifError = statusOrContext.hasVerificationError;
+    staleError = statusOrContext.hasStaleCheckError;
+    branchMeta = statusOrContext.hasBranchMetadata;
+    baseBr = statusOrContext.baseBranch;
+  } else {
+    status = statusOrContext as TaskStatus;
+    verif = verification;
+    stale = isStale;
+    loadingVerif = isLoadingVerification;
+    verifError = hasVerificationError;
+    staleError = options?.hasStaleCheckError;
+    branchMeta = options?.hasBranchMetadata;
+    baseBr = options?.baseBranch;
+  }
+
+  // 1. Task status must be strictly READY_FOR_PUBLICATION
+  if (status !== TaskStatus.READY_FOR_PUBLICATION) {
     return false;
   }
-  if (status === TaskStatus.CANCELLED || status === TaskStatus.FAILED) {
+
+  // 2. Loading verification data blocks publication
+  if (loadingVerif) {
     return false;
   }
-  if (isStale) {
+
+  // 3. Verification API errors block publication
+  if (verifError) {
     return false;
   }
-  if (!verification) {
-    return status === TaskStatus.READY_FOR_PUBLICATION;
+
+  // 4. Missing verification data blocks publication (Fail-closed gate)
+  if (!verif) {
+    return false;
   }
-  const hasNoBlockingFindings = !verification.blocking_findings || verification.blocking_findings.length === 0;
-  const isPass = verification.status === 'PASS';
-  return isPass && hasNoBlockingFindings && (status === TaskStatus.READY_FOR_PUBLICATION || status === TaskStatus.TESTING || status === TaskStatus.VERIFYING);
+
+  // 5. Verification status must be strictly PASS
+  if (verif.status !== 'PASS') {
+    return false;
+  }
+
+  // 6. Blocking findings block publication
+  if (verif.blocking_findings && verif.blocking_findings.length > 0) {
+    return false;
+  }
+
+  // 7. Verified revision must be present and valid
+  if (!verif.verified_revision || typeof verif.verified_revision !== 'string' || verif.verified_revision.trim() === '') {
+    return false;
+  }
+
+  // 8. Stale verification blocks publication
+  if (stale) {
+    return false;
+  }
+
+  // 9. Stale-check error blocks publication (Fail-closed per Requirement 3)
+  if (staleError) {
+    return false;
+  }
+
+  // 10. Missing branch metadata blocks publication if explicitly evaluated
+  if (branchMeta === false) {
+    return false;
+  }
+
+  // 11. Missing base branch blocks publication if evaluated
+  if (baseBr === null || baseBr === '') {
+    return false;
+  }
+
+  return true;
 }
 
 // ============================================================================

@@ -14,7 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { useTaskVerification, useTriggerVerification } from '../../hooks/useTasks';
+import { useTaskVerification, useTriggerVerification, useCheckStaleRevision } from '../../hooks/useTasks';
 import type {
   VerificationResult,
   VerificationCheckStatus,
@@ -172,14 +172,16 @@ export function VerificationPanel({
   onVerificationCompleted,
 }: VerificationPanelProps) {
   const { data: verification, isLoading, isError, error, refetch } = useTaskVerification(taskId);
+  const { data: staleCheck } = useCheckStaleRevision(taskId);
   const triggerMutation = useTriggerVerification(taskId);
   const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({});
   const [triggerError, setTriggerError] = useState<ApiError | null>(null);
 
   const isStale = Boolean(
-    verification?.verified_revision &&
-    currentRevision &&
-    verification.verified_revision !== currentRevision
+    staleCheck?.is_stale ||
+    (verification?.verified_revision &&
+      currentRevision &&
+      verification.verified_revision !== currentRevision)
   );
 
   function toggleExpand(checkName: string) {

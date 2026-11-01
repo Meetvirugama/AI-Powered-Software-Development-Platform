@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   GitPullRequestDraft,
   GitBranch,
@@ -16,7 +17,11 @@ import {
   useTaskPullRequest,
   usePublishDraftPR,
   useTaskVerification,
+  useCheckStaleRevision,
+  taskKeys,
 } from '../../hooks/useTasks';
+import { useRepository } from '../../hooks/useRepositories';
+import { getTaskPullRequest } from '../../services/tasks';
 import {
   TaskStatus,
   isPublicationEligible,
@@ -31,6 +36,7 @@ import { cn } from '../../lib/utils';
 export interface PublicationPanelProps {
   task: TaskDetailResponse;
   workspace?: WorkspaceMetadata | null;
+  baseBranch?: string;
   className?: string;
   onPublished?: (pr: TaskPullRequest) => void;
 }
@@ -51,45 +57,93 @@ function formatDate(dateStr: string): string {
 export function PublicationPanel({
   task,
   workspace,
+  baseBranch: explicitBaseBranch,
   className,
   onPublished,
 }: PublicationPanelProps) {
+  const queryClient = useQueryClient();
   const { data: prData } = useTaskPullRequest(task.task_id);
 
-  const { data: verification } = useTaskVerification(task.task_id);
+  const {
+    data: verification,
+    isLoading: isVerificationLoading,
+    isError: isVerificationError,
+  } = useTaskVerification(task.task_id);
+
+  const {
+    data: staleCheck,
+    isLoading: isStaleCheckLoading,
+    isError: isStaleCheckError,
+  } = useCheckStaleRevision(task.task_id);
+
+  const { data: repository } = useRepository(task.repository_id);
+
   const publishMutation = usePublishDraftPR(task.task_id);
 
   const [authorizedChecked, setAuthorizedChecked] = useState(false);
   const [publishError, setPublishError] = useState<ApiError | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [publishedPR, setPublishedPR] = useState<TaskPullRequest | null>(null);
 
+  const activePR = prData || publishedPR;
+
+  // Canonical base branch resolution (no hardcoded 'main' assumption)
+  const canonicalBaseBranch =
+    explicitBaseBranch ||
+    activePR?.base_branch ||
+    (task as any).base_branch ||
+    repository?.default_branch ||
+    null;
+
+  const baseBranch = canonicalBaseBranch;
+  const targetRepo = repository?.full_name || repository?.name || task.repository_id;
+  const sourceBranch = workspace?.branch_name || null;
+  const verifiedSha = verification?.verified_revision || null;
+
+  // Stale revision evaluation: canonical backend stale check + workspace drift check
   const isStale = Boolean(
-    verification?.verified_revision &&
-    workspace?.base_revision &&
-    verification.verified_revision !== workspace.base_revision
+    staleCheck?.is_stale ||
+    (verifiedSha && workspace?.base_revision && verifiedSha !== workspace.base_revision)
   );
 
-  const eligible = isPublicationEligible(task.status, verification, isStale);
-  const isPublishing = task.status === TaskStatus.PUBLISHING || publishMutation.isPending;
-  const isAlreadyPublished = task.status === TaskStatus.DRAFT_PR_CREATED || Boolean(prData);
+  const isMetadataAvailable = Boolean(targetRepo && sourceBranch && baseBranch && verifiedSha);
 
-  const targetRepo = task.repository_id;
-  const sourceBranch = workspace?.branch_name || 'Not allocated';
-  const baseBranch = 'main';
-  const verifiedSha = verification?.verified_revision || workspace?.base_revision || task.base_revision;
+  const eligible = isPublicationEligible({
+    status: task.status,
+    verification,
+    isStale,
+    isLoadingVerification: isVerificationLoading,
+    hasVerificationError: isVerificationError,
+    isStaleCheckLoading,
+    hasStaleCheckError: isStaleCheckError,
+    hasBranchMetadata: Boolean(sourceBranch),
+    baseBranch,
+  });
+
+  const isPublishing =
+    task.status === TaskStatus.PUBLISHING ||
+    publishMutation.isPending ||
+    isSubmitting;
+
+  const isAlreadyPublished =
+    task.status === TaskStatus.DRAFT_PR_CREATED ||
+    Boolean(activePR);
 
   async function handlePublish() {
-    if (!eligible || !authorizedChecked || isPublishing) {
+    if (!eligible || !authorizedChecked || isPublishing || !baseBranch || !sourceBranch) {
       return;
     }
     setPublishError(null);
+    setIsSubmitting(true);
     try {
       const res = await publishMutation.mutateAsync({
         publication_authorized: true,
         title: `[AI Task] ${task.title}`,
         base_branch: baseBranch,
+        target_repository: targetRepo,
       });
-      if (res.pr_url && onPublished) {
-        onPublished({
+      if (res.pr_url) {
+        const pr: TaskPullRequest = {
           task_id: task.task_id,
           pr_number: res.pr_number,
           pr_url: res.pr_url,
@@ -97,13 +151,56 @@ export function PublicationPanel({
           head_branch: res.head_branch || sourceBranch,
           base_branch: res.base_branch || baseBranch,
           is_draft: true,
-          created_at: res.created_at,
+          created_at: res.created_at || new Date().toISOString(),
           summary: res.summary,
-        });
+        };
+        queryClient.setQueryData(taskKeys.pullRequest(task.task_id), pr);
+        setPublishedPR(pr);
+        if (onPublished) {
+          onPublished(pr);
+        }
       }
     } catch (err) {
+      // Uncertain network outcome: reconcile existing PR before prompting retry
+      try {
+        const existingPR = await getTaskPullRequest(task.task_id);
+        if (existingPR && existingPR.pr_url) {
+          queryClient.setQueryData(taskKeys.pullRequest(task.task_id), existingPR);
+          setPublishedPR(existingPR);
+          queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.task_id) });
+          if (onPublished) {
+            onPublished(existingPR);
+          }
+          return;
+        }
+      } catch {
+        // Reconciliation failed, proceed to surface error
+      }
       setPublishError(err as ApiError);
+    } finally {
+      setIsSubmitting(false);
     }
+  }
+
+  // When task is in READY_FOR_PUBLICATION, wait until initial verification data resolves
+  const isInitialLoading =
+    !isAlreadyPublished &&
+    task.status === TaskStatus.READY_FOR_PUBLICATION &&
+    isVerificationLoading &&
+    !verification;
+
+  if (isInitialLoading) {
+    return (
+      <div
+        data-testid="publication-panel-loading"
+        className={cn(
+          'rounded-lg border border-border bg-card p-6 shadow-xs flex items-center justify-center min-h-[140px]',
+          className
+        )}
+      >
+        <LoadingSpinner size="md" label="Loading publication eligibility and verification state..." />
+      </div>
+    );
   }
 
   return (
@@ -149,7 +246,7 @@ export function PublicationPanel({
       {/* ------------------------------------------------------------------ */}
       {/* 2. Published Draft PR Result View                                  */}
       {/* ------------------------------------------------------------------ */}
-      {isAlreadyPublished && prData ? (
+      {isAlreadyPublished && activePR ? (
         <div
           data-testid="draft-pr-card"
           className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-5 space-y-4"
@@ -158,23 +255,23 @@ export function PublicationPanel({
             <div className="space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-mono text-xs bg-muted text-foreground px-2 py-0.5 rounded border border-border">
-                  #{prData.pr_number || 'Draft'}
+                  #{activePR.pr_number || 'Draft'}
                 </span>
                 <span className="font-mono text-[11px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase">
                   Draft Pull Request
                 </span>
               </div>
-              <h4 className="text-base font-semibold text-foreground">{prData.title}</h4>
-              {prData.created_at && (
+              <h4 className="text-base font-semibold text-foreground">{activePR.title}</h4>
+              {activePR.created_at && (
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <Clock className="h-3 w-3 text-muted-foreground/70" />
-                  <span>Created {formatDate(prData.created_at)}</span>
+                  <span>Created {formatDate(activePR.created_at)}</span>
                 </p>
               )}
             </div>
 
             <a
-              href={prData.pr_url}
+              href={activePR.pr_url}
               target="_blank"
               rel="noopener noreferrer"
               data-testid="open-pr-link"
@@ -198,14 +295,14 @@ export function PublicationPanel({
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <GitBranch className="h-3 w-3" /> Head Branch
               </span>
-              <p className="font-mono font-medium text-foreground">{prData.head_branch}</p>
+              <p className="font-mono font-medium text-foreground">{activePR.head_branch || sourceBranch}</p>
             </div>
 
             <div className="p-3 rounded bg-background/60 border border-border space-y-1">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <GitBranch className="h-3 w-3" /> Base Branch
               </span>
-              <p className="font-mono font-medium text-foreground">{prData.base_branch}</p>
+              <p className="font-mono font-medium text-foreground">{activePR.base_branch || baseBranch}</p>
             </div>
           </div>
 
@@ -220,13 +317,13 @@ export function PublicationPanel({
             </p>
           </div>
 
-          {prData.summary && (
+          {activePR.summary && (
             <div className="p-3 rounded bg-background/40 border border-border/80 text-xs space-y-1">
               <span className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider">
                 Generated PR Summary
               </span>
               <p className="text-foreground/90 whitespace-pre-wrap leading-relaxed">
-                {prData.summary}
+                {activePR.summary}
               </p>
             </div>
           )}
@@ -253,21 +350,27 @@ export function PublicationPanel({
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <FolderGit2 className="h-3 w-3" /> Target Repo
               </span>
-              <p className="font-mono font-medium text-foreground truncate">{targetRepo}</p>
+              <p className="font-mono font-medium text-foreground truncate">
+                {targetRepo || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+              </p>
             </div>
 
             <div className="p-3 rounded-md border border-border/80 bg-background/40 space-y-1">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <GitBranch className="h-3 w-3" /> Source Branch
               </span>
-              <p className="font-mono font-medium text-foreground truncate">{sourceBranch}</p>
+              <p className="font-mono font-medium text-foreground truncate">
+                {sourceBranch || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+              </p>
             </div>
 
             <div className="p-3 rounded-md border border-border/80 bg-background/40 space-y-1">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <GitBranch className="h-3 w-3" /> Base Branch
               </span>
-              <p className="font-mono font-medium text-foreground truncate">{baseBranch}</p>
+              <p className="font-mono font-medium text-foreground truncate">
+                {baseBranch || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+              </p>
             </div>
 
             <div className="p-3 rounded-md border border-border/80 bg-background/40 space-y-1">
@@ -275,24 +378,69 @@ export function PublicationPanel({
                 <GitCommit className="h-3 w-3" /> Verified Revision
               </span>
               <p className="font-mono font-medium text-foreground truncate">
-                {verifiedSha ? verifiedSha.slice(0, 10) : 'Not Verified'}
+                {verifiedSha ? verifiedSha.slice(0, 10) : <span className="text-rose-400 italic font-sans">Unavailable</span>}
               </p>
             </div>
           </div>
 
-          {/* Stale Revision Alert */}
-          {isStale && (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-center gap-2.5">
+          {/* Missing Metadata Alert */}
+          {!isMetadataAvailable && (
+            <div
+              data-testid="missing-metadata-alert"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-center gap-2.5"
+            >
               <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
               <span>
-                Publication is blocked: Workspace revision has drifted from the verified revision. Re-run verification above before publishing.
+                Publication is blocked: Required repository, branch, or verified revision metadata is unavailable.
+              </span>
+            </div>
+          )}
+
+          {/* Stale Revision Alert */}
+          {isStale && (
+            <div
+              data-testid="stale-revision-alert"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-center gap-2.5"
+            >
+              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+              <span>
+                {`Publication is blocked: Workspace revision has drifted from the verified revision. ${staleCheck?.message || 'Re-run verification above before publishing.'}`}
+              </span>
+            </div>
+          )}
+
+          {/* Stale Check Error Alert */}
+          {isStaleCheckError && (
+            <div
+              data-testid="stale-check-error-alert"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+            >
+              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+              <span>
+                Publication is blocked: Remote revision stale-check API failed. Server state cannot be verified.
+              </span>
+            </div>
+          )}
+
+          {/* Verification Error Alert */}
+          {isVerificationError && (
+            <div
+              data-testid="verification-error-alert"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+            >
+              <ShieldAlert className="h-4 w-4 text-rose-400 shrink-0" />
+              <span>
+                Publication is blocked: Verification outcome check failed or is unavailable.
               </span>
             </div>
           )}
 
           {/* Blocking Findings Alert */}
           {verification?.blocking_findings && verification.blocking_findings.length > 0 && (
-            <div className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5">
+            <div
+              data-testid="blocking-findings-alert"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+            >
               <ShieldAlert className="h-4 w-4 text-rose-400 shrink-0" />
               <span>
                 Publication is blocked: {verification.blocking_findings.length} blocking finding(s) exist in the verification report. Resolve them before publishing.
@@ -331,20 +479,20 @@ export function PublicationPanel({
                 data-testid="authorize-publication-checkbox"
                 checked={authorizedChecked}
                 onChange={(e) => setAuthorizedChecked(e.target.checked)}
-                disabled={!eligible || isPublishing}
+                disabled={!eligible || isPublishing || !isMetadataAvailable}
                 className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary disabled:opacity-50 cursor-pointer"
               />
               <label
                 htmlFor="authorize-publication-checkbox"
                 className={cn(
                   'text-xs leading-relaxed select-none',
-                  eligible ? 'text-foreground cursor-pointer' : 'text-muted-foreground opacity-60 cursor-not-allowed'
+                  eligible && isMetadataAvailable ? 'text-foreground cursor-pointer' : 'text-muted-foreground opacity-60 cursor-not-allowed'
                 )}
               >
                 <span className="font-semibold">Explicit Human Publication Authorization</span>
                 <p className="text-muted-foreground text-[11px] mt-0.5">
                   I have inspected the verified diff, test execution telemetry, and security checks. I explicitly authorize pushing branch{' '}
-                  <code className="font-mono text-foreground font-semibold">{sourceBranch}</code> to GitHub and opening a Draft Pull Request. I understand automated merging is strictly forbidden.
+                  <code className="font-mono text-foreground font-semibold">{sourceBranch || 'Not allocated'}</code> to GitHub and opening a Draft Pull Request. Server authorization enforcement is independently validated before publication.
                 </p>
               </label>
             </div>
@@ -367,11 +515,11 @@ export function PublicationPanel({
               <button
                 type="button"
                 data-testid="authorize-publish-button"
-                disabled={!eligible || !authorizedChecked || isPublishing}
+                disabled={!eligible || !authorizedChecked || isPublishing || !isMetadataAvailable}
                 onClick={handlePublish}
                 className={cn(
                   'inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md shadow-xs transition-colors cursor-pointer',
-                  eligible && authorizedChecked && !isPublishing
+                  eligible && authorizedChecked && !isPublishing && isMetadataAvailable
                     ? 'bg-primary text-primary-foreground hover:bg-primary/90'
                     : 'bg-muted text-muted-foreground border border-border opacity-50 cursor-not-allowed'
                 )}

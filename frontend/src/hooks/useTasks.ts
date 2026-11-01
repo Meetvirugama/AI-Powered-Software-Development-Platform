@@ -446,6 +446,9 @@ export function useTriggerVerification(taskId: string) {
     mutationFn: (payload?: TriggerVerificationRequest) => triggerVerification(taskId, payload),
     onSuccess: (newVerification) => {
       queryClient.invalidateQueries({ queryKey: taskKeys.verification(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.pullRequest(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.staleCheck(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.lists() });

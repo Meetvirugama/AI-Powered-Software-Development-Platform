@@ -2873,6 +2873,37 @@ export const taskHandlers = [
   }),
 
   // --------------------------------------------------------------------------
+  // 14b. GET /api/v1/repositories/:repositoryId - Repository Detail for Canonical Metadata
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/repositories/:repositoryId', ({ params }) => {
+    const repoId = String(params.repositoryId);
+    if (repoId === 'repo-not-found' || repoId === 'repo-404') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'NOT_FOUND',
+            message: `Repository '${repoId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+    const defaultBranch =
+      repoId === 'repo-custom-base' || repoId === 'repo-develop' ? 'develop' : 'main';
+    return HttpResponse.json({
+      id: repoId,
+      name: repoId,
+      full_name: `acme/${repoId}`,
+      owner: 'acme',
+      description: `Repository ${repoId}`,
+      default_branch: defaultBranch,
+      sync_status: 'READY',
+      last_synced_at: new Date().toISOString(),
+    });
+  }),
+
+  // --------------------------------------------------------------------------
   // 15. POST /api/v1/tasks/:taskId/verify — Trigger Independent Verification
   // --------------------------------------------------------------------------
   http.post('*/api/v1/tasks/:taskId/verify', async ({ params, request }) => {
@@ -3322,6 +3353,19 @@ export const taskHandlers = [
   http.get('*/api/v1/tasks/:taskId/stale-check', ({ params }) => {
     const taskId = String(params.taskId);
     const task = getTaskFromStore(taskId);
+
+    if (taskId === 'task-stale-check-fail' || taskId.includes('stale-fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'STALE_CHECK_FAILED',
+            message: 'Failed to inspect remote Git repository revision.',
+            retryable: true,
+          },
+        },
+        { status: 500 }
+      );
+    }
 
     if (!task) {
       return HttpResponse.json(
