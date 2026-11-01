@@ -172,7 +172,7 @@ export function WorkspacePanel({
           <ErrorMessage error={error} message="Failed to load workspace metadata." />
         </div>
       ) : !workspace || workspace.status === WorkspaceStatus.NOT_CREATED ? (
-        <div className="p-6 text-center border border-dashed border-border rounded-md bg-background/50 space-y-2">
+        <div data-testid="workspace-not-created-state" className="p-6 text-center border border-dashed border-border rounded-md bg-background/50 space-y-2">
           <Box className="h-7 w-7 mx-auto text-muted-foreground/60" />
           <p className="text-xs font-medium text-foreground">Workspace Not Created</p>
           <p className="text-xs text-muted-foreground max-w-md mx-auto">

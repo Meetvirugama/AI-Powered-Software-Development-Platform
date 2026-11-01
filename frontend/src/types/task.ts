@@ -478,7 +478,7 @@ export interface VerificationFinding {
   id: string;
   severity: FindingSeverity;
   category: string;
-  title: string;
+  title?: string;
   message: string;
   file_path?: string | null;
   line_number?: number | null;
@@ -492,7 +492,7 @@ export interface VerificationCheckItem {
   duration_ms: number;
   message: string;
   findings_count: number;
-  details: Record<string, unknown>;
+  details?: Record<string, unknown>;
 }
 
 export interface VerificationResult {
@@ -631,14 +631,16 @@ export interface WorkspaceRepairBudgetStatus {
 // ============================================================================
 
 /**
- * Check if the task is actively running execution, testing, or self-repair.
+ * Check if the task is actively running execution, testing, self-repair, verification, or publishing.
  */
 export function isExecutionActive(status: TaskStatus): boolean {
   return (
     status === TaskStatus.WORKSPACE_SETUP ||
     status === TaskStatus.EXECUTING ||
     status === TaskStatus.TESTING ||
-    status === TaskStatus.REPAIRING
+    status === TaskStatus.REPAIRING ||
+    status === TaskStatus.VERIFYING ||
+    status === TaskStatus.PUBLISHING
   );
 }
 
@@ -652,4 +654,132 @@ export function canCancelTask(status: TaskStatus): boolean {
     status !== TaskStatus.FAILED &&
     status !== TaskStatus.DRAFT_PR_CREATED
   );
+}
+
+/**
+ * Check if task is eligible for recovery actions.
+ */
+export function canRecoverTask(status: TaskStatus): boolean {
+  return (
+    status === TaskStatus.RECOVERY_REQUIRED ||
+    status === TaskStatus.FAILED ||
+    status === TaskStatus.BLOCKED
+  );
+}
+
+/**
+ * Check if task is eligible for publication authorization.
+ * Requires:
+ * 1. Task status is READY_FOR_PUBLICATION (or VERIFYING / completed tests)
+ * 2. Independent verification has PASS status
+ * 3. Zero blocking findings
+ * 4. Verification is not stale
+ */
+export function isPublicationEligible(
+  status: TaskStatus,
+  verification?: VerificationResult | null,
+  isStale?: boolean
+): boolean {
+  if (status === TaskStatus.DRAFT_PR_CREATED || status === TaskStatus.PUBLISHING) {
+    return false;
+  }
+  if (status === TaskStatus.CANCELLED || status === TaskStatus.FAILED) {
+    return false;
+  }
+  if (isStale) {
+    return false;
+  }
+  if (!verification) {
+    return status === TaskStatus.READY_FOR_PUBLICATION;
+  }
+  const hasNoBlockingFindings = !verification.blocking_findings || verification.blocking_findings.length === 0;
+  const isPass = verification.status === 'PASS';
+  return isPass && hasNoBlockingFindings && (status === TaskStatus.READY_FOR_PUBLICATION || status === TaskStatus.TESTING || status === TaskStatus.VERIFYING);
+}
+
+// ============================================================================
+// 13. GitHub Pull Request & Publication (VERIFIED: backend/app/schemas/workspace.py)
+// ============================================================================
+
+export interface TaskPullRequest {
+  task_id: string;
+  pr_number?: number | null;
+  pr_url: string;
+  title: string;
+  body?: string;
+  head_branch: string;
+  base_branch: string;
+  is_draft: boolean;
+  status?: string;
+  created_at: string;
+  summary?: string;
+}
+
+export interface PublishTaskRequest {
+  title?: string;
+  body?: string;
+  publication_authorized: boolean;
+  base_branch?: string;
+  target_repository?: string;
+  authorization_notes?: string;
+}
+
+export interface TaskPublicationResponse {
+  success: boolean;
+  task_id: string;
+  pr_number?: number | null;
+  pr_url?: string | null;
+  head_branch: string;
+  base_branch: string;
+  is_draft: boolean;
+  summary: string;
+  created_at: string;
+  error?: string | null;
+}
+
+// ============================================================================
+// 14. Reliability, Recovery & Stale Revision Schemas (Docs/week3.md §8 Day 6)
+// ============================================================================
+
+export interface StaleRevisionCheckResult {
+  task_id: string;
+  is_stale: boolean;
+  workspace_base_revision: string;
+  current_base_revision: string;
+  current_remote_sha: string;
+  commits_behind: number;
+  remediation_suggestion?: string | null;
+  message: string;
+  checked_at: string;
+}
+
+export interface TaskRecoveryRequest {
+  action?: 'retry' | 'reconcile' | 'reset_to_plan' | 'resume';
+  reason?: string;
+}
+
+export interface TaskRecoveryResponse {
+  task_id: string;
+  previous_status: TaskStatus;
+  current_status: TaskStatus;
+  reconciliation_action: string;
+  details: string;
+  recovered_at: string;
+}
+
+export interface TriggerVerificationRequest {
+  force_reverify?: boolean;
+  verification_types?: string[];
+}
+
+export interface SecurityEventItem {
+  id: string;
+  task_id: string;
+  event_type: string;
+  severity: FindingSeverity;
+  description: string;
+  rule_id?: string | null;
+  blocked: boolean;
+  sanitized_message: string;
+  timestamp: string;
 }

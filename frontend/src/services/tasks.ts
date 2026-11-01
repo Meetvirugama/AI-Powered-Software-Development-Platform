@@ -6,6 +6,7 @@
  */
 
 import { apiClient, AI_ANALYSIS_TIMEOUT_MS } from './api';
+import type { ApiError } from '../types/api';
 import type {
   CreateIssueFromFindingPayload,
   CreateTaskPayload,
@@ -17,6 +18,8 @@ import type {
   PlanApprovalRequest,
   PlanGenerateRequest,
   PlanRejectionRequest,
+  PublishTaskRequest,
+  StaleRevisionCheckResult,
   TaskApproval,
   TaskCreateRequest,
   TaskDetail,
@@ -27,7 +30,12 @@ import type {
   TaskListFilterParams,
   TaskListResponse,
   TaskPlan,
+  TaskPullRequest,
+  TaskPublicationResponse,
+  TaskRecoveryRequest,
+  TaskRecoveryResponse,
   TaskTestResultsResponse,
+  TriggerVerificationRequest,
   VerificationResult,
   WorkspaceMetadata,
   WorkspaceRepairBudgetStatus,
@@ -184,10 +192,14 @@ export async function getTaskDiff(
         `/repositories/${repositoryId}/source/diff-ranges/task/${taskId}`
       );
       return response.data;
-    } catch {
-      // Fallback to task-centric route
-      const fallback = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
-      return fallback.data;
+    } catch (err: unknown) {
+      const apiErr = err as ApiError;
+      // Fallback to task-centric route ONLY when repository-scoped route returns HTTP 404
+      if (apiErr?.status === 404 || apiErr?.code === 'NOT_FOUND') {
+        const fallback = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
+        return fallback.data;
+      }
+      throw err;
     }
   }
   const response = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
@@ -246,9 +258,17 @@ export async function getTaskTests(taskId: string): Promise<TaskTestResultsRespo
  * Retrieve independent verification and final review outcome for a task.
  * GET /api/v1/tasks/:taskId/verification
  */
-export async function getTaskVerification(taskId: string): Promise<VerificationResult> {
-  const response = await apiClient.get<VerificationResult>(`/tasks/${taskId}/verification`);
-  return response.data;
+export async function getTaskVerification(taskId: string): Promise<VerificationResult | null> {
+  try {
+    const response = await apiClient.get<VerificationResult>(`/tasks/${taskId}/verification`);
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    if (apiErr?.code === 'NOT_FOUND' || apiErr?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 // ============================================================================
@@ -303,6 +323,97 @@ export async function createGitHubIssue(
   const response = await apiClient.post<IssueImportResponse>(
     `/repositories/${repositoryId}/issues`,
     payload
+  );
+  return response.data;
+}
+
+// ============================================================================
+// Day 5–7 Verification, Publication, Stale Revision & Recovery Services
+// ============================================================================
+
+/**
+ * Trigger independent verification and quality review for a task.
+ * POST /api/v1/tasks/:taskId/verify
+ */
+export async function triggerVerification(
+  taskId: string,
+  payload?: TriggerVerificationRequest
+): Promise<VerificationResult> {
+  const response = await apiClient.post<VerificationResult>(
+    `/tasks/${taskId}/verify`,
+    payload || {},
+    { timeout: AI_ANALYSIS_TIMEOUT_MS }
+  );
+  return response.data;
+}
+
+/**
+ * Retrieve GitHub Pull Request metadata associated with a published task.
+ * Returns null if the PR does not exist (404).
+ * GET /api/v1/tasks/:taskId/pull-request
+ */
+export async function getTaskPullRequest(taskId: string): Promise<TaskPullRequest | null> {
+  try {
+    const response = await apiClient.get<TaskPullRequest>(`/tasks/${taskId}/pull-request`);
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    if (apiErr?.code === 'NOT_FOUND' || apiErr?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Explicit human publication authorization gate.
+ * Authorizes pushing the task branch to remote and opening a GitHub Draft PR.
+ * POST /api/v1/tasks/:taskId/publish (with fallback to /tasks/:taskId/create-pr)
+ */
+export async function publishDraftPR(
+  taskId: string,
+  payload: PublishTaskRequest
+): Promise<TaskPublicationResponse> {
+  try {
+    const response = await apiClient.post<TaskPublicationResponse>(
+      `/tasks/${taskId}/publish`,
+      payload
+    );
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    // Fallback to /create-pr if backend exposes that canonical path
+    if (apiErr?.status === 404 || apiErr?.code === 'NOT_FOUND') {
+      const fallbackResponse = await apiClient.post<TaskPublicationResponse>(
+        `/tasks/${taskId}/create-pr`,
+        payload
+      );
+      return fallbackResponse.data;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Detect whether the repository base revision has drifted since task workspace creation.
+ * GET /api/v1/tasks/:taskId/stale-check
+ */
+export async function checkStaleRevision(taskId: string): Promise<StaleRevisionCheckResult> {
+  const response = await apiClient.get<StaleRevisionCheckResult>(`/tasks/${taskId}/stale-check`);
+  return response.data;
+}
+
+/**
+ * Execute recovery and state reconciliation for an interrupted, blocked, or failed task.
+ * POST /api/v1/tasks/:taskId/recover
+ */
+export async function recoverTask(
+  taskId: string,
+  payload?: TaskRecoveryRequest
+): Promise<TaskRecoveryResponse> {
+  const response = await apiClient.post<TaskRecoveryResponse>(
+    `/tasks/${taskId}/recover`,
+    payload || {}
   );
   return response.data;
 }

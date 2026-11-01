@@ -200,12 +200,56 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         bgClass: 'bg-zinc-500/10 border-zinc-500/20',
         textClass: 'text-zinc-400',
       };
+    case 'DIFF_INSPECTED':
+    case 'DIFF_VALIDATED':
+      return {
+        icon: <GitCommit className="h-3.5 w-3.5" />,
+        bgClass: 'bg-teal-500/10 border-teal-500/20',
+        textClass: 'text-teal-400',
+      };
+    case 'DIFF_VALIDATION_FAILED':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'CHANGES_COMMITTED':
+      return {
+        icon: <GitCommit className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'BRANCH_PUSHED':
+      return {
+        icon: <GitBranch className="h-3.5 w-3.5" />,
+        bgClass: 'bg-cyan-500/10 border-cyan-500/20',
+        textClass: 'text-cyan-400',
+      };
     case 'VERIFYING':
-    case 'VERIFICATION_COMPLETED':
+    case 'VERIFICATION_STARTED':
       return {
         icon: <ShieldCheck className="h-3.5 w-3.5" />,
         bgClass: 'bg-indigo-500/10 border-indigo-500/20',
         textClass: 'text-indigo-400',
+      };
+    case 'VERIFICATION_COMPLETED':
+    case 'VERIFICATION_PASSED':
+      return {
+        icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'VERIFICATION_FAILED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'PUBLICATION_AUTHORIZED':
+      return {
+        icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
       };
     case 'READY_FOR_PUBLICATION':
       return {
@@ -220,8 +264,31 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         textClass: 'text-teal-400',
       };
     case 'DRAFT_PR_CREATED':
+    case 'DRAFT_PR_PUBLISHED':
+    case 'PR_CREATED':
       return {
         icon: <GitPullRequest className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'SECURITY_POLICY_VIOLATION':
+    case 'POLICY_VIOLATION':
+    case 'COMMAND_BLOCKED':
+    case 'SECRET_LEAK_DETECTED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-red-500/10 border-red-500/20',
+        textClass: 'text-red-400',
+      };
+    case 'RECOVERY_REQUIRED':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-amber-500/10 border-amber-500/20',
+        textClass: 'text-amber-400',
+      };
+    case 'TASK_RECOVERED':
+      return {
+        icon: <RefreshCw className="h-3.5 w-3.5" />,
         bgClass: 'bg-emerald-500/10 border-emerald-500/20',
         textClass: 'text-emerald-400',
       };
