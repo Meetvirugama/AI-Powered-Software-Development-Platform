@@ -148,7 +148,7 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
 
 def init_intelligence_services(app: FastAPI) -> bool:
-    """Initialize Week 2 developer intelligence services (Explain, Bug, Test, Review)."""
+    """Initialize Week 2 & Week 3 developer intelligence and workflow services."""
     success = True
     llm_gateway = getattr(app.state, "llm_gateway", None)
 
@@ -264,7 +264,7 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["task_planner"] = False
         success = False
 
-    # Task Execution Orchestrator (Week 3 F33-F35)
+    # Task Execution Orchestrator (Week 3 F33-F39)
     try:
         if getattr(app.state, "task_execution_orchestrator", None) is None:
             from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
@@ -362,6 +362,7 @@ async def lifespan(app: FastAPI):
         "test_generation_service": False,
         "code_review_service": False,
         "task_planner": False,
+        "task_execution_orchestrator": False,
         "context_service": False,
         "history_services": False,
         "github_service": False,
@@ -375,9 +376,10 @@ async def lifespan(app: FastAPI):
     init_history_services(app)
     await init_github_service(app)
 
-    # ── Reconcile Stale Sync Jobs on Startup (Week 2 Section 12 Item 15, B-12) ──
+    # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks on Startup ──────
     try:
         from app.core.database import SessionLocal
+        from app.repositories.task_repository import TaskRepository
         from app.services.repository_sync import reconcile_stale_sync_jobs
 
         with SessionLocal() as db_session:
@@ -387,8 +389,20 @@ async def lifespan(app: FastAPI):
                     "startup_stale_sync_jobs_reconciled",
                     extra={"count": len(reconciled), "job_ids": [str(jid) for jid in reconciled]},
                 )
+
+            task_repo = TaskRepository(db_session)
+            interrupted_tasks = task_repo.reconcile_interrupted_tasks()
+            if interrupted_tasks:
+                logger.info(
+                    "startup_interrupted_tasks_reconciled",
+                    extra={"count": len(interrupted_tasks), "task_ids": [str(tid) for tid in interrupted_tasks]},
+                )
+
+        orch = getattr(app.state, "task_execution_orchestrator", None)
+        if orch is not None:
+            orch.workspace_manager.recover_workspaces(auto_reconcile=True)
     except Exception as exc:
-        logger.warning("startup_sync_reconciliation_failed", extra={"error": str(exc)})
+        logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
 
     # ── Background Sync Worker Task ──────────────────────────────────────────
     sync_worker_task = None
