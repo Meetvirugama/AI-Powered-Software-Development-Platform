@@ -28,6 +28,7 @@ import {
   type TaskDetailResponse,
   type WorkspaceMetadata,
   type TaskPullRequest,
+  type VerificationResult,
 } from '../../types/task';
 import type { ApiError } from '../../types/api';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
@@ -36,6 +37,7 @@ import { cn } from '../../lib/utils';
 export interface PublicationPanelProps {
   task: TaskDetailResponse;
   workspace?: WorkspaceMetadata | null;
+  verification?: VerificationResult | null;
   baseBranch?: string;
   className?: string;
   onPublished?: (pr: TaskPullRequest) => void;
@@ -76,7 +78,10 @@ export function PublicationPanel({
     isError: isStaleCheckError,
   } = useCheckStaleRevision(task.task_id);
 
-  const { data: repository } = useRepository(task.repository_id);
+  const {
+    data: repository,
+    isLoading: isRepoLoading,
+  } = useRepository(task.repository_id);
 
   const publishMutation = usePublishDraftPR(task.task_id);
 
@@ -96,7 +101,7 @@ export function PublicationPanel({
     null;
 
   const baseBranch = canonicalBaseBranch;
-  const targetRepo = repository?.full_name || repository?.name || task.repository_id;
+  const targetRepo = repository?.full_name || repository?.name || null;
   const sourceBranch = workspace?.branch_name || null;
   const verifiedSha = verification?.verified_revision || null;
 
@@ -116,7 +121,7 @@ export function PublicationPanel({
     hasVerificationError: isVerificationError,
     isStaleCheckLoading,
     hasStaleCheckError: isStaleCheckError,
-    hasBranchMetadata: Boolean(sourceBranch),
+    hasBranchMetadata: Boolean(sourceBranch && targetRepo),
     baseBranch,
   });
 
@@ -140,9 +145,9 @@ export function PublicationPanel({
         publication_authorized: true,
         title: `[AI Task] ${task.title}`,
         base_branch: baseBranch,
-        target_repository: targetRepo,
+        target_repository: targetRepo || undefined,
       });
-      if (res.pr_url) {
+      if (res && res.pr_url) {
         const pr: TaskPullRequest = {
           task_id: task.task_id,
           pr_number: res.pr_number,
@@ -159,6 +164,27 @@ export function PublicationPanel({
         if (onPublished) {
           onPublished(pr);
         }
+      } else {
+        // Successful response without res.pr_url: treat as uncertain outcome and reconcile
+        try {
+          const existingPR = await getTaskPullRequest(task.task_id);
+          if (existingPR && existingPR.pr_url) {
+            queryClient.setQueryData(taskKeys.pullRequest(task.task_id), existingPR);
+            setPublishedPR(existingPR);
+            queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.task_id) });
+            if (onPublished) {
+              onPublished(existingPR);
+            }
+            return;
+          }
+        } catch {
+          // Reconciliation failed
+        }
+        setPublishError({
+          status_code: 500,
+          error: 'Uncertain Publication Outcome',
+          message: 'Publication request completed without returning a Pull Request URL, and reconciliation could not locate an existing Pull Request.',
+        } as unknown as ApiError);
       }
     } catch (err) {
       // Uncertain network outcome: reconcile existing PR before prompting retry
@@ -350,8 +376,16 @@ export function PublicationPanel({
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <FolderGit2 className="h-3 w-3" /> Target Repo
               </span>
-              <p className="font-mono font-medium text-foreground truncate">
-                {targetRepo || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+              <p className="font-mono font-medium text-foreground truncate" data-testid="target-repo-display">
+                {isRepoLoading ? (
+                  <span className="text-muted-foreground italic font-sans flex items-center gap-1">
+                    <LoadingSpinner size="sm" label="Loading repository metadata..." /> Loading...
+                  </span>
+                ) : targetRepo ? (
+                  targetRepo
+                ) : (
+                  <span className="text-rose-400 italic font-sans">Unavailable</span>
+                )}
               </p>
             </div>
 

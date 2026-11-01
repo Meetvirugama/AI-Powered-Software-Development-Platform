@@ -34,8 +34,8 @@ export function sanitizeSecurityMessage(raw: unknown): string {
     return 'Security policy enforcement blocked the requested operation.';
   }
 
-  // 1. Redact Authorization headers: Bearer, Basic, Token
-  msg = msg.replace(/(?:bearer|basic|token)\s+[^\s,;]+/gi, (match) => {
+  // 1. Redact Authorization headers: Bearer, Basic (does not corrupt ordinary prose like 'token exfiltration')
+  msg = msg.replace(/\b(bearer|basic)\s+[^\s,;]+/gi, (match) => {
     const scheme = match.split(/\s+/)[0];
     return `${scheme} [REDACTED_TOKEN]`;
   });
@@ -46,10 +46,15 @@ export function sanitizeSecurityMessage(raw: unknown): string {
   msg = msg.replace(/\b(AKIA[0-9A-Z]{16})\b/g, '[REDACTED_CREDENTIAL]');
   msg = msg.replace(/\b(xox[baprs]-[0-9a-zA-Z-]{10,})\b/g, '[REDACTED_CREDENTIAL]');
 
-  // 3. Redact key-value secrets: password, token, secret, api_key, auth_token, access_token, private_key
+  // 3. Redact key-value and JSON-serialized secrets: password, token, secret, api_key, auth_token, access_token, private_key
   msg = msg.replace(
-    /((?:password|passwd|pwd|token|secret|api[_-]?key|auth(?:orization)?[_-]?token|access[_-]?token|private[_-]?key)\s*[:=]\s*)(['"][^'"]+['"]|[^\s,;]+)/gi,
-    '$1[REDACTED]'
+    /((?:["']|\b)(?:password|passwd|pwd|token|secret|api[_-]?key|auth(?:orization)?[_-]?token|access[_-]?token|private[_-]?key)(?:["']|\b)?\s*[:=]\s*)(?:(["'])(?:(?!\2)[^\\]|\\.)*\2|([^\s,;}\]]+))/gi,
+    (_match, prefix, quote) => {
+      if (quote) {
+        return `${prefix}${quote}[REDACTED]${quote}`;
+      }
+      return `${prefix}[REDACTED]`;
+    }
   );
 
   // 4. Redact connection URIs containing credentials

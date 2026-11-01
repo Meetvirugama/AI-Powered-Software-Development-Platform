@@ -2925,6 +2925,8 @@ export const taskHandlers = [
 
     const payload = (await request.json().catch(() => ({}))) as Partial<TriggerVerificationRequest>;
     const now = new Date().toISOString();
+    const workspace = db.workspaces.get(taskId);
+    const targetRevision = workspace?.base_revision || task.base_revision || 'a1b2c3d4e5f6';
 
     const isFailureRequested =
       payload.verification_types?.includes('fail') ||
@@ -2935,7 +2937,7 @@ export const taskHandlers = [
     if (isFailureRequested) {
       const failedResult: VerificationResult = {
         task_id: taskId,
-        verified_revision: task.base_revision || 'rev-failed-001',
+        verified_revision: targetRevision,
         status: 'FAIL',
         checks: [
           {
@@ -2999,7 +3001,7 @@ export const taskHandlers = [
 
     const passedResult: VerificationResult = {
       task_id: taskId,
-      verified_revision: task.base_revision || 'rev-verified-001',
+      verified_revision: targetRevision,
       status: 'PASS',
       checks: [
         {
@@ -3296,6 +3298,29 @@ export const taskHandlers = [
       );
     }
 
+    // Stale revision check: verified revision must match workspace base revision
+    const workspace = db.workspaces.get(taskId);
+    if (
+      taskId.includes('stale') ||
+      Boolean(
+        workspace &&
+        verification.verified_revision &&
+        workspace.base_revision &&
+        verification.verified_revision !== workspace.base_revision
+      )
+    ) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'STALE_REVISION',
+            message: 'Verified revision does not match current repository revision. Re-verification required.',
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
     const existingPR = db.pullRequests.get(taskId);
     if (existingPR) {
       return HttpResponse.json(
@@ -3443,6 +3468,36 @@ export const taskHandlers = [
     }
 
     const payload = (await request.json().catch(() => ({}))) as Partial<TaskRecoveryRequest>;
+
+    if (payload.action === 'retry') {
+      const budget = db.repairBudgets.get(taskId);
+      const attemptsUsed =
+        budget?.repair_attempts_used !== undefined
+          ? budget.repair_attempts_used
+          : task.repair_attempts_used;
+      const attemptsMax =
+        budget?.repair_attempts_max !== undefined
+          ? budget.repair_attempts_max
+          : task.repair_attempts_max;
+      const isExhausted =
+        attemptsUsed >= attemptsMax ||
+        Boolean(budget?.is_budget_exhausted) ||
+        (budget && budget.is_eligible_for_repair === false);
+
+      if (isExhausted) {
+        return HttpResponse.json(
+          {
+            error: {
+              code: 'REPAIR_BUDGET_EXHAUSTED',
+              message: `Automated repair attempts limit reached (${attemptsUsed}/${attemptsMax}). Retry is unavailable.`,
+              retryable: false,
+            },
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const previousStatus = task.status;
     const now = new Date().toISOString();
 

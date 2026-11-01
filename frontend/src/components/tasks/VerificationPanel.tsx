@@ -15,11 +15,13 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useTaskVerification, useTriggerVerification, useCheckStaleRevision } from '../../hooks/useTasks';
-import type {
-  VerificationResult,
-  VerificationCheckStatus,
-  VerificationOverallStatus,
-  FindingSeverity,
+import {
+  TaskStatus,
+  isPublicationEligible,
+  type VerificationResult,
+  type VerificationCheckStatus,
+  type VerificationOverallStatus,
+  type FindingSeverity,
 } from '../../types/task';
 import type { ApiError } from '../../types/api';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
@@ -172,7 +174,11 @@ export function VerificationPanel({
   onVerificationCompleted,
 }: VerificationPanelProps) {
   const { data: verification, isLoading, isError, error, refetch } = useTaskVerification(taskId);
-  const { data: staleCheck } = useCheckStaleRevision(taskId);
+  const {
+    data: staleCheck,
+    isLoading: isStaleCheckLoading,
+    isError: isStaleCheckError,
+  } = useCheckStaleRevision(taskId);
   const triggerMutation = useTriggerVerification(taskId);
   const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({});
   const [triggerError, setTriggerError] = useState<ApiError | null>(null);
@@ -183,6 +189,16 @@ export function VerificationPanel({
       currentRevision &&
       verification.verified_revision !== currentRevision)
   );
+
+  const isEligible = isPublicationEligible({
+    status: TaskStatus.READY_FOR_PUBLICATION,
+    verification,
+    isStale,
+    isLoadingVerification: isLoading,
+    hasVerificationError: isError,
+    isStaleCheckLoading,
+    hasStaleCheckError: isStaleCheckError,
+  });
 
   function toggleExpand(checkName: string) {
     setExpandedDetails((prev) => ({ ...prev, [checkName]: !prev[checkName] }));
@@ -533,34 +549,62 @@ export function VerificationPanel({
           {/* ---------------------------------------------------------------- */}
           {/* 6. Publication Eligibility Verdict                               */}
           {/* ---------------------------------------------------------------- */}
-          <div
-            data-testid="publication-eligibility-verdict"
-            className={cn(
-              'rounded-md p-4 text-xs space-y-1 border',
-              verification.status === 'PASS' && (!verification.blocking_findings || verification.blocking_findings.length === 0) && !isStale
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
-            )}
-          >
-            <div className="flex items-center gap-2 font-semibold">
-              {verification.status === 'PASS' && (!verification.blocking_findings || verification.blocking_findings.length === 0) && !isStale ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                  <span className="text-emerald-300">Publication Eligible — Independent Verification Passed</span>
-                </>
-              ) : (
-                <>
-                  <XCircle className="h-4 w-4 text-rose-400" />
-                  <span className="text-rose-300">Publication Blocked — Verification Incomplete or Failed</span>
-                </>
-              )}
+          {isStaleCheckLoading ? (
+            <div
+              data-testid="publication-eligibility-verdict"
+              className="rounded-md p-4 text-xs space-y-1 border border-border bg-muted/40 text-muted-foreground"
+            >
+              <div className="flex items-center gap-2 font-semibold text-foreground">
+                <LoadingSpinner size="sm" label="Checking revision state..." />
+                <span>Publication Eligibility Pending — Checking Revision Freshness</span>
+              </div>
+              <p className="pl-6 text-[11px] leading-relaxed">
+                Verifying whether workspace revision matches the verified revision...
+              </p>
             </div>
-            <p className="pl-6 text-[11px] opacity-90 leading-relaxed">
-              {verification.status === 'PASS' && (!verification.blocking_findings || verification.blocking_findings.length === 0) && !isStale
-                ? 'All mandatory test and security checks have passed without blocking findings. Proceed to the Publication panel to provide explicit human publication authorization.'
-                : 'Automated publication to GitHub is strictly forbidden until all blocking findings are resolved, tests pass, and independent verification is revalidated.'}
-            </p>
-          </div>
+          ) : isStaleCheckError ? (
+            <div
+              data-testid="publication-eligibility-verdict"
+              className="rounded-md p-4 text-xs space-y-1 border border-rose-500/40 bg-rose-500/10 text-rose-200"
+            >
+              <div className="flex items-center gap-2 font-semibold">
+                <XCircle className="h-4 w-4 text-rose-400" />
+                <span className="text-rose-300">Publication Blocked — Revision Freshness Check Failed</span>
+              </div>
+              <p className="pl-6 text-[11px] opacity-90 leading-relaxed">
+                Remote revision stale-check API failed. Server state cannot be verified.
+              </p>
+            </div>
+          ) : (
+            <div
+              data-testid="publication-eligibility-verdict"
+              className={cn(
+                'rounded-md p-4 text-xs space-y-1 border',
+                isEligible
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                  : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+              )}
+            >
+              <div className="flex items-center gap-2 font-semibold">
+                {isEligible ? (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    <span className="text-emerald-300">Publication Eligible — Independent Verification Passed</span>
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="h-4 w-4 text-rose-400" />
+                    <span className="text-rose-300">Publication Blocked — Verification Incomplete or Failed</span>
+                  </>
+                )}
+              </div>
+              <p className="pl-6 text-[11px] opacity-90 leading-relaxed">
+                {isEligible
+                  ? 'All mandatory test and security checks have passed without blocking findings. Proceed to the Publication panel to provide explicit human publication authorization.'
+                  : 'Automated publication to GitHub is strictly forbidden until all blocking findings are resolved, tests pass, and independent verification is revalidated.'}
+              </p>
+            </div>
+          )}
         </div>
       )}
     </div>

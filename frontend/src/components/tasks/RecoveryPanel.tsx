@@ -29,9 +29,18 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
   }
 
   const isPending = recoverMutation.isPending;
+  const attemptsUsed =
+    repairBudget?.repair_attempts_used !== undefined
+      ? repairBudget.repair_attempts_used
+      : task.repair_attempts_used;
+  const attemptsMax =
+    repairBudget?.repair_attempts_max !== undefined
+      ? repairBudget.repair_attempts_max
+      : task.repair_attempts_max;
   const isBudgetExhausted =
-    task.repair_attempts_used >= task.repair_attempts_max ||
-    Boolean(repairBudget?.is_budget_exhausted);
+    attemptsUsed >= attemptsMax ||
+    Boolean(repairBudget?.is_budget_exhausted) ||
+    (repairBudget && repairBudget.is_eligible_for_repair === false);
 
   // Permitted recovery actions strictly governed by backend state contracts:
   // - FAILED: reconcile, reset_to_plan, and retry (ONLY when repair budget remains)
@@ -102,7 +111,7 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
           className="rounded border border-rose-500/30 bg-rose-500/10 p-2.5 text-rose-300 text-[11px] flex items-center gap-2"
         >
           <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
-          <span>Automated repair attempts limit reached ({task.repair_attempts_used}/{task.repair_attempts_max}). Retrying is unavailable.</span>
+          <span>Automated repair attempts limit reached ({attemptsUsed}/{attemptsMax}). Retrying is unavailable.</span>
         </div>
       )}
 

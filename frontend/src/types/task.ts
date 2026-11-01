@@ -709,6 +709,7 @@ export function isPublicationEligible(
   let stale: boolean | undefined;
   let loadingVerif: boolean | undefined;
   let verifError: boolean | undefined;
+  let staleLoading: boolean | undefined;
   let staleError: boolean | undefined;
   let branchMeta: boolean | undefined;
   let baseBr: string | null | undefined;
@@ -719,6 +720,7 @@ export function isPublicationEligible(
     stale = statusOrContext.isStale;
     loadingVerif = statusOrContext.isLoadingVerification;
     verifError = statusOrContext.hasVerificationError;
+    staleLoading = statusOrContext.isStaleCheckLoading;
     staleError = statusOrContext.hasStaleCheckError;
     branchMeta = statusOrContext.hasBranchMetadata;
     baseBr = statusOrContext.baseBranch;
@@ -728,6 +730,7 @@ export function isPublicationEligible(
     stale = isStale;
     loadingVerif = isLoadingVerification;
     verifError = hasVerificationError;
+    staleLoading = options?.isStaleCheckLoading;
     staleError = options?.hasStaleCheckError;
     branchMeta = options?.hasBranchMetadata;
     baseBr = options?.baseBranch;
@@ -740,6 +743,11 @@ export function isPublicationEligible(
 
   // 2. Loading verification data blocks publication
   if (loadingVerif) {
+    return false;
+  }
+
+  // 3. Loading stale-check blocks publication
+  if (staleLoading) {
     return false;
   }
 
