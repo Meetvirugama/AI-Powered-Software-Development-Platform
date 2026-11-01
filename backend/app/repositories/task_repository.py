@@ -1631,6 +1631,52 @@ class TaskRepository:
     # 5. Timeline & Audit Events
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _default_event_summary(
+        event_type: str,
+        event_data: Optional[dict[str, Any]] = None,
+        from_status: Optional[str] = None,
+        to_status: Optional[str] = None,
+    ) -> str:
+        """Synthesize a readable timeline summary when one is not explicitly supplied."""
+        data = event_data or {}
+        evt = (event_type or "EVENT").upper()
+        if evt == "TASK_CREATED":
+            return f"Task created: {data.get('title') or 'Untitled Task'}."
+        if evt == "ISSUE_IMPORTED":
+            return f"Imported GitHub issue: {data.get('title') or data.get('source_id') or ''}."
+        if evt == "PLAN_GENERATED":
+            return f"Generated implementation plan v{data.get('plan_version', 1)} ({data.get('step_count') or data.get('steps_count') or 0} steps)."
+        if evt == "PLAN_APPROVED":
+            return f"Plan v{data.get('plan_version', 1)} approved for workspace execution."
+        if evt == "PLAN_REJECTED":
+            return f"Plan v{data.get('plan_version', 1)} rejected: {data.get('reason') or 'Requires revision'}."
+        if evt == "WORKSPACE_CREATED":
+            return f"Isolated workspace provisioned on branch {data.get('task_branch') or data.get('branch_name') or 'agent/task'}."
+        if evt == "TOOL_INVOKED":
+            return f"Executed workspace tool '{data.get('tool_name', 'unknown')}' ({data.get('status', 'COMPLETED')})."
+        if evt == "TESTS_EXECUTED":
+            return (
+                f"Executed test suite '{data.get('command', 'pytest')}': "
+                f"{data.get('status', 'COMPLETED')} ({data.get('passed', 0)} passed, {data.get('failed', 0)} failed)."
+            )
+        if evt == "REPAIR_ATTEMPTED":
+            return (
+                f"Executed bounded repair attempt {data.get('attempt_number', 1)} "
+                f"(remaining budget: {data.get('remaining_budget', 0)})."
+            )
+        if evt == "VERIFICATION_COMPLETED":
+            return f"Independent verification completed with status {data.get('status', 'PASSED')}."
+        if evt == "DRAFT_PR_CREATED":
+            return f"Created Draft Pull Request {data.get('pr_url') or ''}."
+        if evt == "CHECKPOINT_SAVED":
+            return f"Saved recovery checkpoint at step '{data.get('step_name', 'step')}'."
+        if evt == "EXECUTION_FAILED":
+            return f"Execution failed: {data.get('reason') or data.get('error') or 'Error during task execution'}."
+        if from_status and to_status:
+            return f"Task transitioned from {from_status} to {to_status}."
+        return f"Recorded task event: {event_type}."
+
     def record_event(
         self,
         task_id: uuid.UUID | str,
@@ -1648,7 +1694,15 @@ class TaskRepository:
         u_uuid = _ensure_uuid(user_id)
 
         clean_event_data = scrub_sensitive_data(event_data)
-        safe_summary = scrub_sensitive_text(summary) or ""
+        raw_summary = (summary or "").strip()
+        if not raw_summary:
+            raw_summary = self._default_event_summary(
+                event_type=event_type,
+                event_data=clean_event_data if isinstance(clean_event_data, dict) else None,
+                from_status=from_status,
+                to_status=to_status,
+            )
+        safe_summary = scrub_sensitive_text(raw_summary) or ""
 
         event = TaskEvent(
             id=uuid.uuid4(),
@@ -1664,6 +1718,65 @@ class TaskRepository:
         self.session.add(event)
         self.session.flush()
         return event
+
+    def get_workspace_record(self, task_id: uuid.UUID | str) -> Optional[Workspace]:
+        """Return persisted Workspace record for a task if one exists."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        stmt = select(Workspace).where(Workspace.task_id == t_uuid)
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_test_runs(self, task_id: uuid.UUID | str) -> list[TestRun]:
+        """List all persisted TestRun records for a task in chronological order."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return []
+        stmt = (
+            select(TestRun)
+            .where(TestRun.task_id == t_uuid)
+            .order_by(TestRun.created_at.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def list_repair_attempts(self, task_id: uuid.UUID | str) -> list[RepairAttempt]:
+        """List all persisted RepairAttempt records for a task ordered by attempt_number asc."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return []
+        stmt = (
+            select(RepairAttempt)
+            .where(RepairAttempt.task_id == t_uuid)
+            .order_by(RepairAttempt.attempt_number.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def list_tool_invocations(self, task_id: uuid.UUID | str) -> list[ToolInvocation]:
+        """List all persisted ToolInvocation records for a task ordered by created_at asc."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return []
+        stmt = (
+            select(ToolInvocation)
+            .where(ToolInvocation.task_id == t_uuid)
+            .order_by(ToolInvocation.created_at.asc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def get_latest_verification_result(
+        self,
+        task_id: uuid.UUID | str,
+    ) -> Optional[VerificationResult]:
+        """Return the most recent VerificationResult for a task."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        stmt = (
+            select(VerificationResult)
+            .where(VerificationResult.task_id == t_uuid)
+            .order_by(VerificationResult.created_at.desc())
+        )
+        return self.session.scalars(stmt).first()
 
     def _append_event(
         self,

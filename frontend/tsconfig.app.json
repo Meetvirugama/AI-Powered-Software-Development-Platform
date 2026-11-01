@@ -7,6 +7,11 @@
     "types": ["vite/client"],
     "allowArbitraryExtensions": true,
     "skipLibCheck": true,
+    "paths": {
+      "msw": ["./src/lib/msw/index.ts"],
+      "msw/node": ["./src/lib/msw/node.ts"],
+      "msw/browser": ["./src/lib/msw/browser.ts"]
+    },
 
     /* Bundler mode */
     "moduleResolution": "bundler",

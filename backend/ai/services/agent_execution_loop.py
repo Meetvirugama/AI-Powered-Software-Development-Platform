@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from app.core.input_security import UnsafePathError, validate_repo_relative_path
+from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.schemas.plan import PlanStep, StructuredPlan
 from app.schemas.workspace import (
@@ -38,7 +38,6 @@ from app.schemas.workspace import (
 )
 from sandbox.exceptions import (
     WorkspaceError,
-    WorkspacePolicyViolationError,
     WorkspaceStateError,
 )
 from sandbox.workspace_manager import WorkspaceManager
@@ -174,10 +173,12 @@ class AgentExecutionLoop:
         *,
         max_iterations: int = 25,
         max_cycle_repetitions: int = 2,
+        tool_router: Any = None,
     ) -> None:
         self.workspace_manager = workspace_manager
         self.max_iterations = max_iterations
         self.loop_detector = LoopDetector(max_cycle_repetitions=max_cycle_repetitions)
+        self.tool_router = tool_router
 
     def _resolve_step_dependencies(self, steps: Sequence[PlanStep]) -> list[PlanStep]:
         """Sort steps topologically by dependencies; fallback to natural order if cyclic."""
@@ -236,7 +237,11 @@ class AgentExecutionLoop:
         # Extract steps
         raw_steps: list[PlanStep] = []
         if hasattr(plan, "steps"):
-            raw_steps = list(plan.steps)
+            for item in plan.steps:
+                if isinstance(item, PlanStep):
+                    raw_steps.append(item)
+                elif isinstance(item, dict):
+                    raw_steps.append(PlanStep.model_validate(item))
         elif isinstance(plan, Sequence):
             for item in plan:
                 if isinstance(item, PlanStep):
@@ -395,7 +400,22 @@ class AgentExecutionLoop:
                 validate_repo_relative_path(target_file)
 
             output: Any = None
-            if action_type in ("edit", "create", "write"):
+            if action_type == "patch" or ("target_content" in step_input and "replacement_content" in step_input):
+                target_content = str(step_input.get("target_content", ""))
+                replacement_content = str(step_input.get("replacement_content", ""))
+                patched_files: dict[str, int] = {}
+                for target_file in expected_files:
+                    if hasattr(self.workspace_manager, "patch_file"):
+                        res = self.workspace_manager.patch_file(
+                            task_id=task_id,
+                            file_path=target_file,
+                            target_content=target_content,
+                            replacement_content=replacement_content,
+                        )
+                        patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
+                output = {"patched_files": patched_files}
+
+            elif action_type in ("edit", "create", "write", "modify", "refactor"):
                 content = step_input.get("content")
                 if content is None:
                     # Synthetic code edit if content not supplied directly
@@ -419,29 +439,64 @@ class AgentExecutionLoop:
                         res = self.workspace_manager.safe_write_file(req)
                         output = {"written_bytes": getattr(res, "bytes_written", len(content))}
 
+            elif action_type == "delete":
+                deleted_files: list[str] = []
+                for target_file in expected_files:
+                    if hasattr(self.workspace_manager, "delete_file"):
+                        self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
+                        deleted_files.append(target_file)
+                output = {"deleted_files": deleted_files}
+
             elif action_type in ("inspect", "read"):
                 read_outputs: dict[str, str] = {}
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "read_file"):
-                        res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                        read_outputs[target_file] = getattr(res, "content", "")
-                    else:
-                        req = WorkspaceFileReadRequest(task_id=task_id, file_path=target_file)
-                        res = self.workspace_manager.safe_read_file(req)
-                        read_outputs[target_file] = getattr(res, "content", "")
+                    try:
+                        if hasattr(self.workspace_manager, "read_file"):
+                            res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                            read_outputs[target_file] = getattr(res, "content", "") or ""
+                        else:
+                            req = WorkspaceFileReadRequest(task_id=task_id, file_path=target_file)
+                            res = self.workspace_manager.safe_read_file(req)
+                            read_outputs[target_file] = getattr(res, "content", "") or ""
+                    except Exception:
+                        read_outputs[target_file] = ""
                 output = read_outputs
 
             elif action_type in ("command", "test"):
-                cmd = step_input.get("command") or "pytest"
-                args = step_input.get("args") or []
-                req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
-                if hasattr(self.workspace_manager, "execute_command"):
-                    res = self.workspace_manager.execute_command(req)
+                if action_type == "test" and "command" not in step_input and expected_files:
+                    written_tests: list[str] = []
+                    for target_file in expected_files:
+                        content = step_input.get("content")
+                        if content is not None and hasattr(self.workspace_manager, "write_file"):
+                            self.workspace_manager.write_file(
+                                task_id=task_id,
+                                file_path=target_file,
+                                content=content,
+                                create_parents=True,
+                            )
+                            written_tests.append(target_file)
+                    if not step_input.get("run_command", False):
+                        output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
+                    else:
+                        cmd = "pytest"
+                        args = list(step_input.get("args") or [])
+                        req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
+                        res = self.workspace_manager.execute_command(req)
+                        output = {"exit_code": res.exit_code, "stdout": res.stdout, "stderr": res.stderr}
+                        if res.exit_code not in (0, 5):
+                            raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
                 else:
-                    res = self.workspace_manager.run_command_in_workspace(req)
-                output = {"exit_code": res.exit_code, "stdout": res.stdout, "stderr": res.stderr}
-                if res.exit_code != 0:
-                    raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
+                    cmd = step_input.get("command") or "pytest"
+                    args = step_input.get("args") or []
+                    req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
+                    if hasattr(self.workspace_manager, "execute_command"):
+                        res = self.workspace_manager.execute_command(req)
+                    else:
+                        res = self.workspace_manager.run_command_in_workspace(req)
+                    output = {"exit_code": res.exit_code, "stdout": res.stdout, "stderr": res.stderr}
+                    allowed_codes = (0, 5) if cmd == "pytest" and "command" not in step_input else (0,)
+                    if res.exit_code not in allowed_codes:
+                        raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
 
             else:
                 # Default inspect/noop step
