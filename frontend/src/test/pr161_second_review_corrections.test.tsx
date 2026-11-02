@@ -492,6 +492,72 @@ describe('PR #161 Second CodeRabbit Review Corrections', () => {
       expect(banner).toHaveTextContent('{"password":"[REDACTED]"}');
       expect(banner).not.toHaveTextContent('mySecret123');
     });
+
+    describe('Compound secret-key redaction (10 mandatory test scenarios)', () => {
+      it('1. Redacts unquoted refresh_token', () => {
+        expect(sanitizeSecurityMessage('refresh_token=abc')).toBe('refresh_token=[REDACTED]');
+      });
+
+      it('2. Redacts quoted client_secret', () => {
+        expect(sanitizeSecurityMessage('client_secret: "abc"')).toBe('client_secret: "[REDACTED]"');
+      });
+
+      it('3. Redacts JSON-serialized secret_key', () => {
+        expect(sanitizeSecurityMessage('{"secret_key":"abc"}')).toBe('{"secret_key":"[REDACTED]"}');
+      });
+
+      it('4. Redacts JSON-serialized refresh_token', () => {
+        expect(sanitizeSecurityMessage('{"refresh_token":"abc"}')).toBe('{"refresh_token":"[REDACTED]"}');
+      });
+
+      it('5. Redacts access_token key-value pair', () => {
+        expect(sanitizeSecurityMessage('access_token=abc')).toBe('access_token=[REDACTED]');
+      });
+
+      it('6. Redacts private_key key-value pair', () => {
+        expect(sanitizeSecurityMessage('private_key=abc')).toBe('private_key=[REDACTED]');
+      });
+
+      it('7. Redacts multiple compound secrets in one message preserving delimiters', () => {
+        expect(
+          sanitizeSecurityMessage('refresh_token=123, client_secret="456", secret_key=789')
+        ).toBe('refresh_token=[REDACTED], client_secret="[REDACTED]", secret_key=[REDACTED]');
+      });
+
+      it('8. Preserves ordinary prose containing the word token', () => {
+        expect(sanitizeSecurityMessage('Blocked token exfiltration attempt')).toBe(
+          'Blocked token exfiltration attempt'
+        );
+        expect(sanitizeSecurityMessage('The user requested a token refresh cycle')).toBe(
+          'The user requested a token refresh cycle'
+        );
+      });
+
+      it('9. Redacts Bearer and Basic authorization credentials accurately', () => {
+        expect(sanitizeSecurityMessage('Authorization: Bearer secretTokenABC')).toBe(
+          'Authorization: Bearer [REDACTED_TOKEN]'
+        );
+        expect(sanitizeSecurityMessage('Authorization: Basic dXNlcjpwYXNz')).toBe(
+          'Authorization: Basic [REDACTED_TOKEN]'
+        );
+      });
+
+      it('10. Handles malformed or incomplete inputs safely without crashing', () => {
+        expect(sanitizeSecurityMessage(null)).toBe(
+          'Security policy enforcement blocked the requested operation.'
+        );
+        expect(sanitizeSecurityMessage(undefined)).toBe(
+          'Security policy enforcement blocked the requested operation.'
+        );
+        expect(sanitizeSecurityMessage('')).toBe(
+          'Security policy enforcement blocked the requested operation.'
+        );
+        expect(sanitizeSecurityMessage('   ')).toBe(
+          'Security policy enforcement blocked the requested operation.'
+        );
+        expect(sanitizeSecurityMessage('malformed refresh_token=')).toBe('malformed refresh_token=');
+      });
+    });
   });
 
   // ==========================================================================
@@ -534,24 +600,46 @@ describe('PR #161 Second CodeRabbit Review Corrections', () => {
     });
 
     it('3. Shows blocked state when verification is stale', async () => {
+      server.use(
+        http.get('*/api/v1/tasks/:taskId/stale-check', () => {
+          return HttpResponse.json({ is_stale: true, task_id: baseTask.task_id, reason: 'Drift detected' });
+        }),
+        http.get('*/api/v1/tasks/:taskId/verification', () => {
+          return HttpResponse.json(passingVerification);
+        })
+      );
+
       queryClient.setQueryData(taskKeys.verification(baseTask.task_id), passingVerification);
       queryClient.setQueryData(taskKeys.staleCheck(baseTask.task_id), { is_stale: true, task_id: baseTask.task_id });
 
       renderWithClient(<VerificationPanel taskId={baseTask.task_id} />, queryClient);
 
       const verdict = await screen.findByTestId('publication-eligibility-verdict');
-      expect(verdict).toHaveTextContent(/Publication Blocked — Verification Incomplete or Failed/i);
+      await waitFor(() => {
+        expect(verdict).toHaveTextContent(/Publication Blocked — Verification Incomplete or Failed/i);
+      });
       expect(verdict).not.toHaveTextContent('Publication Eligible — Independent Verification Passed');
     });
 
     it('4. Shows Publication Eligible on fresh result with passing verification', async () => {
+      server.use(
+        http.get('*/api/v1/tasks/:taskId/verification', () => {
+          return HttpResponse.json(passingVerification);
+        }),
+        http.get('*/api/v1/tasks/:taskId/stale-check', () => {
+          return HttpResponse.json({ is_stale: false, task_id: baseTask.task_id });
+        })
+      );
+
       queryClient.setQueryData(taskKeys.verification(baseTask.task_id), passingVerification);
       queryClient.setQueryData(taskKeys.staleCheck(baseTask.task_id), { is_stale: false, task_id: baseTask.task_id });
 
       renderWithClient(<VerificationPanel taskId={baseTask.task_id} />, queryClient);
 
       const verdict = await screen.findByTestId('publication-eligibility-verdict');
-      expect(verdict).toHaveTextContent('Publication Eligible — Independent Verification Passed');
+      await waitFor(() => {
+        expect(verdict).toHaveTextContent('Publication Eligible — Independent Verification Passed');
+      });
     });
 
     it('5. Shows empty state when verification is missing', async () => {
@@ -586,18 +674,28 @@ describe('PR #161 Second CodeRabbit Review Corrections', () => {
         ],
       };
 
+      server.use(
+        http.get('*/api/v1/tasks/:taskId/verification', () => {
+          return HttpResponse.json(verifWithBlocking);
+        }),
+        http.get('*/api/v1/tasks/:taskId/stale-check', () => {
+          return HttpResponse.json({ is_stale: false, task_id: baseTask.task_id });
+        })
+      );
+
       queryClient.setQueryData(taskKeys.verification(baseTask.task_id), verifWithBlocking);
       queryClient.setQueryData(taskKeys.staleCheck(baseTask.task_id), { is_stale: false, task_id: baseTask.task_id });
 
       renderWithClient(<VerificationPanel taskId={baseTask.task_id} />, queryClient);
 
       const verdict = await screen.findByTestId('publication-eligibility-verdict');
-      expect(verdict).toHaveTextContent(/Publication Blocked — Verification Incomplete or Failed/i);
+      await waitFor(() => {
+        expect(verdict).toHaveTextContent(/Publication Blocked — Verification Incomplete or Failed/i);
+      });
       expect(verdict).not.toHaveTextContent('Publication Eligible — Independent Verification Passed');
     });
   });
 
-  // ==========================================================================
   // Finding G: isPublicationEligible stale-check loading enforcement
   // ==========================================================================
   describe('G. isPublicationEligible stale-check loading enforcement', () => {

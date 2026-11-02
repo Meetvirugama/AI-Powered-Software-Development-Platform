@@ -21,6 +21,26 @@ const SECURITY_EVENT_TYPES = new Set([
   'DISK_QUOTA_EXCEEDED',
 ]);
 
+const SECRET_KEY_NAMES = [
+  'refresh[_-]?(?:token|key)',
+  'access[_-]?(?:token|key)',
+  'auth(?:orization)?[_-]?(?:token|key|secret)',
+  'client[_-]?(?:secret|key|token)',
+  'secret[_-]?(?:key|token)',
+  'private[_-]?(?:key|token|secret)',
+  'api[_-]?(?:key|token|secret)',
+  'password',
+  'passwd',
+  'pwd',
+  'secret',
+  'token',
+].join('|');
+
+const SECRET_KV_REGEX = new RegExp(
+  `((?:["'](?:${SECRET_KEY_NAMES})["']|\\b(?:${SECRET_KEY_NAMES})\\b)\\s*[:=]\\s*)(?:(["'])((?:(?!\\2)[^\\\\]|\\\\.)*)\\2|([^\\s,;}\\]]+))`,
+  'gi'
+);
+
 /**
  * Client-side credential sanitization applied as defense in depth.
  * Server-side redaction remains authoritative.
@@ -46,9 +66,10 @@ export function sanitizeSecurityMessage(raw: unknown): string {
   msg = msg.replace(/\b(AKIA[0-9A-Z]{16})\b/g, '[REDACTED_CREDENTIAL]');
   msg = msg.replace(/\b(xox[baprs]-[0-9a-zA-Z-]{10,})\b/g, '[REDACTED_CREDENTIAL]');
 
-  // 3. Redact key-value and JSON-serialized secrets: password, token, secret, api_key, auth_token, access_token, private_key
+  // 3. Redact compound & simple key-value and JSON-serialized secrets:
+  // refresh_token, client_secret, secret_key, access_token, private_key, password, token, etc.
   msg = msg.replace(
-    /((?:["']|\b)(?:password|passwd|pwd|token|secret|api[_-]?key|auth(?:orization)?[_-]?token|access[_-]?token|private[_-]?key)(?:["']|\b)?\s*[:=]\s*)(?:(["'])(?:(?!\2)[^\\]|\\.)*\2|([^\s,;}\]]+))/gi,
+    SECRET_KV_REGEX,
     (_match, prefix, quote) => {
       if (quote) {
         return `${prefix}${quote}[REDACTED]${quote}`;

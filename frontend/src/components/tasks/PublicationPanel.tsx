@@ -64,7 +64,7 @@ export function PublicationPanel({
   onPublished,
 }: PublicationPanelProps) {
   const queryClient = useQueryClient();
-  const { data: prData } = useTaskPullRequest(task.task_id);
+  const { data: prData } = useTaskPullRequest(task.task_id, { repositoryId: task.repository_id });
 
   const {
     data: verification,
@@ -167,7 +167,7 @@ export function PublicationPanel({
       } else {
         // Successful response without res.pr_url: treat as uncertain outcome and reconcile
         try {
-          const existingPR = await getTaskPullRequest(task.task_id);
+          const existingPR = await getTaskPullRequest(task.task_id, task.repository_id);
           if (existingPR && existingPR.pr_url) {
             queryClient.setQueryData(taskKeys.pullRequest(task.task_id), existingPR);
             setPublishedPR(existingPR);
@@ -189,7 +189,7 @@ export function PublicationPanel({
     } catch (err) {
       // Uncertain network outcome: reconcile existing PR before prompting retry
       try {
-        const existingPR = await getTaskPullRequest(task.task_id);
+        const existingPR = await getTaskPullRequest(task.task_id, task.repository_id);
         if (existingPR && existingPR.pr_url) {
           queryClient.setQueryData(taskKeys.pullRequest(task.task_id), existingPR);
           setPublishedPR(existingPR);

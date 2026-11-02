@@ -455,9 +455,48 @@ export async function triggerVerification(
 /**
  * Retrieve GitHub Pull Request metadata associated with a published task.
  * Returns null if the PR does not exist (404).
+ * Supports repository-scoped PR metadata route with fallback to canonical task-centric route.
+ * GET /api/v1/repositories/:repositoryId/source/pr-metadata/:taskId
  * GET /api/v1/tasks/:taskId/pull-request
  */
-export async function getTaskPullRequest(taskId: string): Promise<TaskPullRequest | null> {
+export async function getTaskPullRequest(
+  taskId: string,
+  repositoryId?: string
+): Promise<TaskPullRequest | null> {
+  if (repositoryId) {
+    try {
+      const response = await apiClient.get<{
+        task_id?: string;
+        pr_number?: number | null;
+        pr_url?: string | null;
+        commit_message?: string;
+        verification_summary?: string;
+        branch?: string;
+        base_branch?: string;
+        status?: string;
+      }>(`/repositories/${repositoryId}/source/pr-metadata/${taskId}`);
+      if (response.data && (response.data.pr_url || response.data.pr_number)) {
+        return {
+          task_id: response.data.task_id || taskId,
+          pr_number: response.data.pr_number,
+          pr_url: response.data.pr_url || '',
+          title: response.data.commit_message || 'Draft Pull Request',
+          body: response.data.verification_summary,
+          head_branch: response.data.branch || '',
+          base_branch: response.data.base_branch || 'main',
+          is_draft: true,
+          status: response.data.status,
+          created_at: new Date().toISOString(),
+        };
+      }
+    } catch (err: unknown) {
+      const apiErr = err as ApiError;
+      if (apiErr?.code !== 'NOT_FOUND' && apiErr?.status !== 404) {
+        throw err;
+      }
+    }
+  }
+
   try {
     const response = await apiClient.get<TaskPullRequest>(`/tasks/${taskId}/pull-request`);
     return response.data;

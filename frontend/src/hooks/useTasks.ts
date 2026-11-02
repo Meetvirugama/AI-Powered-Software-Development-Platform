@@ -206,10 +206,13 @@ export function useTaskVerification(taskId: string | undefined, options?: { enab
 /**
  * Hook to retrieve GitHub Pull Request metadata associated with a published task.
  */
-export function useTaskPullRequest(taskId: string | undefined, options?: { enabled?: boolean }) {
+export function useTaskPullRequest(
+  taskId: string | undefined,
+  options?: { enabled?: boolean; repositoryId?: string }
+) {
   return useQuery<TaskPullRequest | null, ApiError>({
     queryKey: taskKeys.pullRequest(taskId || ''),
-    queryFn: () => getTaskPullRequest(taskId!),
+    queryFn: () => getTaskPullRequest(taskId!, options?.repositoryId),
     enabled: Boolean(taskId) && (options?.enabled ?? true),
   });
 }
