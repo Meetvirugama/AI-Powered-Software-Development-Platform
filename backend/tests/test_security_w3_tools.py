@@ -603,3 +603,28 @@ def test_api_tools_other_user_gets_404(api_env):
     task_id = _running_task(api_env.client)
     resp = _call_tool(api_env.client, task_id, "read_file", {"file_path": "src/discount.py"}, user=USER_B_ID)
     assert resp.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["../.."],
+        ["../task-other-workspace"],
+        ["/etc"],
+        ["C:\\Users"],
+        ["~/.ssh"],
+        ["--rootdir=/"],
+        ["-o", "addopts=-p evil"],
+        ["-c", "/tmp/evil.ini"],
+        ["tests; rm -rf /"],
+    ],
+)
+def test_api_tests_endpoint_refuses_unsafe_runner_arguments(api_env, arguments):
+    task_id = _running_task(api_env.client)
+    resp = api_env.client.post(
+        f"/api/v1/tasks/{task_id}/tests",
+        headers=_headers(USER_A_ID),
+        json={"framework": "pytest", "arguments": arguments},
+    )
+    assert resp.status_code == 403, resp.text
+    assert resp.json()["error"]["code"] == "COMMAND_NOT_ALLOWED"
