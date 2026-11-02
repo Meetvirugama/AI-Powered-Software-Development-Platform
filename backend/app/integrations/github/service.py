@@ -16,6 +16,7 @@ Key responsibilities:
 from __future__ import annotations
 
 import asyncio
+import base64
 import io
 import logging
 import os
@@ -70,6 +71,13 @@ _DEFAULT_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "ai_platform_workspaces"
 _GITHUB_API_BASE = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
 _SAFE_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+
+# Sukun W3 Day 5 (B2): branch names used in `git push` and Draft PRs.
+_SAFE_GIT_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+_PROTECTED_PUSH_BRANCHES: frozenset[str] = frozenset(
+    {"main", "master", "develop", "dev", "release", "production", "prod", "staging"}
+)
+_GIT_PUSH_TIMEOUT_SECONDS = 120
 
 
 class GitHubService(GitHubIntegrationBase, GitHubSourceService):
@@ -579,6 +587,27 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
     # Week 3 Day 1: Published High-Level GitHub Service (Parth)
     # ---------------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_branch(name: str) -> str:
+        return (name or "").strip().removeprefix("refs/heads/")
+
+    @classmethod
+    def _is_protected_branch(cls, name: str) -> bool:
+        return cls._normalize_branch(name).lower() in _PROTECTED_PUSH_BRANCHES
+
+    @classmethod
+    def _validate_branch_name(cls, name: str, label: str) -> str:
+        clean = cls._normalize_branch(name)
+        if (
+            not _SAFE_GIT_BRANCH_RE.match(clean)
+            or ".." in clean
+            or "//" in clean
+            or "@{" in clean
+            or clean.endswith((".lock", "/", "."))
+        ):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Invalid {label} branch name.")
+        return clean
+
     async def push_branch(
         self,
         installation_id: UUID | str,
@@ -592,37 +621,78 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
 
         Rule 554: Only called after WAITING_PUSH_APPROVAL state receives explicit human approval.
         Rule 563: Direct push to main is strictly forbidden; must push to agent/task-*.
+
+        Security (Sukun W3 Day 5, B2): the installation token is never placed in argv or in
+        the remote URL. It is passed to git through environment config (an HTTP auth header),
+        branch/owner/repo names are validated, pre-push hooks are skipped, and git errors are
+        redacted before they are returned.
         """
-        if remote_branch in ("main", "master"):
+        if self._is_protected_branch(remote_branch):
             raise APIError(
                 400,
                 ErrorCode.INVALID_REQUEST,
                 "Direct push to default branch ('main'/'master') is strictly forbidden by team rules.",
             )
 
+        clean_local = self._validate_branch_name(local_branch, "local")
+        clean_remote = self._validate_branch_name(remote_branch, "remote")
+        try:
+            clean_owner, clean_repo = self._validate_owner_and_repo(owner, repo)
+        except ValueError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, str(exc)) from exc
+
         if workspace_path is not None:
             ws = Path(workspace_path)
             if not ws.exists():
-                raise APIError(400, ErrorCode.INVALID_REQUEST, f"Workspace path does not exist: {workspace_path}")
+                raise APIError(400, ErrorCode.INVALID_REQUEST, "Workspace path does not exist.")
 
             token = await self._resolve_token(installation_id)
-            auth_url = f"https://x-access-token:{token}@github.com/{owner}/{repo}.git"
+            basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+            remote_url = f"https://github.com/{clean_owner}/{clean_repo}.git"
+
+            env = {
+                **os.environ,
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+                "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+            }
 
             proc = await asyncio.create_subprocess_exec(
                 "git",
                 "push",
-                auth_url,
-                f"{local_branch}:{remote_branch}",
+                "--no-verify",
+                remote_url,
+                f"{clean_local}:refs/heads/{clean_remote}",
                 cwd=str(ws),
+                env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
+            try:
+                _stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=_GIT_PUSH_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError as exc:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
                 raise APIError(
                     502,
                     ErrorCode.SERVICE_UNAVAILABLE,
-                    f"Failed to push branch to GitHub: {stderr.decode('utf-8', errors='replace')}".strip(),
+                    "Failed to push branch to GitHub: git push timed out.",
+                ) from exc
+
+            if proc.returncode != 0:
+                err_text = (stderr or b"").decode("utf-8", errors="replace")
+                for secret in (token, basic):
+                    if secret:
+                        err_text = err_text.replace(secret, "[REDACTED]")
+                raise APIError(
+                    502,
+                    ErrorCode.SERVICE_UNAVAILABLE,
+                    redact(f"Failed to push branch to GitHub: {err_text}").strip(),
                 )
 
     async def create_pull_request(
@@ -636,17 +706,42 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         draft: bool = True,
         installation_id: UUID | str | None = None,
     ) -> PullRequestInfo:
-        """Create a pull request on GitHub (defaults to Draft PR for agent safety)."""
+        """Create a pull request on GitHub (Draft PR only, for agent safety).
+
+        Security (Sukun W3 Day 5): agent PRs are always drafts, never come from a protected
+        branch, and their title/body are redacted before they leave the platform.
+        """
+        if not draft:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Only Draft pull requests can be created by the platform (team rule: no auto-merge).",
+            )
+        if self._is_protected_branch(head):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "A pull request cannot be opened from a protected branch.",
+            )
+        clean_head = self._validate_branch_name(head, "head")
+        clean_base = self._validate_branch_name(base, "base")
+        if clean_head.lower() == clean_base.lower():
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Head and base branches must differ.")
+        try:
+            clean_owner, clean_repo = self._validate_owner_and_repo(owner, repo)
+        except ValueError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, str(exc)) from exc
+
         token = await self._resolve_token(installation_id)
         client = GitHubClient(token)
         pr_data = await client.create_pull_request(
-            owner=owner,
-            repo=repo,
-            head=head,
-            base=base,
-            title=title,
-            body=body,
-            draft=draft,
+            owner=clean_owner,
+            repo=clean_repo,
+            head=clean_head,
+            base=clean_base,
+            title=redact(title or ""),
+            body=redact(body or ""),
+            draft=True,
         )
         return self._parse_pull_request(pr_data)
 
