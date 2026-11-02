@@ -485,6 +485,15 @@ class TaskExecutionOrchestrator:
         timeout_seconds: int = 60,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
+        # Sukun W3 Day 4: extra test-runner arguments come from API callers. Refuse paths
+        # outside the workspace (other tasks' folders, absolute paths) and unsafe pytest flags.
+        if arguments:
+            from app.core.tool_api_policy import argv_safety_error
+
+            arg_error = argv_safety_error([str(item) for item in arguments])
+            if arg_error:
+                raise APIError(403, ErrorCode.COMMAND_NOT_ALLOWED, redact(arg_error))
+
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(404, ErrorCode.NOT_FOUND, f"No workspace found for task '{task.id}'.")
