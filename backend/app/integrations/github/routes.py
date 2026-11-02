@@ -58,6 +58,10 @@ from app.integrations.github.schemas import (
     TaskPublishResponse,
     TaskVerifyRequest,
     TaskVerifyResponse,
+    TaskRecoveryRequest,
+    TaskRecoveryResponse,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResponse,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -813,3 +817,85 @@ def get_task_pull_request_endpoint(
         created_at=str(pr.created_at) if pr.created_at else None,
         body=pr.verification_summary,
     )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 6: Reliability, Security & Failure Recovery (F39 / F40)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/recover",
+    response_model=TaskRecoveryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reconcile task state after worker restart or network failure",
+    description="Validates state transitions, checks remote drift, and determines safe recovery actions.",
+)
+async def recover_task_state_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskRecoveryRequest,
+    db: Session = Depends(get_db),
+) -> TaskRecoveryResponse:
+    from app.services.git_branch import GitBranchService
+    from app.services.task_recovery import TaskRecoveryService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    recovery_service = TaskRecoveryService(db)
+    result = await recovery_service.reconcile_task_state(
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        last_known_status=payload.last_known_status,
+        recorded_base_sha=payload.recorded_base_sha,
+        remote_branch_exists=payload.remote_branch_exists,
+        remote_pr_exists=payload.remote_pr_exists,
+        current_remote_base_sha=payload.current_remote_base_sha,
+        repair_attempts_used=payload.repair_attempts_used,
+    )
+
+    return TaskRecoveryResponse(
+        task_id=result["task_id"],
+        reconciled_status=result["reconciled_status"],
+        base_drift_detected=result["base_drift_detected"],
+        recovery_action=result["recovery_action"],
+        message=result["message"],
+        repair_attempts_used=result["repair_attempts_used"],
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task/cleanup",
+    response_model=WorkspaceCleanupResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Safely clean up isolated task workspace directory",
+    description="Deletes ephemeral workspace directory with path confinement validation.",
+)
+def cleanup_task_workspace_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: WorkspaceCleanupRequest,
+    db: Session = Depends(get_db),
+) -> WorkspaceCleanupResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.task_recovery import TaskRecoveryService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    cleaned = TaskRecoveryService.cleanup_task_workspace(
+        workspace_path=ws_path,
+        task_id=task_uuid,
+    )
+
+    return WorkspaceCleanupResponse(
+        task_id=task_uuid,
+        cleaned=cleaned,
+        workspace_path=str(ws_path),
+        message=f"Workspace {'successfully removed' if cleaned else 'could not be fully removed'}.",
+    )
+

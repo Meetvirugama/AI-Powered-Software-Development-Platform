@@ -653,12 +653,12 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 6 Security, Reliability & Performance Hardening
 
-- ⬜ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks)
-- ⬜ Meet: Retrieval latency optimization (target P95 < 400ms) and agent token budget checks
-- ⬜ Dev: AI quality evaluation, false-positive metrics, and Gemini/Groq provider validation
-- ⬜ Yug: API reliability, concurrent request handling, and error response standardization
-- ⬜ Om: Database query performance, index optimization, and audit event consistency
-- ⬜ Keval: Consolidated regression test suite across backend and frontend builds
+- ✅ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks)
+- ✅ Meet: Task state machine transition guards, worker crash recovery & repair budget preservation (`TaskRecoveryService`)
+- ✅ Dev: Remote base-revision drift detection and automatic `RECOVERY_REQUIRED` transition
+- ✅ Yug: API reliability, recovery and workspace cleanup routes (`POST /repositories/{id}/source/task/recover`, `POST /repositories/{id}/source/task/cleanup`)
+- ✅ Om: Database state reconciliation, external PR confirmation and idempotent recovery
+- ✅ Keval: Security, reliability and recovery acceptance tests (`backend/tests/test_week3_day6_reliability_and_recovery.py`)
 
 ## WEEK 3 — Day 7 Final Integration & Live Demonstration
 

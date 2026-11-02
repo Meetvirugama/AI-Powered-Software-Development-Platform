@@ -551,3 +551,43 @@ class TaskVerifyResponse(BaseModel):
     checks_count: int = 0
     blocking_findings_count: int = 0
     warnings_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 6: Security, Reliability & Failure Recovery (F39 / F40)
+# ---------------------------------------------------------------------------
+
+class TaskRecoveryRequest(BaseModel):
+    """Request to reconcile in-flight task state across worker restart or network failure."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    last_known_status: str = Field(..., description="Last known status of task before restart or failure")
+    recorded_base_sha: Optional[str] = Field(default=None, description="Recorded base revision SHA at plan approval")
+    remote_branch_exists: bool = Field(default=False, description="Whether agent branch exists on remote GitHub")
+    remote_pr_exists: bool = Field(default=False, description="Whether Draft PR already exists on remote GitHub")
+    current_remote_base_sha: Optional[str] = Field(default=None, description="Current remote head SHA of base branch")
+    repair_attempts_used: int = Field(default=0, ge=0, description="Persisted repair attempts budget used")
+
+
+class TaskRecoveryResponse(BaseModel):
+    """Reconciled task state, drift status, and recovery actions."""
+    task_id: UUID
+    reconciled_status: str
+    base_drift_detected: bool
+    recovery_action: str
+    message: str
+    repair_attempts_used: int = 0
+
+
+class WorkspaceCleanupRequest(BaseModel):
+    """Request to safely clean up isolated task workspace directory."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class WorkspaceCleanupResponse(BaseModel):
+    """Outcome of task workspace directory cleanup."""
+    task_id: UUID
+    cleaned: bool
+    workspace_path: Optional[str] = None
+    message: str
+
