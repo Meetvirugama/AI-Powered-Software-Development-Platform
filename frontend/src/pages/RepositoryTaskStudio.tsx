@@ -1,25 +1,29 @@
 /**
- * RepositoryTaskStudio — Week 3 Day 1–4 Studio UI:
+ * RepositoryTaskStudio — Week 3 Day 1–7 Studio UI:
  * - F31 GitHub Issue Import & Issue List
  * - F32 Task Intake (segregated Requirements, Assumptions, Protected-File Constraints)
  * - F32 Structured Implementation Plan Viewer (steps, dependencies, files, tests, validation, risks, budget)
  * - F32 Human Approval Gate (Approve Plan vN, Reject Plan with reason, Revise Plan with notes, Execute Approved Plan)
  * - F33 Isolated Workspace Lifecycle Controls (Pause, Resume, Cancel, Branch & Sandbox Telemetry)
  * - F35 Test Runner & Bounded Self-Repair Loop Controls (Run Tests, Trigger Auto-Repair, 3-Attempt Budget Tracker)
- * - F38 Ordered Task Execution Timeline & Audit History
+ * - F36 Independent Verification & Review Panel (Run Verification across Tests, Diff Scope, Secret Scan, Static Analysis & AI Review)
+ * - F37 Git Commit, Push & Draft PR Publication Gate (Mandatory Human Publication Authorization Checkbox & Draft PR Link)
+ * - F38 & F39 Ordered Task Execution Timeline, Checkpoints & Crash Recovery Controls
  *
- * Owner: Dhramraj — Week 3 Day 1–4 Deliverable (Docs/week3.md §6 F31–F35, F38)
+ * Owner: Dhramraj & Yug — Week 3 Day 1–7 Deliverable (Docs/week3.md §6 F31–F39)
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  CheckCircle2,
   Clock,
   ExternalLink,
   FileCode,
   FlaskConical,
   GitBranch,
+  GitCommit,
   GitPullRequestDraft,
   History,
   ListChecks,
@@ -28,6 +32,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   Slash,
@@ -42,28 +47,36 @@ import { cn } from '../lib/utils';
 import {
   approveTaskPlan,
   cancelTask,
+  commitTaskChanges,
   createTask,
+  createTaskDraftPR,
   executeTask,
   generateTaskPlan,
   getTaskDetail,
   getTaskEvents,
+  getTaskPullRequest,
   getTaskRepairBudget,
   getTaskTests,
+  getTaskVerification,
   getTaskWorkspace,
   importGitHubIssue,
   listTasks,
   pauseTask,
+  recoverTask,
   rejectTaskPlan,
   resumeTask,
   triggerTaskRepair,
   triggerTaskTests,
+  triggerTaskVerification,
 } from '../services/tasks';
 import type {
   PlanStep,
   TaskDetail,
   TaskEvent,
+  TaskPullRequestResponse,
   TaskSummary,
   TaskTestResultsResponse,
+  VerificationResult,
   WorkspaceMetadata,
   WorkspaceRepairBudgetStatus,
 } from '../types/task';
@@ -112,9 +125,25 @@ const STATUS_BADGE_MAP: Record<
     label: 'Verifying',
     className: 'bg-teal-500/15 text-teal-300 border-teal-500/40',
   },
+  READY_FOR_PUBLICATION: {
+    label: 'Ready for Publication',
+    className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  },
+  PUBLISHING: {
+    label: 'Publishing PR…',
+    className: 'bg-purple-500/15 text-purple-300 border-purple-500/40',
+  },
   DRAFT_PR_CREATED: {
     label: 'Draft PR Created',
     className: 'bg-purple-500/15 text-purple-300 border-purple-500/40',
+  },
+  RECOVERY_REQUIRED: {
+    label: 'Recovery Required',
+    className: 'bg-orange-500/15 text-orange-300 border-orange-500/40',
+  },
+  BLOCKED: {
+    label: 'Blocked',
+    className: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
   },
   FAILED: {
     label: 'Failed',
@@ -147,6 +176,8 @@ export function RepositoryTaskStudio() {
   const [workspaceMeta, setWorkspaceMeta] = useState<WorkspaceMetadata | null>(null);
   const [testResults, setTestResults] = useState<TaskTestResultsResponse | null>(null);
   const [repairBudget, setRepairBudget] = useState<WorkspaceRepairBudgetStatus | null>(null);
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const [draftPR, setDraftPR] = useState<TaskPullRequestResponse | null>(null);
 
   const [loadingList, setLoadingList] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -161,10 +192,11 @@ export function RepositoryTaskStudio() {
   const [newTaskFiles, setNewTaskFiles] = useState('');
   const [newTaskForbidden, setNewTaskForbidden] = useState('.env, .github/workflows/deploy.yml');
 
-  // Approval / Rejection / Revision inputs
+  // Approval / Rejection / Revision / Publication inputs
   const [approvalComment, setApprovalComment] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNotes, setRevisionNotes] = useState('');
+  const [publicationAuthorized, setPublicationAuthorized] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     if (!repoId) return;
@@ -185,18 +217,22 @@ export function RepositoryTaskStudio() {
   const fetchTaskDetailAndEvents = useCallback(async (taskId: string) => {
     setLoadingDetail(true);
     try {
-      const [detail, evtList, ws, tests, budget] = await Promise.all([
+      const [detail, evtList, ws, tests, budget, ver, pr] = await Promise.all([
         getTaskDetail(taskId),
         getTaskEvents(taskId),
         getTaskWorkspace(taskId).catch(() => null),
         getTaskTests(taskId).catch(() => null),
         getTaskRepairBudget(taskId).catch(() => null),
+        getTaskVerification(taskId).catch(() => null),
+        getTaskPullRequest(taskId).catch(() => null),
       ]);
       setTaskDetail(detail);
       setEvents(Array.isArray(evtList) ? evtList : (evtList as any)?.items || []);
       setWorkspaceMeta(ws);
       setTestResults(tests);
       setRepairBudget(budget);
+      setVerificationResult(ver);
+      setDraftPR(pr);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to load task details.');
     } finally {
@@ -218,6 +254,8 @@ export function RepositoryTaskStudio() {
       setWorkspaceMeta(null);
       setTestResults(null);
       setRepairBudget(null);
+      setVerificationResult(null);
+      setDraftPR(null);
     }
   }, [selectedTaskId, fetchTaskDetailAndEvents, setSearchParams]);
 
@@ -455,6 +493,76 @@ export function RepositoryTaskStudio() {
     }
   }
 
+  async function handleRunVerification() {
+    if (!taskDetail) return;
+    setActionBusy('verify');
+    setErrorBanner(null);
+    try {
+      await triggerTaskVerification(taskDetail.task_id, {
+        require_passing_tests: true,
+        strict_scope: true,
+      });
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Independent verification failed.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleCommitChanges() {
+    if (!taskDetail) return;
+    setActionBusy('commit');
+    setErrorBanner(null);
+    try {
+      await commitTaskChanges(taskDetail.task_id, {
+        message: `feat(task): implement ${taskDetail.title}`,
+      });
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to commit workspace changes.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleCreateDraftPR() {
+    if (!taskDetail) return;
+    setActionBusy('create-pr');
+    setErrorBanner(null);
+    try {
+      const pr = await createTaskDraftPR(taskDetail.task_id, {
+        publication_authorized: publicationAuthorized,
+        title: `feat: ${taskDetail.title}`,
+      });
+      setDraftPR(pr);
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(
+        err?.message || 'Publication blocked: Independent verification and explicit human authorization are required.'
+      );
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
+  async function handleRecoverTask() {
+    if (!taskDetail) return;
+    setActionBusy('recover');
+    setErrorBanner(null);
+    try {
+      await recoverTask(taskDetail.task_id);
+      await fetchTasks();
+      await fetchTaskDetailAndEvents(taskDetail.task_id);
+    } catch (err: any) {
+      setErrorBanner(err?.message || 'Failed to recover interrupted task.');
+    } finally {
+      setActionBusy(null);
+    }
+  }
+
   const latestPlan = taskDetail?.latest_plan ?? null;
   const isApproved =
     taskDetail?.status === 'APPROVED' &&
@@ -462,6 +570,11 @@ export function RepositoryTaskStudio() {
     taskDetail.approved_plan_version === latestPlan?.plan_version;
   const hasWorkspace =
     workspaceMeta && workspaceMeta.status && workspaceMeta.status !== 'NOT_CREATED';
+  const canPublishPR =
+    taskDetail?.status === 'READY_FOR_PUBLICATION' ||
+    (verificationResult &&
+      (verificationResult.status === 'PASS' || verificationResult.status === 'REQUIRES_HUMAN_REVIEW') &&
+      (verificationResult.blocking_findings || []).length === 0);
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden bg-background">
@@ -470,7 +583,7 @@ export function RepositoryTaskStudio() {
         <div className="flex items-center gap-2">
           <ListChecks className="h-4 w-4 text-primary" />
           <span className="text-xs font-semibold text-foreground">
-            Week 3 Workflow Automation — Task Planner, Isolated Sandbox & Bounded Repair
+            Week 3 Workflow Automation — Task Planner, Sandbox, Bounded Repair, Verification &amp; Draft PR
           </span>
         </div>
 
@@ -605,7 +718,7 @@ export function RepositoryTaskStudio() {
         </form>
       )}
 
-      {/* Main Split View: Left Task List, Center Plan/Sandbox/Repair, Right Timeline */}
+      {/* Main Split View: Left Task List, Center Plan/Sandbox/Repair/Verification/PR, Right Timeline */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Left Sidebar: Task List */}
         <aside className="w-80 shrink-0 border-r border-border bg-card/30 flex flex-col min-h-0">
@@ -673,7 +786,7 @@ export function RepositoryTaskStudio() {
           </div>
         </aside>
 
-        {/* Center Canvas: Task Detail, Structured Plan, Workspace Sandbox & Bounded Repair */}
+        {/* Center Canvas: Task Detail, Structured Plan, Workspace Sandbox, Verification & Draft PR */}
         <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-5">
           {loadingDetail && !taskDetail ? (
             <div className="h-64 flex items-center justify-center text-xs text-muted-foreground gap-2">
@@ -720,6 +833,18 @@ export function RepositoryTaskStudio() {
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       )}
+                      {draftPR && (
+                        <a
+                          href={draftPR.pr_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/40 text-[11px] font-mono text-purple-300 hover:underline"
+                        >
+                          <GitPullRequestDraft className="h-3 w-3" />
+                          <span>Draft PR #{draftPR.pr_number}</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </div>
                     <h2 className="text-base font-bold text-foreground">{taskDetail.title}</h2>
                   </div>
@@ -757,6 +882,18 @@ export function RepositoryTaskStudio() {
                       <Play className="h-3.5 w-3.5" />
                       <span>Start Workspace Execution</span>
                     </button>
+
+                    {(taskDetail.status === 'RECOVERY_REQUIRED' || taskDetail.status === 'FAILED') && (
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleRecoverTask}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-500/40 bg-orange-500/15 text-orange-300 text-xs font-semibold hover:bg-orange-500/25 disabled:opacity-40"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        <span>Recover Task</span>
+                      </button>
+                    )}
 
                     {taskDetail.status !== 'CANCELLED' &&
                       taskDetail.status !== 'FAILED' &&
@@ -821,14 +958,14 @@ export function RepositoryTaskStudio() {
                 </div>
               </div>
 
-              {/* Day 3 & Day 4: Isolated Workspace, Test Runner & Bounded Repair Card */}
+              {/* Day 3–7: Isolated Workspace, Test Runner, Bounded Repair, Independent Verification & Draft PR Card */}
               {hasWorkspace && workspaceMeta && (
-                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-4">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-2">
                       <Terminal className="h-4 w-4 text-indigo-400" />
                       <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                        Isolated Workspace &amp; Test / Repair Controls
+                        Isolated Workspace, Verification &amp; Publication Controls
                       </h3>
                       <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
                         {workspaceMeta.status}
@@ -884,11 +1021,29 @@ export function RepositoryTaskStudio() {
                           Auto-Repair ({taskDetail.repair_attempts_used}/{taskDetail.repair_attempts_max})
                         </span>
                       </button>
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleRunVerification}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-teal-500/40 bg-teal-500/10 text-teal-300 text-xs font-medium hover:bg-teal-500/20"
+                      >
+                        <CheckCircle2 className="h-3 w-3" />
+                        <span>Run Verification</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleCommitChanges}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background text-foreground text-xs font-medium hover:bg-accent"
+                      >
+                        <GitCommit className="h-3 w-3" />
+                        <span>Commit</span>
+                      </button>
                     </div>
                   </div>
 
-                  {/* Test & Repair Telemetry Summary */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs pt-2 border-t border-border/50">
+                  {/* Test, Repair & Verification Telemetry Summary */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs pt-2 border-t border-border/50">
                     <div className="rounded-lg bg-background/60 border border-border/60 p-2.5 space-y-1">
                       <div className="text-[10px] font-mono uppercase text-sky-400 font-bold">
                         Test Execution Runs ({testResults?.runs?.length || 0})
@@ -915,6 +1070,65 @@ export function RepositoryTaskStudio() {
                           ? 'Retry budget exhausted (3/3 attempts used). Human review required.'
                           : `${taskDetail.repair_attempts_max - taskDetail.repair_attempts_used} repair attempt(s) remaining.`}
                       </div>
+                    </div>
+
+                    <div className="rounded-lg bg-background/60 border border-border/60 p-2.5 space-y-1">
+                      <div className="text-[10px] font-mono uppercase text-teal-400 font-bold">
+                        Independent Verification ({verificationResult?.status || 'INCONCLUSIVE'})
+                      </div>
+                      {verificationResult && verificationResult.checks.length > 0 ? (
+                        <div className="text-[11px] font-mono space-y-0.5">
+                          <div>
+                            Checks: {verificationResult.checks.filter((c) => c.status === 'PASSED').length}/
+                            {verificationResult.checks.length} passed • Blockers:{' '}
+                            {verificationResult.blocking_findings.length}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-muted-foreground">
+                          Click &ldquo;Run Verification&rdquo; to evaluate diff, secrets, static rules &amp; requirements.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Day 5 Publication Gate: Explicit Human Authorization & Draft PR Creation */}
+                  <div className="rounded-lg bg-background/70 border border-purple-500/30 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={publicationAuthorized}
+                        onChange={(e) => setPublicationAuthorized(e.target.checked)}
+                        className="rounded border-border text-primary focus:ring-primary"
+                      />
+                      <span className="text-[11px] text-foreground">
+                        <strong>Authorize Branch Push &amp; Draft PR Publication (ADR-010):</strong> I confirm independent verification has been reviewed and authorize creating a GitHub Draft PR (auto-merge disabled).
+                      </span>
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      {draftPR ? (
+                        <a
+                          href={draftPR.pr_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-500"
+                        >
+                          <GitPullRequestDraft className="h-3.5 w-3.5" />
+                          <span>View Draft PR #{draftPR.pr_number}</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={!publicationAuthorized || !canPublishPR || actionBusy !== null}
+                          onClick={handleCreateDraftPR}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-500 disabled:opacity-40"
+                        >
+                          <GitPullRequestDraft className="h-3.5 w-3.5" />
+                          <span>Create GitHub Draft PR</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

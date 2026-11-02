@@ -1,11 +1,12 @@
-"""Week 3 Day 1–4 (F32, F33, F34, F35, F36, F38, F39) — Task Intake, Planning, Approval Gate, Isolated Workspace, Tool Routing, Test Runner & Bounded Repair APIs.
+"""Week 3 Day 1–7 (F31–F39) — Task Intake, Planning, Approval Gate, Isolated Workspace, Tool Routing, Test Runner, Bounded Repair, Independent Verification, Git Branch/Commit/Push, Draft PR Publication, Checkpoints & Crash Recovery APIs.
 
 Owners:
-- Yug (Task lifecycle & execution REST endpoints: create, list, detail, plan, approve, reject, execute, pause, resume, cancel, workspace, diff, tools, tests, repair-budget, repair, verification, events)
-- Meet & Dev (TaskPlanner, AgentExecutionLoop, BoundedRepairLoop, FailureTracebackAnalyzer & RepairPatchValidator integration)
-- Prit & Devu (WorkspaceManager, WorkspaceToolPolicyBridge, ToolRouter & command allowlist enforcement)
-- Sukun (Server-enforced approval gate, requirement verifier & tenant isolation)
-- Om (TaskRepository persistence, versioned plans, immutable approvals, test runs, repair attempts & timeline events)
+- Yug (Task lifecycle, execution, verification, git publication & recovery REST endpoints: create, list, detail, plan, approve, reject, execute, pause, resume, cancel, workspace, diff, tools, tests, repair-budget, repair, verify, verification, branch, commit, push, create-pr, publish, pull-request, checkpoints, recover, invariants, run-workflow, events)
+- Meet & Dev (TaskPlanner, AgentExecutionLoop, BoundedRepairLoop, RequirementToCodeVerifier & VerificationResult schemas)
+- Prit & Devu (WorkspaceManager, WorkspaceDiffVerifier, WorkspaceToolPolicyBridge, ToolRouter & command allowlist enforcement)
+- Parth (GitBranchService, PullRequest metadata & GitHub integration)
+- Sukun (Server-enforced approval gate, publication authorization gate, rate limiting & tenant isolation)
+- Om (TaskRepository persistence, versioned plans, immutable approvals, test runs, repair attempts, verification results, checkpoints, pull requests & timeline events)
 """
 
 from __future__ import annotations
@@ -26,8 +27,10 @@ from app.models.repository import Repository
 from app.models.task import (
     AgentTask,
     TaskApprovalRecord,
+    TaskCheckpoint,
     TaskEventRecord,
     TaskPlanRecord,
+    TaskPullRequest,
     WorkspaceStatus as DBWorkspaceStatus,
 )
 from app.repositories.repository_repository import RepositoryRepository
@@ -45,14 +48,19 @@ from app.schemas.plan import (
 )
 from app.schemas.task import (
     PaginatedTaskListResponse,
+    PublicationAuthorizationRequest,
+    PublicationAuthorizationResponse,
     TaskAssumption,
+    TaskCheckpointResponse,
     TaskConstraint,
     TaskCreateRequest,
     TaskDetailResponse,
+    TaskPullRequestResponse,
     TaskRequirement,
     TaskSourceReference,
     TaskStatus,
     TaskSummaryResponse,
+    TaskTraceabilityResponse,
 )
 from app.schemas.workspace import (
     RepairAttemptRecord,
@@ -69,7 +77,7 @@ repo_tasks_router = APIRouter(prefix="/repositories", tags=["tasks"])
 
 
 # ---------------------------------------------------------------------------
-# Request / Response Models for Day 3 & Day 4 Execution, Tools, Tests & Repair
+# Request / Response Models for Day 3–7 Execution, Tools, Tests, Repair, Verification, Git & Recovery
 # ---------------------------------------------------------------------------
 
 class TaskExecuteRequest(BaseModel):
@@ -111,6 +119,133 @@ class TaskRepairTriggerRequest(BaseModel):
     patch_diff: str | None = Field(default=None, description="Optional explicit unified diff to validate and apply.")
     patch_explanation: str | None = Field(default=None, max_length=1000)
     target_files: list[str] = Field(default_factory=list)
+
+
+class TaskVerifyTriggerRequest(BaseModel):
+    """Optional parameters for POST /api/v1/tasks/{task_id}/verify."""
+
+    run_tests_if_missing: bool = Field(
+        default=False,
+        description="If True and no test runs exist yet, runs the workspace test suite before verification.",
+    )
+    require_passing_tests: bool = Field(
+        default=True,
+        description="If True, treats passing test execution or clean baseline as mandatory for PASS.",
+    )
+    allow_critical_deletions: bool = Field(
+        default=False,
+        description="If True, permits deletion of critical project manifests with a warning instead of blocking.",
+    )
+    strict_scope: bool = Field(
+        default=True,
+        description="If True, rejects modifications to files outside the approved plan and requirement target_files.",
+    )
+
+
+class TaskBranchSetupRequest(BaseModel):
+    """Optional parameters for POST /api/v1/tasks/{task_id}/branch."""
+
+    branch_name: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Optional custom feature branch name (protected branches like main/master are strictly blocked).",
+    )
+
+
+class TaskCommitTriggerRequest(BaseModel):
+    """Request payload for POST /api/v1/tasks/{task_id}/commit."""
+
+    message: str | None = Field(default=None, max_length=1000, description="Commit message.")
+    branch_name: str | None = Field(default=None, max_length=256, description="Target feature branch.")
+    files: list[str] | None = Field(default=None, description="Optional list of specific relative file paths to stage.")
+    author_name: str = Field(default="AI Platform Agent", max_length=128)
+    author_email: str = Field(default="agent@ai-platform.local", max_length=128)
+
+
+class TaskPushTriggerRequest(BaseModel):
+    """Request payload for POST /api/v1/tasks/{task_id}/push."""
+
+    publication_authorized: bool = Field(
+        default=False,
+        description="Mandatory explicit human publication authorization flag (ADR-010).",
+    )
+    human_authorized: bool = Field(
+        default=False,
+        description="Alias for publication_authorized.",
+    )
+    branch_name: str | None = Field(default=None, max_length=256)
+    remote_name: str = Field(default="origin", max_length=128)
+    current_remote_head_sha: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Optional remote base branch HEAD SHA for stale base-revision detection.",
+    )
+    strict_remote: bool = Field(default=False)
+
+    @property
+    def is_authorized(self) -> bool:
+        return bool(self.publication_authorized or self.human_authorized)
+
+
+class TaskDraftPRCreateRequest(BaseModel):
+    """Request payload for POST /api/v1/tasks/{task_id}/create-pr (and /publish)."""
+
+    publication_authorized: bool = Field(
+        default=False,
+        description="Mandatory explicit human publication authorization flag (ADR-010).",
+    )
+    human_authorized: bool = Field(
+        default=False,
+        description="Alias for publication_authorized.",
+    )
+    title: str | None = Field(default=None, max_length=512, description="Optional custom PR title.")
+    body: str | None = Field(default=None, max_length=10000, description="Optional custom PR body markdown.")
+    base_branch: str | None = Field(default=None, max_length=256, description="Target base branch (defaults to repository default_branch or 'main').")
+    head_branch: str | None = Field(default=None, max_length=256, description="Source feature branch (defaults to agent/task-<id>).")
+    current_remote_head_sha: str | None = Field(default=None, max_length=128)
+    authorization_notes: str | None = Field(default=None, max_length=2000)
+
+    @property
+    def is_authorized(self) -> bool:
+        return bool(self.publication_authorized or self.human_authorized)
+
+
+class TaskCheckpointCreateRequest(BaseModel):
+    """Request payload for POST /api/v1/tasks/{task_id}/checkpoints."""
+
+    step_name: str = Field(..., min_length=1, max_length=128, description="Execution step or phase name.")
+    state_data: dict[str, Any] = Field(default_factory=dict, description="Checkpoint state dictionary (secret-scrubbed prior to storage).")
+    recovery_instructions: str | None = Field(default=None, max_length=2000)
+
+
+class TaskRecoverTriggerRequest(BaseModel):
+    """Optional parameters for POST /api/v1/tasks/{task_id}/recover."""
+
+    target_status: TaskStatus | None = Field(
+        default=None,
+        description="Optional target status after reconciliation (defaults to APPROVED if plan approved, else PLANNING).",
+    )
+    action: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Optional recovery action hint ('retry', 'reconcile', 'reset_to_plan', 'resume').",
+    )
+    reason: str | None = Field(
+        default=None,
+        max_length=1000,
+        description="Optional recovery reason.",
+    )
+
+
+class TaskAutonomousWorkflowRequest(BaseModel):
+    """Optional parameters for POST /api/v1/tasks/{task_id}/run-workflow."""
+
+    step_payloads: dict[str, Any] = Field(default_factory=dict)
+    run_tests: bool = Field(default=True)
+    auto_repair: bool = Field(default=True)
+    publication_authorized: bool = Field(default=False)
+    pr_title: str | None = Field(default=None, max_length=512)
+    pr_body: str | None = Field(default=None, max_length=10000)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +379,36 @@ def _serialize_event_record(event: TaskEventRecord) -> TaskEventResponse:
         "created_at": event.created_at.isoformat() if event.created_at else "",
     }
     return TaskEventResponse.model_validate(payload)
+
+
+def _serialize_checkpoint_record(cp: TaskCheckpoint) -> TaskCheckpointResponse:
+    payload = {
+        "checkpoint_id": str(cp.id),
+        "task_id": str(cp.task_id),
+        "step_name": cp.step_name,
+        "state_data": redact_obj(cp.state_data or {}),
+        "recovery_instructions": redact(cp.recovery_instructions or "") if cp.recovery_instructions else None,
+        "created_at": cp.created_at.isoformat() if cp.created_at else "",
+    }
+    return TaskCheckpointResponse.model_validate(payload)
+
+
+def _serialize_pull_request_record(pr: TaskPullRequest) -> TaskPullRequestResponse:
+    payload = {
+        "pr_id": str(pr.id),
+        "task_id": str(pr.task_id),
+        "repository_id": str(pr.repository_id),
+        "pr_number": pr.pr_number,
+        "pr_url": pr.pr_url,
+        "base_branch": pr.base_branch,
+        "head_branch": pr.head_branch,
+        "head_sha": pr.head_sha,
+        "is_draft": bool(pr.is_draft),
+        "title": redact(pr.title),
+        "body": redact(pr.body or "") if pr.body else None,
+        "created_at": pr.created_at.isoformat() if pr.created_at else "",
+    }
+    return TaskPullRequestResponse.model_validate(payload)
 
 
 def _serialize_task_detail(task: AgentTask, task_repo: TaskRepository) -> TaskDetailResponse:
@@ -996,8 +1161,40 @@ def trigger_task_repair(
 
 
 # ---------------------------------------------------------------------------
-# 6. Independent Verification & Timeline Events (F36, F38)
+# 6. Independent Verification, Git Branch/Commit/Push & Draft PR APIs (Week 3 Day 5 — F36, F37)
 # ---------------------------------------------------------------------------
+
+@router.post(
+    "/{task_id}/verify",
+    summary="Execute independent multi-dimensional verification over workspace changes",
+)
+def trigger_task_verification(
+    task_id: UUID,
+    request: Request,
+    body: TaskVerifyTriggerRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    ver_result = orchestrator.run_independent_verification(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        run_tests_if_missing=body.run_tests_if_missing if body else False,
+        require_passing_tests=body.require_passing_tests if body else True,
+        allow_critical_deletions=body.allow_critical_deletions if body else False,
+        strict_scope=body.strict_scope if body else True,
+    )
+    return redact_obj(
+        {
+            **ver_result.model_dump(mode="json"),
+            "task_status": task.status,
+            "is_eligible_for_publication": ver_result.is_eligible_for_publication,
+        }
+    )
+
 
 @router.get(
     "/{task_id}/verification",
@@ -1022,17 +1219,346 @@ def get_task_verification(
             "pr_summary": "",
             "created_at": task.updated_at.isoformat() if task.updated_at else "",
         }
+    norm_status = "PASS" if ver.status == "PASSED" else ("FAIL" if ver.status == "FAILED" else ver.status)
     return redact_obj(
         {
             "task_id": str(task.id),
             "verified_revision": ver.verified_revision,
-            "status": ver.status,
+            "status": norm_status,
             "checks": ver.checks or [],
             "blocking_findings": ver.blocking_findings or [],
             "warnings": ver.warnings or [],
             "pr_summary": redact(ver.summary or ""),
             "created_at": ver.created_at.isoformat() if ver.created_at else "",
         }
+    )
+
+
+@router.post(
+    "/{task_id}/branch",
+    summary="Ensure isolated task branch agent/task-<id> and block protected branches",
+)
+def ensure_task_branch_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskBranchSetupRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    return redact_obj(
+        orchestrator.ensure_task_branch(
+            task=task,
+            task_repo=task_repo,
+            actor_id=user_id,
+            branch_name=body.branch_name if body else None,
+        )
+    )
+
+
+@router.post(
+    "/{task_id}/commit",
+    summary="Stage and commit validated workspace changes on the isolated task branch",
+)
+def commit_task_changes_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskCommitTriggerRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    res = orchestrator.commit_workspace_changes(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        message=body.message if body else None,
+        branch_name=body.branch_name if body else None,
+        files=body.files if body else None,
+        author_name=body.author_name if body else "AI Platform Agent",
+        author_email=body.author_email if body else "agent@ai-platform.local",
+    )
+    return redact_obj(res.model_dump(mode="json"))
+
+
+@router.post(
+    "/{task_id}/push",
+    summary="Push verified task branch after checking human publication authorization and diff immutability",
+)
+def push_task_branch_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskPushTriggerRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    res = orchestrator.push_verified_branch(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        publication_authorized=body.is_authorized if body else False,
+        branch_name=body.branch_name if body else None,
+        remote_name=body.remote_name if body else "origin",
+        current_remote_head_sha=body.current_remote_head_sha if body else None,
+        strict_remote=body.strict_remote if body else False,
+    )
+    return redact_obj(res.model_dump(mode="json"))
+
+
+@router.post(
+    "/{task_id}/authorize-publication",
+    response_model=PublicationAuthorizationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Explicitly authorize branch publication and transition READY_FOR_PUBLICATION -> PUBLISHING",
+)
+def authorize_task_publication_endpoint(
+    task_id: UUID,
+    payload: PublicationAuthorizationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PublicationAuthorizationResponse:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    updated = task_repo.authorize_publication(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        head_sha=payload.head_sha,
+        user_id=user_id,
+        notes=payload.notes,
+    )
+    return PublicationAuthorizationResponse(
+        task_id=str(updated.id),
+        status=updated.status,
+        head_sha=payload.head_sha,
+        authorized=True,
+        user_id=str(user_id),
+        authorized_at=updated.updated_at.isoformat() if updated.updated_at else None,
+    )
+
+
+@router.post(
+    "/{task_id}/create-pr",
+    response_model=TaskPullRequestResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Create a reviewable GitHub Draft Pull Request (is_draft=True, zero auto-merge)",
+)
+def create_task_draft_pr_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskDraftPRCreateRequest | None = None,
+    db: Session = Depends(get_db),
+) -> TaskPullRequestResponse:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    pr_record = orchestrator.create_draft_pull_request(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        publication_authorized=body.is_authorized if body else False,
+        title=body.title if body else None,
+        body=body.body if body else None,
+        base_branch=body.base_branch if body else None,
+        head_branch=body.head_branch if body else None,
+        current_remote_head_sha=body.current_remote_head_sha if body else None,
+    )
+    return _serialize_pull_request_record(pr_record)
+
+
+@router.post(
+    "/{task_id}/publish",
+    response_model=TaskPullRequestResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Alias for POST /api/v1/tasks/{task_id}/create-pr",
+)
+def publish_task_draft_pr_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskDraftPRCreateRequest | None = None,
+    db: Session = Depends(get_db),
+) -> TaskPullRequestResponse:
+    return create_task_draft_pr_endpoint(task_id=task_id, request=request, body=body, db=db)
+
+
+@router.get(
+    "/{task_id}/pull-request",
+    response_model=TaskPullRequestResponse,
+    summary="Get published GitHub Draft Pull Request details for a task",
+)
+def get_task_pull_request_endpoint(
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TaskPullRequestResponse:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    pr_record = task_repo.get_pull_request(task.id, task.repository_id)
+    if pr_record is None:
+        raise APIError(
+            404,
+            ErrorCode.NOT_FOUND,
+            f"No Draft Pull Request has been created for task '{task_id}'.",
+        )
+    return _serialize_pull_request_record(pr_record)
+
+
+@router.get(
+    "/{task_id}/traceability",
+    response_model=TaskTraceabilityResponse,
+    summary="Get end-to-end audit traceability graph from finding/issue to Draft PR (Day 5)",
+)
+def get_task_traceability_endpoint(
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TaskTraceabilityResponse:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    trace = task_repo.get_task_traceability(task.id, task.repository_id)
+    return TaskTraceabilityResponse.model_validate(redact_obj(trace))
+
+
+@router.get(
+    "/{task_id}/stale-check",
+    summary="Check whether the workspace base revision has drifted relative to the repository/plan revision (Day 6)",
+)
+def check_task_stale_revision_endpoint(
+    task_id: UUID,
+    request: Request,
+    current_remote_head_sha: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+    return redact_obj(
+        orchestrator.check_stale_base_revision(
+            task=task,
+            task_repo=task_repo,
+            current_remote_head_sha=current_remote_head_sha,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. Checkpoints, Crash Recovery, Invariants & Timeline Events (Week 3 Day 6 & Day 7 — F38, F39)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{task_id}/checkpoints",
+    response_model=TaskCheckpointResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a secret-scrubbed recovery checkpoint for a task",
+)
+def save_task_checkpoint_endpoint(
+    task_id: UUID,
+    payload: TaskCheckpointCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TaskCheckpointResponse:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    cp = orchestrator.save_task_checkpoint(
+        task=task,
+        task_repo=task_repo,
+        step_name=payload.step_name,
+        state_data=payload.state_data,
+        recovery_instructions=payload.recovery_instructions,
+    )
+    return _serialize_checkpoint_record(cp)
+
+
+@router.get(
+    "/{task_id}/checkpoints",
+    response_model=list[TaskCheckpointResponse],
+    summary="List persisted recovery checkpoints for a task",
+)
+def list_task_checkpoints_endpoint(
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> list[TaskCheckpointResponse]:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    cps = task_repo.list_checkpoints(task.id)
+    return [_serialize_checkpoint_record(cp) for cp in cps]
+
+
+@router.post(
+    "/{task_id}/recover",
+    summary="Reconcile an interrupted or failed task and its workspace while preserving the 3-attempt repair budget",
+)
+def recover_task_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskRecoverTriggerRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    resolved_target = body.target_status if body else None
+    if resolved_target is None and body and body.action == "reset_to_plan":
+        resolved_target = TaskStatus.PLANNING
+    recovery_res = orchestrator.recover_interrupted_task(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        target_status=resolved_target,
+    )
+    return redact_obj(recovery_res)
+
+
+@router.get(
+    "/{task_id}/invariants",
+    summary="Run Day 6 sandbox security, path confinement, disk budget, and diff immutability invariant checks",
+)
+def check_task_invariants_endpoint(
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, _ = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+    return orchestrator.check_workspace_invariants(task=task, task_repo=task_repo)
+
+
+@router.post(
+    "/{task_id}/run-workflow",
+    summary="Execute the Day 7 autonomous post-approval workflow (Execute -> Test -> Repair -> Verify -> Draft PR)",
+)
+def run_autonomous_workflow_endpoint(
+    task_id: UUID,
+    request: Request,
+    body: TaskAutonomousWorkflowRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    task_repo = TaskRepository(db)
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+
+    return orchestrator.run_autonomous_post_approval_workflow(
+        task=task,
+        task_repo=task_repo,
+        actor_id=user_id,
+        step_payloads=body.step_payloads if body else None,
+        run_tests=body.run_tests if body else True,
+        auto_repair=body.auto_repair if body else True,
+        publication_authorized=body.publication_authorized if body else False,
+        pr_title=body.pr_title if body else None,
+        pr_body=body.pr_body if body else None,
     )
 
 
@@ -1053,7 +1579,7 @@ def get_task_events(
 
 
 # ---------------------------------------------------------------------------
-# 7. Repository-Scoped Task Endpoints (Docs/week3.md §6 F31 & §7)
+# 8. Repository-Scoped Task Endpoints (Docs/week3.md §6 F31 & §7)
 # ---------------------------------------------------------------------------
 
 @repo_tasks_router.get(

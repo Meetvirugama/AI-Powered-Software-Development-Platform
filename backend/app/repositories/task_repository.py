@@ -129,6 +129,7 @@ VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.CANCELLED: set(),
     TaskStatus.RECOVERY_REQUIRED: {
         TaskStatus.PLANNING,
+        TaskStatus.APPROVED,
         TaskStatus.WORKSPACE_SETUP,
         TaskStatus.EXECUTING,
         TaskStatus.TESTING,
@@ -138,6 +139,9 @@ VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
         TaskStatus.CANCELLED,
     },
     TaskStatus.BLOCKED: {
+        TaskStatus.PLANNING,
+        TaskStatus.PENDING_APPROVAL,
+        TaskStatus.APPROVED,
         TaskStatus.EXECUTING,
         TaskStatus.TESTING,
         TaskStatus.VERIFYING,
@@ -345,26 +349,28 @@ class TaskRepository:
     def get_task(
         self,
         task_id: uuid.UUID | str,
-        repository_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
     ) -> Optional[Task]:
-        """Fetch task enforcing strict multi-tenant repository isolation."""
+        """Fetch task enforcing strict multi-tenant repository isolation when repository_id is supplied."""
         t_uuid = _ensure_uuid(task_id)
-        r_uuid = _ensure_uuid(repository_id)
-        if not t_uuid or not r_uuid:
+        if not t_uuid:
             return None
 
-        stmt = (
-            select(Task)
-            .where(Task.id == t_uuid, Task.repository_id == r_uuid)
-            .options(
-                selectinload(Task.plans),
-                selectinload(Task.approvals),
-                selectinload(Task.workspace),
-                selectinload(Task.repair_attempts),
-                selectinload(Task.verification_results),
-                selectinload(Task.pull_request),
-                selectinload(Task.finding),
-            )
+        stmt = select(Task).where(Task.id == t_uuid)
+        if repository_id is not None:
+            r_uuid = _ensure_uuid(repository_id)
+            if not r_uuid:
+                return None
+            stmt = stmt.where(Task.repository_id == r_uuid)
+
+        stmt = stmt.options(
+            selectinload(Task.plans),
+            selectinload(Task.approvals),
+            selectinload(Task.workspace),
+            selectinload(Task.repair_attempts),
+            selectinload(Task.verification_results),
+            selectinload(Task.pull_request),
+            selectinload(Task.finding),
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
@@ -1531,9 +1537,9 @@ class TaskRepository:
 
         # State transition based on verification outcome (§7.1, §7.2)
         has_blocking = bool(blocking_findings and len(blocking_findings) > 0)
-        if status_val == VerificationStatus.PASSED.value and not has_blocking:
+        if status_val in {VerificationStatus.PASSED.value, "PASS"} and not has_blocking:
             task.status = TaskStatus.READY_FOR_PUBLICATION.value
-        elif status_val == VerificationStatus.FAILED.value or has_blocking:
+        elif status_val in {VerificationStatus.FAILED.value, "FAIL"} or has_blocking:
             task.status = TaskStatus.BLOCKED.value
 
         self.session.flush()
@@ -1619,7 +1625,7 @@ class TaskRepository:
             )
 
         has_blocking = bool(latest_ver.blocking_findings and len(latest_ver.blocking_findings) > 0)
-        if latest_ver.status != VerificationStatus.PASSED.value or has_blocking:
+        if latest_ver.status not in {VerificationStatus.PASSED.value, "PASS"} or has_blocking:
             raise InvalidStateTransitionError(
                 f"Cannot authorize publication: verification status is '{latest_ver.status}' with {len(latest_ver.blocking_findings or [])} blocking findings."
             )
@@ -1723,14 +1729,20 @@ class TaskRepository:
     def get_pull_request(
         self,
         task_id: uuid.UUID | str,
-        repository_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
     ) -> Optional[TaskPullRequest]:
         """Fetch recorded Pull Request for an authorized task (Day 5)."""
-        task = self.get_task(task_id, repository_id)
-        if not task:
-            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+        if repository_id is not None:
+            task = self.get_task(task_id, repository_id)
+            if not task:
+                raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+            t_uuid = task.id
+        else:
+            t_uuid = _ensure_uuid(task_id)
+            if t_uuid is None:
+                return None
 
-        stmt = select(TaskPullRequest).where(TaskPullRequest.task_id == task.id)
+        stmt = select(TaskPullRequest).where(TaskPullRequest.task_id == t_uuid)
         return self.session.execute(stmt).scalar_one_or_none()
 
     def get_task_traceability(
@@ -2325,6 +2337,72 @@ class TaskRepository:
             .order_by(TaskEvent.created_at.asc())
         )
         return list(self.session.scalars(stmt).all())
+
+    def list_checkpoints(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> list[TaskCheckpoint]:
+        """List all recovery checkpoints for a task, ordered newest-first."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return []
+        if repository_id is not None:
+            task = self.get_task(task_id, repository_id)
+            if not task:
+                raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+        stmt = (
+            select(TaskCheckpoint)
+            .where(TaskCheckpoint.task_id == t_uuid)
+            .order_by(TaskCheckpoint.created_at.desc())
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def reconcile_interrupted_tasks(
+        self,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> list[uuid.UUID]:
+        """Transition any in-flight tasks interrupted by worker restart to RECOVERY_REQUIRED (F39)."""
+        in_flight_statuses = [
+            TaskStatus.WORKSPACE_SETUP.value,
+            TaskStatus.EXECUTING.value,
+            TaskStatus.TESTING.value,
+            TaskStatus.REPAIRING.value,
+            TaskStatus.VERIFYING.value,
+            TaskStatus.PUBLISHING.value,
+        ]
+        stmt = select(Task).where(Task.status.in_(in_flight_statuses))
+        if repository_id is not None:
+            r_uuid = _ensure_uuid(repository_id)
+            if r_uuid is not None:
+                stmt = stmt.where(Task.repository_id == r_uuid)
+
+        interrupted = list(self.session.scalars(stmt).all())
+        reconciled_ids: list[uuid.UUID] = []
+        for task in interrupted:
+            prev_status = task.status
+            task.status = TaskStatus.RECOVERY_REQUIRED.value
+            task.error_message = (
+                f"Worker interrupted while task was in '{prev_status}'; marked RECOVERY_REQUIRED for safe recovery."
+            )
+            self.record_event(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                event_type=TaskEventType.RECOVERY_TRIGGERED.value,
+                event_data={
+                    "previous_status": prev_status,
+                    "new_status": TaskStatus.RECOVERY_REQUIRED.value,
+                    "reason": "startup_worker_reconciliation",
+                },
+                from_status=prev_status,
+                to_status=TaskStatus.RECOVERY_REQUIRED.value,
+                summary=f"Worker restart reconciled interrupted task from {prev_status} to RECOVERY_REQUIRED.",
+            )
+            reconciled_ids.append(task.id)
+
+        if reconciled_ids:
+            self.session.commit()
+        return reconciled_ids
 
 
 __all__ = [

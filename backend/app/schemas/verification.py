@@ -83,6 +83,13 @@ class VerificationFinding(BaseModel):
         description="Linter or scanner rule ID, e.g. 'B101' (Bandit) or 'F401' (Flake8).",
     )
 
+    # Optional short human-readable title for frontend verification drawers
+    title: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Optional short finding title for UI display.",
+    )
+
     # If True, this finding is serious enough to completely block opening a pull request
     blocking: bool = Field(
         default=False,
