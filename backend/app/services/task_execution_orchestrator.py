@@ -447,6 +447,30 @@ class TaskExecutionOrchestrator:
     ) -> ToolResult:
         """Route a tool invocation through ToolRouter & WorkspaceToolPolicyBridge and persist audit log."""
         task_repo.verify_execution_approval_gate(task)
+
+        # Sukun W3 Day 3: extra API tool policy (blocks publication/admin tools,
+        # trusted-only arguments and commands outside the approved templates).
+        from app.core.tool_api_policy import api_tool_policy_violation
+
+        violation = api_tool_policy_violation(
+            tool_name,
+            arguments or {},
+            DEFAULT_COMMAND_ALLOWLIST.get("execute_command", []),
+        )
+        if violation is not None:
+            code, reason = violation
+            reason = redact(reason)
+            task_repo.record_tool_invocation(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                tool_name=tool_name,
+                arguments=redact_obj(dict(arguments or {})),
+                status=ToolInvocationStatus.BLOCKED,
+                duration_ms=0,
+                output_summary=f"Blocked by API tool policy: {reason}",
+            )
+            raise APIError(403, code, reason)
+
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace must be initialized before invoking tools.")
@@ -514,6 +538,15 @@ class TaskExecutionOrchestrator:
         timeout_seconds: int = 60,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
+        # Sukun W3 Day 4: extra test-runner arguments come from API callers. Refuse paths
+        # outside the workspace (other tasks' folders, absolute paths) and unsafe pytest flags.
+        if arguments:
+            from app.core.tool_api_policy import argv_safety_error
+
+            arg_error = argv_safety_error([str(item) for item in arguments])
+            if arg_error:
+                raise APIError(403, ErrorCode.COMMAND_NOT_ALLOWED, redact(arg_error))
+
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(404, ErrorCode.NOT_FOUND, f"No workspace found for task '{task.id}'.")
