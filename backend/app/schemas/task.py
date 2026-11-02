@@ -72,41 +72,60 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     ),
     TaskStatus.APPROVED: frozenset(
         # Approved plan can enter WORKSPACE_SETUP/EXECUTING, or be re-planned if revised (which invalidates approval)
-        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED}
     ),
     TaskStatus.REJECTED: frozenset(
         # Rejected plan can be re-planned, cancelled, or closed; never directly executed
         {TaskStatus.PLANNING, TaskStatus.CANCELLED}
     ),
     TaskStatus.WORKSPACE_SETUP: frozenset(
-        {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.EXECUTING: frozenset(
         {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.TESTING: frozenset(
-        {TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.REPAIRING: frozenset(
-        {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+        {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.VERIFYING: frozenset(
-        {TaskStatus.READY_FOR_PUBLICATION, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+        {TaskStatus.READY_FOR_PUBLICATION, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.READY_FOR_PUBLICATION: frozenset(
-        {TaskStatus.PUBLISHING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.PUBLISHING, TaskStatus.VERIFYING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.PUBLISHING: frozenset(
-        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED}
+        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.DRAFT_PR_CREATED: frozenset(),  # Terminal happy path
     TaskStatus.FAILED: frozenset({TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING}),
     TaskStatus.CANCELLED: frozenset(),  # Terminal
     TaskStatus.RECOVERY_REQUIRED: frozenset(
-        {TaskStatus.PLANNING, TaskStatus.APPROVED, TaskStatus.WORKSPACE_SETUP, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        {
+            TaskStatus.PLANNING,
+            TaskStatus.APPROVED,
+            TaskStatus.WORKSPACE_SETUP,
+            TaskStatus.EXECUTING,
+            TaskStatus.TESTING,
+            TaskStatus.VERIFYING,
+            TaskStatus.READY_FOR_PUBLICATION,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
     TaskStatus.BLOCKED: frozenset(
-        {TaskStatus.PLANNING, TaskStatus.PENDING_APPROVAL, TaskStatus.CANCELLED}
+        {
+            TaskStatus.PLANNING,
+            TaskStatus.PENDING_APPROVAL,
+            TaskStatus.EXECUTING,
+            TaskStatus.TESTING,
+            TaskStatus.VERIFYING,
+            TaskStatus.READY_FOR_PUBLICATION,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
 }
 
@@ -191,10 +210,17 @@ class TaskSourceReference(BaseModel):
     def _validate_base_revision(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        value = value.strip()
-        if not _COMMIT_SHA_RE.match(value):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if (
+            cleaned.startswith("-")
+            or ".." in cleaned
+            or "\x00" in cleaned
+            or not (_COMMIT_SHA_RE.match(cleaned) or _SAFE_GIT_REF_RE.match(cleaned))
+        ):
             raise ValueError(f"Invalid base_revision commit SHA format: '{value}'")
-        return value
+        return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +550,7 @@ class TaskPlanResponse(BaseModel):
     expected_files: Optional[List[str]] = None
     tests_to_run: Optional[List[str]] = None
     validation_strategy: Optional[str] = None
-    risks: Optional[List[str]] = None
+    risks: Optional[List[Any]] = None
     status: str
     created_at: Optional[str] = None
 

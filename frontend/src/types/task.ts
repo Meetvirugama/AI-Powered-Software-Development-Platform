@@ -5,7 +5,7 @@
  * - Docs/week3.md §6 & §7
  * - backend/app/schemas/task.py (VERIFIED)
  * - backend/app/schemas/verification.py (VERIFIED)
- * - origin/dev/w3-planner-schema & origin/yug (PROVISIONAL)
+ * - origin/dev/w3-planner-schema & origin/yug (VERIFIED)
  */
 
 // ============================================================================
@@ -36,28 +36,47 @@ export const TaskStatus = {
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
 
 /**
- * Explicit state transition graph per Docs/week3.md §7.2 & backend/app/schemas/task.py:59-107
+ * Explicit state transition graph per Docs/week3.md §7.2 & backend/app/schemas/task.py
  */
 export const VALID_TASK_TRANSITIONS: Readonly<Record<TaskStatus, readonly TaskStatus[]>> = {
   [TaskStatus.CREATED]: [TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED],
   [TaskStatus.PLANNING]: [TaskStatus.PENDING_APPROVAL, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
   // STRICT GUARDRAIL: PENDING_APPROVAL cannot transition directly to EXECUTING (Docs/week3.md §7.2)
   [TaskStatus.PENDING_APPROVAL]: [TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED],
-  [TaskStatus.APPROVED]: [TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
+  [TaskStatus.APPROVED]: [TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
   // STRICT GUARDRAIL: Rejected plan can NEVER be executed directly
   [TaskStatus.REJECTED]: [TaskStatus.PLANNING, TaskStatus.CANCELLED],
-  [TaskStatus.WORKSPACE_SETUP]: [TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
+  [TaskStatus.WORKSPACE_SETUP]: [TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED],
   [TaskStatus.EXECUTING]: [TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED],
-  [TaskStatus.TESTING]: [TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
-  [TaskStatus.REPAIRING]: [TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED],
-  [TaskStatus.VERIFYING]: [TaskStatus.READY_FOR_PUBLICATION, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED],
-  [TaskStatus.READY_FOR_PUBLICATION]: [TaskStatus.PUBLISHING, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
-  [TaskStatus.PUBLISHING]: [TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED],
+  [TaskStatus.TESTING]: [TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED],
+  [TaskStatus.REPAIRING]: [TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED],
+  [TaskStatus.VERIFYING]: [TaskStatus.READY_FOR_PUBLICATION, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED],
+  [TaskStatus.READY_FOR_PUBLICATION]: [TaskStatus.PUBLISHING, TaskStatus.VERIFYING, TaskStatus.CANCELLED, TaskStatus.BLOCKED],
+  [TaskStatus.PUBLISHING]: [TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED],
   [TaskStatus.DRAFT_PR_CREATED]: [], // Terminal happy path
   [TaskStatus.FAILED]: [TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING],
   [TaskStatus.CANCELLED]: [], // Terminal
-  [TaskStatus.RECOVERY_REQUIRED]: [TaskStatus.PLANNING, TaskStatus.APPROVED, TaskStatus.WORKSPACE_SETUP, TaskStatus.FAILED, TaskStatus.CANCELLED],
-  [TaskStatus.BLOCKED]: [TaskStatus.PLANNING, TaskStatus.PENDING_APPROVAL, TaskStatus.CANCELLED],
+  [TaskStatus.RECOVERY_REQUIRED]: [
+    TaskStatus.PLANNING,
+    TaskStatus.APPROVED,
+    TaskStatus.WORKSPACE_SETUP,
+    TaskStatus.EXECUTING,
+    TaskStatus.TESTING,
+    TaskStatus.VERIFYING,
+    TaskStatus.READY_FOR_PUBLICATION,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+  ],
+  [TaskStatus.BLOCKED]: [
+    TaskStatus.PLANNING,
+    TaskStatus.PENDING_APPROVAL,
+    TaskStatus.EXECUTING,
+    TaskStatus.TESTING,
+    TaskStatus.VERIFYING,
+    TaskStatus.READY_FOR_PUBLICATION,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+  ],
 };
 
 /**
@@ -203,8 +222,7 @@ export interface TaskListFilterParams {
 }
 
 // ============================================================================
-// 5. Structured Plan Models (PROVISIONAL: origin/dev/w3-planner-schema & week3.md §6 F32)
-// Marked provisional until merged into origin/main backend schemas.
+// 5. Structured Plan Models (Week 3 §6 F32)
 // ============================================================================
 
 export type PlanStepType =
@@ -338,7 +356,7 @@ export interface TaskApproval {
 }
 
 // ============================================================================
-// 6. Chronological Events & Timeline (PROVISIONAL: origin/yug & Docs/week3.md §6 F38)
+// 6. Chronological Events & Timeline (Docs/week3.md §6 F38)
 // ============================================================================
 
 export interface TaskEvent {
@@ -361,7 +379,7 @@ export interface TaskEventListResponse {
 }
 
 // ============================================================================
-// 7. GitHub Issue Intake Models (PROVISIONAL: origin/yug & Docs/week3.md §6 F31)
+// 7. GitHub Issue Intake Models (Docs/week3.md §6 F31)
 // ============================================================================
 
 export interface GitHubIssue {
@@ -478,7 +496,7 @@ export interface VerificationFinding {
   id: string;
   severity: FindingSeverity;
   category: string;
-  title?: string;
+  title?: string | null;
   message: string;
   file_path?: string | null;
   line_number?: number | null;
@@ -504,6 +522,8 @@ export interface VerificationResult {
   warnings: VerificationFinding[];
   pr_summary: string;
   created_at: string;
+  task_status?: TaskStatus | string;
+  is_eligible_for_publication?: boolean;
 }
 
 // ============================================================================
@@ -627,7 +647,55 @@ export interface WorkspaceRepairBudgetStatus {
 }
 
 // ============================================================================
-// 12. Lifecycle Helpers
+// 12. Day 5–7 Git Commit, Push, Draft PR, Checkpoints & Crash Recovery Models
+// ============================================================================
+
+export interface TaskPullRequestResponse {
+  pr_id?: string;
+  task_id: string;
+  repository_id?: string;
+  pr_number?: number | null;
+  pr_url: string;
+  base_branch: string;
+  head_branch: string;
+  head_sha?: string;
+  is_draft: boolean;
+  title: string;
+  body?: string | null;
+  created_at?: string | null;
+  status?: string;
+  summary?: string;
+}
+
+export type TaskPullRequest = TaskPullRequestResponse;
+
+export interface TaskCheckpointResponse {
+  checkpoint_id: string;
+  task_id: string;
+  step_name: string;
+  state_data: Record<string, unknown>;
+  recovery_instructions?: string | null;
+  created_at?: string | null;
+}
+
+export interface TaskRecoveryResponse {
+  task_id: string;
+  previous_status: TaskStatus | string;
+  current_status?: TaskStatus | string;
+  recovered_status?: string;
+  repair_attempts_used?: number;
+  repair_attempts_max?: number;
+  restored_checkpoint?: TaskCheckpointResponse | null;
+  workspace_recovery?: Record<string, unknown> | null;
+  reconciliation_action?: string;
+  details?: string;
+  recovered_at?: string;
+  success?: boolean;
+  message?: string;
+}
+
+// ============================================================================
+// 13. Lifecycle Helpers
 // ============================================================================
 
 /**
@@ -803,19 +871,7 @@ export function isPublicationEligible(
 // 13. GitHub Pull Request & Publication (VERIFIED: backend/app/schemas/workspace.py)
 // ============================================================================
 
-export interface TaskPullRequest {
-  task_id: string;
-  pr_number?: number | null;
-  pr_url: string;
-  title: string;
-  body?: string;
-  head_branch: string;
-  base_branch: string;
-  is_draft: boolean;
-  status?: string;
-  created_at: string;
-  summary?: string;
-}
+// TaskPullRequest unified with TaskPullRequestResponse above
 
 export interface PublishTaskRequest {
   title?: string;
@@ -860,18 +916,16 @@ export interface TaskRecoveryRequest {
   reason?: string;
 }
 
-export interface TaskRecoveryResponse {
-  task_id: string;
-  previous_status: TaskStatus;
-  current_status: TaskStatus;
-  reconciliation_action: string;
-  details: string;
-  recovered_at: string;
-}
+// TaskRecoveryResponse unified above
 
 export interface TriggerVerificationRequest {
   force_reverify?: boolean;
   verification_types?: string[];
+  run_tests_if_missing?: boolean;
+  require_passing_tests?: boolean;
+  allow_critical_deletions?: boolean;
+  strict_scope?: boolean;
+  base_revision?: string;
 }
 
 export interface SecurityEventItem {

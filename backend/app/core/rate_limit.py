@@ -16,6 +16,7 @@ Limits:
     /repositories/:id/issues/import            20 req/min per user
     /tasks                                     30 req/min per user
     /tasks/:id/plan                            15 req/min per user
+    /tasks/:id/(execute|tests|repair|verify|branch|commit|push|authorize-publication|create-pr|publish|checkpoints|recover|run-workflow) 20 req/min per user
 """
 
 from __future__ import annotations
@@ -80,8 +81,16 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/tasks/?$"), 30, 60, "user"),
         RateLimitRule("task_plan", frozenset({"POST"}),
                       re.compile(rf"^{p}/tasks/[^/]+/plan/?$"), 15, 60, "user"),
-        RateLimitRule("task_execute", frozenset({"POST"}),
-                      re.compile(rf"^{p}/tasks/[^/]+/(?:execute|tests|repair|tools/[^/]+)/?$"), 20, 60, "user"),
+        RateLimitRule(
+            "task_execute",
+            frozenset({"POST"}),
+            re.compile(
+                rf"^{p}/tasks/[^/]+/(?:execute|tests|repair|verify|branch|commit|push|authorize-publication|create-pr|publish|checkpoints|recover|run-workflow|tools/[^/]+)/?$"
+            ),
+            20,
+            60,
+            "user",
+        ),
     )
 
 
