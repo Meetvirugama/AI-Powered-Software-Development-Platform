@@ -783,7 +783,7 @@ class TaskRepository:
         if plan_version is not None:
             query = query.where(TaskApproval.plan_version == plan_version)
 
-        query = query.order_by(desc(TaskApproval.created_at))
+        query = query.order_by(desc(TaskApproval.plan_version), desc(TaskApproval.created_at))
         return self.session.execute(query).scalars().first()
 
     def list_approvals(
@@ -1756,7 +1756,11 @@ class TaskRepository:
             raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
 
         latest_plan = self.get_plan(task.id, repository_id, version=None)
-        latest_approval = self.get_approval(task.id, repository_id)
+        latest_approval = (
+            self.get_approval(task.id, repository_id, plan_version=latest_plan.version)
+            if latest_plan
+            else self.get_approval(task.id, repository_id)
+        )
         workspace = self.get_workspace(task.id, repository_id)
         executions = self.get_executions(task.id, repository_id)
         latest_execution = executions[-1] if executions else None
@@ -1780,6 +1784,9 @@ class TaskRepository:
                 "source_reference": task.finding.source_reference,
             }
 
+        tools = self.get_tool_invocations(task.id, repository_id)
+        test_runs = self.get_test_runs(task.id, repository_id)
+
         status_str = "IN_PROGRESS"
         if task.status == TaskStatus.DRAFT_PR_CREATED.value:
             status_str = "COMPLETE"
@@ -1787,6 +1794,14 @@ class TaskRepository:
             status_str = task.status
         elif task.status in {TaskStatus.READY_FOR_PUBLICATION.value, TaskStatus.PUBLISHING.value}:
             status_str = "READY_FOR_PR"
+
+        is_complete = bool(
+            pr
+            and task.status == TaskStatus.DRAFT_PR_CREATED.value
+            and latest_ver
+            and latest_ver.status == VerificationStatus.PASSED.value
+            and task.approved_plan_version
+        )
 
         return {
             "task": task.to_dict(),
@@ -1801,7 +1816,11 @@ class TaskRepository:
             "latest_verification": latest_ver.to_dict() if latest_ver else None,
             "pull_request": pr.to_dict() if pr else None,
             "timeline": [ev.to_dict() for ev in timeline],
+            "tool_invocations": [t.to_dict() for t in tools],
+            "test_runs": [tr.to_dict() for tr in test_runs],
+            "repair_attempts": [ra.to_dict() for ra in repairs],
             "traceability_status": status_str,
+            "is_complete_workflow": is_complete,
         }
 
     @staticmethod
@@ -2403,6 +2422,205 @@ class TaskRepository:
         if reconciled_ids:
             self.session.commit()
         return reconciled_ids
+
+
+    # ------------------------------------------------------------------
+    # 6. Performance Query Optimization & Immutability Enforcement (Day 6)
+    # ------------------------------------------------------------------
+
+    def get_active_tasks_for_repository(
+        self,
+        repository_id: uuid.UUID | str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Task]:
+        """Fetch active non-terminal tasks using composite index (repository_id, status)."""
+        r_uuid = _ensure_uuid(repository_id)
+        if not r_uuid:
+            return []
+        terminal_statuses = {
+            TaskStatus.DRAFT_PR_CREATED.value,
+            TaskStatus.CANCELLED.value,
+            TaskStatus.FAILED.value,
+        }
+        stmt = (
+            select(Task)
+            .where(
+                Task.repository_id == r_uuid,
+                Task.status.notin_(terminal_statuses),
+            )
+            .options(
+                selectinload(Task.plans),
+                selectinload(Task.approvals),
+                selectinload(Task.workspace),
+            )
+            .order_by(Task.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def delete_event(self, event_id: uuid.UUID | str) -> None:
+        """Enforce append-only audit event immutability. Deletions are strictly prohibited."""
+        raise PermissionError("Audit events are immutable and cannot be deleted.")
+
+    def update_event(self, event_id: uuid.UUID | str, *args: Any, **kwargs: Any) -> None:
+        """Enforce append-only audit event immutability. Updates are strictly prohibited."""
+        raise PermissionError("Audit events are immutable and cannot be modified.")
+
+    def update_approval(self, approval_id: uuid.UUID | str, *args: Any, **kwargs: Any) -> None:
+        """Enforce human approval immutability. Approval decisions cannot be altered."""
+        raise PermissionError("Task approvals are immutable and cannot be modified.")
+
+    # ------------------------------------------------------------------
+    # 7. Worker Crash Recovery & Restart Resilience (Day 6 & F39)
+    # ------------------------------------------------------------------
+
+    def reconcile_crashed_task(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        reason: str = "Worker crash detected during execution",
+    ) -> Task:
+        """Reconcile an individual task interrupted by worker failure (Docs/week3.md §8, §6 F39)."""
+        task = self.get_task(task_id, repository_id)
+        if not task:
+            raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
+
+        volatile_states = {
+            TaskStatus.WORKSPACE_SETUP.value,
+            TaskStatus.EXECUTING.value,
+            TaskStatus.TESTING.value,
+            TaskStatus.REPAIRING.value,
+        }
+
+        # If task is not in a volatile state, recovery is an idempotent no-op
+        if task.status not in volatile_states:
+            return task
+
+        # Fail any open running execution records
+        open_executions = (
+            self.session.execute(
+                select(TaskExecution).where(
+                    TaskExecution.task_id == task.id,
+                    TaskExecution.status.in_([ExecutionStatus.STARTED.value, ExecutionStatus.RUNNING.value]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for ex in open_executions:
+            ex.status = ExecutionStatus.FAILED.value
+            ex.completed_at = datetime.now(timezone.utc)
+            ex.error_message = reason
+        self.session.flush()
+
+        # Check if retry budget is exhausted
+        if task.repair_attempts_used >= task.repair_attempts_max:
+            old_status = task.status
+            task.status = TaskStatus.FAILED.value
+            task.error_message = "Task recovery failed: repair attempt budget exhausted."
+            task.updated_at = datetime.now(timezone.utc)
+            self.session.flush()
+
+            self.record_event(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                event_type="RECOVERY_FAILED",
+                event_data={
+                    "from_status": old_status,
+                    "to_status": task.status,
+                    "repair_attempts_used": task.repair_attempts_used,
+                    "repair_attempts_max": task.repair_attempts_max,
+                    "reason": "Repair retry budget exhausted during crash recovery",
+                },
+                from_status=old_status,
+                to_status=task.status,
+                summary="Task marked as FAILED during crash recovery: repair retry budget exhausted.",
+            )
+            self.session.commit()
+            return task
+
+        # Check for latest valid checkpoint
+        latest_cp = self.get_latest_checkpoint(task.id, repository_id)
+        old_status = task.status
+        task.status = TaskStatus.RECOVERY_REQUIRED.value
+        task.error_message = reason
+        task.updated_at = datetime.now(timezone.utc)
+        self.session.flush()
+
+        if latest_cp:
+            event_type = "CRASH_RECOVERED"
+            event_summary = f"Crash recovery performed using checkpoint {latest_cp.step_name}."
+            event_data = {
+                "checkpoint_id": str(latest_cp.id),
+                "step_name": latest_cp.step_name,
+                "recovery_instructions": latest_cp.recovery_instructions,
+                "from_status": old_status,
+                "to_status": task.status,
+                "repair_attempts_used": task.repair_attempts_used,
+            }
+        else:
+            event_type = "CRASH_DETECTED"
+            event_summary = "Crash detected with no available checkpoint. Marked as RECOVERY_REQUIRED."
+            event_data = {
+                "from_status": old_status,
+                "to_status": task.status,
+                "repair_attempts_used": task.repair_attempts_used,
+                "reason": reason,
+            }
+
+        self.record_event(
+            task_id=task.id,
+            repository_id=task.repository_id,
+            event_type=event_type,
+            event_data=event_data,
+            from_status=old_status,
+            to_status=task.status,
+            summary=event_summary,
+        )
+        self.session.commit()
+        return task
+
+    def recover_interrupted_tasks(
+        self,
+        repository_id: uuid.UUID | str,
+        worker_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """Find and reconcile all tasks left in volatile states across a repository."""
+        r_uuid = _ensure_uuid(repository_id)
+        if not r_uuid:
+            return []
+
+        volatile_states = [
+            TaskStatus.WORKSPACE_SETUP.value,
+            TaskStatus.EXECUTING.value,
+            TaskStatus.TESTING.value,
+            TaskStatus.REPAIRING.value,
+        ]
+
+        stmt = select(Task).where(
+            Task.repository_id == r_uuid,
+            Task.status.in_(volatile_states),
+        )
+        tasks = list(self.session.scalars(stmt).all())
+        results = []
+
+        for task in tasks:
+            reconciled = self.reconcile_crashed_task(
+                task_id=task.id,
+                repository_id=r_uuid,
+                reason=f"Worker failure detected for worker {worker_id or 'unknown'}",
+            )
+            results.append({
+                "task_id": str(reconciled.id),
+                "status": reconciled.status,
+                "repair_attempts_used": reconciled.repair_attempts_used,
+                "error_message": reconciled.error_message,
+            })
+
+        return results
+
 
 
 __all__ = [

@@ -714,3 +714,39 @@ class TaskHistoryService:
         with self._get_session(db) as session:
             repo = TaskRepository(session)
             return repo.get_task_traceability(task_id, repository_id)
+
+    def get_active_tasks(
+        self,
+        repository_id: uuid.UUID | str,
+        limit: int = 50,
+        offset: int = 0,
+        db: Optional[Session] = None,
+    ) -> list[Task]:
+        """Fetch active non-terminal tasks using compound index with session management (Day 6)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.get_active_tasks_for_repository(repository_id, limit=limit, offset=offset)
+
+    def reconcile_crashed_task(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: uuid.UUID | str,
+        reason: str = "Worker crash detected during execution",
+        db: Optional[Session] = None,
+    ) -> Task:
+        """Reconcile an individual crashed task with session management (Day 6 & F39)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.reconcile_crashed_task(task_id, repository_id, reason=reason)
+
+    def recover_interrupted_tasks(
+        self,
+        repository_id: uuid.UUID | str,
+        worker_id: Optional[str] = None,
+        db: Optional[Session] = None,
+    ) -> list[dict[str, Any]]:
+        """Find and reconcile all tasks left in volatile states across a repository (Day 6 & F39)."""
+        with self._get_session(db) as session:
+            repo = TaskRepository(session)
+            return repo.recover_interrupted_tasks(repository_id, worker_id=worker_id)
+

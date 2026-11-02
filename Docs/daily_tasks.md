@@ -663,12 +663,13 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Meet: Retrieval latency optimization (target P95 < 400ms) and agent token budget checks (`backend/ai/services/retrieval_optimizer.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Dev: AI quality evaluation, false-positive metrics, and Gemini/Groq provider validation (`Docs/week3_day6_ai_quality_report.md`, `backend/app/schemas/ai_quality.py`, `backend/ai/services/ai_quality_evaluator.py`, `backend/tests/test_dev_w3_day6_ai_quality.py`)
 - ⬜ Yug: API reliability, concurrent request handling, and error response standardization
-- ⬜ Om: Database query performance, index optimization, and audit event consistency
+- ✅ Om: Database query performance, index optimization across all tables, append-only audit event consistency and immutability, worker restart crash recovery & retry budget preservation (20/20 tests passing) (Docs/persistence_week3_day6_day7_report.md, ackend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py)
 - ⬜ Keval: Consolidated regression test suite across backend and frontend builds
 
 ## WEEK 3 — Day 7 Final Integration & Live Demonstration
 
 - ✅ Prit: End-to-end sandbox lifecycle acceptance, Scenarios A through J verification, Week 2 intelligence integration, SLA benchmarking (<1s creation/recovery), zero secret leakage audit trail, and published final acceptance report (25/25 acceptance tests passing, 194/194 total Week 3 tests passing) (`Docs/week3_day7_workspace_acceptance_report.md`, `backend/tests/test_prit_w3_d7_acceptance.py`)
+- ✅ Om: Full 17-step end-to-end workflow persistence acceptance, zero manual intervention verification between plan approval and PR creation, and query SLA benchmarks (74/74 cumulative Week 3 persistence tests passing) (Docs/persistence_week3_day6_day7_report.md, ackend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py)
 - ⬜ All Leads: Execute full 17-step end-to-end acceptance demo on a real GitHub repository
 - ⬜ Verify complete chain: Finding -> GitHub Issue -> Task Plan -> Approval -> Edit -> Test & Repair -> Verify -> Draft PR
 - ⬜ Verify zero manual interventions between Plan Approval and Draft PR creation
