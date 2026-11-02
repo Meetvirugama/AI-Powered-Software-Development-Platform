@@ -479,7 +479,17 @@ class RepairPatchValidator:
             except UnsafePathError as exc:
                 violations.append(f"Unsafe path traversal in patch diff '{file_path}': {exc}")
 
-        # 4. Forbidden Files Policy Check
+        # 3b. Explicit target_files gate (Sukun W3 Day 4): BoundedRepairLoop writes to
+        # payload.target_files when they are given, not to the paths in the diff, so they
+        # must pass the same traversal and forbidden-file checks.
+        validated_targets: list[str] = []
+        for target in payload.target_files or []:
+            try:
+                validated_targets.append(validate_repo_relative_path(str(target)))
+            except UnsafePathError as exc:
+                violations.append(f"Unsafe path traversal in patch target file '{target}': {exc}")
+
+        # 4. Forbidden Files Policy Check (case-insensitive, diff paths and target files)
         if forbidden_files:
             forbidden_set = set(forbidden_files)
             target_check = validated_files if validated_files else extracted_files
@@ -487,6 +497,25 @@ class RepairPatchValidator:
             if conflicts:
                 violations.append(
                     f"Patch targets forbidden file(s) under policy constraint: {', '.join(conflicts)}"
+                )
+
+            def _norm(path: str) -> str:
+                value = str(path).strip().replace("\\", "/")
+                while value.startswith("./"):
+                    value = value[2:]
+                return value.lower()
+
+            forbidden_norm = {_norm(f) for f in forbidden_files}
+            extra_conflicts = sorted(
+                {
+                    f
+                    for f in [*target_check, *validated_targets]
+                    if _norm(f) in forbidden_norm and f not in conflicts
+                }
+            )
+            if extra_conflicts:
+                violations.append(
+                    f"Patch targets forbidden file(s) under policy constraint: {', '.join(extra_conflicts)}"
                 )
 
         # 5. Allowed Files Scope Check
