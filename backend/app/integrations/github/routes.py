@@ -62,6 +62,8 @@ from app.integrations.github.schemas import (
     TaskRecoveryResponse,
     WorkspaceCleanupRequest,
     WorkspaceCleanupResponse,
+    TaskPipelineRequest,
+    TaskPipelineResponse,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -898,4 +900,64 @@ def cleanup_task_workspace_endpoint(
         workspace_path=str(ws_path),
         message=f"Workspace {'successfully removed' if cleaned else 'could not be fully removed'}.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 7: Final Integration & E2E Pipeline (Docs/week3.md §8 Day 7)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/execute-pipeline",
+    response_model=TaskPipelineResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute full 17-step end-to-end task execution pipeline",
+    description="Orchestrates complete lifecycle from approved plan to verified Draft PR with zero manual intervention.",
+)
+async def execute_task_pipeline_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskPipelineRequest,
+    db: Session = Depends(get_db),
+) -> TaskPipelineResponse:
+    from app.services.git_branch import GitBranchService
+    from app.services.task_orchestrator import TaskExecutionOrchestrator
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    orchestrator = TaskExecutionOrchestrator(db)
+    result = await orchestrator.execute_task_pipeline(
+        repository_id=repository_id,
+        task_id=payload.task_id,
+        user_id=_request_user_id(request),
+        has_approved_plan=payload.has_approved_plan,
+        publication_authorized=payload.publication_authorized,
+        base_revision=payload.base_revision,
+        target_file=payload.target_file,
+        new_content=payload.new_content,
+        commit_message=payload.commit_message,
+        test_command=payload.test_command,
+        workspace_path=payload.workspace_path,
+        repair_patch=payload.repair_patch,
+        pr_title=payload.pr_title,
+        pr_body=payload.pr_body,
+    )
+
+    return TaskPipelineResponse(
+        task_id=result.task_id,
+        repository_id=result.repository_id,
+        final_status=result.final_status,
+        steps_executed=[
+            {"step_number": s.step_number, "name": s.name, "status": s.status, "details": s.details}
+            for s in result.steps_executed
+        ],
+        branch_name=result.branch_name,
+        workspace_revision=result.workspace_revision,
+        pr_number=result.pr_number,
+        pr_url=result.pr_url,
+        verification_passed=result.verification_passed,
+        repair_attempts_used=result.repair_attempts_used,
+        message=result.message,
+    )
+
 

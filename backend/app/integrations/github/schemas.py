@@ -591,3 +591,39 @@ class WorkspaceCleanupResponse(BaseModel):
     workspace_path: Optional[str] = None
     message: str
 
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 7: Final Integration & E2E Pipeline (Docs/week3.md §8 Day 7)
+# ---------------------------------------------------------------------------
+
+class TaskPipelineRequest(BaseModel):
+    """Request to execute the full 17-step end-to-end task execution pipeline."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    has_approved_plan: bool = Field(default=True, description="Human approval gate for task plan")
+    publication_authorized: bool = Field(default=False, description="Human authorization gate for push and Draft PR")
+    base_revision: str = Field(..., description="Target base revision SHA or branch name")
+    target_file: str = Field(..., description="Target file path to modify")
+    new_content: str = Field(..., description="New file content to apply")
+    commit_message: str = Field(..., description="Commit message for workspace commit")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to run")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace")
+    repair_patch: Optional[str] = Field(default=None, description="Optional unified diff patch for self-repair loop")
+    pr_title: Optional[str] = Field(default=None, description="Pull Request title")
+    pr_body: Optional[str] = Field(default=None, description="Pull Request markdown body")
+
+
+class TaskPipelineResponse(BaseModel):
+    """Execution outcome of 17-step end-to-end task pipeline."""
+    task_id: UUID
+    repository_id: UUID
+    final_status: str
+    steps_executed: list[dict[str, Any]] = Field(default_factory=list)
+    branch_name: str
+    workspace_revision: Optional[str] = None
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    verification_passed: bool = False
+    repair_attempts_used: int = 0
+    message: str = ""
+
+

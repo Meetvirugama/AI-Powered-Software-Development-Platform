@@ -19,6 +19,11 @@ from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunne
 from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
 from app.services.independent_verifier import IndependentVerifier
 from app.services.task_recovery import TaskRecoveryService
+from app.services.task_orchestrator import (
+    PipelineExecutionResult,
+    PipelineStepRecord,
+    TaskExecutionOrchestrator,
+)
 
 __all__ = [
     "AgentBranchInfo",
@@ -36,6 +41,9 @@ __all__ = [
     "BoundedRepairManager",
     "IndependentVerifier",
     "TaskRecoveryService",
+    "TaskExecutionOrchestrator",
+    "PipelineExecutionResult",
+    "PipelineStepRecord",
     "CommandPolicyValidator",
     "MAX_TASK_REPAIR_ATTEMPTS",
     "RestrictedTestRunner",
