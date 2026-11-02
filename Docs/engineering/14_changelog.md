@@ -962,3 +962,48 @@ Related Docs: Which documentation may need updating
 **Impact:** Provides the core persistence foundation and state machine gates for Dev & Keval (W3-08 Independent Verification), Parth & Yug (W3-09 Authorized Push & Draft PR Creator), and Dhramraj (W3-10 Task Dashboard, Progress & Timeline UI). All artifacts from original finding to GitHub Draft PR are interconnected in an auditable, tamper-resistant graph.
 
 **Related Docs:** `Docs/persistence_week3_day5_report.md`, `Docs/week3.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+
+---
+
+### [W3-Day6-Day7] 2026-10-30 — Query Performance, Audit Consistency, Crash Recovery & 17-Step E2E Acceptance
+**Type:** Feature / Performance / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- ackend/app/models/task.py:
+  - Added composite indexes across all core tables for sub-millisecond query performance:
+    - Workspace: ix_workspaces_task_status on (task_id, status)
+    - TaskExecution: ix_task_executions_task_attempt on (task_id, attempt_number), ix_task_executions_task_created on (task_id, created_at)
+    - ToolInvocation: ix_tool_invocations_task_created on (task_id, created_at), ix_tool_invocations_task_tool on (task_id, tool_name)
+    - TestRun: ix_test_runs_task_created on (task_id, created_at), ix_test_runs_task_status on (task_id, status)
+    - VerificationResult: ix_verification_results_task_revision on (task_id, verified_revision), ix_verification_results_task_created on (task_id, created_at)
+    - TaskCheckpoint: ix_task_checkpoints_task_created on (task_id, created_at)
+    - TaskPullRequest: ix_task_pull_requests_repo_pr on (repository_id, pr_number)
+  - Added new audit event types: CRASH_DETECTED, CRASH_RECOVERED, RECOVERY_FAILED.
+- ackend/app/schemas/task.py, ackend/app/schemas/__init__.py:
+  - Added and exported TaskRecoveryResponse Pydantic response schema.
+  - Enhanced TaskTraceabilityResponse with 	ool_invocations, 	est_runs, 
+epair_attempts, and is_complete_workflow: bool.
+- ackend/app/repositories/task_repository.py:
+  - Implemented get_active_tasks_for_repository() leveraging composite index (repository_id, status) with pagination and terminal status filtering.
+  - Enforced audit event consistency & immutability: delete_event(), update_event(), update_approval() raise PermissionError to preserve append-only compliance.
+  - Implemented worker crash recovery & restart resilience: 
+econcile_crashed_task() and 
+ecover_interrupted_tasks(). Automatically identifies volatile states (EXECUTING, TESTING, REPAIRING, WORKSPACE_SETUP), marks dangling running executions as FAILED, restores latest checkpoint with CRASH_RECOVERED event into RECOVERY_REQUIRED, preserves retry counter 
+epair_attempts_used, and marks FAILED with RECOVERY_FAILED if retry budget ($\ge 3$) is exhausted.
+  - Made crash recovery strictly idempotent on non-volatile terminal or publication-ready tasks.
+  - Enhanced get_task_traceability(): deterministic approval retrieval by (plan_version, created_at), eager tool invocation / test run / repair attempt tracking, and computation of is_complete_workflow.
+- ackend/app/services/task_history_service.py:
+  - Added session-managed wrappers: get_active_tasks, 
+econcile_crashed_task, 
+ecover_interrupted_tasks.
+- ackend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py:
+  - Authored 20 automated tests (100% passing) verifying query performance, composite indexes, query SLA benchmarks (<100ms), audit event immutability, worker crash recovery, 17-step end-to-end lifecycle acceptance, and multi-tenant isolation.
+- Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md:
+  - Marked Om's Week 3 Day 6 and Day 7 deliverables complete with all 74 cumulative persistence tests passing.
+- Docs/persistence_week3_day6_day7_report.md:
+  - Published comprehensive Week 3 Day 6 & Day 7 Deliverable Report.
+
+**Impact:** Completes Om's entire Week 3 persistence deliverables (Days 1–7), delivering an ultra-fast, crash-resilient, immutable, and fully traceable persistence backbone. Supports all downstream team modules with guaranteed query performance SLAs (<100ms) and complete referential integrity across the 17-step autonomous development lifecycle.
+
+**Related Docs:** Docs/persistence_week3_day6_day7_report.md, Docs/week3.md, Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md

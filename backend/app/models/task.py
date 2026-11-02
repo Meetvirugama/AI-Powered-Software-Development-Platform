@@ -170,6 +170,9 @@ class TaskEventType(str, enum.Enum):
     EXECUTION_FAILED = "EXECUTION_FAILED"
     RECOVERY_TRIGGERED = "RECOVERY_TRIGGERED"
     STATE_TRANSITIONED = "STATE_TRANSITIONED"
+    CRASH_DETECTED = "CRASH_DETECTED"
+    CRASH_RECOVERED = "CRASH_RECOVERED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
     CHECKPOINT_SAVED = "CHECKPOINT_SAVED"
 
 
@@ -584,6 +587,10 @@ class Workspace(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="workspace")
 
+    __table_args__ = (
+        Index("ix_workspaces_task_status", "task_id", "status"),
+    )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert Workspace model to dictionary."""
         return {
@@ -627,6 +634,11 @@ class TaskExecution(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="executions")
 
+    __table_args__ = (
+        Index("ix_task_executions_task_attempt", "task_id", "attempt_number"),
+        Index("ix_task_executions_task_created", "task_id", "created_at"),
+    )
+
 
 # ---------------------------------------------------------------------------
 # 4. Tool Invocations, Test Runs & Repair Attempts
@@ -665,6 +677,11 @@ class ToolInvocation(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="tool_invocations")
 
+    __table_args__ = (
+        Index("ix_tool_invocations_task_created", "task_id", "created_at"),
+        Index("ix_tool_invocations_task_tool", "task_id", "tool_name"),
+    )
+
     def to_dict(self) -> dict[str, Any]:
         """Convert ToolInvocation model to canonical dictionary."""
         return {
@@ -702,6 +719,11 @@ class TestRun(TimestampedModel, Base):
     target_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="test_runs")
+
+    __table_args__ = (
+        Index("ix_test_runs_task_created", "task_id", "created_at"),
+        Index("ix_test_runs_task_status", "task_id", "status"),
+    )
 
     __test__ = False
 
@@ -784,6 +806,11 @@ class VerificationResult(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="verification_results")
 
+    __table_args__ = (
+        Index("ix_verification_results_task_revision", "task_id", "verified_revision"),
+        Index("ix_verification_results_task_created", "task_id", "created_at"),
+    )
+
     @property
     def target_revision(self) -> str:
         return self.verified_revision
@@ -825,6 +852,10 @@ class TaskCheckpoint(TimestampedModel, Base):
     recovery_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="checkpoints")
+
+    __table_args__ = (
+        Index("ix_task_checkpoints_task_created", "task_id", "created_at"),
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert TaskCheckpoint model to canonical response envelope dictionary."""
@@ -931,6 +962,10 @@ class TaskPullRequest(TimestampedModel, Base):
 
     task: Mapped["Task"] = relationship("Task", back_populates="pull_request")
     repository: Mapped["Repository"] = relationship("Repository")
+
+    __table_args__ = (
+        Index("ix_task_pull_requests_repo_pr", "repository_id", "pr_number"),
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Convert TaskPullRequest model to canonical response envelope dictionary."""

@@ -115,6 +115,7 @@ from app.schemas.task import (
     PublicationAuthorizationRequest,
     PublicationAuthorizationResponse,
     TaskTraceabilityResponse,
+    TaskRecoveryResponse,
 )
 from app.schemas.verification import (
     VerificationCheckItem,
@@ -342,4 +343,5 @@ __all__ = [
     "PublicationAuthorizationRequest",
     "PublicationAuthorizationResponse",
     "TaskTraceabilityResponse",
+    "TaskRecoveryResponse",
 ]

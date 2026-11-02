@@ -688,7 +688,7 @@ class PublicationAuthorizationResponse(BaseModel):
 
 
 class TaskTraceabilityResponse(BaseModel):
-    """Complete end-to-end audit traceability from finding/issue to draft PR (Day 5)."""
+    """Complete end-to-end audit traceability from finding/issue to draft PR (Days 5-7)."""
 
     task: TaskResponse
     finding: Optional[dict[str, Any]] = None
@@ -702,7 +702,19 @@ class TaskTraceabilityResponse(BaseModel):
     latest_verification: Optional[VerificationResultResponse] = None
     pull_request: Optional[TaskPullRequestResponse] = None
     timeline: List[TaskEventResponse] = []
+    tool_invocations: List[ToolInvocationResponse] = []
+    test_runs: List[TestRunResponse] = []
+    repair_attempts: List[RepairAttemptResponse] = []
     traceability_status: str
+    is_complete_workflow: bool = False
+
+
+class TaskRecoveryResponse(BaseModel):
+    """Result of worker crash recovery and restart reconciliation (Day 6)."""
+
+    recovered_tasks_count: int
+    tasks: List[dict[str, Any]] = []
+    timestamp: Optional[str] = None
 
 
 __all__ = [
@@ -741,4 +753,5 @@ __all__ = [
     "PublicationAuthorizationRequest",
     "PublicationAuthorizationResponse",
     "TaskTraceabilityResponse",
+    "TaskRecoveryResponse",
 ]
