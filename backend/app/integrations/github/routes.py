@@ -21,6 +21,7 @@ GET  /api/v1/repositories/{id}/source/pr-metadata/{task} — Retrieve prepared P
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -48,6 +49,11 @@ from app.integrations.github.schemas import (
     TaskBranchIsolationRequest,
     TaskBranchIsolationResponse,
     TaskDiffRanges,
+    RepairExecutionRequest,
+    RepairExecutionResponse,
+    TestRunnerRequest,
+    TestRunnerResponse,
+    WorkspaceStatusResponse,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -513,3 +519,141 @@ async def validate_base_revision_endpoint(
     )
     return BaseRevisionValidationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
 
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 4: Restricted Test Execution & Bounded Repair (F35 / W3-05)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task-workspace/tests",
+    response_model=TestRunnerResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute restricted test command in task workspace",
+    description="Runs permitted tests (pytest, unittest, npm) inside isolated task workspace with timeout & bounded logs.",
+)
+async def run_task_workspace_tests_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TestRunnerRequest,
+    db: Session = Depends(get_db),
+) -> TestRunnerResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.test_runner import RestrictedTestRunner
+
+    # Verify repository ownership
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+
+    # Resolve workspace path
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    runner = RestrictedTestRunner(default_timeout=payload.timeout_seconds)
+    result = await runner.run_tests(
+        workspace_path=ws_path,
+        command=payload.command,
+        timeout_seconds=payload.timeout_seconds,
+    )
+
+    return TestRunnerResponse(
+        task_id=task_uuid,
+        status=result.status,
+        exit_code=result.exit_code,
+        duration_ms=result.duration_ms,
+        passed_count=result.test_counts.passed,
+        failed_count=result.test_counts.failed,
+        total_count=result.test_counts.total,
+        logs=result.stdout + ("\n" + result.stderr if result.stderr else ""),
+        workspace_revision=result.workspace_revision,
+        timed_out=result.timed_out,
+        is_infrastructure_error=result.is_infrastructure_error,
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task-workspace/repair",
+    response_model=RepairExecutionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute bounded repair cycle against failing test",
+    description="Applies validated patch with 3-attempt ceiling and re-tests against newly committed workspace revision.",
+)
+async def execute_task_repair_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: RepairExecutionRequest,
+    db: Session = Depends(get_db),
+) -> RepairExecutionResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.repair_loop import BoundedRepairManager
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    manager = BoundedRepairManager()
+    record = await manager.execute_repair_attempt(
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        diagnosis=payload.diagnosis,
+        target_file=payload.target_file,
+        new_content=payload.new_content,
+        patch_text=payload.patch_text,
+        test_command=payload.test_command,
+        current_attempts_used=payload.current_attempts_used,
+    )
+
+    return RepairExecutionResponse(
+        task_id=task_uuid,
+        attempt_number=record.attempt_number,
+        attempts_remaining=max(0, 3 - record.attempt_number),
+        success=record.success,
+        previous_revision=record.previous_revision,
+        new_revision=record.new_revision,
+        status="PASSED" if record.success else "FAILED",
+        message=record.message,
+        test_result={
+            "status": record.test_result.status if record.test_result else "UNKNOWN",
+            "exit_code": record.test_result.exit_code if record.test_result else -1,
+            "passed": record.test_result.test_counts.passed if record.test_result else 0,
+            "failed": record.test_result.test_counts.failed if record.test_result else 0,
+        } if record.test_result else None,
+    )
+
+
+@router.get(
+    "/{repository_id}/source/task-workspace/status/{task_id}",
+    response_model=WorkspaceStatusResponse,
+    summary="Get task workspace git status & revision",
+    description="Inspects git revision and file modifications in the task workspace.",
+)
+async def get_task_workspace_status_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    workspace_path: str | None = Query(default=None, description="Optional workspace path"),
+    db: Session = Depends(get_db),
+) -> WorkspaceStatusResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    short_id = str(task_id)[:8]
+    ws_path = Path(workspace_path) if workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    status_dict = await branch_service.get_workspace_status(ws_path)
+    return WorkspaceStatusResponse(
+        task_id=task_id,
+        branch=status_dict["branch"],
+        revision=status_dict["revision"],
+        is_clean=status_dict["is_clean"],
+        staged_files=status_dict["staged_files"],
+        modified_files=status_dict["modified_files"],
+        untracked_files=status_dict["untracked_files"],
+    )

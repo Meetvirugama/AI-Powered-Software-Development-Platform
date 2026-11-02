@@ -632,13 +632,13 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
-- ⬜ Prit: Restricted test runner executing `pytest` or `npm test` with timeout and resource limits
-- ⬜ Devu: Command allowlist enforcement and argument validation
-- ⬜ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts
-- ⬜ Dev: Failure traceback diagnosis and repair patch validation
-- ⬜ Yug: Test and repair progress APIs and failure reporting
-- ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
-- ⬜ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling
+- ✅ Prit: Restricted test runner executing `pytest` or `npm test` with timeout and resource limits (`backend/app/services/test_runner.py`)
+- ✅ Devu: Command allowlist enforcement and argument validation (`CommandPolicyValidator`)
+- ✅ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts (`BoundedRepairManager`, `backend/app/services/repair_loop.py`)
+- ✅ Dev: Failure traceback diagnosis and repair patch validation
+- ✅ Yug: Test and repair progress APIs and failure reporting (`POST /repositories/{id}/source/task-workspace/tests`, `POST /repositories/{id}/source/task-workspace/repair`)
+- ✅ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
+- ✅ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling (`backend/tests/test_week3_day4_test_runner_and_repair.py`)
 
 ## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 

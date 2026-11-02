@@ -1069,6 +1069,63 @@ class GitBranchService:
             status=status,
         )
 
+    # ----- Week 3 Day 4: Workspace Revision & Safe Patch Execution ----------
+
+    async def get_workspace_revision(
+        self,
+        workspace_path: str | Path,
+    ) -> str:
+        """Return the exact Git commit SHA of the current HEAD in the task workspace."""
+        ws = _validate_safe_workspace_path(Path(workspace_path))
+        if not (ws / ".git").exists():
+            raise APIError(400, ErrorCode.WORKSPACE_CREATION_FAILED, f"No .git directory found in workspace: {ws}")
+        code, stdout, stderr = await self._run_git(["rev-parse", "HEAD"], ws)
+        if code != 0 or not stdout.strip():
+            raise APIError(500, ErrorCode.INTERNAL_SERVER_ERROR, f"Failed to get workspace revision: {stderr}")
+        return stdout.strip()
+
+    async def get_workspace_status(
+        self,
+        workspace_path: str | Path,
+    ) -> dict[str, Any]:
+        """Return a structured git status summary of the task workspace."""
+        ws = _validate_safe_workspace_path(Path(workspace_path))
+        if not (ws / ".git").exists():
+            raise APIError(400, ErrorCode.WORKSPACE_CREATION_FAILED, f"No .git directory found in workspace: {ws}")
+
+        b_code, b_out, _ = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], ws)
+        branch = b_out.strip() if b_code == 0 else "unknown"
+
+        s_code, s_out, _ = await self._run_git(["status", "--porcelain"], ws)
+        modified_files: list[str] = []
+        untracked_files: list[str] = []
+        staged_files: list[str] = []
+
+        if s_code == 0 and s_out.strip():
+            for line in s_out.splitlines():
+                if not line or len(line) < 3:
+                    continue
+                x, y = line[0], line[1]
+                path_part = line[3:].strip()
+                if " -> " in path_part:
+                    path_part = path_part.split(" -> ")[1].strip()
+                if x in ("M", "A", "D", "R", "C"):
+                    staged_files.append(path_part)
+                if y in ("M", "D"):
+                    modified_files.append(path_part)
+                elif x == "?" and y == "?":
+                    untracked_files.append(path_part)
+
+        rev = await self.get_workspace_revision(ws)
+        return {
+            "branch": branch,
+            "revision": rev,
+            "is_clean": (len(modified_files) == 0 and len(staged_files) == 0 and len(untracked_files) == 0),
+            "staged_files": staged_files,
+            "modified_files": modified_files,
+            "untracked_files": untracked_files,
+        }
+
 
 def parse_unified_diff(diff_text: str) -> list[FileDiffRange]:
     """Parse unified diff text into structured FileDiffRange models with exact line ranges.

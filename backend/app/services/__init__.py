@@ -15,6 +15,8 @@ from app.services.git_branch import (
 from app.services.review_history_service import ReviewHistoryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 from app.services.test_generation_orchestrator import LLMTestGenerationService
+from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
+from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
 
 __all__ = [
     "AgentBranchInfo",
@@ -29,5 +31,9 @@ __all__ = [
     "LLMTestGenerationService",
     "ReviewHistoryService",
     "TestGenerationHistoryService",
+    "BoundedRepairManager",
+    "CommandPolicyValidator",
+    "MAX_TASK_REPAIR_ATTEMPTS",
+    "RestrictedTestRunner",
     "format_agent_branch_name",
 ]

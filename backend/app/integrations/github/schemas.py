@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -442,3 +442,66 @@ class BaseRevisionValidationResponse(BaseModel):
     commit_sha: str
     ref_type: str = "branch"  # "branch" | "commit" | "tag"
     is_valid: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 4: Restricted Test Execution & Bounded Repair (F35 / W3-05)
+# ---------------------------------------------------------------------------
+
+class TestRunnerRequest(BaseModel):
+    """Request to execute restricted test suite inside task workspace."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    command: list[str] | str = Field(default="pytest", description="Permitted test command (pytest, python -m unittest, npm test)")
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0, description="Test execution timeout limit in seconds")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class TestRunnerResponse(BaseModel):
+    """Sanitized and bounded outcome of restricted test execution."""
+    task_id: UUID
+    status: str = Field(..., description="Outcome: PASSED, FAILED, TIMEOUT, or INFRASTRUCTURE_ERROR")
+    exit_code: int = 0
+    duration_ms: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    total_count: int = 0
+    logs: str = ""
+    workspace_revision: Optional[str] = None
+    timed_out: bool = False
+    is_infrastructure_error: bool = False
+
+
+class RepairExecutionRequest(BaseModel):
+    """Request to execute bounded self-repair cycle against a failing test."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    diagnosis: str = Field(..., min_length=1, description="Root cause failure analysis")
+    target_file: str = Field(..., min_length=1, description="Repository-relative file path to repair")
+    new_content: Optional[str] = Field(default=None, description="Updated file content")
+    patch_text: Optional[str] = Field(default=None, description="Unified diff patch to apply")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to verify repair")
+    current_attempts_used: Optional[int] = Field(default=None, ge=0, le=3, description="Optional override of used repair attempts")
+
+
+class RepairExecutionResponse(BaseModel):
+    """Audit record and outcome of bounded self-repair attempt."""
+    task_id: UUID
+    attempt_number: int
+    attempts_remaining: int
+    success: bool
+    previous_revision: Optional[str] = None
+    new_revision: Optional[str] = None
+    status: str
+    message: str
+    test_result: Optional[dict[str, Any]] = None
+
+
+class WorkspaceStatusResponse(BaseModel):
+    """Git revision and file modification status of task workspace."""
+    task_id: UUID
+    branch: str
+    revision: str
+    is_clean: bool
+    staged_files: list[str] = Field(default_factory=list)
+    modified_files: list[str] = Field(default_factory=list)
+    untracked_files: list[str] = Field(default_factory=list)
