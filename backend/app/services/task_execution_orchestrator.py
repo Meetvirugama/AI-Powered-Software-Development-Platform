@@ -121,6 +121,56 @@ DEFAULT_COMMAND_ALLOWLIST: dict[str, list[list[str]]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Sukun W3 Day 6: git name validation for branch / commit / push / Draft PR APIs
+# ---------------------------------------------------------------------------
+# Branch and remote names from API callers end up as `git` arguments. A value such as
+# `--receive-pack=<cmd>` or `--upload-pack=<cmd>` would be read by git as an option and
+# run a command on the server, so names are checked before any git call.
+
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+_SAFE_REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# A user-triggered recovery may only send the task back to planning or approval (so the
+# approval gate and verification run again), or cancel it.
+_USER_RECOVERY_TARGETS = frozenset({TaskStatus.PLANNING, TaskStatus.APPROVED, TaskStatus.CANCELLED})
+
+
+def _require_safe_git_ref(value: str | None, label: str) -> None:
+    if value is None:
+        return
+    clean = str(value).strip()
+    if clean.startswith("refs/heads/"):
+        clean = clean[len("refs/heads/"):]
+    if (
+        not _SAFE_GIT_REF_RE.match(clean)
+        or ".." in clean
+        or "//" in clean
+        or "@{" in clean
+        or clean.endswith((".lock", "/", "."))
+    ):
+        raise APIError(400, ErrorCode.INVALID_REQUEST, f"Invalid {label}.")
+
+
+def _require_safe_remote_name(value: str | None) -> None:
+    if value is None:
+        return
+    if not _SAFE_REMOTE_NAME_RE.match(str(value).strip()):
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid remote name.")
+
+
+def _require_safe_commit_files(files: Sequence[str] | None) -> None:
+    from app.core.input_security import UnsafePathError, validate_repo_relative_path
+
+    for item in files or []:
+        text = str(item)
+        if text.strip().startswith("-"):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid file path in commit request.")
+        try:
+            validate_repo_relative_path(text)
+        except UnsafePathError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid file path in commit request.") from exc
+
+
 class TaskExecutionOrchestrator:
     """Coordinates database persistence, WorkspaceManager, ToolRouter, AgentExecutionLoop, BoundedRepairLoop, Verification, and Draft PR publication."""
 
@@ -1306,6 +1356,7 @@ class TaskExecutionOrchestrator:
     ) -> dict[str, Any]:
         """Ensure isolated task branch `agent/task-<id>` exists and reject protected branches."""
         task_repo.verify_execution_approval_gate(task)
+        _require_safe_git_ref(branch_name, "branch name")
         target_branch = (branch_name or format_agent_branch_name(task.id)).strip()
         clean_branch = target_branch.removeprefix("refs/heads/").lower()
         if clean_branch in PROTECTED_BRANCHES:
@@ -1355,6 +1406,8 @@ class TaskExecutionOrchestrator:
     ) -> WorkspaceCommitResult:
         """Stage and commit validated changes on the isolated task branch."""
         task_repo.verify_execution_approval_gate(task)
+        _require_safe_git_ref(branch_name, "branch name")
+        _require_safe_commit_files(files)
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace must be initialized before committing changes.")
@@ -1490,6 +1543,8 @@ class TaskExecutionOrchestrator:
                 ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
                 "Publication not authorized: Explicit human publication authorization (`publication_authorized=True`) is required before pushing changes (ADR-010).",
             )
+        _require_safe_git_ref(branch_name, "branch name")
+        _require_safe_remote_name(remote_name)
 
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
@@ -1596,6 +1651,8 @@ class TaskExecutionOrchestrator:
                 ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
                 "Draft PR publication not authorized: Explicit human authorization (`publication_authorized=True`) is required (ADR-010).",
             )
+        _require_safe_git_ref(head_branch, "head branch")
+        _require_safe_git_ref(base_branch, "base branch")
 
         lock = self.workspace_manager.get_task_lock(str(task.id))
         if not lock.acquire(timeout=10):
@@ -1795,6 +1852,18 @@ class TaskExecutionOrchestrator:
         target_status: TaskStatus | str | None = None,
     ) -> dict[str, Any]:
         """Reconcile an interrupted or failed task and its workspace without resetting repair budget."""
+        if target_status is not None:
+            try:
+                requested_target = TaskStatus(target_status) if isinstance(target_status, str) else target_status
+            except ValueError as exc:
+                raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid recovery target status.") from exc
+            if requested_target not in _USER_RECOVERY_TARGETS:
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    "Recovery can only return a task to PLANNING or APPROVED (or cancel it); "
+                    "execution, verification and publication must run again.",
+                )
         curr_status = TaskStatus(task.status)
         if curr_status == TaskStatus.FAILED:
             task_repo.transition_status(

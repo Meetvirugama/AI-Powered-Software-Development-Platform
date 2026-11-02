@@ -42,6 +42,26 @@ API_FORBIDDEN_ARGUMENT_KEYS: frozenset[str] = frozenset(
 
 _ABSOLUTE_PATH_RE = re.compile(r"^(?:/|\\|~|[A-Za-z]:[\\/])")
 
+# Day 6: arguments that become git ref names (e.g. `git fetch origin <base_branch>`).
+GIT_REF_ARGUMENT_KEYS: tuple[str, ...] = ("branch_name", "base_branch", "head_branch")
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+
+
+def git_ref_error(value: Any) -> str | None:
+    """Return a reason when value is not a safe git branch name, else None."""
+    clean = str(value).strip()
+    if clean.startswith("refs/heads/"):
+        clean = clean[len("refs/heads/"):]
+    if (
+        not _SAFE_GIT_REF_RE.match(clean)
+        or ".." in clean
+        or "//" in clean
+        or "@{" in clean
+        or clean.endswith((".lock", "/", "."))
+    ):
+        return f"Invalid git branch name: {str(value)[:100]!r}"
+    return None
+
 
 def argv_safety_error(argv: Sequence[str]) -> str | None:
     """Reuse ToolRouter token rules and also reject absolute and home paths."""
@@ -88,6 +108,22 @@ def api_tool_policy_violation(
             ErrorCode.POLICY_VIOLATION,
             f"These arguments cannot be set by API callers: {', '.join(forbidden)}",
         )
+
+    for key in GIT_REF_ARGUMENT_KEYS:
+        if key in arguments and arguments[key] is not None:
+            error = git_ref_error(arguments[key])
+            if error:
+                return ErrorCode.POLICY_VIOLATION, error
+
+    files = arguments.get("files")
+    if files is not None:
+        if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
+            return ErrorCode.POLICY_VIOLATION, "files must be a list of strings."
+        error = argv_safety_error(files)
+        if error:
+            return ErrorCode.POLICY_VIOLATION, error
+        if any(item.strip().startswith("-") for item in files):
+            return ErrorCode.POLICY_VIOLATION, "File paths cannot start with '-'."
 
     if tool_name in ("execute_command", "run_tests"):
         raw_args = arguments.get("arguments", []) or []
