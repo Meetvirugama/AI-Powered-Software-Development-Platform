@@ -16,7 +16,16 @@ import {
   Slash,
   AlertTriangle,
 } from 'lucide-react';
-import { useTask, useExecuteTask, useCancelTask, useTaskPlan, taskKeys } from '../hooks/useTasks';
+import {
+  useTask,
+  useExecuteTask,
+  useCancelTask,
+  useTaskPlan,
+  useTaskEvents,
+  useTaskWorkspace,
+  useTaskVerification,
+  taskKeys,
+} from '../hooks/useTasks';
 import { TaskStatus, isExecutionActive, canCancelTask } from '../types/task';
 import type { ApiError } from '../types/api';
 import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
@@ -27,6 +36,10 @@ import { WorkspacePanel } from '../components/tasks/WorkspacePanel';
 import { CodeChangesPanel } from '../components/tasks/CodeChangesPanel';
 import { TestExecutionPanel } from '../components/tasks/TestExecutionPanel';
 import { RepairBudgetTracker } from '../components/tasks/RepairBudgetTracker';
+import { VerificationPanel } from '../components/tasks/VerificationPanel';
+import { PublicationPanel } from '../components/tasks/PublicationPanel';
+import { SecurityAlertBanner } from '../components/tasks/SecurityAlertBanner';
+import { RecoveryPanel } from '../components/tasks/RecoveryPanel';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { cn } from '../lib/utils';
@@ -65,16 +78,16 @@ export function TaskDetail() {
   const executeMutation = useExecuteTask(task?.task_id || '');
   const cancelMutation = useCancelTask(task?.task_id || '');
   const { data: plan } = useTaskPlan(task?.task_id, task?.plan_version);
+  const { data: eventsData } = useTaskEvents(task?.task_id);
+  const { data: workspace } = useTaskWorkspace(task?.task_id);
+  const { data: verification } = useTaskVerification(task?.task_id);
 
   function handleManualRefresh() {
-    refetch();
     if (task?.task_id) {
-      queryClient.invalidateQueries({ queryKey: taskKeys.events(task.task_id) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(task.task_id) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.diff(task.task_id) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.tests(task.task_id) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(task.task_id) });
-      queryClient.invalidateQueries({ queryKey: taskKeys.plan(task.task_id) });
+      // Invalidate unified detail key prefix to trigger refetch of task details and all child telemetry queries
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(task.task_id) });
+    } else {
+      refetch();
     }
   }
 
@@ -311,7 +324,7 @@ export function TaskDetail() {
                   {task.status === TaskStatus.REPAIRING && 'Bounded Self-Repair Active'}
                 </span>
                 <p className="text-[11px] text-sky-300/80">
-                  The task is active inside the isolated sandbox. Polling for real-time progress and telemetry.
+                  Task execution is actively in progress. Task status and event timeline refresh automatically.
                 </p>
               </div>
             </div>
@@ -320,12 +333,75 @@ export function TaskDetail() {
             </span>
           </div>
         )}
+
+        {/* Security Policy Violation / Threat Alert Banner */}
+        <SecurityAlertBanner events={eventsData?.items} />
+
+        {/* Failure & Interrupt Recovery Panel */}
+        <RecoveryPanel task={task} />
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Quick-Jump Section Navigation                                      */}
+      {/* ------------------------------------------------------------------ */}
+      <nav
+        aria-label="Task detail sections"
+        className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs border-b border-border/60 scrollbar-none"
+      >
+        <a
+          href="#section-overview"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Overview
+        </a>
+        <a
+          href="#section-plan"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Plan & Approvals
+        </a>
+        <a
+          href="#section-workspace"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Workspace
+        </a>
+        <a
+          href="#section-changes"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Changes
+        </a>
+        <a
+          href="#section-tests"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Tests & Repairs
+        </a>
+        <a
+          href="#section-verification"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Verification
+        </a>
+        <a
+          href="#section-publication"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Publication & PR
+        </a>
+        <a
+          href="#section-timeline"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        >
+          Timeline
+        </a>
+      </nav>
 
       {/* ------------------------------------------------------------------ */}
       {/* 2. Overview & Segregated Intake Details                             */}
       {/* ------------------------------------------------------------------ */}
-      <div className="rounded-lg border border-border bg-card p-6 shadow-xs space-y-6">
+      <div id="section-overview" className="rounded-lg border border-border bg-card p-6 shadow-xs space-y-6">
         {/* Description */}
         <div>
           <h2 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider mb-2">
@@ -340,11 +416,11 @@ export function TaskDetail() {
         <div>
           <h2 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider mb-3 flex items-center gap-1.5">
             <Layers className="h-4 w-4 text-primary" />
-            Segregated Requirements ({task.requirements.length})
+            Segregated Requirements ({task.requirements?.length || 0})
           </h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-            {task.requirements.map((req, idx) => (
+            {(task.requirements || []).map((req, idx) => (
               <div
                 key={req.id || idx}
                 className="p-4 rounded-md border border-border/80 bg-background/40 space-y-2.5"
@@ -482,49 +558,71 @@ export function TaskDetail() {
       </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* ------------------------------------------------------------------ */}
       {/* 3. Structured Plan Review & Approval Panel                         */}
       {/* ------------------------------------------------------------------ */}
-      <PlanReviewPanel task={task} />
+      <div id="section-plan" className="space-y-6">
+        <PlanReviewPanel task={task} />
+        <ApprovalHistoryPanel taskId={task.task_id} task={task} />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 4. Approval History & Audit Trail                                  */}
+      {/* 4. Isolated Workspace Sandbox Panel                                */}
       {/* ------------------------------------------------------------------ */}
-      <ApprovalHistoryPanel taskId={task.task_id} task={task} />
+      <div id="section-workspace">
+        <WorkspacePanel taskId={task.task_id} />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 5. Isolated Workspace Sandbox Panel                                */}
+      {/* 5. Code Changes & Diff Telemetry Panel                             */}
       {/* ------------------------------------------------------------------ */}
-      <WorkspacePanel taskId={task.task_id} />
+      <div id="section-changes">
+        <CodeChangesPanel
+          taskId={task.task_id}
+          repositoryId={task.repository_id}
+          plannedTargetFiles={task.requirements.flatMap((r) => r.target_files || [])}
+          plannedExpectedFiles={plan?.expected_files_to_modify || []}
+          verificationFindings={verification?.blocking_findings?.concat(verification?.warnings || [])}
+        />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 6. Code Changes & Diff Telemetry Panel                             */}
+      {/* 6. Bounded Self-Repair Budget & Test Execution Telemetry           */}
       {/* ------------------------------------------------------------------ */}
-      <CodeChangesPanel
-        taskId={task.task_id}
-        repositoryId={task.repository_id}
-        plannedTargetFiles={task.requirements.flatMap((r) => r.target_files || [])}
-        plannedExpectedFiles={plan?.expected_files_to_modify || []}
-      />
+      <div id="section-tests" className="space-y-6">
+        <RepairBudgetTracker
+          taskId={task.task_id}
+          repairAttemptsUsed={task.repair_attempts_used}
+          repairAttemptsMax={task.repair_attempts_max}
+        />
+        <TestExecutionPanel taskId={task.task_id} />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 7. Bounded Self-Repair Budget Tracker                              */}
+      {/* 7. Independent Verification & Quality Review                       */}
       {/* ------------------------------------------------------------------ */}
-      <RepairBudgetTracker
-        taskId={task.task_id}
-        repairAttemptsUsed={task.repair_attempts_used}
-        repairAttemptsMax={task.repair_attempts_max}
-      />
+      <div id="section-verification">
+        <VerificationPanel
+          taskId={task.task_id}
+          currentRevision={workspace?.base_revision || task.base_revision}
+        />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
-      {/* 8. Test Execution Telemetry Panel                                  */}
+      {/* 8. Publication Authorization & GitHub Draft PR                     */}
       {/* ------------------------------------------------------------------ */}
-      <TestExecutionPanel taskId={task.task_id} />
+      <div id="section-publication">
+        <PublicationPanel
+          task={task}
+          workspace={workspace}
+        />
+      </div>
 
       {/* ------------------------------------------------------------------ */}
       {/* 9. Chronological Event Timeline                                    */}
       {/* ------------------------------------------------------------------ */}
-      <ExecutionTimeline taskId={task.task_id} />
+      <div id="section-timeline">
+        <ExecutionTimeline taskId={task.task_id} />
+      </div>
     </div>
   );
 }

@@ -510,7 +510,7 @@ export interface VerificationCheckItem {
   duration_ms: number;
   message: string;
   findings_count: number;
-  details: Record<string, unknown>;
+  details?: Record<string, unknown>;
 }
 
 export interface VerificationResult {
@@ -651,19 +651,23 @@ export interface WorkspaceRepairBudgetStatus {
 // ============================================================================
 
 export interface TaskPullRequestResponse {
-  pr_id: string;
+  pr_id?: string;
   task_id: string;
-  repository_id: string;
+  repository_id?: string;
   pr_number?: number | null;
   pr_url: string;
   base_branch: string;
   head_branch: string;
-  head_sha: string;
+  head_sha?: string;
   is_draft: boolean;
   title: string;
   body?: string | null;
   created_at?: string | null;
+  status?: string;
+  summary?: string;
 }
+
+export type TaskPullRequest = TaskPullRequestResponse;
 
 export interface TaskCheckpointResponse {
   checkpoint_id: string;
@@ -676,12 +680,18 @@ export interface TaskCheckpointResponse {
 
 export interface TaskRecoveryResponse {
   task_id: string;
-  previous_status: string;
-  recovered_status: string;
-  repair_attempts_used: number;
-  repair_attempts_max: number;
+  previous_status: TaskStatus | string;
+  current_status?: TaskStatus | string;
+  recovered_status?: string;
+  repair_attempts_used?: number;
+  repair_attempts_max?: number;
   restored_checkpoint?: TaskCheckpointResponse | null;
   workspace_recovery?: Record<string, unknown> | null;
+  reconciliation_action?: string;
+  details?: string;
+  recovered_at?: string;
+  success?: boolean;
+  message?: string;
 }
 
 // ============================================================================
@@ -689,14 +699,16 @@ export interface TaskRecoveryResponse {
 // ============================================================================
 
 /**
- * Check if the task is actively running execution, testing, or self-repair.
+ * Check if the task is actively running execution, testing, self-repair, verification, or publishing.
  */
 export function isExecutionActive(status: TaskStatus): boolean {
   return (
     status === TaskStatus.WORKSPACE_SETUP ||
     status === TaskStatus.EXECUTING ||
     status === TaskStatus.TESTING ||
-    status === TaskStatus.REPAIRING
+    status === TaskStatus.REPAIRING ||
+    status === TaskStatus.VERIFYING ||
+    status === TaskStatus.PUBLISHING
   );
 }
 
@@ -710,4 +722,220 @@ export function canCancelTask(status: TaskStatus): boolean {
     status !== TaskStatus.FAILED &&
     status !== TaskStatus.DRAFT_PR_CREATED
   );
+}
+
+/**
+ * Check if task is eligible for recovery actions.
+ */
+export function canRecoverTask(status: TaskStatus): boolean {
+  return (
+    status === TaskStatus.RECOVERY_REQUIRED ||
+    status === TaskStatus.FAILED ||
+    status === TaskStatus.BLOCKED
+  );
+}
+
+export interface PublicationEligibilityOptions {
+  status: TaskStatus;
+  verification?: VerificationResult | null;
+  isStale?: boolean;
+  isLoadingVerification?: boolean;
+  hasVerificationError?: boolean;
+  isStaleCheckLoading?: boolean;
+  hasStaleCheckError?: boolean;
+  hasBranchMetadata?: boolean;
+  baseBranch?: string | null;
+}
+
+/**
+ * Check if task is eligible for publication authorization.
+ * Strict fail-closed policy (ADR-010 & Week 3 Day 7):
+ * 1. Task status must be strictly READY_FOR_PUBLICATION
+ * 2. Independent verification data must be present (missing or loading data blocks publication)
+ * 3. Verification API errors strictly block publication
+ * 4. Verification overall status must be strictly PASS
+ * 5. Zero blocking findings permitted
+ * 6. Verified revision must be non-empty and current (not stale)
+ * 7. Stale check errors or pending stale check strictly block publication
+ * 8. Missing branch metadata or base branch blocks publication
+ */
+export function isPublicationEligible(
+  statusOrContext: TaskStatus | PublicationEligibilityOptions,
+  verification?: VerificationResult | null,
+  isStale?: boolean,
+  isLoadingVerification?: boolean,
+  hasVerificationError?: boolean,
+  options?: {
+    isStaleCheckLoading?: boolean;
+    hasStaleCheckError?: boolean;
+    hasBranchMetadata?: boolean;
+    baseBranch?: string | null;
+  }
+): boolean {
+  let status: TaskStatus;
+  let verif: VerificationResult | null | undefined;
+  let stale: boolean | undefined;
+  let loadingVerif: boolean | undefined;
+  let verifError: boolean | undefined;
+  let staleLoading: boolean | undefined;
+  let staleError: boolean | undefined;
+  let branchMeta: boolean | undefined;
+  let baseBr: string | null | undefined;
+
+  if (typeof statusOrContext === 'object' && statusOrContext !== null && 'status' in statusOrContext) {
+    status = statusOrContext.status;
+    verif = statusOrContext.verification;
+    stale = statusOrContext.isStale;
+    loadingVerif = statusOrContext.isLoadingVerification;
+    verifError = statusOrContext.hasVerificationError;
+    staleLoading = statusOrContext.isStaleCheckLoading;
+    staleError = statusOrContext.hasStaleCheckError;
+    branchMeta = statusOrContext.hasBranchMetadata;
+    baseBr = statusOrContext.baseBranch;
+  } else {
+    status = statusOrContext as TaskStatus;
+    verif = verification;
+    stale = isStale;
+    loadingVerif = isLoadingVerification;
+    verifError = hasVerificationError;
+    staleLoading = options?.isStaleCheckLoading;
+    staleError = options?.hasStaleCheckError;
+    branchMeta = options?.hasBranchMetadata;
+    baseBr = options?.baseBranch;
+  }
+
+  // 1. Task status must be strictly READY_FOR_PUBLICATION
+  if (status !== TaskStatus.READY_FOR_PUBLICATION) {
+    return false;
+  }
+
+  // 2. Loading verification data blocks publication
+  if (loadingVerif) {
+    return false;
+  }
+
+  // 3. Loading stale-check blocks publication
+  if (staleLoading) {
+    return false;
+  }
+
+  // 3. Verification API errors block publication
+  if (verifError) {
+    return false;
+  }
+
+  // 4. Missing verification data blocks publication (Fail-closed gate)
+  if (!verif) {
+    return false;
+  }
+
+  // 5. Verification status must be strictly PASS
+  if (verif.status !== 'PASS') {
+    return false;
+  }
+
+  // 6. Blocking findings block publication
+  if (verif.blocking_findings && verif.blocking_findings.length > 0) {
+    return false;
+  }
+
+  // 7. Verified revision must be present and valid
+  if (!verif.verified_revision || typeof verif.verified_revision !== 'string' || verif.verified_revision.trim() === '') {
+    return false;
+  }
+
+  // 8. Stale verification blocks publication
+  if (stale) {
+    return false;
+  }
+
+  // 9. Stale-check error blocks publication (Fail-closed per Requirement 3)
+  if (staleError) {
+    return false;
+  }
+
+  // 10. Missing branch metadata blocks publication if explicitly evaluated
+  if (branchMeta === false) {
+    return false;
+  }
+
+  // 11. Missing base branch blocks publication if evaluated
+  if (baseBr === null || baseBr === '') {
+    return false;
+  }
+
+  return true;
+}
+
+// ============================================================================
+// 13. GitHub Pull Request & Publication (VERIFIED: backend/app/schemas/workspace.py)
+// ============================================================================
+
+// TaskPullRequest unified with TaskPullRequestResponse above
+
+export interface PublishTaskRequest {
+  title?: string;
+  body?: string;
+  publication_authorized: boolean;
+  base_branch?: string;
+  target_repository?: string;
+  authorization_notes?: string;
+}
+
+export interface TaskPublicationResponse {
+  success: boolean;
+  task_id: string;
+  pr_number?: number | null;
+  pr_url?: string | null;
+  head_branch: string;
+  base_branch: string;
+  is_draft: boolean;
+  summary: string;
+  created_at: string;
+  error?: string | null;
+}
+
+// ============================================================================
+// 14. Reliability, Recovery & Stale Revision Schemas (Docs/week3.md §8 Day 6)
+// ============================================================================
+
+export interface StaleRevisionCheckResult {
+  task_id: string;
+  is_stale: boolean;
+  workspace_base_revision: string;
+  current_base_revision: string;
+  current_remote_sha: string;
+  commits_behind: number;
+  remediation_suggestion?: string | null;
+  message: string;
+  checked_at: string;
+}
+
+export interface TaskRecoveryRequest {
+  action?: 'retry' | 'reconcile' | 'reset_to_plan' | 'resume';
+  reason?: string;
+}
+
+// TaskRecoveryResponse unified above
+
+export interface TriggerVerificationRequest {
+  force_reverify?: boolean;
+  verification_types?: string[];
+  run_tests_if_missing?: boolean;
+  require_passing_tests?: boolean;
+  allow_critical_deletions?: boolean;
+  strict_scope?: boolean;
+  base_revision?: string;
+}
+
+export interface SecurityEventItem {
+  id: string;
+  task_id: string;
+  event_type: string;
+  severity: FindingSeverity;
+  description: string;
+  rule_id?: string | null;
+  blocked: boolean;
+  sanitized_message: string;
+  timestamp: string;
 }

@@ -23,6 +23,11 @@ import {
   getTaskEvents,
   getTaskTests,
   getTaskVerification,
+  triggerVerification,
+  getTaskPullRequest,
+  publishDraftPR,
+  checkStaleRevision,
+  recoverTask,
   importGitHubIssue,
   listRepositoryIssues,
 } from '../services/tasks';
@@ -45,6 +50,13 @@ import {
   type WorkspaceMetadata,
   type TaskDiffRanges,
   type WorkspaceRepairBudgetStatus,
+  type TaskPullRequest,
+  type PublishTaskRequest,
+  type TaskPublicationResponse,
+  type StaleRevisionCheckResult,
+  type TaskRecoveryRequest,
+  type TaskRecoveryResponse,
+  type TriggerVerificationRequest,
 } from '../types/task';
 import type { ApiError } from '../types/api';
 
@@ -69,6 +81,8 @@ export const taskKeys = {
     [...taskKeys.all, 'detail', taskId, 'events', params] as const,
   tests: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'tests'] as const,
   verification: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'verification'] as const,
+  pullRequest: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'pullRequest'] as const,
+  staleCheck: (taskId: string) => [...taskKeys.all, 'detail', taskId, 'staleCheck'] as const,
   repoIssues: (
     repoId: string,
     params?: { state?: 'open' | 'closed' | 'all'; page?: number; page_size?: number }
@@ -182,7 +196,7 @@ export function useTaskTests(taskId: string | undefined, options?: { enabled?: b
  * Hook to retrieve independent verification result.
  */
 export function useTaskVerification(taskId: string | undefined, options?: { enabled?: boolean }) {
-  return useQuery<VerificationResult, ApiError>({
+  return useQuery<VerificationResult | null, ApiError>({
     queryKey: taskKeys.verification(taskId || ''),
     queryFn: () => getTaskVerification(taskId!),
     enabled: Boolean(taskId) && (options?.enabled ?? true),
@@ -190,17 +204,55 @@ export function useTaskVerification(taskId: string | undefined, options?: { enab
 }
 
 /**
+ * Hook to retrieve GitHub Pull Request metadata associated with a published task.
+ */
+export function useTaskPullRequest(
+  taskId: string | undefined,
+  options?: { enabled?: boolean; repositoryId?: string }
+) {
+  return useQuery<TaskPullRequest | null, ApiError>({
+    queryKey: taskKeys.pullRequest(taskId || ''),
+    queryFn: () => getTaskPullRequest(taskId!, options?.repositoryId),
+    enabled: Boolean(taskId) && (options?.enabled ?? true),
+  });
+}
+
+/**
+ * Hook to detect whether repository base revision has drifted.
+ */
+export function useCheckStaleRevision(taskId: string | undefined, options?: { enabled?: boolean }) {
+  return useQuery<StaleRevisionCheckResult, ApiError>({
+    queryKey: taskKeys.staleCheck(taskId || ''),
+    queryFn: () => checkStaleRevision(taskId!),
+    enabled: Boolean(taskId) && (options?.enabled ?? true),
+  });
+}
+
+/**
  * Hook to retrieve isolated workspace metadata for a task.
+ * Gracefully handles 404/WORKSPACE_NOT_FOUND by returning null without throwing or retrying,
+ * allowing UI to display the "Workspace Not Created" state instead of an error alert.
  */
 export function useTaskWorkspace(
   taskId: string | undefined,
-  options?: { enabled?: boolean; refetchInterval?: number | false }
+  options?: { enabled?: boolean; refetchInterval?: number | false; retry?: boolean | number }
 ) {
-  return useQuery<WorkspaceMetadata, ApiError>({
+  return useQuery<WorkspaceMetadata | null, ApiError>({
     queryKey: taskKeys.workspace(taskId || ''),
-    queryFn: () => getTaskWorkspace(taskId!),
+    queryFn: async () => {
+      try {
+        return await getTaskWorkspace(taskId!);
+      } catch (err: unknown) {
+        const apiErr = err as ApiError;
+        if (apiErr?.code === 'WORKSPACE_NOT_FOUND' || apiErr?.status === 404) {
+          return null;
+        }
+        throw err;
+      }
+    },
     enabled: Boolean(taskId) && (options?.enabled ?? true),
     refetchInterval: options?.refetchInterval,
+    ...(options?.retry !== undefined ? { retry: options.retry } : {}),
   });
 }
 
@@ -382,6 +434,67 @@ export function useCancelTask(taskId: string) {
       queryClient.invalidateQueries({ queryKey: taskKeys.tests(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(taskId) });
       queryClient.setQueryData(taskKeys.detail(taskId), updatedTask);
+    },
+  });
+}
+
+/**
+ * Mutation hook to trigger independent verification and quality review.
+ * Invalidates verification, task detail, events, and list queries.
+ */
+export function useTriggerVerification(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<VerificationResult, ApiError, TriggerVerificationRequest | undefined>({
+    mutationFn: (payload?: TriggerVerificationRequest) => triggerVerification(taskId, payload),
+    onSuccess: (newVerification) => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.verification(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.pullRequest(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.staleCheck(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      queryClient.setQueryData(taskKeys.verification(taskId), newVerification);
+    },
+  });
+}
+
+/**
+ * Mutation hook for human publication authorization and Draft PR creation.
+ * Enforces explicit human gate per ADR-010.
+ * Invalidates pullRequest, task detail, events, and list queries.
+ */
+export function usePublishDraftPR(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskPublicationResponse, ApiError, PublishTaskRequest>({
+    mutationFn: (payload: PublishTaskRequest) => publishDraftPR(taskId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.pullRequest(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(taskId) });
+    },
+  });
+}
+
+/**
+ * Mutation hook to recover an interrupted, blocked, or failed task.
+ * Invalidates task detail, events, workspace, and list queries.
+ */
+export function useRecoverTask(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskRecoveryResponse, ApiError, TaskRecoveryRequest | undefined>({
+    mutationFn: (payload?: TaskRecoveryRequest) => recoverTask(taskId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: taskKeys.detail(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: taskKeys.workspace(taskId) });
+      queryClient.invalidateQueries({ queryKey: taskKeys.verification(taskId) });
     },
   });
 }

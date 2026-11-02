@@ -12,6 +12,7 @@ import {
   TaskStatus,
   canTransition,
   canCancelTask,
+  canRecoverTask,
   WorkspaceStatus,
   type TaskCreateRequest,
   type TaskDetailResponse,
@@ -29,6 +30,13 @@ import {
   type WorkspaceMetadata,
   type TaskDiffRanges,
   type WorkspaceRepairBudgetStatus,
+  type TaskPullRequest,
+  type TaskPublicationResponse,
+  type PublishTaskRequest,
+  type StaleRevisionCheckResult,
+  type TaskRecoveryRequest,
+  type TaskRecoveryResponse,
+  type TriggerVerificationRequest,
 } from '../../types/task';
 
 // ============================================================================
@@ -42,6 +50,7 @@ interface MockDatabase {
   events: Map<string, TaskEvent[]>;
   tests: Map<string, TaskTestResultsResponse>;
   verifications: Map<string, VerificationResult>;
+  pullRequests: Map<string, TaskPullRequest>;
   issues: Map<string, GitHubIssue[]>;
   workspaces: Map<string, WorkspaceMetadata>;
   diffs: Map<string, TaskDiffRanges>;
@@ -58,6 +67,7 @@ function createInitialSeedData(): MockDatabase {
   const events = new Map<string, TaskEvent[]>();
   const tests = new Map<string, TaskTestResultsResponse>();
   const verifications = new Map<string, VerificationResult>();
+  const pullRequests = new Map<string, TaskPullRequest>();
   const issues = new Map<string, GitHubIssue[]>();
   const workspaces = new Map<string, WorkspaceMetadata>();
   const diffs = new Map<string, TaskDiffRanges>();
@@ -592,6 +602,18 @@ function createInitialSeedData(): MockDatabase {
       details: { pr_url: 'https://github.com/example/repo/pull/143' },
     },
   ]);
+
+  pullRequests.set(task6.task_id, {
+    task_id: task6.task_id,
+    pr_number: 143,
+    pr_url: 'https://github.com/example/repo/pull/143',
+    head_branch: 'agent/task-seed-6',
+    base_branch: 'main',
+    title: 'Tenant isolation enforced across all vector retrieval endpoints',
+    is_draft: true,
+    created_at: '2026-10-26T12:00:00.000Z',
+    summary: 'Tenant isolation enforced across all vector retrieval endpoints.',
+  });
 
   // Seed 7: Task in FAILED state
   const task7: TaskDetailResponse = {
@@ -1423,6 +1445,200 @@ function createInitialSeedData(): MockDatabase {
   };
   scenarioTasks.set(taskExecEmptyTelemetry.task_id, taskExecEmptyTelemetry);
 
+  // Scenario 15: Verification Failed with Blocking Security Finding
+  const taskVerifyFail: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-scenario-verify-fail',
+    title: 'Verification Failed with Blocking Finding',
+    status: TaskStatus.FAILED,
+    base_revision: 'rev-fail-100',
+    updated_at: '2026-10-20T11:00:00.000Z',
+  };
+  scenarioTasks.set(taskVerifyFail.task_id, taskVerifyFail);
+  verifications.set(taskVerifyFail.task_id, {
+    task_id: taskVerifyFail.task_id,
+    verified_revision: 'rev-fail-100',
+    status: 'FAIL',
+    checks: [
+      {
+        name: 'test_suite',
+        status: 'PASSED',
+        duration_ms: 800,
+        message: 'All unit tests passed.',
+        findings_count: 0,
+      },
+      {
+        name: 'security_checks',
+        status: 'FAILED',
+        duration_ms: 320,
+        message: 'CWE-89: Unescaped parameter detected in query construction.',
+        findings_count: 1,
+      },
+    ],
+    blocking_findings: [
+      {
+        id: 'block-sec-1',
+        severity: 'CRITICAL',
+        category: 'security',
+        blocking: true,
+        message: 'Direct interpolation in vector query bypasses sanitization (CWE-89).',
+        file_path: 'backend/app/services/vector_store.py',
+        line_number: 42,
+        rule_id: 'CWE-89',
+      },
+    ],
+    warnings: [
+      {
+        id: 'warn-1',
+        severity: 'MEDIUM',
+        category: 'code_quality',
+        blocking: false,
+        message: 'Redundant typing alias found in service export.',
+        file_path: 'backend/app/services/vector_store.py',
+        line_number: 12,
+        rule_id: 'TYP-01',
+      },
+    ],
+    pr_summary: 'Verification failed due to 1 critical security finding.',
+    created_at: '2026-10-20T11:00:00.000Z',
+  });
+  events.set(taskVerifyFail.task_id, [
+    {
+      id: 'evt-vf-1',
+      task_id: taskVerifyFail.task_id,
+      event_type: 'VERIFICATION_FAILED',
+      description: 'Independent verification failed: 1 blocking security finding.',
+      created_at: '2026-10-20T11:00:00.000Z',
+    },
+  ]);
+
+  // Scenario 16: Ready for Publication Authorization
+  const taskPubReady: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-scenario-pub-ready',
+    title: 'Ready for Publication Authorization',
+    status: TaskStatus.READY_FOR_PUBLICATION,
+    base_revision: 'rev-pub-base',
+    updated_at: '2026-10-20T11:30:00.000Z',
+  };
+  scenarioTasks.set(taskPubReady.task_id, taskPubReady);
+  workspaces.set(taskPubReady.task_id, {
+    workspace_id: 'ws-pub-1',
+    task_id: taskPubReady.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'rev-pub-base',
+    branch_name: 'agent/task-scenario-pub-ready',
+    status: WorkspaceStatus.READY,
+    created_at: '2026-10-20T10:00:00.000Z',
+    updated_at: '2026-10-20T11:30:00.000Z',
+  });
+  verifications.set(taskPubReady.task_id, {
+    task_id: taskPubReady.task_id,
+    verified_revision: 'rev-pub-base',
+    status: 'PASS',
+    checks: [
+      { name: 'test_suite', status: 'PASSED', duration_ms: 1100, message: 'All tests passed.', findings_count: 0 },
+      { name: 'static_analysis', status: 'PASSED', duration_ms: 250, message: 'Clean lint & types.', findings_count: 0 },
+      { name: 'ai_code_review', status: 'PASSED', duration_ms: 1800, message: 'Clean architecture verified.', findings_count: 0 },
+      { name: 'security_checks', status: 'PASSED', duration_ms: 400, message: '0 vulnerabilities detected.', findings_count: 0 },
+    ],
+    blocking_findings: [],
+    warnings: [],
+    pr_summary: 'Fully verified. Ready for publication authorization.',
+    created_at: '2026-10-20T11:30:00.000Z',
+  });
+  events.set(taskPubReady.task_id, [
+    {
+      id: 'evt-pr-1',
+      task_id: taskPubReady.task_id,
+      event_type: 'VERIFICATION_PASSED',
+      description: 'Independent verification completed with PASS status.',
+      created_at: '2026-10-20T11:30:00.000Z',
+    },
+  ]);
+
+  // Scenario 17: Task in RECOVERY_REQUIRED state
+  const taskRecoveryReq: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-scenario-recovery-req',
+    title: 'Interrupted Execution Recovery Required',
+    status: TaskStatus.RECOVERY_REQUIRED,
+    updated_at: '2026-10-20T11:46:00.000Z',
+  };
+  scenarioTasks.set(taskRecoveryReq.task_id, taskRecoveryReq);
+  events.set(taskRecoveryReq.task_id, [
+    {
+      id: 'evt-rec-1',
+      task_id: taskRecoveryReq.task_id,
+      event_type: 'WORKSPACE_FAILED',
+      description: 'Workspace runner container crashed during command execution.',
+      created_at: '2026-10-20T11:45:00.000Z',
+    },
+    {
+      id: 'evt-rec-2',
+      task_id: taskRecoveryReq.task_id,
+      event_type: 'RECOVERY_REQUIRED',
+      description: 'Task execution interrupted. Operator recovery action required.',
+      created_at: '2026-10-20T11:46:00.000Z',
+    },
+  ]);
+
+  // Scenario 18: Security Policy Violation Event
+  const taskSecAlert: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-scenario-sec-alert',
+    title: 'Blocked Security Policy Violation',
+    status: TaskStatus.BLOCKED,
+    updated_at: '2026-10-20T12:00:00.000Z',
+  };
+  scenarioTasks.set(taskSecAlert.task_id, taskSecAlert);
+  events.set(taskSecAlert.task_id, [
+    {
+      id: 'evt-sec-1',
+      task_id: taskSecAlert.task_id,
+      event_type: 'SECURITY_POLICY_VIOLATION',
+      description: 'Blocked unauthorized write to protected file: infra/secrets.env.',
+      created_at: '2026-10-20T12:00:00.000Z',
+      details: {
+        rule: 'FORBIDDEN_FILE_ACCESS',
+        target: 'infra/secrets.env',
+      },
+    },
+  ]);
+
+  // Scenario 19: Stale Revision Drift
+  const taskStale: TaskDetailResponse = {
+    ...taskExecApproved,
+    task_id: 'task-scenario-stale',
+    title: 'Stale Revision Drift Detected',
+    status: TaskStatus.READY_FOR_PUBLICATION,
+    base_revision: 'rev-drifted-999',
+    updated_at: '2026-10-20T12:15:00.000Z',
+  };
+  scenarioTasks.set(taskStale.task_id, taskStale);
+  workspaces.set(taskStale.task_id, {
+    workspace_id: 'ws-stale-1',
+    task_id: taskStale.task_id,
+    repository_id: DEFAULT_REPO_ID,
+    base_revision: 'rev-drifted-999',
+    branch_name: 'agent/task-scenario-stale',
+    status: WorkspaceStatus.READY,
+    created_at: '2026-10-20T08:00:00.000Z',
+    updated_at: '2026-10-20T12:15:00.000Z',
+  });
+  verifications.set(taskStale.task_id, {
+    task_id: taskStale.task_id,
+    verified_revision: 'rev-old-initial-111',
+    status: 'PASS',
+    checks: [
+      { name: 'test_suite', status: 'PASSED', duration_ms: 900, message: 'Passed on old revision.', findings_count: 0 },
+    ],
+    blocking_findings: [],
+    warnings: [],
+    pr_summary: 'Verified against rev-old-initial-111',
+    created_at: '2026-10-20T08:00:00.000Z',
+  });
+
   return {
     tasks,
     plans,
@@ -1430,6 +1646,7 @@ function createInitialSeedData(): MockDatabase {
     events,
     tests,
     verifications,
+    pullRequests,
     issues,
     workspaces,
     diffs,
@@ -2653,5 +2870,664 @@ export const taskHandlers = [
         status: 'READY',
       },
     ]);
+  }),
+
+  // --------------------------------------------------------------------------
+  // 14b. GET /api/v1/repositories/:repositoryId - Repository Detail for Canonical Metadata
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/repositories/:repositoryId', ({ params }) => {
+    const repoId = String(params.repositoryId);
+    if (repoId === 'repo-not-found' || repoId === 'repo-404') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'NOT_FOUND',
+            message: `Repository '${repoId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+    const defaultBranch =
+      repoId === 'repo-custom-base' || repoId === 'repo-develop' ? 'develop' : 'main';
+    return HttpResponse.json({
+      id: repoId,
+      name: repoId,
+      full_name: `acme/${repoId}`,
+      owner: 'acme',
+      description: `Repository ${repoId}`,
+      default_branch: defaultBranch,
+      sync_status: 'READY',
+      last_synced_at: new Date().toISOString(),
+    });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 15. POST /api/v1/tasks/:taskId/verify — Trigger Independent Verification
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/verify', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const payload = (await request.json().catch(() => ({}))) as Partial<TriggerVerificationRequest>;
+    const now = new Date().toISOString();
+    const workspace = db.workspaces.get(taskId);
+    const targetRevision = workspace?.base_revision || task.base_revision || 'a1b2c3d4e5f6';
+
+    const isFailureRequested =
+      payload.verification_types?.includes('fail') ||
+      task.title.includes('[fail-verify]') ||
+      taskId === 'task-scenario-verify-fail' ||
+      taskId === 'task-fail-verify';
+
+    if (isFailureRequested) {
+      const failedResult: VerificationResult = {
+        task_id: taskId,
+        verified_revision: targetRevision,
+        status: 'FAIL',
+        checks: [
+          {
+            name: 'test_suite',
+            status: 'PASSED',
+            duration_ms: 800,
+            message: 'All unit tests passed.',
+            findings_count: 0,
+          },
+          {
+            name: 'security_checks',
+            status: 'FAILED',
+            duration_ms: 350,
+            message: 'Critical vulnerability detected: unescaped parameter.',
+            findings_count: 1,
+            details: { rule: 'CWE-89' },
+          },
+        ],
+        blocking_findings: [
+          {
+            id: 'find-block-1',
+            severity: 'CRITICAL',
+            category: 'security',
+            blocking: true,
+            message: 'Critical security finding: unescaped query parameter detected.',
+            file_path: 'backend/app/services/vector_store.py',
+            line_number: 42,
+            rule_id: 'CWE-89',
+          },
+        ],
+        warnings: [
+          {
+            id: 'find-warn-1',
+            severity: 'MEDIUM',
+            category: 'code_quality',
+            blocking: false,
+            message: 'Redundant typing alias found in service export.',
+            file_path: 'backend/app/services/vector_store.py',
+            line_number: 12,
+            rule_id: 'TYP-01',
+          },
+        ],
+        pr_summary: 'Verification failed with 1 blocking finding.',
+        created_at: now,
+      };
+
+      db.verifications.set(taskId, failedResult);
+
+      const taskEvents = db.events.get(taskId) || [];
+      taskEvents.push({
+        id: nextEventId(),
+        task_id: taskId,
+        event_type: 'VERIFICATION_FAILED',
+        description: 'Independent verification failed with 1 blocking finding.',
+        created_at: now,
+      });
+      db.events.set(taskId, taskEvents);
+
+      return HttpResponse.json(failedResult, { status: 200 });
+    }
+
+    const passedResult: VerificationResult = {
+      task_id: taskId,
+      verified_revision: targetRevision,
+      status: 'PASS',
+      checks: [
+        {
+          name: 'test_suite',
+          status: 'PASSED',
+          duration_ms: 1240,
+          message: 'All unit and integration tests passed.',
+          findings_count: 0,
+        },
+        {
+          name: 'static_analysis',
+          status: 'PASSED',
+          duration_ms: 280,
+          message: '0 lint or typing violations.',
+          findings_count: 0,
+        },
+        {
+          name: 'ai_code_review',
+          status: 'PASSED',
+          duration_ms: 1950,
+          message: 'Verified logic and contracts conform to requirements.',
+          findings_count: 0,
+        },
+        {
+          name: 'security_checks',
+          status: 'PASSED',
+          duration_ms: 420,
+          message: '0 vulnerabilities, secret exposures, or CVEs detected.',
+          findings_count: 0,
+        },
+      ],
+      blocking_findings: [],
+      warnings: [],
+      pr_summary: 'All automated tests, static checks, AI review, and security scans passed cleanly.',
+      created_at: now,
+    };
+
+    db.verifications.set(taskId, passedResult);
+
+    if (task.status === TaskStatus.EXECUTING || task.status === TaskStatus.TESTING) {
+      task.status = TaskStatus.READY_FOR_PUBLICATION;
+      task.updated_at = now;
+    }
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'VERIFICATION_PASSED',
+      description: 'Independent verification completed with PASS status.',
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(passedResult, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 16. GET /api/v1/tasks/:taskId/pull-request — Pull Request Details
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/pull-request', ({ params }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const pr = db.pullRequests.get(taskId);
+    if (!pr) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'NOT_FOUND',
+            message: `No pull request associated with task '${taskId}'.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    return HttpResponse.json(pr, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 17. POST /api/v1/tasks/:taskId/publish (and /create-pr) — Authorized Draft PR Publication
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/publish', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const payload = (await request.json().catch(() => ({}))) as Partial<PublishTaskRequest>;
+
+    // ADR-010 Human Authorization Gate: Publication MUST be explicitly authorized by human operator
+    if (!payload.publication_authorized) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'PUBLICATION_AUTHORIZATION_REQUIRED',
+            message: 'Explicit human authorization is required before publishing a Draft PR.',
+            retryable: false,
+          },
+        },
+        { status: 403 }
+      );
+    }
+
+    // Verification check: must have passing verification with 0 blocking findings
+    const verification = db.verifications.get(taskId);
+    if (!verification || verification.status !== 'PASS' || (verification.blocking_findings && verification.blocking_findings.length > 0)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VERIFICATION_FAILED',
+            message: 'Task must have passing independent verification with zero blocking findings before publication.',
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // Stale revision check: verified revision must match workspace base revision
+    const workspace = db.workspaces.get(taskId);
+    if (
+      taskId.includes('stale') ||
+      Boolean(workspace && verification.verified_revision && workspace.base_revision && verification.verified_revision !== workspace.base_revision)
+    ) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'STALE_REVISION',
+            message: 'Verified revision does not match current repository revision. Re-verification required.',
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // Idempotent return if already published
+    const existingPR = db.pullRequests.get(taskId);
+    if (existingPR) {
+      return HttpResponse.json(
+        {
+          success: true,
+          task_id: taskId,
+          pr_number: existingPR.pr_number,
+          pr_url: existingPR.pr_url,
+          head_branch: existingPR.head_branch,
+          base_branch: existingPR.base_branch,
+          is_draft: existingPR.is_draft,
+          summary: 'Draft PR already published.',
+          created_at: existingPR.created_at,
+        },
+        { status: 200 }
+      );
+    }
+
+    // Simulate publication failure for error testing
+    if (payload.target_repository === 'fail-publication' || taskId === 'task-pub-fail') {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'PUBLICATION_FAILED',
+            message: 'GitHub API rate limit exceeded or repository push rejected.',
+            retryable: true,
+          },
+        },
+        { status: 502 }
+      );
+    }
+
+    const prNumber = 144 + Math.floor(Math.random() * 800);
+    const now = new Date().toISOString();
+    const newPR: TaskPullRequest = {
+      task_id: taskId,
+      pr_number: prNumber,
+      pr_url: `https://github.com/example/repo/pull/${prNumber}`,
+      head_branch: `agent/${taskId}`,
+      base_branch: payload.base_branch || 'main',
+      title: task.title,
+      is_draft: true, // ADR-010: MUST be draft
+      created_at: now,
+      summary: `Draft PR for ${task.title}`,
+    };
+
+    db.pullRequests.set(taskId, newPR);
+    task.status = TaskStatus.DRAFT_PR_CREATED;
+    task.updated_at = now;
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push(
+      {
+        id: nextEventId(),
+        task_id: taskId,
+        event_type: 'PUBLICATION_AUTHORIZED',
+        description: `Draft PR publication authorized by human operator.${payload.authorization_notes ? ' Notes: ' + payload.authorization_notes : ''}`,
+        created_at: now,
+      },
+      {
+        id: nextEventId(),
+        task_id: taskId,
+        event_type: 'DRAFT_PR_PUBLISHED',
+        description: `Draft Pull Request #${prNumber} published to GitHub.`,
+        created_at: now,
+        details: { pr_url: newPR.pr_url, pr_number: prNumber },
+      }
+    );
+    db.events.set(taskId, taskEvents);
+
+    const response: TaskPublicationResponse = {
+      success: true,
+      task_id: taskId,
+      pr_number: prNumber,
+      pr_url: newPR.pr_url,
+      head_branch: newPR.head_branch,
+      base_branch: newPR.base_branch,
+      is_draft: true,
+      summary: `Draft PR #${prNumber} created successfully.`,
+      created_at: now,
+    };
+
+    return HttpResponse.json(response, { status: 201 });
+  }),
+
+  // Alias for backward compatibility
+  http.post('*/api/v1/tasks/:taskId/create-pr', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const payload = (await request.json().catch(() => ({}))) as Partial<PublishTaskRequest>;
+
+    if (!payload.publication_authorized) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'PUBLICATION_AUTHORIZATION_REQUIRED',
+            message: 'Explicit human authorization is required before publishing a Draft PR.',
+            retryable: false,
+          },
+        },
+        { status: 403 }
+      );
+    }
+
+    const verification = db.verifications.get(taskId);
+    if (!verification || verification.status !== 'PASS' || (verification.blocking_findings && verification.blocking_findings.length > 0)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'VERIFICATION_FAILED',
+            message: 'Task must have passing independent verification with zero blocking findings before publication.',
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    // Stale revision check: verified revision must match workspace base revision
+    const workspace = db.workspaces.get(taskId);
+    if (
+      taskId.includes('stale') ||
+      Boolean(
+        workspace &&
+        verification.verified_revision &&
+        workspace.base_revision &&
+        verification.verified_revision !== workspace.base_revision
+      )
+    ) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'STALE_REVISION',
+            message: 'Verified revision does not match current repository revision. Re-verification required.',
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    const existingPR = db.pullRequests.get(taskId);
+    if (existingPR) {
+      return HttpResponse.json(
+        {
+          success: true,
+          task_id: taskId,
+          pr_number: existingPR.pr_number,
+          pr_url: existingPR.pr_url,
+          head_branch: existingPR.head_branch,
+          base_branch: existingPR.base_branch,
+          is_draft: existingPR.is_draft,
+          summary: 'Draft PR already published.',
+          created_at: existingPR.created_at,
+        },
+        { status: 200 }
+      );
+    }
+
+    const prNumber = 144 + Math.floor(Math.random() * 800);
+    const now = new Date().toISOString();
+    const newPR: TaskPullRequest = {
+      task_id: taskId,
+      pr_number: prNumber,
+      pr_url: `https://github.com/example/repo/pull/${prNumber}`,
+      head_branch: `agent/${taskId}`,
+      base_branch: payload.base_branch || 'main',
+      title: task.title,
+      is_draft: true,
+      created_at: now,
+    };
+
+    db.pullRequests.set(taskId, newPR);
+    task.status = TaskStatus.DRAFT_PR_CREATED;
+    task.updated_at = now;
+
+    return HttpResponse.json(
+      {
+        success: true,
+        task_id: taskId,
+        pr_number: prNumber,
+        pr_url: newPR.pr_url,
+        head_branch: newPR.head_branch,
+        base_branch: newPR.base_branch,
+        is_draft: true,
+        summary: `Draft PR #${prNumber} created successfully.`,
+        created_at: now,
+      },
+      { status: 201 }
+    );
+  }),
+
+  // --------------------------------------------------------------------------
+  // 18. GET /api/v1/tasks/:taskId/stale-check — Check Stale Revision
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/stale-check', ({ params }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (taskId === 'task-stale-check-fail' || taskId.includes('stale-fail')) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'STALE_CHECK_FAILED',
+            message: 'Failed to inspect remote Git repository revision.',
+            retryable: true,
+          },
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    const verification = db.verifications.get(taskId);
+    const workspace = db.workspaces.get(taskId);
+
+    const isStale =
+      taskId.includes('stale') ||
+      Boolean(
+        workspace &&
+          verification?.verified_revision &&
+          workspace.base_revision &&
+          verification.verified_revision !== workspace.base_revision
+      );
+
+    const response: StaleRevisionCheckResult = {
+      task_id: taskId,
+      is_stale: isStale,
+      workspace_base_revision: workspace?.base_revision || task.base_revision || 'rev-base-001',
+      current_base_revision: task.base_revision || 'rev-base-001',
+      current_remote_sha: 'rev-remote-latest',
+      commits_behind: isStale ? 3 : 0,
+      remediation_suggestion: isStale ? 'Rebase workspace and re-verify' : null,
+      message: isStale
+        ? 'Current repository revision differs from the verified revision. Re-verification required.'
+        : 'Workspace revision is current with remote.',
+      checked_at: new Date().toISOString(),
+    };
+
+    return HttpResponse.json(response, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 19. POST /api/v1/tasks/:taskId/recover — Task Failure & Interruption Recovery
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/recover', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+
+    if (!task) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'TASK_NOT_FOUND',
+            message: `Task '${taskId}' not found.`,
+            retryable: false,
+          },
+        },
+        { status: 404 }
+      );
+    }
+
+    if (!canRecoverTask(task.status)) {
+      return HttpResponse.json(
+        {
+          error: {
+            code: 'INVALID_STATE_TRANSITION',
+            message: `Task in status '${task.status}' cannot be recovered.`,
+            retryable: false,
+          },
+        },
+        { status: 409 }
+      );
+    }
+
+    const payload = (await request.json().catch(() => ({}))) as Partial<TaskRecoveryRequest>;
+
+    if (payload.action === 'retry') {
+      const budget = db.repairBudgets.get(taskId);
+      const attemptsUsed =
+        budget?.repair_attempts_used !== undefined
+          ? budget.repair_attempts_used
+          : task.repair_attempts_used;
+      const attemptsMax =
+        budget?.repair_attempts_max !== undefined
+          ? budget.repair_attempts_max
+          : task.repair_attempts_max;
+      const isExhausted =
+        attemptsUsed >= attemptsMax ||
+        Boolean(budget?.is_budget_exhausted) ||
+        (budget && budget.is_eligible_for_repair === false);
+
+      if (isExhausted) {
+        return HttpResponse.json(
+          {
+            error: {
+              code: 'REPAIR_BUDGET_EXHAUSTED',
+              message: `Automated repair attempts limit reached (${attemptsUsed}/${attemptsMax}). Retry is unavailable.`,
+              retryable: false,
+            },
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const previousStatus = task.status;
+    const now = new Date().toISOString();
+
+    if (payload.action === 'reset_to_plan') {
+      task.status = TaskStatus.APPROVED;
+    } else {
+      task.status = TaskStatus.EXECUTING;
+    }
+    task.updated_at = now;
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'TASK_RECOVERED',
+      description: `Task recovered via action '${payload.action || 'reconcile'}'. Restored from ${previousStatus} to ${task.status}.`,
+      created_at: now,
+      details: { action: payload.action, reason: payload.reason },
+    });
+    db.events.set(taskId, taskEvents);
+
+    const response: TaskRecoveryResponse = {
+      task_id: taskId,
+      previous_status: previousStatus,
+      current_status: task.status,
+      reconciliation_action: payload.action || 'reconcile',
+      details: `Task successfully recovered using '${payload.action || 'reconcile'}' strategy.`,
+      recovered_at: now,
+    };
+
+    return HttpResponse.json(response, { status: 200 });
   }),
 ];

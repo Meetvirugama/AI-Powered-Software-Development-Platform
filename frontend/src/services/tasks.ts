@@ -6,6 +6,7 @@
  */
 
 import { apiClient, AI_ANALYSIS_TIMEOUT_MS } from './api';
+import type { ApiError } from '../types/api';
 import type {
   CreateIssueFromFindingPayload,
   CreateTaskPayload,
@@ -17,6 +18,8 @@ import type {
   PlanApprovalRequest,
   PlanGenerateRequest,
   PlanRejectionRequest,
+  PublishTaskRequest,
+  StaleRevisionCheckResult,
   TaskApproval,
   TaskCheckpointResponse,
   TaskCreateRequest,
@@ -28,9 +31,13 @@ import type {
   TaskListFilterParams,
   TaskListResponse,
   TaskPlan,
+  TaskPullRequest,
   TaskPullRequestResponse,
+  TaskPublicationResponse,
+  TaskRecoveryRequest,
   TaskRecoveryResponse,
   TaskTestResultsResponse,
+  TriggerVerificationRequest,
   VerificationResult,
   WorkspaceMetadata,
   WorkspaceRepairBudgetStatus,
@@ -217,9 +224,14 @@ export async function getTaskDiff(
         `/repositories/${repositoryId}/source/diff-ranges/task/${taskId}`
       );
       return response.data;
-    } catch {
-      const fallback = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
-      return fallback.data;
+    } catch (err: unknown) {
+      const apiErr = err as ApiError;
+      // Fallback to task-centric route ONLY when repository-scoped route returns HTTP 404
+      if (apiErr?.status === 404 || apiErr?.code === 'NOT_FOUND') {
+        const fallback = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
+        return fallback.data;
+      }
+      throw err;
     }
   }
   const response = await apiClient.get<TaskDiffRanges>(`/tasks/${taskId}/diff`);
@@ -326,12 +338,7 @@ export async function triggerTaskTests(
  */
 export async function triggerTaskVerification(
   taskId: string,
-  payload?: {
-    run_tests_if_missing?: boolean;
-    require_passing_tests?: boolean;
-    allow_critical_deletions?: boolean;
-    strict_scope?: boolean;
-  }
+  payload?: TriggerVerificationRequest
 ): Promise<VerificationResult> {
   const response = await apiClient.post<VerificationResult>(`/tasks/${taskId}/verify`, payload || {}, {
     timeout: AI_ANALYSIS_TIMEOUT_MS,
@@ -343,9 +350,17 @@ export async function triggerTaskVerification(
  * Retrieve independent verification and final review outcome for a task.
  * GET /api/v1/tasks/:taskId/verification
  */
-export async function getTaskVerification(taskId: string): Promise<VerificationResult> {
-  const response = await apiClient.get<VerificationResult>(`/tasks/${taskId}/verification`);
-  return response.data;
+export async function getTaskVerification(taskId: string): Promise<VerificationResult | null> {
+  try {
+    const response = await apiClient.get<VerificationResult>(`/tasks/${taskId}/verification`);
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    if (apiErr?.code === 'NOT_FOUND' || apiErr?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -434,12 +449,89 @@ export async function createTaskDraftPR(
 }
 
 /**
- * Get published GitHub Draft Pull Request details for a task.
+ * Retrieve GitHub Pull Request metadata associated with a published task.
+ * Returns null if the PR does not exist (404).
+ * Supports repository-scoped PR metadata route with fallback to canonical task-centric route.
+ * GET /api/v1/repositories/:repositoryId/source/pr-metadata/:taskId
  * GET /api/v1/tasks/:taskId/pull-request
  */
-export async function getTaskPullRequest(taskId: string): Promise<TaskPullRequestResponse> {
-  const response = await apiClient.get<TaskPullRequestResponse>(`/tasks/${taskId}/pull-request`);
-  return response.data;
+export async function getTaskPullRequest(
+  taskId: string,
+  repositoryId?: string
+): Promise<TaskPullRequest | null> {
+  if (repositoryId) {
+    try {
+      const response = await apiClient.get<{
+        task_id?: string;
+        pr_number?: number | null;
+        pr_url?: string | null;
+        commit_message?: string;
+        verification_summary?: string;
+        branch?: string;
+        base_branch?: string;
+        status?: string;
+      }>(`/repositories/${repositoryId}/source/pr-metadata/${taskId}`);
+      if (response.data && (response.data.pr_url || response.data.pr_number)) {
+        return {
+          task_id: response.data.task_id || taskId,
+          pr_number: response.data.pr_number,
+          pr_url: response.data.pr_url || '',
+          title: response.data.commit_message || 'Draft Pull Request',
+          body: response.data.verification_summary,
+          head_branch: response.data.branch || '',
+          base_branch: response.data.base_branch || 'main',
+          is_draft: true,
+          status: response.data.status,
+          created_at: new Date().toISOString(),
+        };
+      }
+    } catch (err: unknown) {
+      const apiErr = err as ApiError;
+      if (apiErr?.code !== 'NOT_FOUND' && apiErr?.status !== 404) {
+        throw err;
+      }
+    }
+  }
+
+  try {
+    const response = await apiClient.get<TaskPullRequest>(`/tasks/${taskId}/pull-request`);
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    if (apiErr?.code === 'NOT_FOUND' || apiErr?.status === 404) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Explicit human publication authorization gate.
+ * Authorizes pushing the task branch to remote and opening a GitHub Draft PR.
+ * POST /api/v1/tasks/:taskId/publish (with fallback to /tasks/:taskId/create-pr)
+ */
+export async function publishDraftPR(
+  taskId: string,
+  payload: PublishTaskRequest
+): Promise<TaskPublicationResponse> {
+  try {
+    const response = await apiClient.post<TaskPublicationResponse>(
+      `/tasks/${taskId}/publish`,
+      payload
+    );
+    return response.data;
+  } catch (err: unknown) {
+    const apiErr = err as ApiError;
+    // Fallback to /create-pr if backend exposes that canonical path
+    if (apiErr?.status === 404 || apiErr?.code === 'NOT_FOUND') {
+      const fallbackResponse = await apiClient.post<TaskPublicationResponse>(
+        `/tasks/${taskId}/create-pr`,
+        payload
+      );
+      return fallbackResponse.data;
+    }
+    throw err;
+  }
 }
 
 /**
@@ -468,16 +560,20 @@ export async function listTaskCheckpoints(taskId: string): Promise<TaskCheckpoin
 }
 
 /**
- * Reconcile an interrupted or failed task while preserving its 3-attempt repair budget.
+ * Execute recovery and state reconciliation for an interrupted, blocked, or failed task.
  * POST /api/v1/tasks/:taskId/recover
  */
 export async function recoverTask(
   taskId: string,
-  targetStatus?: string
+  payload?: TaskRecoveryRequest | string
 ): Promise<TaskRecoveryResponse> {
+  const body =
+    typeof payload === 'string'
+      ? { target_status: payload }
+      : payload || {};
   const response = await apiClient.post<TaskRecoveryResponse>(
     `/tasks/${taskId}/recover`,
-    targetStatus ? { target_status: targetStatus } : {}
+    body
   );
   return response.data;
 }
@@ -642,18 +738,8 @@ export async function getTaskTraceability(taskId: string): Promise<Record<string
 export async function checkStaleRevision(
   taskId: string,
   currentRemoteHeadSha?: string
-): Promise<{
-  task_id: string;
-  is_stale: boolean;
-  workspace_base_revision: string;
-  current_base_revision: string;
-  current_remote_sha: string;
-  commits_behind: number;
-  remediation_suggestion?: string | null;
-  message: string;
-  checked_at: string;
-}> {
-  const response = await apiClient.get(`/tasks/${taskId}/stale-check`, {
+): Promise<StaleRevisionCheckResult> {
+  const response = await apiClient.get<StaleRevisionCheckResult>(`/tasks/${taskId}/stale-check`, {
     params: currentRemoteHeadSha ? { current_remote_head_sha: currentRemoteHeadSha } : undefined,
   });
   return response.data;
@@ -663,4 +749,3 @@ export async function checkStaleRevision(
  * Compatibility aliases for Day 5-7 verification & Draft PR publication callers.
  */
 export const triggerVerification = triggerTaskVerification;
-export const publishDraftPR = createTaskDraftPR;

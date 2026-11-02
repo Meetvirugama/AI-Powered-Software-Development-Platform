@@ -10,11 +10,13 @@ import {
   ListTodo,
   Layers,
   RefreshCw,
+  ShieldAlert,
 } from 'lucide-react';
 import { useTaskDiff } from '../../hooks/useTasks';
-import type { TaskDiffRanges } from '../../types/task';
+import type { TaskDiffRanges, VerificationFinding } from '../../types/task';
 import type { ApiError } from '../../types/api';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
+import { ErrorMessage } from '../shared/ErrorMessage';
 import { cn } from '../../lib/utils';
 
 export interface CodeChangesPanelProps {
@@ -22,6 +24,7 @@ export interface CodeChangesPanelProps {
   repositoryId?: string;
   plannedTargetFiles?: string[];
   plannedExpectedFiles?: string[];
+  verificationFindings?: VerificationFinding[];
   diffData?: TaskDiffRanges | null;
   isLoading?: boolean;
   error?: ApiError | null;
@@ -60,6 +63,7 @@ export function CodeChangesPanel({
   repositoryId,
   plannedTargetFiles = [],
   plannedExpectedFiles = [],
+  verificationFindings = [],
   diffData: initialDiff,
   isLoading: initialLoading,
   error: initialError,
@@ -217,15 +221,29 @@ export function CodeChangesPanel({
             <LoadingSpinner size="sm" label="Loading git diff..." />
             <p className="text-xs text-muted-foreground">Inspecting workspace branch diff...</p>
           </div>
-        ) : error || !diffData || !diffData.files ? (
-          <div className="p-4 border border-dashed border-border rounded-md bg-background/50 text-center space-y-1.5">
+        ) : error ? (
+          <div data-testid="diff-error-state" className="space-y-3 py-1">
+            <ErrorMessage error={error} message="Failed to load git diff telemetry." />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => refetch()}
+                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors"
+              >
+                <RefreshCw className="h-3 w-3" />
+                Retry Loading Diff
+              </button>
+            </div>
+          </div>
+        ) : !diffData || !diffData.files ? (
+          <div data-testid="diff-unavailable-state" className="p-4 border border-dashed border-border rounded-md bg-background/50 text-center space-y-1.5">
             <p className="text-xs font-medium text-foreground">Diff Telemetry Unavailable</p>
             <p className="text-xs text-muted-foreground">
               Workspace git diff has not been generated or execution has not modified files yet.
             </p>
           </div>
         ) : diffData.files.length === 0 ? (
-          <div className="p-6 text-center border border-dashed border-border rounded-md bg-background/50 space-y-1.5">
+          <div data-testid="empty-diff-state" className="p-6 text-center border border-dashed border-border rounded-md bg-background/50 space-y-1.5">
             <FileDiff className="h-6 w-6 mx-auto text-muted-foreground/60" />
             <p className="text-xs font-medium text-foreground">No Actual Changes Detected</p>
             <p className="text-xs text-muted-foreground">
@@ -237,6 +255,13 @@ export function CodeChangesPanel({
             {diffData.files.map((file) => {
               const badge = getFileStatusBadge(file.status);
               const isExpanded = expandedFiles[file.file_path] ?? true;
+              const fileFindings = verificationFindings.filter(
+                (f) =>
+                  f.file_path &&
+                  (f.file_path === file.file_path ||
+                    file.file_path.endsWith(f.file_path) ||
+                    f.file_path.endsWith(file.file_path))
+              );
 
               return (
                 <div
@@ -267,6 +292,12 @@ export function CodeChangesPanel({
                       >
                         {badge.label}
                       </span>
+                      {fileFindings.length > 0 && (
+                        <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.2 rounded">
+                          <ShieldAlert className="h-3 w-3" />
+                          {fileFindings.length} finding{fileFindings.length === 1 ? '' : 's'}
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-3 font-mono text-xs shrink-0">
@@ -274,6 +305,23 @@ export function CodeChangesPanel({
                       <span className="text-rose-400 font-medium">-{file.deletions}</span>
                     </div>
                   </button>
+
+                  {/* Inline File Verification Findings */}
+                  {fileFindings.length > 0 && (
+                    <div className="mx-3 mb-2 p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 space-y-1">
+                      <div className="flex items-center gap-1.5 font-semibold text-rose-300">
+                        <ShieldAlert className="h-3.5 w-3.5" />
+                        <span>Associated Verification Findings:</span>
+                      </div>
+                      {fileFindings.map((f) => (
+                        <div key={f.id} className="pl-5 text-rose-200/90 font-mono text-[10px] flex items-center gap-2">
+                          <span className="uppercase font-bold text-[9px] bg-rose-500/20 px-1 rounded">{f.severity}</span>
+                          <span>{f.message}</span>
+                          {f.line_number && <span className="text-muted-foreground">(Line {f.line_number})</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Diff Hunk Content */}
                   {isExpanded && (

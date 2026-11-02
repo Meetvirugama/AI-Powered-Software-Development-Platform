@@ -200,12 +200,56 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         bgClass: 'bg-zinc-500/10 border-zinc-500/20',
         textClass: 'text-zinc-400',
       };
+    case 'DIFF_INSPECTED':
+    case 'DIFF_VALIDATED':
+      return {
+        icon: <GitCommit className="h-3.5 w-3.5" />,
+        bgClass: 'bg-teal-500/10 border-teal-500/20',
+        textClass: 'text-teal-400',
+      };
+    case 'DIFF_VALIDATION_FAILED':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'CHANGES_COMMITTED':
+      return {
+        icon: <GitCommit className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'BRANCH_PUSHED':
+      return {
+        icon: <GitBranch className="h-3.5 w-3.5" />,
+        bgClass: 'bg-cyan-500/10 border-cyan-500/20',
+        textClass: 'text-cyan-400',
+      };
     case 'VERIFYING':
-    case 'VERIFICATION_COMPLETED':
+    case 'VERIFICATION_STARTED':
       return {
         icon: <ShieldCheck className="h-3.5 w-3.5" />,
         bgClass: 'bg-indigo-500/10 border-indigo-500/20',
         textClass: 'text-indigo-400',
+      };
+    case 'VERIFICATION_COMPLETED':
+    case 'VERIFICATION_PASSED':
+      return {
+        icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'VERIFICATION_FAILED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-rose-500/10 border-rose-500/20',
+        textClass: 'text-rose-400',
+      };
+    case 'PUBLICATION_AUTHORIZED':
+      return {
+        icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
       };
     case 'READY_FOR_PUBLICATION':
       return {
@@ -220,16 +264,71 @@ function getEventIcon(eventType: string): { icon: ReactNode; bgClass: string; te
         textClass: 'text-teal-400',
       };
     case 'DRAFT_PR_CREATED':
+    case 'DRAFT_PR_PUBLISHED':
+    case 'PR_CREATED':
       return {
         icon: <GitPullRequest className="h-3.5 w-3.5" />,
         bgClass: 'bg-emerald-500/10 border-emerald-500/20',
         textClass: 'text-emerald-400',
       };
+    case 'SECURITY_POLICY_VIOLATION':
+    case 'POLICY_VIOLATION':
+    case 'COMMAND_BLOCKED':
+    case 'SECRET_LEAK_DETECTED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-red-500/10 border-red-500/20',
+        textClass: 'text-red-400',
+      };
+    case 'RECOVERY_REQUIRED':
+    case 'EXECUTION_INTERRUPTED':
+      return {
+        icon: <AlertTriangle className="h-3.5 w-3.5" />,
+        bgClass: 'bg-amber-500/10 border-amber-500/20',
+        textClass: 'text-amber-400',
+      };
+    case 'TASK_RECOVERED':
+    case 'WORKER_CRASH_RECOVERED':
+      return {
+        icon: <RefreshCw className="h-3.5 w-3.5" />,
+        bgClass: 'bg-emerald-500/10 border-emerald-500/20',
+        textClass: 'text-emerald-400',
+      };
+    case 'STALE_REVISION_DETECTED':
+    case 'DISK_QUOTA_EXCEEDED':
+    case 'PUBLICATION_FAILED':
+    case 'EXECUTION_FAILED':
     case 'FAILED':
       return {
         icon: <AlertTriangle className="h-3.5 w-3.5" />,
         bgClass: 'bg-red-500/10 border-red-500/20',
         textClass: 'text-red-400',
+      };
+    case 'POST_VERIFICATION_MUTATION_DETECTED':
+    case 'INVARIANT_VALIDATION_FAILED':
+      return {
+        icon: <ShieldAlert className="h-3.5 w-3.5" />,
+        bgClass: 'bg-red-500/10 border-red-500/20',
+        textClass: 'text-red-400',
+      };
+    case 'CODE_MODIFIED':
+      return {
+        icon: <Play className="h-3.5 w-3.5" />,
+        bgClass: 'bg-blue-500/10 border-blue-500/20',
+        textClass: 'text-blue-400',
+      };
+    case 'COMMAND_EXECUTED':
+      return {
+        icon: <Terminal className="h-3.5 w-3.5" />,
+        bgClass: 'bg-indigo-500/10 border-indigo-500/20',
+        textClass: 'text-indigo-400',
+      };
+    case 'WORKSPACE_CLEANED':
+    case 'ORPHANED_WORKSPACES_CLEANED':
+      return {
+        icon: <FolderGit2 className="h-3.5 w-3.5" />,
+        bgClass: 'bg-sky-500/10 border-sky-500/20',
+        textClass: 'text-sky-400',
       };
     default:
       return {
@@ -245,7 +344,14 @@ export function ExecutionTimeline({ taskId, events: passedEvents, className }: E
     enabled: passedEvents === undefined,
   });
 
-  const events: TaskEvent[] = passedEvents !== undefined ? passedEvents : (eventsData?.items || []);
+  const rawEvents: TaskEvent[] = passedEvents !== undefined ? passedEvents : (eventsData?.items || []);
+
+  // Strict chronological ordering by timestamp / created_at
+  const events = [...rawEvents].sort((a, b) => {
+    const timeA = new Date(a.created_at || (a as any).timestamp || 0).getTime();
+    const timeB = new Date(b.created_at || (b as any).timestamp || 0).getTime();
+    return timeA - timeB;
+  });
 
   return (
     <div
@@ -290,9 +396,10 @@ export function ExecutionTimeline({ taskId, events: passedEvents, className }: E
         <div className="relative pl-6 space-y-6 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-border">
           {events.map((evt, idx) => {
             const { icon, bgClass, textClass } = getEventIcon(evt.event_type);
+            const eventKey = evt.id || evt.event_id || `${evt.event_type}-${evt.created_at || (evt as any).timestamp || idx}-${idx}`;
 
             return (
-              <div key={evt.id || idx} className="relative group">
+              <div key={eventKey} className="relative group">
                 {/* Event node badge */}
                 <div
                   className={cn(

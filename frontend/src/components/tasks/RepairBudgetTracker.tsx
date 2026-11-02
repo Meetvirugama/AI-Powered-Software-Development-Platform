@@ -143,8 +143,8 @@ export function RepairBudgetTracker({
   const remaining = Math.max(0, max - used);
   const isExhausted = budget?.is_budget_exhausted ?? used >= max;
 
-  // Render slots for each attempt up to max (e.g. 3)
-  const slotCount = Math.max(max, 3);
+  // Render slots for each attempt up to max
+  const slotCount = Math.max(0, max);
   const slots = Array.from({ length: slotCount }, (_, idx) => idx + 1);
 
   return (
@@ -182,13 +182,23 @@ export function RepairBudgetTracker({
       {/* Visual Attempt Slots */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>Attempt Allocation (Max {max} per ADR-010):</span>
+          <span>Attempt Allocation (Max {max}):</span>
           <span className="font-mono text-[11px]">
             {remaining} attempt{remaining === 1 ? '' : 's'} remaining
           </span>
         </div>
 
-        <div className="grid grid-cols-3 gap-2.5">
+        <div
+          className={cn(
+            'grid gap-2.5',
+            max === 1 && 'grid-cols-1',
+            max === 2 && 'grid-cols-2',
+            max === 3 && 'grid-cols-3',
+            max === 4 && 'grid-cols-4',
+            max >= 5 && 'grid-cols-5'
+          )}
+          style={{ gridTemplateColumns: `repeat(${Math.max(1, slotCount)}, minmax(0, 1fr))` }}
+        >
           {slots.map((slotNum) => {
             const isUsedSlot = slotNum <= used;
             const slotHistory = history.find((h) => h.attempt_number === slotNum);
@@ -243,7 +253,7 @@ export function RepairBudgetTracker({
             <span>Repair Budget Exhausted — Auto-Repair Terminated</span>
           </div>
           <p className="pl-5.5 text-rose-200/90 leading-relaxed">
-            Maximum repair budget limit reached ({max}/{max}). Automatic repair cannot continue. The hard limit of {max} task-level repair attempts has been exhausted in accordance with platform safety constraints (ADR-010). Review test failures and inspect diffs manually.
+            Maximum repair budget limit reached ({max}/{max}). Automatic repair cannot continue. The hard limit of {max} task-level repair attempts has been exhausted in accordance with platform safety constraints. Review test failures and inspect diffs manually.
           </p>
         </div>
       )}

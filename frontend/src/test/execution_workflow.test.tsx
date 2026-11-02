@@ -22,6 +22,8 @@ import { CodeChangesPanel } from '../components/tasks/CodeChangesPanel';
 import { TestExecutionPanel } from '../components/tasks/TestExecutionPanel';
 import { RepairBudgetTracker } from '../components/tasks/RepairBudgetTracker';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
+import { taskKeys } from '../hooks/useTasks';
+import { getTaskDiff } from '../services/tasks';
 
 function createTestQueryClient() {
   return new QueryClient({
@@ -151,11 +153,42 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
     });
 
     it('invalidates sub-queries when user clicks manual refresh button in header', async () => {
+      let taskDetailFetchCount = 0;
+      server.use(
+        http.get('*/api/v1/tasks/task-exec-approved', () => {
+          taskDetailFetchCount++;
+          return HttpResponse.json({
+            task_id: 'task-exec-approved',
+            title: 'Ready for Execution Start',
+            description: 'Intake and planning are complete. Plan version 1 is approved.',
+            status: TaskStatus.APPROVED,
+            plan_version: 1,
+            repository_id: 'repo-task-exec',
+            repair_attempts_used: 0,
+            repair_attempts_max: 3,
+            requirements: [
+              {
+                id: 'req-1',
+                description: 'Verify execution start transitions task to WORKSPACE_SETUP.',
+                category: 'functional',
+                target_files: ['src/core/engine.py'],
+                acceptance_criteria: ['Workspace created with status READY or CREATING.'],
+              },
+            ],
+            assumptions: [],
+            constraints: [],
+            created_at: '2026-10-20T10:00:00.000Z',
+            updated_at: '2026-10-20T10:15:00.000Z',
+          });
+        })
+      );
+
       const { queryClient } = renderWithProviders(<TaskDetail />, '/app/tasks/task-exec-approved');
 
       await waitFor(() => {
         expect(screen.getByRole('heading', { name: 'Ready for Execution Start' })).toBeInTheDocument();
       });
+      expect(taskDetailFetchCount).toBe(1);
 
       const refreshBtn = screen.getByTitle('Refresh task');
       expect(refreshBtn).toBeInTheDocument();
@@ -163,7 +196,15 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
       const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
       fireEvent.click(refreshBtn);
 
-      expect(invalidateSpy).toHaveBeenCalled();
+      // Verify that invalidateQueries was called with the unified task detail key prefix
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: taskKeys.detail('task-exec-approved'),
+      });
+
+      // Verify observable behavior: manual refresh triggers actual query refetch over the network
+      await waitFor(() => {
+        expect(taskDetailFetchCount).toBeGreaterThanOrEqual(2);
+      });
     });
   });
 
@@ -297,6 +338,45 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
       renderWithProviders(<WorkspacePanel workspace={null} isLoading={false} error={null} />);
 
       expect(screen.getByText(/Workspace Not Created/i)).toBeInTheDocument();
+      expect(screen.getByTestId('workspace-not-created-state')).toBeInTheDocument();
+    });
+
+    it('renders Workspace Not Created state when workspace API returns WORKSPACE_NOT_FOUND (404)', async () => {
+      server.use(
+        http.get('*/api/v1/tasks/task-ws-404/workspace', () => {
+          return HttpResponse.json(
+            { error: { code: 'WORKSPACE_NOT_FOUND', message: 'Workspace not found', retryable: false } },
+            { status: 404 }
+          );
+        })
+      );
+
+      renderWithProviders(<WorkspacePanel taskId="task-ws-404" />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('workspace-not-created-state')).toBeInTheDocument();
+        expect(screen.getByText(/Workspace Not Created/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('renders ErrorMessage when workspace API returns an unexpected 500 error', async () => {
+      server.use(
+        http.get('*/api/v1/tasks/task-ws-500/workspace', () => {
+          return HttpResponse.json(
+            { error: { code: 'INTERNAL_ERROR', message: 'Sandbox service failure', retryable: true } },
+            { status: 500 }
+          );
+        })
+      );
+
+      renderWithProviders(<WorkspacePanel taskId="task-ws-500" />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(screen.getByText(/Sandbox service failure/i)).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('workspace-not-created-state')).toBeNull();
     });
 
     it('renders execution started_at and stopped_at timestamps when supplied', () => {
@@ -413,6 +493,29 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
       );
 
       expect(screen.getByText(/Diff Telemetry Unavailable/i)).toBeInTheDocument();
+      expect(screen.getByTestId('diff-unavailable-state')).toBeInTheDocument();
+    });
+
+    it('renders error state with ErrorMessage and retry button when diff telemetry query fails', () => {
+      const mockError = {
+        code: 'DIFF_GENERATION_FAILED',
+        message: 'Could not compute diff for isolated worktree.',
+        retryable: true,
+        status: 500,
+      };
+
+      renderWithProviders(
+        <CodeChangesPanel
+          diffData={null}
+          isLoading={false}
+          error={mockError}
+        />
+      );
+
+      expect(screen.getByTestId('diff-error-state')).toBeInTheDocument();
+      expect(screen.getByText(/Could not compute diff for isolated worktree/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Retry Loading Diff/i })).toBeInTheDocument();
+      expect(screen.queryByText(/Diff Telemetry Unavailable/i)).toBeNull();
     });
   });
 
@@ -663,6 +766,74 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
         expect(screen.getByText('Updated token counter boundary condition')).toBeInTheDocument();
       });
     });
+
+    it('renders dynamic slots without phantom slots for max=1 and max=2', () => {
+      const budgetMax1: WorkspaceRepairBudgetStatus = {
+        task_id: 'task-max1',
+        repair_attempts_used: 1,
+        repair_attempts_max: 1,
+        is_budget_exhausted: true,
+        is_eligible_for_repair: false,
+        last_attempt_at: '2026-10-20T10:15:00.000Z',
+        history: [
+          {
+            attempt_number: 1,
+            task_id: 'task-max1',
+            timestamp: '2026-10-20T10:15:00.000Z',
+            patch_summary: 'Single repair attempt',
+            test_status_before: 'FAILED',
+            test_status_after: 'FAILED',
+            success: false,
+          },
+        ],
+      };
+
+      const { unmount } = renderWithProviders(<RepairBudgetTracker budget={budgetMax1} isLoading={false} error={null} />);
+
+      expect(screen.getByTestId('repair-slot-1')).toBeInTheDocument();
+      expect(screen.queryByTestId('repair-slot-2')).toBeNull();
+      expect(screen.queryByTestId('repair-slot-3')).toBeNull();
+      expect(screen.getByText(/Attempt Allocation \(Max 1\):/i)).toBeInTheDocument();
+      unmount();
+
+      const budgetMax2: WorkspaceRepairBudgetStatus = {
+        task_id: 'task-max2',
+        repair_attempts_used: 1,
+        repair_attempts_max: 2,
+        is_budget_exhausted: false,
+        is_eligible_for_repair: true,
+        last_attempt_at: '2026-10-20T10:15:00.000Z',
+        history: [],
+      };
+
+      renderWithProviders(<RepairBudgetTracker budget={budgetMax2} isLoading={false} error={null} />);
+
+      expect(screen.getByTestId('repair-slot-1')).toBeInTheDocument();
+      expect(screen.getByTestId('repair-slot-2')).toBeInTheDocument();
+      expect(screen.queryByTestId('repair-slot-3')).toBeNull();
+      expect(screen.getByText(/Attempt Allocation \(Max 2\):/i)).toBeInTheDocument();
+    });
+
+    it('renders exactly 4 slots when max=4', () => {
+      const budgetMax4: WorkspaceRepairBudgetStatus = {
+        task_id: 'task-max4',
+        repair_attempts_used: 2,
+        repair_attempts_max: 4,
+        is_budget_exhausted: false,
+        is_eligible_for_repair: true,
+        last_attempt_at: '2026-10-20T10:20:00.000Z',
+        history: [],
+      };
+
+      renderWithProviders(<RepairBudgetTracker budget={budgetMax4} isLoading={false} error={null} />);
+
+      expect(screen.getByTestId('repair-slot-1')).toBeInTheDocument();
+      expect(screen.getByTestId('repair-slot-2')).toBeInTheDocument();
+      expect(screen.getByTestId('repair-slot-3')).toBeInTheDocument();
+      expect(screen.getByTestId('repair-slot-4')).toBeInTheDocument();
+      expect(screen.queryByTestId('repair-slot-5')).toBeNull();
+      expect(screen.getByText(/Attempt Allocation \(Max 4\):/i)).toBeInTheDocument();
+    });
   });
 
   // ==========================================================================
@@ -834,6 +1005,63 @@ describe('Week 3 Day 3 & Day 4 — Execution Workflow & Telemetry', () => {
       expect(screen.getByText('Active Executing Task with Repairs')).toBeInTheDocument();
       expect(screen.getByTestId('active-execution-badge-task-card-active')).toHaveTextContent('Executing');
       expect(screen.getByTestId('repair-budget-indicator-task-card-active')).toHaveTextContent('1/3');
+    });
+  });
+
+  // ==========================================================================
+  // 9. getTaskDiff Service Fallback Logic (Finding 6)
+  // ==========================================================================
+  describe('getTaskDiff service fallback logic', () => {
+    it('falls back to /tasks/:taskId/diff when repository-scoped route returns 404', async () => {
+      server.use(
+        http.get('*/api/v1/repositories/repo-404/source/diff-ranges/task/task-diff-fallback', () => {
+          return HttpResponse.json(
+            { error: { code: 'NOT_FOUND', message: 'Route not found', retryable: false } },
+            { status: 404 }
+          );
+        }),
+        http.get('*/api/v1/tasks/task-diff-fallback/diff', () => {
+          return HttpResponse.json({
+            task_id: 'task-diff-fallback',
+            files: [
+              {
+                file_path: 'src/fallback.py',
+                status: 'modified',
+                additions: 3,
+                deletions: 1,
+                patch: '@@ -1,1 +1,3 @@',
+              },
+            ],
+            total_files_changed: 1,
+            total_additions: 3,
+            total_deletions: 1,
+          });
+        })
+      );
+
+      const diff = await getTaskDiff('task-diff-fallback', 'repo-404');
+      expect(diff.files[0].file_path).toBe('src/fallback.py');
+    });
+
+    it('rethrows immediately without fallback when repository-scoped route returns 500', async () => {
+      let fallbackCalled = false;
+      server.use(
+        http.get('*/api/v1/repositories/repo-500/source/diff-ranges/task/task-diff-500', () => {
+          return HttpResponse.json(
+            { error: { code: 'INTERNAL_ERROR', message: 'Git diff crashed', retryable: true } },
+            { status: 500 }
+          );
+        }),
+        http.get('*/api/v1/tasks/task-diff-500/diff', () => {
+          fallbackCalled = true;
+          return HttpResponse.json({});
+        })
+      );
+
+      await expect(getTaskDiff('task-diff-500', 'repo-500')).rejects.toMatchObject({
+        status: 500,
+      });
+      expect(fallbackCalled).toBe(false);
     });
   });
 });
