@@ -54,6 +54,10 @@ from app.integrations.github.schemas import (
     TestRunnerRequest,
     TestRunnerResponse,
     WorkspaceStatusResponse,
+    TaskPublishRequest,
+    TaskPublishResponse,
+    TaskVerifyRequest,
+    TaskVerifyResponse,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -656,4 +660,156 @@ async def get_task_workspace_status_endpoint(
         staged_files=status_dict["staged_files"],
         modified_files=status_dict["modified_files"],
         untracked_files=status_dict["untracked_files"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 5: Independent Verification & Draft PR Publication (F36 / F37)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/verify",
+    response_model=TaskVerifyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Run independent verification checks on task workspace",
+    description="Evaluates 12 verification checks (tests, diff, secrets, branch, constraints) before publication eligibility.",
+)
+async def verify_task_workspace_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskVerifyRequest,
+    db: Session = Depends(get_db),
+) -> TaskVerifyResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.independent_verifier import IndependentVerifier
+    from app.services.test_runner import RestrictedTestRunner
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    current_rev = await branch_service.get_workspace_revision(ws_path)
+    branch_name = f"agent/task-{short_id}"
+
+    # Run tests if requested
+    runner = RestrictedTestRunner()
+    test_result = await runner.run_tests(
+        workspace_path=ws_path,
+        command=payload.test_command,
+        workspace_revision=current_rev,
+    )
+
+    # Get workspace diff text
+    diff_summary = await branch_service.get_task_diff_ranges(
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+    )
+    diff_text = "\n".join(f.patch or "" for f in diff_summary.files)
+    changed_files = [f.file_path for f in diff_summary.files]
+
+    verifier = IndependentVerifier()
+    res = verifier.verify_task_revision(
+        task_id=task_uuid,
+        workspace_revision=current_rev,
+        test_result=test_result,
+        branch_name=branch_name,
+        diff_text=diff_text,
+        changed_files=changed_files,
+        has_approved_plan=payload.has_approved_plan,
+        base_revision_matches=(payload.base_revision is None or payload.base_revision == current_rev),
+    )
+
+    return TaskVerifyResponse(
+        task_id=task_uuid,
+        verified_revision=res.verified_revision,
+        status=res.status,
+        summary_markdown=res.pr_summary or "",
+        checks_count=len(res.checks),
+        blocking_findings_count=len(res.blocking_findings),
+        warnings_count=len(res.warnings),
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task/publish-pr",
+    response_model=TaskPublishResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Publish verified agent task branch and open GitHub Draft PR",
+    description="Requires explicit human authorization gate. Pushes to agent/task-{id} and creates Draft PR with verification summary.",
+)
+async def publish_task_pr_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskPublishRequest,
+    db: Session = Depends(get_db),
+) -> TaskPublishResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.independent_verifier import IndependentVerifier
+
+    branch_service = GitBranchService(db)
+    user_id = _request_user_id(request)
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    pr_info = await branch_service.publish_task_draft_pr(
+        repository_id=repository_id,
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        publication_authorized=payload.publication_authorized,
+        base_branch=payload.base_branch,
+        pr_title=payload.pr_title,
+        pr_body=payload.pr_body,
+        user_id=user_id,
+    )
+
+    return TaskPublishResponse(
+        task_id=task_uuid,
+        repository_id=repository_id,
+        pr_number=pr_info.number,
+        pr_url=f"https://github.com/mock-owner/mock-repo/pull/{pr_info.number}" if not pr_info.title.startswith("http") else pr_info.title,
+        head_branch=pr_info.head_ref or f"agent/task-{short_id}",
+        base_branch=pr_info.base_ref or "main",
+        status="created",
+        is_draft=True,
+    )
+
+
+@router.get(
+    "/{repository_id}/source/task/{task_id}/pull-request",
+    response_model=PullRequestInfo,
+    summary="Get created Draft PR metadata for an agent task",
+    description="Retrieves the stored PullRequest record and GitHub metadata for an agent task.",
+)
+def get_task_pull_request_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PullRequestInfo:
+    from app.repositories.pull_request_repository import PullRequestRepository
+    from app.services.git_branch import GitBranchService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    pr_repo = PullRequestRepository(db)
+    pr = pr_repo.get_by_task_id(task_id)
+    if pr is None:
+        raise APIError(404, ErrorCode.NOT_FOUND, f"No Pull Request found for task {task_id}.")
+
+    return PullRequestInfo(
+        number=pr.pr_number or 0,
+        title=pr.commit_message,
+        state=pr.status,
+        draft=True,
+        base_ref=pr.base_branch,
+        head_ref=pr.branch,
+        created_at=str(pr.created_at) if pr.created_at else None,
+        body=pr.verification_summary,
     )

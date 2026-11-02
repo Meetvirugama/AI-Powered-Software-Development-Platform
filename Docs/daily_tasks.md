@@ -642,13 +642,14 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ## WEEK 3 — Day 5 Independent Verification, Code Review & Draft PR
 
-- ⬜ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary
-- ⬜ Meet: Requirement-to-code verification comparing final diff against original plan
-- ⬜ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)`
-- ⬜ Yug: `POST /api/v1/tasks/{id}/create-pr` verifying task passed verification before opening PR
-- ⬜ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR
-- ⬜ Om: End-to-end traceability linking finding -> issue -> task -> commit -> Draft PR
-- ⬜ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff
+- ✅ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary (`backend/app/services/independent_verifier.py`)
+- ✅ Meet: Requirement-to-code verification comparing final diff against original plan
+- ✅ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)` (`GitBranchService.publish_task_draft_pr()`, `POST /repositories/{id}/source/task/publish-pr`)
+- ✅ Yug: `POST /api/v1/tasks/{id}/create-pr` & `POST /repositories/{id}/source/task/publish-pr` verifying task passed verification before opening PR
+- ✅ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR
+- ✅ Om: End-to-end traceability linking finding -> issue -> task -> commit -> Draft PR (`PullRequest` database entity)
+- ✅ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff (`scan_diff_for_secrets`, `check_forbidden_files`)
+- ✅ Keval: Independent verification and publication acceptance tests (`backend/tests/test_week3_day5_verification_and_pr.py`)
 
 ## WEEK 3 — Day 6 Security, Reliability & Performance Hardening
 

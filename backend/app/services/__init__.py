@@ -17,6 +17,7 @@ from app.services.test_generation_history_service import TestGenerationHistorySe
 from app.services.test_generation_orchestrator import LLMTestGenerationService
 from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
 from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
+from app.services.independent_verifier import IndependentVerifier
 
 __all__ = [
     "AgentBranchInfo",
@@ -32,6 +33,7 @@ __all__ = [
     "ReviewHistoryService",
     "TestGenerationHistoryService",
     "BoundedRepairManager",
+    "IndependentVerifier",
     "CommandPolicyValidator",
     "MAX_TASK_REPAIR_ATTEMPTS",
     "RestrictedTestRunner",

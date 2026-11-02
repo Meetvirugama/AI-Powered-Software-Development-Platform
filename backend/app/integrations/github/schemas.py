@@ -505,3 +505,49 @@ class WorkspaceStatusResponse(BaseModel):
     staged_files: list[str] = Field(default_factory=list)
     modified_files: list[str] = Field(default_factory=list)
     untracked_files: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 5: Independent Verification & Draft PR (F36 / F37)
+# ---------------------------------------------------------------------------
+
+class TaskPublishRequest(BaseModel):
+    """Request to authorize branch push and open a GitHub Draft PR."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    publication_authorized: bool = Field(default=False, description="Explicit human approval gate for pushing & opening PR")
+    pr_title: Optional[str] = Field(default=None, description="Custom Pull Request title")
+    pr_body: Optional[str] = Field(default=None, description="Custom Pull Request Markdown description")
+    base_branch: Optional[str] = Field(default=None, description="Target base branch (defaults to repo default branch)")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class TaskPublishResponse(BaseModel):
+    """Result of publishing verified task branch and opening Draft PR."""
+    task_id: UUID
+    repository_id: UUID
+    pr_number: int
+    pr_url: str
+    head_branch: str
+    base_branch: str
+    status: str = "created"
+    is_draft: bool = True
+
+
+class TaskVerifyRequest(BaseModel):
+    """Request to execute independent verification suite against task workspace."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+    has_approved_plan: bool = Field(default=True, description="Whether plan was explicitly approved by user")
+    base_revision: Optional[str] = Field(default=None, description="Base commit SHA recorded in task plan")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to evaluate")
+
+
+class TaskVerifyResponse(BaseModel):
+    """Structured result of independent verification evaluation."""
+    task_id: UUID
+    verified_revision: str
+    status: str
+    summary_markdown: str
+    checks_count: int = 0
+    blocking_findings_count: int = 0
+    warnings_count: int = 0
