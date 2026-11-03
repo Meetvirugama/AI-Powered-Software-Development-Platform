@@ -116,7 +116,10 @@ class RedisRateLimitStore:
     def hit(self, key: str, window_seconds: int) -> int:
         pipe = self.redis.pipeline()
         pipe.incr(key)
-        pipe.expire(key, window_seconds + 5)
+        try:
+            pipe.expire(key, window_seconds + 5, nx=True)
+        except TypeError:
+            pipe.expire(key, window_seconds + 5)
         count, _ = pipe.execute()
         return int(count)
 

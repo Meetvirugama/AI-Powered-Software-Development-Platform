@@ -165,6 +165,11 @@ class Settings(BaseSettings):
         return [o for o in origins if o != "*"]
 
     @property
+    def is_production(self) -> bool:
+        """Return True when running in production environment."""
+        return self.app_env.lower().strip() in ("production", "prod")
+
+    @property
     def effective_cookie_samesite(self) -> str:
         if self.cookie_samesite:
             return self.cookie_samesite.lower()

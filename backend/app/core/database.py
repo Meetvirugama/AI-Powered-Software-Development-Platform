@@ -4,7 +4,7 @@ Models and migrations remain Om's responsibility; this file only provides the
 shared application infrastructure they will use.
 """
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from typing import Any
 
 from sqlalchemy import create_engine
@@ -65,6 +65,7 @@ def _create_safe_async_engine(sync_url: str, kwargs: dict[str, Any]) -> tuple[As
 
 _async_database_url = _resolve_async_database_url(settings.database_url)
 async_engine, AsyncSessionLocal = _create_safe_async_engine(settings.database_url, db_kwargs)
+async_session_factory = AsyncSessionLocal
 
 
 class Base(DeclarativeBase):
@@ -78,3 +79,14 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+async def get_db_async() -> AsyncGenerator[AsyncSession, None]:
+    """Yield an asynchronous database session when AsyncSessionLocal is configured (GAP-07)."""
+    if AsyncSessionLocal is None:
+        raise RuntimeError("AsyncSessionLocal is not configured for the active database URL.")
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
