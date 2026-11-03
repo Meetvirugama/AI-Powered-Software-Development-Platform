@@ -1,3 +1,5 @@
+"""Database models package."""
+
 from app.models.base import TimestampedModel
 from app.models.user import User
 from app.models.github_installation import GitHubInstallation
@@ -11,10 +13,47 @@ from app.models.memory_entry import MemoryEntry, MemoryType, MemoryStatus
 from app.models.pull_request import PullRequest
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus, AnalysisFeature
 from app.models.analysis_finding import AnalysisFinding
+from app.models.task import (
+    AgentTask,
+    ApprovalDecision,
+    ExecutionStatus,
+    GitHubIssue,
+    RepairAttempt,
+    RepairResult,
+    Task,
+    TaskApproval,
+    TaskApprovalRecord,
+    TaskCheckpoint,
+    TaskEvent,
+    TaskEventRecord,
+    TaskEventType,
+    TaskExecution,
+    TaskPlan,
+    TaskPlanRecord,
+    TaskPlanStatus,
+    TaskPullRequest,
+    TaskSourceType,
+    TaskStatus,
+    TestRun,
+    TestRunStatus,
+    ToolInvocation,
+    ToolInvocationStatus,
+    VerificationResult,
+    VerificationStatus,
+    Workspace,
+    WorkspaceStatus,
+)
 
 __all__ = [
     "TimestampedModel", "User", "GitHubInstallation", "Repository", "SyncStatus",
     "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus",
     "MemoryEntry", "MemoryType", "MemoryStatus", "PullRequest",
     "AnalysisRun", "AnalysisRunStatus", "AnalysisFeature", "AnalysisFinding",
+    "GitHubIssue", "AgentTask", "TaskPlanRecord", "TaskApprovalRecord", "TaskEventRecord",
+    "Task", "TaskStatus", "TaskSourceType", "TaskPlan", "TaskPlanStatus",
+    "TaskApproval", "ApprovalDecision", "Workspace", "WorkspaceStatus",
+    "TaskExecution", "ExecutionStatus", "ToolInvocation", "ToolInvocationStatus",
+    "TestRun", "TestRunStatus", "RepairAttempt", "RepairResult",
+    "VerificationResult", "VerificationStatus", "TaskCheckpoint",
+    "TaskEvent", "TaskEventType", "TaskPullRequest",
 ]

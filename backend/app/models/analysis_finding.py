@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,6 +12,7 @@ from app.models.base import TimestampedModel
 
 if TYPE_CHECKING:
     from app.models.analysis_run import AnalysisRun
+    from app.models.task import Task
 
 
 class AnalysisFinding(TimestampedModel, Base):
@@ -68,6 +69,10 @@ class AnalysisFinding(TimestampedModel, Base):
     run: Mapped["AnalysisRun"] = relationship(
         "AnalysisRun",
         back_populates="findings",
+    )
+    tasks: Mapped[List["Task"]] = relationship(
+        "Task",
+        back_populates="finding",
     )
 
     @property

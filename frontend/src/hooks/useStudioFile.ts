@@ -4,17 +4,27 @@
  * Consolidates the identical file-selection pattern that previously existed
  * in RepositoryExplainStudio, RepositoryBugStudio, RepositoryTestStudio,
  * and RepositoryReviewStudio (~30 duplicate lines each).
+ *
+ * BUG-W3-05 Fix:
+ * `handleSelectFile` accepts an optional `{ preserveResults?: boolean }` flag
+ * so cross-file source reference navigation in BugScannerView / ExplanationResultView
+ * switches the code viewer file without wiping the active analysis result!
  */
 
 import { useState, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import type { RepositoryFile } from '../types/api';
 import type { AnalysisTarget } from '../types/analysis';
+import { findMatchingRepositoryFile } from '../lib/sourceReference';
 
 export interface TargetRange {
   start_line?: number;
   end_line?: number;
   symbol?: string | null;
+}
+
+export interface SelectFileOptions {
+  preserveResults?: boolean;
 }
 
 export interface UseStudioFileReturn {
@@ -29,10 +39,10 @@ export interface UseStudioFileReturn {
   /** Show or hide the file picker popover. */
   setShowFilePicker: (visible: boolean) => void;
   /**
-   * Called when the user selects a file in the file picker.
+   * Called when the user selects a file in the file picker or via citation click.
    * Resets target range, updates the URL search param, and hides the picker.
    */
-  handleSelectFile: (file: RepositoryFile) => void;
+  handleSelectFile: (file: RepositoryFile, options?: SelectFileOptions) => void;
   /**
    * Called when the code viewer emits a new range selection.
    * Narrows the analysis target to the specified lines or symbol.
@@ -43,34 +53,57 @@ export interface UseStudioFileReturn {
 }
 
 /**
- * Shared file-selection hook for all four developer studio pages.
+ * Shared file-selection hook for all four developer studio pages (F-05).
+ *
+ * Guarantees:
+ * - Selection state is scoped to current repository ID and reset upon switching.
+ * - Deep-link query parameters are resolved with normalized path comparison.
+ * - Overrides are validated against the active repository's file list.
+ * - Non-target search parameters are preserved upon file selection.
  *
  * @param files         The list of indexed repository files (from useRepositoryFiles).
  * @param onFileChange  Optional callback invoked after file selection changes.
- *                      Useful for clearing analysis results in the parent.
  */
 export function useStudioFile(
   files: RepositoryFile[],
   onFileChange?: () => void
 ): UseStudioFileReturn {
+  const { id: repoId } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedFileOverride, setSelectedFileOverride] = useState<RepositoryFile | null>(null);
+  const [fileOverride, setFileOverride] = useState<{ repoId?: string; file: RepositoryFile } | null>(null);
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [targetRange, setTargetRange] = useState<TargetRange>({});
+  const [prevRepoId, setPrevRepoId] = useState(repoId);
+
+  if (prevRepoId !== repoId) {
+    setPrevRepoId(repoId);
+    setTargetRange({});
+  }
 
   const fileQuery = searchParams.get('file');
 
+  // Validated override scoped strictly to current repoId and verified to exist in files
+  const validOverride = useMemo(() => {
+    if (!fileOverride) return null;
+    if (fileOverride.repoId && repoId && fileOverride.repoId !== repoId) return null;
+    return findMatchingRepositoryFile(files, fileOverride.file.path) ?? null;
+  }, [fileOverride, repoId, files]);
+
   const selectedFile: RepositoryFile | null = useMemo(() => {
-    if (selectedFileOverride) return selectedFileOverride;
+    // 1. Deep link query parameter matching
     if (fileQuery && files.length > 0) {
-      const match = files.find((f) => f.path === fileQuery);
+      const match = findMatchingRepositoryFile(files, fileQuery);
       if (match) return match;
     }
+    // 2. Active user selection override belonging to current repo
+    if (validOverride) return validOverride;
+
+    // 3. Fallback to default index file
     if (files.length > 0) {
       return files.find((f) => !f.path.startsWith('.') && f.size_bytes > 0) ?? files[0];
     }
     return null;
-  }, [selectedFileOverride, fileQuery, files]);
+  }, [validOverride, fileQuery, files]);
 
   const activeTarget: AnalysisTarget = useMemo(
     () => ({
@@ -83,12 +116,18 @@ export function useStudioFile(
     [selectedFile, targetRange]
   );
 
-  const handleSelectFile = (file: RepositoryFile) => {
-    setSelectedFileOverride(file);
+  const handleSelectFile = (file: RepositoryFile, options?: SelectFileOptions) => {
+    setFileOverride({ repoId, file });
     setTargetRange({});
-    setSearchParams({ file: file.path });
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('file', file.path);
+      return next;
+    });
     setShowFilePicker(false);
-    onFileChange?.();
+    if (!options?.preserveResults) {
+      onFileChange?.();
+    }
   };
 
   const handleTargetChange = (target: AnalysisTarget) => {

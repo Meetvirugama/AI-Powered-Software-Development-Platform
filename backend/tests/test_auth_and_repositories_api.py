@@ -20,6 +20,12 @@ class FakeRedis:
     def setex(self, key: str, _: int, __: str) -> None:
         self.blocklisted.add(key)
 
+    def delete(self, key: str) -> int:
+        if key in self.blocklisted:
+            self.blocklisted.remove(key)
+            return 1
+        return 0
+
     def rpush(self, *_: object) -> int:
         return 1
 
@@ -88,11 +94,30 @@ def test_github_callback_validates_redis_state(monkeypatch) -> None:
     app.dependency_overrides[get_db] = lambda: object()
     try:
         client = TestClient(app, raise_server_exceptions=False)
+        # 1. Missing cookie rejects even if state is in Redis
+        no_cookie_resp = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert no_cookie_resp.status_code == 400
+        assert no_cookie_resp.json()["error"]["code"] == "OAUTH_STATE_INVALID"
+
+        # 2. Valid cookie succeeds and consumes state
+        client.cookies.set("oauth_state", "valid-state")
         response = client.get(
             "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
             follow_redirects=False,
         )
         assert response.status_code == 302
+
+        # 3. Replay attack rejects because state was atomically deleted from Redis
+        client.cookies.set("oauth_state", "valid-state")
+        replay_resp = client.get(
+            "/api/v1/auth/github/callback?code=valid-code&state=valid-state",
+            follow_redirects=False,
+        )
+        assert replay_resp.status_code == 400
+        assert replay_resp.json()["error"]["code"] == "OAUTH_STATE_INVALID"
     finally:
         app.dependency_overrides.clear()
 

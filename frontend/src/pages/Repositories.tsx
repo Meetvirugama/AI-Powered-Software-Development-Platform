@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAvailableRepositories } from '../hooks/useAvailableRepositories';
 import { useConnectRepository } from '../hooks/useConnectRepository';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import { GitHubInstallButton } from '../components/shared/GitHubInstallButton';
+import { apiClient } from '../services/api';
 import type { AvailableRepository, ApiError } from '../types/api';
 import {
   Search,
@@ -15,7 +17,6 @@ import {
   RefreshCw,
   X,
   AlertCircle,
-  ExternalLink,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -43,6 +44,8 @@ const SEARCH_DEBOUNCE_MS = 350;
 
 export function Repositories() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const urlInstallationId = searchParams.get('installation_id') || undefined;
 
   // ------------------------------------------------------------------
   // Search state — raw input (immediately updated) + debounced value
@@ -84,7 +87,12 @@ export function Repositories() {
   // Discovery query
   // ------------------------------------------------------------------
   const { data, isLoading, isFetching, isError, error, refetch } =
-    useAvailableRepositories({ page, pageSize: PAGE_SIZE, search: debouncedSearch });
+    useAvailableRepositories({
+      page,
+      pageSize: PAGE_SIZE,
+      search: debouncedSearch,
+      installationId: urlInstallationId,
+    });
 
   // ------------------------------------------------------------------
   // Connect mutation
@@ -139,16 +147,11 @@ export function Repositories() {
               GitHub repositories available through your GitHub App installation.
             </p>
           </div>
-          <a
-            href="https://github.com/apps/ai-dev-platform-local/installations/new"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm self-start sm:self-auto shrink-0"
-          >
-            <PlusCircle className="h-3.5 w-3.5" />
-            <span>Install / Manage GitHub App</span>
-            <ExternalLink className="h-3 w-3 opacity-70" />
-          </a>
+          <GitHubInstallButton
+            label="Install / Manage GitHub App"
+            size="sm"
+            className="self-start sm:self-auto shrink-0"
+          />
         </div>
 
         {/* Search input & repo count row */}
@@ -228,7 +231,7 @@ export function Repositories() {
 
         {/* Empty — no repositories */}
         {!isLoading && !isError && data && data.items.length === 0 && !debouncedSearch && (
-          <EmptyNoRepositories />
+          <EmptyNoRepositories onRefresh={() => refetch()} />
         )}
 
         {/* Empty — search returned no results */}
@@ -406,7 +409,30 @@ function AvailableRepositoryCard({
 // Empty states
 // ---------------------------------------------------------------------------
 
-function EmptyNoRepositories() {
+function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
+  const [manualId, setManualId] = useState('');
+  const [isLinking, setIsLinking] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  const handleManualLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualId.trim()) return;
+    setIsLinking(true);
+    setLinkError(null);
+    try {
+      await apiClient.post('/github/installations/link', {
+        installation_id: manualId.trim(),
+      });
+      setManualId('');
+      onRefresh?.();
+    } catch (err: unknown) {
+      const msg = err && typeof err === 'object' && 'message' in err ? String((err as { message: unknown }).message) : 'Failed to link installation ID.';
+      setLinkError(msg);
+    } finally {
+      setIsLinking(false);
+    }
+  };
+
   return (
     <div className="flex flex-col items-center justify-center gap-4 rounded-xl border border-dashed border-border py-16 px-4 text-center">
       <div className="rounded-full bg-muted p-4">
@@ -418,16 +444,45 @@ function EmptyNoRepositories() {
           No repositories are available because the <strong>AI Dev Platform</strong> GitHub App is not yet installed on your GitHub account or organizations.
         </p>
       </div>
-      <a
-        href="https://github.com/apps/ai-dev-platform-local/installations/new"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 transition-colors"
-      >
-        <PlusCircle className="h-4 w-4" />
-        Install GitHub App & Select Repositories
-        <ExternalLink className="h-4 w-4 opacity-70" />
-      </a>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <GitHubInstallButton
+          label="Install GitHub App & Select Repositories"
+          size="md"
+        />
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            type="button"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Check Installation
+          </button>
+        )}
+      </div>
+
+      <form onSubmit={handleManualLink} className="mt-4 flex flex-col items-center gap-2">
+        <p className="text-xs text-muted-foreground">
+          Already installed? Link your GitHub Installation ID:
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            placeholder="e.g. 171308854"
+            value={manualId}
+            onChange={(e) => setManualId(e.target.value)}
+            className="rounded-lg border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring w-44"
+          />
+          <button
+            type="submit"
+            disabled={isLinking || !manualId.trim()}
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+          >
+            {isLinking ? 'Linking...' : 'Link'}
+          </button>
+        </div>
+        {linkError && <p className="text-xs text-destructive">{linkError}</p>}
+      </form>
     </div>
   );
 }
@@ -455,16 +510,11 @@ function EmptySearchResults({ search, onClear }: { search: string; onClear: () =
           <X className="h-4 w-4" />
           Clear search
         </button>
-        <a
-          href="https://github.com/apps/ai-dev-platform-local/installations/new"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
-        >
-          <PlusCircle className="h-4 w-4" />
-          Add More Repositories
-          <ExternalLink className="h-3.5 w-3.5 opacity-70" />
-        </a>
+        <GitHubInstallButton
+          label="Add More Repositories"
+          variant="secondary"
+          size="md"
+        />
       </div>
     </div>
   );

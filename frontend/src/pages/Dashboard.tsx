@@ -4,6 +4,7 @@ import { useRepositories } from '../hooks/useRepositories';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import type { PaginatedRepositoryResponse, Repository } from '../types/api';
 import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -26,9 +27,9 @@ export function Dashboard() {
     page,
     PAGE_SIZE,
     {
-      refetchInterval: (query: any) => {
+      refetchInterval: (query: { state: { data?: PaginatedRepositoryResponse } }) => {
         const items = query.state.data?.items;
-        const hasSyncing = items?.some((r: any) => r.sync_status === 'SYNCING');
+        const hasSyncing = items?.some((r: Repository) => r.sync_status === 'SYNCING');
         return hasSyncing ? 3000 : false;
       },
     },

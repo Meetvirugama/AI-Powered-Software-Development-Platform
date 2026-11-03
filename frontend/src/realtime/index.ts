@@ -68,8 +68,7 @@ export class RealtimeClient {
 
         const handler = this.handlers[envelope.type as keyof typeof this.handlers];
         if (handler) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (handler as (payload: any) => void)(envelope.data);
+          (handler as (payload: unknown) => void)(envelope.data);
         }
       };
 

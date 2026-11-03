@@ -108,8 +108,9 @@ export async function lookupRepositoryFileByPath(
       { params: { path } },
     );
     return response.data;
-  } catch (err: any) {
-    if (err?.status === 404 || err?.response?.status === 404) {
+  } catch (err: unknown) {
+    const errorObj = err as { status?: number; response?: { status?: number } } | null;
+    if (errorObj?.status === 404 || errorObj?.response?.status === 404) {
       return null;
     }
     throw err;
@@ -138,10 +139,10 @@ export async function getRepositoryDependencies(
  */
 export async function syncRepository(
   id: string,
+  force: boolean = false,
 ): Promise<{ job_id: string }> {
-  const response = await apiClient.post<{ job_id: string }>(
-    `/repositories/${id}/sync`,
-  );
+  const url = force ? `/repositories/${id}/sync?force=true` : `/repositories/${id}/sync`;
+  const response = await apiClient.post<{ job_id: string }>(url);
   return response.data;
 }
 

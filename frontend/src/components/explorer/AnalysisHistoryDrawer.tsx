@@ -129,7 +129,7 @@ export function AnalysisHistoryDrawer({
   }
 
   const queryParams = useMemo(() => {
-    const params: Record<string, any> = {
+    const params: Record<string, string | number> = {
       page,
       page_size: pageSize,
     };
@@ -157,7 +157,7 @@ export function AnalysisHistoryDrawer({
 
   const runs: AnalysisRunSummary[] = historyData?.items || [];
   const totalRuns = historyData?.total || 0;
-  const error = queryError ? (queryError as any)?.message || 'Failed to fetch analysis history runs.' : null;
+  const error = queryError instanceof Error ? queryError.message : queryError ? 'Failed to fetch analysis history runs.' : null;
 
   if (!isOpen) return null;
 
@@ -189,8 +189,9 @@ export function AnalysisHistoryDrawer({
         onReopenReview(parsed.reviewResult);
         onClose();
       }
-    } catch (err: any) {
-      setUnavailableMessage(err?.message || 'Failed to load details for this analysis run.');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to load details for this analysis run.';
+      setUnavailableMessage(msg);
     } finally {
       setReopeningId(null);
     }
@@ -256,7 +257,7 @@ export function AnalysisHistoryDrawer({
             <select
               value={statusFilter}
               onChange={(e) => {
-                setStatusFilter(e.target.value as any);
+                setStatusFilter(e.target.value as 'all' | 'COMPLETED' | 'FAILED');
                 setPage(1);
               }}
               className="text-xs rounded-md bg-background/80 border border-border/80 px-2 py-1 text-foreground focus:outline-none focus:border-primary"

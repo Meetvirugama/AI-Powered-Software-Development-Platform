@@ -22,11 +22,11 @@ export const availableRepositoryKeys = {
    * Keeping page, pageSize, and search inside a single object means
    * TanStack Query deep-compares the full params — no missed re-fetches.
    */
-  list: (page: number, pageSize: number, search: string) =>
+  list: (page: number, pageSize: number, search: string, installationId?: string) =>
     [
       ...availableRepositoryKeys.all,
       'list',
-      { page, pageSize, search },
+      { page, pageSize, search, installationId },
     ] as const,
 };
 
@@ -45,6 +45,8 @@ export interface UseAvailableRepositoriesParams {
    * Note: debouncing belongs in the UI layer (Prompt 3), not here.
    */
   search?: string;
+  /** Optional installation ID from URL or manual linking. */
+  installationId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,9 +57,9 @@ export interface UseAvailableRepositoriesParams {
  * useAvailableRepositories — TanStack Query hook for GitHub App repository discovery.
  *
  * Data flow:
- *   useAvailableRepositories({ page, pageSize, search })
- *     → listAvailableRepositories({ page, pageSize, search })
- *     → GET /api/v1/github/repositories?page=&page_size=&search=
+ *   useAvailableRepositories({ page, pageSize, search, installationId })
+ *     → listAvailableRepositories({ page, pageSize, search, installationId })
+ *     → GET /api/v1/github/repositories?page=&page_size=&search=&installation_id=
  *     → PaginatedAvailableRepositoryResponse
  *
  * Design decisions (from Day 4 spec):
@@ -86,9 +88,10 @@ export function useAvailableRepositories({
   page = 1,
   pageSize = 20,
   search = '',
+  installationId,
 }: UseAvailableRepositoriesParams = {}) {
   return useQuery<PaginatedAvailableRepositoryResponse>({
-    queryKey: availableRepositoryKeys.list(page, pageSize, search),
-    queryFn: () => listAvailableRepositories({ page, pageSize, search }),
+    queryKey: availableRepositoryKeys.list(page, pageSize, search, installationId),
+    queryFn: () => listAvailableRepositories({ page, pageSize, search, installationId }),
   });
 }

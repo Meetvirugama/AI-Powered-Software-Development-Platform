@@ -106,7 +106,7 @@ export function reconstructAnalysisResult(
   }
 
   // 2. Bug Detection
-  if (featureType === 'detect_bugs' || featureType === ('bugs' as any)) {
+  if (featureType === 'detect_bugs' || (featureType as string) === 'bugs') {
     const findings = (
       detail.findings && detail.findings.length > 0
         ? detail.findings
@@ -140,7 +140,7 @@ export function reconstructAnalysisResult(
   }
 
   // 3. Test Generation
-  if (featureType === 'generate_tests' || featureType === ('tests' as any)) {
+  if (featureType === 'generate_tests' || (featureType as string) === 'tests') {
     const rawResult = payload?.result ?? payload;
     const testContent =
       rawResult?.test_content ||

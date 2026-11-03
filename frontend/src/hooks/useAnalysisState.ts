@@ -46,6 +46,14 @@ export const INITIAL_ANALYSIS_STATE: AnalysisStateCollection = {
  * Hook providing isolated per-feature lifecycle states, stale response protection,
  * and clean feature switching (F-05).
  */
+function getTargetPath(target: AnalysisTarget | ReviewTarget | null | undefined): string | undefined {
+  if (!target) return undefined;
+  if ('path' in target && typeof target.path === 'string') {
+    return target.path;
+  }
+  return undefined;
+}
+
 export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | null = null) {
   const [activeFeature, setActiveFeature] = useState<AnalysisFeatureType | null>(initialActiveFeature);
   const [states, setStates] = useState<AnalysisStateCollection>(INITIAL_ANALYSIS_STATE);
@@ -70,19 +78,25 @@ export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | nul
   const completeAnalysis = useCallback(
     (
       feature: AnalysisFeatureType,
-      result: any,
+      result: unknown,
       target: AnalysisTarget | ReviewTarget,
       runId?: string
     ) => {
       setStates((prev) => {
         const currentTarget = prev[feature].target;
         // Stale response guard (F-05): if target changed before completion, discard or keep strictly bound
-        const currentPath = (currentTarget as any)?.path;
-        const resultPath = (target as any)?.path;
+        const currentPath = getTargetPath(currentTarget);
+        const resultPath = getTargetPath(target);
         if (currentPath && resultPath && currentPath !== resultPath) {
           // Stale response: ignore so it doesn't overwrite new file selection
           return prev;
         }
+
+        const resolvedRunId =
+          runId ??
+          (result && typeof result === 'object' && 'run_id' in result && typeof (result as { run_id: unknown }).run_id === 'string'
+            ? (result as { run_id: string }).run_id
+            : null);
 
         return {
           ...prev,
@@ -90,9 +104,9 @@ export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | nul
             status: 'COMPLETED',
             error: null,
             errorCode: null,
-            result,
+            result: result as never,
             target,
-            runId: runId ?? (result as any)?.run_id ?? null,
+            runId: resolvedRunId,
           },
         };
       });
@@ -111,8 +125,8 @@ export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | nul
 
       setStates((prev) => {
         const currentTarget = prev[feature].target;
-        const currentPath = (currentTarget as any)?.path;
-        const errorPath = (target as any)?.path;
+        const currentPath = getTargetPath(currentTarget);
+        const errorPath = getTargetPath(target);
         if (currentPath && errorPath && currentPath !== errorPath) {
           // Stale error for old file: ignore
           return prev;
@@ -147,17 +161,28 @@ export function useAnalysisState(initialActiveFeature: AnalysisFeatureType | nul
   }, []);
 
   const reopenFeature = useCallback(
-    (feature: AnalysisFeatureType, result: any, target: any, runId?: string) => {
+    (
+      feature: AnalysisFeatureType,
+      result: unknown,
+      target: AnalysisTarget | ReviewTarget,
+      runId?: string
+    ) => {
       setActiveFeature(feature);
+      const resolvedRunId =
+        runId ??
+        (result && typeof result === 'object' && 'run_id' in result && typeof (result as { run_id: unknown }).run_id === 'string'
+          ? (result as { run_id: string }).run_id
+          : null);
+
       setStates((prev) => ({
         ...prev,
         [feature]: {
           status: 'COMPLETED',
           error: null,
           errorCode: null,
-          result,
+          result: result as never,
           target,
-          runId: runId ?? (result as any)?.run_id ?? null,
+          runId: resolvedRunId,
         },
       }));
     },

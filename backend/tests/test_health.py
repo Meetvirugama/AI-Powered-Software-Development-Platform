@@ -172,3 +172,110 @@ def test_modular_initialization_isolation(monkeypatch: pytest.MonkeyPatch) -> No
     assert ok_hist is True
     assert test_app.state.service_readiness["history_services"] is True
     assert test_app.state.explanation_history_service is not None
+
+
+def test_health_ready_no_gemini_key_degraded(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-01: Health readiness reports degraded when retriever has no Gemini key."""
+    from app.main import app
+
+    app.state.service_readiness = {"database": True, "redis": True, "rag_pipeline": False}
+    app.state.llm_gateway = object()
+    # RAG pipeline with retriever=None
+    mock_pipeline = MagicMock()
+    mock_pipeline.retriever = None
+    mock_pipeline.llm = app.state.llm_gateway
+    app.state.rag_pipeline = mock_pipeline
+
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    monkeypatch.setattr("app.api.v1.health.SessionLocal", lambda: mock_session)
+
+    mock_redis = MagicMock()
+    mock_redis.ping.return_value = True
+    monkeypatch.setattr("app.api.v1.health.get_redis", lambda: mock_redis)
+
+    res = client.get("/health/ready")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "degraded"
+    assert data["rag_pipeline"]["status"] == "degraded"
+    assert "retriever unavailable" in data["rag_pipeline"]["message"]
+
+
+def test_health_ready_no_llm_key_degraded(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-01: Health readiness reports degraded when no LLM gateway is configured."""
+    from app.main import app
+
+    app.state.service_readiness = {"database": True, "redis": True, "llm_gateway": False}
+    app.state.llm_gateway = None
+    mock_pipeline = MagicMock()
+    mock_pipeline.retriever = object()
+    mock_pipeline.llm = None
+    app.state.rag_pipeline = mock_pipeline
+
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    monkeypatch.setattr("app.api.v1.health.SessionLocal", lambda: mock_session)
+
+    mock_redis = MagicMock()
+    mock_redis.ping.return_value = True
+    monkeypatch.setattr("app.api.v1.health.get_redis", lambda: mock_redis)
+
+    res = client.get("/health/ready")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "degraded"
+    assert data["llm_gateway"]["status"] == "degraded"
+    assert data["rag_pipeline"]["status"] == "degraded"
+
+
+def test_health_ready_normal_configuration_ready(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """F-01: Health readiness reports ready when all dependencies and retriever are available."""
+    from app.main import app
+
+    app.state.service_readiness = {"database": True, "redis": True, "llm_gateway": True, "rag_pipeline": True}
+    llm = object()
+    retriever = object()
+    app.state.llm_gateway = llm
+    mock_pipeline = MagicMock()
+    mock_pipeline.retriever = retriever
+    mock_pipeline.llm = llm
+    app.state.rag_pipeline = mock_pipeline
+
+    mock_session = MagicMock()
+    mock_session.__enter__.return_value = mock_session
+    monkeypatch.setattr("app.api.v1.health.SessionLocal", lambda: mock_session)
+
+    mock_redis = MagicMock()
+    mock_redis.ping.return_value = True
+    monkeypatch.setattr("app.api.v1.health.get_redis", lambda: mock_redis)
+
+    res = client.get("/health/ready")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ready"
+    assert data["database"]["status"] == "healthy"
+    assert data["redis"]["status"] == "healthy"
+    assert data["llm_gateway"]["status"] == "healthy"
+    assert data["rag_pipeline"]["status"] == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_rag_pipeline_chat_without_retriever_returns_degraded():
+    """F-01: RAGPipeline.chat returns degraded status when retriever is None."""
+    import uuid
+    from ai.pipeline import RAGPipeline
+
+    pipeline = RAGPipeline(retriever=None)
+    assert pipeline.has_retriever is False
+    assert pipeline.is_ready is False
+
+    answer = await pipeline.chat(
+        question="Where is authentication?",
+        repository_id=uuid.uuid4(),
+        history=[],
+    )
+    assert answer.status == "retrieval_degraded"
+    assert "no retriever is configured" in answer.answer
+    assert answer.confidence == "low"
+    assert answer.sources == []

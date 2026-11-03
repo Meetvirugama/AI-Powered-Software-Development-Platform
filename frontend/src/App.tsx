@@ -26,10 +26,17 @@ const RepositoryTestStudio = lazy(() =>
 const RepositoryReviewStudio = lazy(() =>
   import('./pages/RepositoryReviewStudio').then((m) => ({ default: m.RepositoryReviewStudio }))
 );
+const RepositoryTaskStudio = lazy(() =>
+  import('./pages/RepositoryTaskStudio').then((m) => ({ default: m.RepositoryTaskStudio }))
+);
+const NotFound = lazy(() => import('./pages/NotFound').then((m) => ({ default: m.NotFound })));
+const Tasks = lazy(() => import('./pages/Tasks').then((m) => ({ default: m.Tasks })));
+const CreateTask = lazy(() => import('./pages/CreateTask').then((m) => ({ default: m.CreateTask })));
+const TaskDetail = lazy(() => import('./pages/TaskDetail').then((m) => ({ default: m.TaskDetail })));
 
 function RouteFallback() {
   return (
-    <div className="flex h-64 w-full items-center justify-center">
+    <div className="flex min-h-screen w-full items-center justify-center bg-background">
       <LoadingSpinner size="lg" label="Loading page..." />
     </div>
   );
@@ -50,6 +57,9 @@ export function App() {
                 <Route index element={<Navigate to="/app/dashboard" replace />} />
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="repositories" element={<Repositories />} />
+                <Route path="tasks" element={<Tasks />} />
+                <Route path="tasks/new" element={<CreateTask />} />
+                <Route path="tasks/:taskId" element={<TaskDetail />} />
 
                 {/* Dedicated Antigravity-Style Repository Workspace Studios */}
                 <Route path="repositories/:id" element={<RepositoryStudioLayout />}>
@@ -59,6 +69,7 @@ export function App() {
                   <Route path="bugs" element={<RepositoryBugStudio />} />
                   <Route path="tests" element={<RepositoryTestStudio />} />
                   <Route path="review" element={<RepositoryReviewStudio />} />
+                  <Route path="tasks" element={<RepositoryTaskStudio />} />
                 </Route>
               </Route>
             </Route>
@@ -66,8 +77,8 @@ export function App() {
             {/* Root redirect */}
             <Route path="/" element={<Navigate to="/app/dashboard" replace />} />
 
-            {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
+            {/* Catch-all 404 */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

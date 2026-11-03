@@ -88,4 +88,52 @@ describe('useAnalysisState (F-05)', () => {
     expect(result.current.states.bugs.runId).toBe('run-reopened-123');
     expect(result.current.states.bugs.result?.total_findings).toBe(1);
   });
+
+  it('drops stale errors when file target changed during flight', () => {
+    const { result } = renderHook(() => useAnalysisState('bugs'));
+
+    // Request initiated for file A
+    act(() => {
+      result.current.startAnalysis('bugs', { type: 'file', path: 'src/old_file.py' });
+    });
+
+    // User switches to file B
+    act(() => {
+      result.current.resetFileFeatures('src/new_file.py');
+      result.current.startAnalysis('bugs', { type: 'file', path: 'src/new_file.py' });
+    });
+
+    // Error arrives for old file A
+    act(() => {
+      result.current.failAnalysis(
+        'bugs',
+        { message: 'AST parsing error on old file', code: 'PARSE_ERROR' },
+        { type: 'file', path: 'src/old_file.py' }
+      );
+    });
+
+    // Stale error is ignored; status for new file remains RUNNING
+    expect(result.current.states.bugs.status).toBe('RUNNING');
+    expect(result.current.states.bugs.error).toBeNull();
+  });
+
+  it('handles cancellation error code cleanly', () => {
+    const { result } = renderHook(() => useAnalysisState('tests'));
+
+    act(() => {
+      result.current.startAnalysis('tests', { type: 'file', path: 'src/calc.py' });
+    });
+
+    act(() => {
+      result.current.failAnalysis(
+        'tests',
+        { message: 'Request was cancelled.', code: 'REQUEST_CANCELLED' },
+        { type: 'file', path: 'src/calc.py' }
+      );
+    });
+
+    expect(result.current.states.tests.status).toBe('FAILED');
+    expect(result.current.states.tests.error).toBe('Request was cancelled.');
+    expect(result.current.states.tests.errorCode).toBe('REQUEST_CANCELLED');
+  });
 });

@@ -1,6 +1,6 @@
 """Task Intake & Lifecycle Schemas.
 
-Owner: Dev — Week 3 Day 1 Deliverable (Docs/daily_tasks.md line 608 & Docs/week3.md §7)
+Owner: Dev (Task Intake & Lifecycle), Yug, & Om (Persistence, Workflows & Recovery).
 Reference: Docs/week3.md §7.1 (Task Lifecycle), §7.2 (State Transitions), §7.3 (Common Task Response)
 
 Responsibilities:
@@ -9,6 +9,7 @@ Responsibilities:
 3. Validate repository-relative paths and prevent path traversal escapes.
 4. Provide structured source references connecting tasks to GitHub issues, bug findings, or reviews.
 5. Provide canonical task creation requests and task detail response models.
+6. Provide plan proposals, step models, approval payloads, and recovery checkpoint schemas.
 """
 
 from __future__ import annotations
@@ -16,15 +17,17 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
+from app.core.secret_redaction import redact
 
 _HTTP_URL_RE = re.compile(r"^https?://[^\s/$.?#].[^\s]*$", re.IGNORECASE)
 _COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
 
 
 # ---------------------------------------------------------------------------
@@ -68,41 +71,61 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         {TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED}
     ),
     TaskStatus.APPROVED: frozenset(
-        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        # Approved plan can enter WORKSPACE_SETUP/EXECUTING, or be re-planned if revised (which invalidates approval)
+        {TaskStatus.WORKSPACE_SETUP, TaskStatus.EXECUTING, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.BLOCKED}
     ),
     TaskStatus.REJECTED: frozenset(
         # Rejected plan can be re-planned, cancelled, or closed; never directly executed
         {TaskStatus.PLANNING, TaskStatus.CANCELLED}
     ),
     TaskStatus.WORKSPACE_SETUP: frozenset(
-        {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.EXECUTING: frozenset(
         {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.TESTING: frozenset(
-        {TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.REPAIRING: frozenset(
-        {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+        {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.VERIFYING: frozenset(
-        {TaskStatus.READY_FOR_PUBLICATION, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED}
+        {TaskStatus.READY_FOR_PUBLICATION, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.READY_FOR_PUBLICATION: frozenset(
-        {TaskStatus.PUBLISHING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
+        {TaskStatus.PUBLISHING, TaskStatus.VERIFYING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.PUBLISHING: frozenset(
-        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED}
+        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.DRAFT_PR_CREATED: frozenset(),  # Terminal happy path
     TaskStatus.FAILED: frozenset({TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING}),
     TaskStatus.CANCELLED: frozenset(),  # Terminal
     TaskStatus.RECOVERY_REQUIRED: frozenset(
-        {TaskStatus.PLANNING, TaskStatus.APPROVED, TaskStatus.WORKSPACE_SETUP, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        {
+            TaskStatus.PLANNING,
+            TaskStatus.APPROVED,
+            TaskStatus.WORKSPACE_SETUP,
+            TaskStatus.EXECUTING,
+            TaskStatus.TESTING,
+            TaskStatus.VERIFYING,
+            TaskStatus.READY_FOR_PUBLICATION,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
     TaskStatus.BLOCKED: frozenset(
-        {TaskStatus.PLANNING, TaskStatus.PENDING_APPROVAL, TaskStatus.CANCELLED}
+        {
+            TaskStatus.PLANNING,
+            TaskStatus.PENDING_APPROVAL,
+            TaskStatus.EXECUTING,
+            TaskStatus.TESTING,
+            TaskStatus.VERIFYING,
+            TaskStatus.READY_FOR_PUBLICATION,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELLED,
+        }
     ),
 }
 
@@ -124,6 +147,8 @@ TaskSourceType = Literal["GITHUB_ISSUE", "BUG_FINDING", "REVIEW_FINDING", "USER_
 class TaskSourceReference(BaseModel):
     """Traceability link connecting task to GitHub issues or Week 2 findings."""
 
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
     type: TaskSourceType = Field(
         ...,
         description="Source type: GITHUB_ISSUE, BUG_FINDING, REVIEW_FINDING, or USER_PROMPT.",
@@ -138,6 +163,11 @@ class TaskSourceReference(BaseModel):
         default=None,
         max_length=2048,
         description="HTTP URL for the imported GitHub issue.",
+    )
+    url: str | None = Field(
+        default=None,
+        max_length=2048,
+        description="Direct URL alias for imported issue or finding.",
     )
     finding_id: str | None = Field(
         default=None,
@@ -154,9 +184,20 @@ class TaskSourceReference(BaseModel):
         description="Git commit SHA from which the task branches.",
     )
 
-    @field_validator("issue_url")
+    @model_validator(mode="before")
     @classmethod
-    def _validate_issue_url(cls, value: str | None) -> str | None:
+    def _sync_url_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            d = dict(data)
+            if d.get("url") and not d.get("issue_url"):
+                d["issue_url"] = d["url"]
+            elif d.get("issue_url") and not d.get("url"):
+                d["url"] = d["issue_url"]
+            return d
+        return data
+    @field_validator("issue_url", "url")
+    @classmethod
+    def _validate_url(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
@@ -169,10 +210,17 @@ class TaskSourceReference(BaseModel):
     def _validate_base_revision(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        value = value.strip()
-        if not _COMMIT_SHA_RE.match(value):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if (
+            cleaned.startswith("-")
+            or ".." in cleaned
+            or "\x00" in cleaned
+            or not (_COMMIT_SHA_RE.match(cleaned) or _SAFE_GIT_REF_RE.match(cleaned))
+        ):
             raise ValueError(f"Invalid base_revision commit SHA format: '{value}'")
-        return value
+        return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +244,14 @@ class TaskRequirement(BaseModel):
         default_factory=list,
         description="Conditions that must pass for this requirement to be satisfied.",
     )
+
+    @field_validator("description")
+    @classmethod
+    def _redact_description(cls, value: str) -> str:
+        cleaned = redact(value.strip())
+        if not cleaned:
+            raise ValueError("Requirement description must not be empty.")
+        return cleaned
 
     @field_validator("target_files")
     @classmethod
@@ -222,6 +278,11 @@ class TaskAssumption(BaseModel):
         default="low",
         description="Risk of failure if assumption proves false.",
     )
+
+    @field_validator("description")
+    @classmethod
+    def _redact_description(cls, value: str) -> str:
+        return redact(value.strip())
 
 
 TaskConstraintType = Literal[
@@ -292,29 +353,58 @@ class TaskIntakePayload(BaseModel):
     )
     base_revision: str | None = Field(
         default=None,
-        description="Git commit SHA to branch from. If omitted, uses default branch HEAD.",
+        description="Git commit SHA or branch ref to branch from. If omitted, uses default branch HEAD.",
     )
 
     @field_validator("title")
     @classmethod
     def _validate_title_not_blank(cls, value: str) -> str:
-        cleaned = value.strip()
+        cleaned = redact(value.strip())
         if not cleaned:
             raise ValueError("Task title must contain non-whitespace characters.")
         return cleaned
 
+    @field_validator("description")
+    @classmethod
+    def _validate_and_redact_description(cls, value: str) -> str:
+        cleaned = redact(value.strip())
+        if not cleaned:
+            raise ValueError("Task description must contain non-whitespace characters.")
+        return cleaned
+
+    @field_validator("base_revision")
+    @classmethod
+    def _validate_base_revision(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if (
+            cleaned.startswith("-")
+            or ".." in cleaned
+            or "\x00" in cleaned
+            or not (_COMMIT_SHA_RE.match(cleaned) or _SAFE_GIT_REF_RE.match(cleaned))
+        ):
+            raise ValueError(f"Invalid base_revision format: '{value}'")
+        return cleaned
+
     @model_validator(mode="after")
     def _validate_constraint_disjointness(self) -> "TaskIntakePayload":
-        """Ensure target files in requirements are not listed in forbidden_files constraints."""
-        forbidden_set: set[str] = set()
+        """Ensure target files in requirements are not listed in forbidden_files constraints (case-insensitive)."""
+        forbidden_map: dict[str, str] = {}
         for c in self.constraints:
-            forbidden_set.update(c.forbidden_files)
+            for f_path in c.forbidden_files:
+                forbidden_map[f_path.lower()] = f_path
 
         for req in self.requirements:
-            overlap = set(req.target_files).intersection(forbidden_set)
-            if overlap:
+            overlaps: list[str] = []
+            for t_path in req.target_files:
+                if t_path.lower() in forbidden_map:
+                    overlaps.append(t_path)
+            if overlaps:
                 raise ValueError(
-                    f"Requirement '{req.id}' targets forbidden file(s): {', '.join(sorted(overlap))}"
+                    f"Requirement '{req.id}' targets forbidden file(s): {', '.join(sorted(set(overlaps)))}"
                 )
         return self
 
@@ -331,6 +421,7 @@ class TaskDetailResponse(BaseModel):
     title: str
     description: str
     status: TaskStatus = Field(default=TaskStatus.CREATED)
+    source_type: TaskSourceType = Field(default="USER_PROMPT")
     source: TaskSourceReference
     requirements: list[TaskRequirement]
     assumptions: list[TaskAssumption] = Field(default_factory=list)
@@ -340,6 +431,8 @@ class TaskDetailResponse(BaseModel):
     approved_plan_version: int | None = None
     repair_attempts_used: int = Field(default=0, ge=0)
     repair_attempts_max: int = Field(default=3, ge=1, le=5)
+    latest_plan: dict[str, Any] | None = None
+    approvals: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
@@ -347,8 +440,315 @@ class TaskDetailResponse(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
 
+    @model_validator(mode="after")
+    def _sync_source_type(self) -> "TaskDetailResponse":
+        if self.source and self.source.type:
+            self.source_type = self.source.type
+        return self
+
+
+class TaskSummaryResponse(BaseModel):
+    """Compact summary item for task list views (Docs/week3.md §6 F38 & §7.3)."""
+
+    task_id: str
+    repository_id: str
+    title: str
+    description: str = ""
+    status: TaskStatus
+    source_type: TaskSourceType
+    source: TaskSourceReference
+    requirements: list[TaskRequirement] = Field(default_factory=list)
+    assumptions: list[TaskAssumption] = Field(default_factory=list)
+    constraints: list[TaskConstraint] = Field(default_factory=list)
+    base_revision: str | None = None
+    plan_version: int = 1
+    approved_plan_version: int | None = None
+    repair_attempts_used: int = 0
+    repair_attempts_max: int = 3
+    created_at: str
+    updated_at: str
+
+
+class PaginatedTaskListResponse(BaseModel):
+    """Paginated task list response."""
+
+    items: list[TaskSummaryResponse] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+# ---------------------------------------------------------------------------
+# 5. Workflow Automation, Plans, Approvals & Recovery Schemas
+# ---------------------------------------------------------------------------
+
+class TaskResponse(BaseModel):
+    """Canonical task response envelope for database and persistence operations."""
+
+    task_id: str
+    repository_id: str
+    user_id: Optional[str] = None
+    title: str
+    description: Optional[str] = None
+    status: str
+    source_type: str
+    source_id: Optional[str] = None
+    source_metadata: Optional[dict[str, Any]] = None
+    finding_id: Optional[str] = None
+    base_revision: str
+    plan_version: int
+    approved_plan_version: Optional[int] = None
+    repair_attempts_used: int
+    repair_attempts_max: int
+    context_summary: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class TaskListResponse(BaseModel):
+    """Paginated task list envelope."""
+
+    tasks: List[TaskResponse]
+    total: int
+    offset: int
+    limit: int
+
+
+class TaskPlanStep(BaseModel):
+    """Single ordered step within an implementation plan."""
+
+    step_id: str = Field(..., description="Unique step identifier (e.g. step_1)")
+    description: str = Field(..., description="Clear explanation of the change to be made")
+    expected_files: List[str] = Field(default_factory=list, description="Files to inspect or modify")
+    verification: List[str] = Field(default_factory=list, description="Verification criteria for this step")
+
+
+class TaskPlanCreateRequest(BaseModel):
+    """Request to propose or revise an implementation plan."""
+
+    summary: str = Field(..., max_length=512, description="High-level plan summary")
+    problem_statement: Optional[str] = Field(None, description="Problem breakdown")
+    steps: List[TaskPlanStep] = Field(..., min_length=1, description="Ordered implementation steps")
+    expected_files: Optional[List[str]] = Field(None, description="All files expected to be changed")
+    tests_to_run: Optional[List[str]] = Field(None, description="Target tests to execute")
+    validation_strategy: Optional[str] = Field(None, description="Verification and safety strategy")
+    risks: Optional[List[str]] = Field(None, description="Identified risks or side effects")
+    base_revision: Optional[str] = Field(None, description="Target base revision")
+
+
+class TaskPlanResponse(BaseModel):
+    """Structured implementation plan response."""
+
+    plan_id: str
+    task_id: str
+    version: int
+    base_revision: str
+    summary: str
+    problem_statement: Optional[str] = None
+    steps: List[dict[str, Any]]
+    expected_files: Optional[List[str]] = None
+    tests_to_run: Optional[List[str]] = None
+    validation_strategy: Optional[str] = None
+    risks: Optional[List[Any]] = None
+    status: str
+    created_at: Optional[str] = None
+
+
+class TaskApprovalRequest(BaseModel):
+    """Request to approve or reject a plan version."""
+
+    plan_version: int = Field(..., ge=1, description="The exact plan version being decided")
+    feedback: Optional[str] = Field(None, description="Optional feedback or rejection reason")
+
+
+class TaskApprovalResponse(BaseModel):
+    """Immutable task approval outcome."""
+
+    approval_id: str
+    task_id: str
+    plan_version: int
+    user_id: Optional[str] = None
+    decision: str
+    feedback: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskCheckpointResponse(BaseModel):
+    """Sanitized checkpoint for worker failure recovery."""
+
+    checkpoint_id: str
+    task_id: str
+    step_name: str
+    state_data: dict[str, Any]
+    recovery_instructions: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskEventResponse(BaseModel):
+    """Ordered event item for dashboard timeline."""
+
+    event_id: str
+    task_id: str
+    event_type: str
+    event_data: Optional[dict[str, Any]] = None
+    user_id: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class VerificationResultResponse(BaseModel):
+    """Independent verification check outcome."""
+
+    verification_id: str
+    task_id: str
+    verified_revision: str
+    status: str
+    checks: Optional[List[dict[str, Any]]] = None
+    blocking_findings: Optional[List[dict[str, Any]]] = None
+    warnings: Optional[List[dict[str, Any]]] = None
+    summary: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskPullRequestResponse(BaseModel):
+    """Created GitHub Draft PR details."""
+
+    pr_id: str
+    task_id: str
+    repository_id: str
+    pr_number: Optional[int] = None
+    pr_url: str
+    base_branch: str
+    head_branch: str
+    head_sha: str
+    is_draft: bool
+    title: str
+    body: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class WorkspaceResponse(BaseModel):
+    """Isolated task execution environment details (Day 3)."""
+
+    workspace_id: str
+    task_id: str
+    workspace_path: str
+    task_branch: str
+    base_revision: str
+    current_revision: Optional[str] = None
+    status: str
+    cleanup_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TaskExecutionResponse(BaseModel):
+    """Task worker execution attempt status (Day 3)."""
+
+    execution_id: str
+    task_id: str
+    attempt_number: int
+    worker_id: Optional[str] = None
+    status: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class ToolInvocationResponse(BaseModel):
+    """Audit log of operations routed through ToolRouter (Day 3)."""
+
+    invocation_id: str
+    task_id: str
+    tool_name: str
+    sanitized_arguments: Optional[dict[str, Any]] = None
+    status: str
+    duration_ms: Optional[int] = None
+    output_summary: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class TestRunResponse(BaseModel):
+    __test__ = False
+    """Execution counts, duration, and exit code from permitted tests (Day 4)."""
+
+    test_run_id: str
+    task_id: str
+    command: str
+    status: str
+    exit_code: Optional[int] = None
+    duration_ms: Optional[int] = None
+    tests_total: int = 0
+    tests_passed: int = 0
+    tests_failed: int = 0
+    sanitized_output: Optional[str] = None
+    target_revision: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class RepairAttemptResponse(BaseModel):
+    """Bounded repair cycle attempt outcome (Day 4)."""
+
+    repair_id: str
+    task_id: str
+    attempt_number: int
+    failure_classification: Optional[str] = None
+    diagnosis: Optional[str] = None
+    applied_patch: Optional[str] = None
+    result: str
+    created_at: Optional[str] = None
+
+
+class PublicationAuthorizationRequest(BaseModel):
+    """Request model for authorizing branch publication and PR creation (Day 5)."""
+
+    head_sha: str
+    notes: Optional[str] = None
+
+
+class PublicationAuthorizationResponse(BaseModel):
+    """Response envelope confirming publication authorization (Day 5)."""
+
+    task_id: str
+    status: str
+    head_sha: str
+    authorized: bool = True
+    user_id: Optional[str] = None
+    authorized_at: Optional[str] = None
+
+
+class TaskTraceabilityResponse(BaseModel):
+    """Complete end-to-end audit traceability from finding/issue to draft PR (Days 5-7)."""
+
+    task: TaskResponse
+    finding: Optional[dict[str, Any]] = None
+    latest_plan: Optional[TaskPlanResponse] = None
+    latest_approval: Optional[TaskApprovalResponse] = None
+    workspace: Optional[WorkspaceResponse] = None
+    latest_execution: Optional[TaskExecutionResponse] = None
+    latest_test_run: Optional[TestRunResponse] = None
+    repair_attempts_used: int = 0
+    latest_repair: Optional[RepairAttemptResponse] = None
+    latest_verification: Optional[VerificationResultResponse] = None
+    pull_request: Optional[TaskPullRequestResponse] = None
+    timeline: List[TaskEventResponse] = []
+    tool_invocations: List[ToolInvocationResponse] = []
+    test_runs: List[TestRunResponse] = []
+    repair_attempts: List[RepairAttemptResponse] = []
+    traceability_status: str
+    is_complete_workflow: bool = False
+
+
+class TaskRecoveryResponse(BaseModel):
+    """Result of worker crash recovery and restart reconciliation (Day 6)."""
+
+    recovered_tasks_count: int
+    tasks: List[dict[str, Any]] = []
+    timestamp: Optional[str] = None
+
 
 __all__ = [
+    "PaginatedTaskListResponse",
     "TaskAssumption",
     "TaskConstraint",
     "TaskConstraintType",
@@ -360,6 +760,28 @@ __all__ = [
     "TaskSourceReference",
     "TaskSourceType",
     "TaskStatus",
+    "TaskSummaryResponse",
     "VALID_TASK_TRANSITIONS",
     "can_transition",
+    # Om (Workflows & Recovery)
+    "TaskResponse",
+    "TaskListResponse",
+    "TaskPlanStep",
+    "TaskPlanCreateRequest",
+    "TaskPlanResponse",
+    "TaskApprovalRequest",
+    "TaskApprovalResponse",
+    "TaskCheckpointResponse",
+    "TaskEventResponse",
+    "VerificationResultResponse",
+    "TaskPullRequestResponse",
+    "WorkspaceResponse",
+    "TaskExecutionResponse",
+    "ToolInvocationResponse",
+    "TestRunResponse",
+    "RepairAttemptResponse",
+    "PublicationAuthorizationRequest",
+    "PublicationAuthorizationResponse",
+    "TaskTraceabilityResponse",
+    "TaskRecoveryResponse",
 ]

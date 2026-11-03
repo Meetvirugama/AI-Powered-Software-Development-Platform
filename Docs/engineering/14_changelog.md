@@ -625,11 +625,385 @@ Related Docs: Which documentation may need updating
 
 **Related Docs:** `Docs/week2_day7_ast_acceptance_report.md`, `Docs/scanner_languages.md`, `Docs/week2.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+
+## Week 3 Changes
+
+---
+
+### [W3-Day1] 2026-10-27 — Workspace & Sandbox Architecture Audit, WorkspaceManager Interface & Resource Guardrails
+**Type:** Feature / Architecture & Isolation  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceStatus`, `WorkspaceResourceLimits`, and `WorkspaceMetadata` schemas, plus request/result schemas for create, file, and cleanup operations.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `WorkspaceManager` interface providing isolated directory provisioning under `.workspaces/task-<task_id>/`.
+  - Built path traversal containment and resource limits enforcement.
+- `Docs/workspace_sandbox_architecture_audit.md`:
+  - Authored comprehensive architectural audit for workspace and sandbox isolation.
+- `backend/tests/test_prit_w3_d1_workspace.py`:
+  - 38 unit and integration tests verifying workspace creation, boundary enforcement, and cleanup.
+
+**Impact:** Provides secure, isolated workspace directory provisioning for task execution and safe agent tool containment.
+
+**Related Docs:** `Docs/workspace_sandbox_architecture_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day2] 2026-10-28 — Symbol-Level Blast Radius Engine, Test Discovery Planner & Task Planning Context
+**Type:** Feature / Analysis & Planning  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/planner_context.py`:
+  - Implemented `LineRange`, `FileDiffRange`, `TaskDiffRanges`, `AffectedSymbol`, `RiskLevel`, `RiskAssessment`, `ProposedTest`, `TestExecutionPlan` (with `__test__ = False`), `TaskImpactAssessment`, and `TaskPlanningContext` Pydantic schemas.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all planner context schemas in public schemas package.
+- `backend/scanner/symbol_blast_radius.py`:
+  - Implemented `SymbolBlastRadiusEngine` with 1-indexed interval intersection (`map_diff_ranges_to_symbols`), multi-hop BFS graph traversal across dependency edges (`compute_symbol_blast_radius`) with cycle protection, and multi-tier risk evaluation (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`).
+- `backend/scanner/task_test_planner.py`:
+  - Implemented `TaskTestPlanner` providing framework detection (`pytest`, `unittest`, `jest`), reverse test mapping via `FileTestMapper`, missing coverage discovery for modified symbols, standardized test proposals, and CLI command formulation.
+- `backend/scanner/workspace_preflight.py`:
+  - Implemented `WorkspaceBaseValidator` providing base-revision SHA validation, workspace path boundary confinement (`WorkspacePathGuard`), framework detection, and lifecycle status validation.
+- `backend/scanner/__init__.py`:
+  - Re-exported `SymbolBlastRadiusEngine`, `TaskTestPlanner`, `WorkspaceBaseValidator`, and `WorkspacePreflightResult`.
+- `backend/review/blast_radius.py`:
+  - Enhanced existing `BlastRadiusEngine` with `compute_symbols()` delegating to `SymbolBlastRadiusEngine` while maintaining full backward compatibility.
+- `Docs/task_planning_blast_radius_audit.md`:
+  - Authored comprehensive Week 3 Day 2 Architecture, Blast Radius & Test Planning Report with mathematical models, component specifications, and SLA benchmarks.
+- `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`:
+  - 35 comprehensive unit/integration tests covering line-range matching, multi-hop BFS, recursion/cycle safety, risk tiers, framework detection, test discovery, proposed tests, pre-flight checks, schema validation, and real-world multi-language fixtures.
+
+**Impact:** Ingests Git diff line ranges from Parth (`feat(git): Week 3 Day 2`) and AST symbols to deliver symbol-level impact assessment, automated test execution planning, and pre-flight workspace validation for Meet's `TaskPlanner` and human approval gate.
+
+**Related Docs:** `Docs/task_planning_blast_radius_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day3] 2026-10-29 — Workspace Execution Start, Tool Policy Bridge, Sandboxed Command Runner & Execution Timeline
+**Type:** Feature / Execution & Sandbox Security  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `WorkspaceExecutionEventType`, `WorkspaceExecutionEvent`, `WorkspaceStartExecutionRequest`, `WorkspaceStartExecutionResult`, `WorkspaceCommandRequest`, `WorkspaceCommandResult`, `WorkspaceToolPolicyRequest`, and `WorkspaceToolPolicyResult`.
+  - Added `STOPPED -> IN_USE` transition to `VALID_WORKSPACE_TRANSITIONS` for execution resumption.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all new Day 3 workspace execution schemas.
+- `backend/sandbox/constants.py`:
+  - Defined `ALLOWED_COMMAND_TEMPLATES`, `DISALLOWED_COMMAND_TOKENS`, `SENSITIVE_ENV_VARS`, `MAX_COMMAND_OUTPUT_BYTES`, and `DEFAULT_COMMAND_TIMEOUT_SECONDS`.
+- `backend/sandbox/exceptions.py`:
+  - Defined `WorkspaceAuthorizationError`, `WorkspaceStaleApprovalError`, `WorkspaceCommandError`, `WorkspaceCommandTimeoutError`, and `WorkspacePolicyViolationError`.
+- `backend/sandbox/command_runner.py`:
+  - Implemented `WorkspaceCommandRunner` with allowlist enforcement, shell injection detection (rejecting metacharacters/operators/null bytes), environment sanitization (purging host credentials), timeout budgeting, bounded output capture (100 KB), and secret redaction.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Implemented `WorkspaceToolPolicyBridge` and `register_workspace_tools()` connecting Devu's `ToolRouter` with `WorkspaceManager`.
+  - Registered 6 canonical tools (`read_file`, `write_file`, `patch_file`, `delete_file`, `list_files`, `execute_command`) with strict JSON parameter schemas, `WorkspacePathGuard` boundary checks, and fail-closed policy enforcement.
+- `backend/sandbox/workspace_manager.py`:
+  - Implemented `start_execution()` enforcing human approval check (ADR-010, Docs/week3.md §8 Day 3) and stale revision invalidation.
+  - Implemented `pause_execution()`, `resume_execution()`, `stop_execution()`, and `fail_execution()`.
+  - Implemented `execute_command()` strictly bounded to `IN_USE` workspace states.
+  - Implemented `record_timeline_event()` and `get_execution_timeline()` for task observability.
+- `backend/agent/tools/router.py`:
+  - Updated `ToolRouter.route()` to permit execution when policy engine is verified while maintaining fail-closed default for unverified handlers.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `register_workspace_tools`, and Day 3 exceptions and constants.
+- `Docs/workspace_execution_start_audit.md`:
+  - Authored comprehensive Week 3 Day 3 Architecture, Execution Start & Tool Policy Security Report.
+- `backend/tests/test_prit_w3_d3_workspace_execution.py`:
+  - 16 comprehensive unit and integration tests covering approval gates, stale revision checks, pause/resume, sandboxed commands, shell injection defense, environment purging, ToolRouter policy bridge, path traversal defense, and concurrency isolation (100% pass rate).
+
+**Impact:** Provides safe, authorized workspace execution start and tool routing for Meet's agent execution loop, Yug's execution APIs, and Dhramraj's live execution progress timeline.
+
+**Related Docs:** `Docs/workspace_execution_start_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day4] 2026-10-29 — Restricted Test Runner, Failure Classification & Bounded Auto-Repair Loop
+**Type:** Feature / Test Execution & Bounded Self-Repair  
+**Developer:** Prit  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Implemented `TestOutcomeStatus` (`PASSED`, `FAILED`, `ERROR`, `TIMEOUT`, `UNSUPPORTED_FRAMEWORK`, `AMBIGUOUS`, `NO_TESTS_FOUND`).
+  - Implemented `TestFailureClassification` (`NONE`, `TEST_FAILURE`, `INFRASTRUCTURE_ERROR`, `TIMEOUT`, `SECURITY_VIOLATION`).
+  - Implemented `WorkspaceTestExecutionRequest`, `WorkspaceTestExecutionResult`, `RepairAttemptRecord`, and `WorkspaceRepairBudgetStatus`.
+  - Added new test and repair timeline events to `WorkspaceExecutionEventType`: `TESTS_STARTED`, `TESTS_PASSED`, `TESTS_FAILED`, `TEST_INFRASTRUCTURE_FAILURE`, `TEST_TIMEOUT`, `REPAIR_ATTEMPT_STARTED`, `REPAIR_ATTEMPT_COMPLETED`, and `REPAIR_BUDGET_EXHAUSTED`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 4 test runner and repair schemas.
+- `backend/sandbox/exceptions.py`:
+  - Added `WorkspaceTestExecutionError`, `WorkspaceUnsupportedFrameworkError`, `WorkspaceRepairBudgetExhaustedError`, and `WorkspaceDuplicateRepairPatchError`.
+- `backend/sandbox/test_runner.py`:
+  - Implemented `WorkspaceTestRunner` with automatic framework detection (`pytest`, `unittest`, `jest`), graceful handling of unsupported frameworks (`vitest`, `go test`), command allowlisting, dependency install prevention (`npm install`, `pip install`), shell injection blocking, path traversal containment, timeout budgeting (default 60s, max 300s), 100 KB output log bounding with truncation notices, and automatic secret redaction.
+  - Implemented structured output parser and failure classifier distinguishing assertion/test failures (`is_repair_eligible=True`) from infrastructure crashes, timeouts, and security violations (`is_repair_eligible=False`).
+  - Implemented bounded auto-repair tracker enforcing the strict 3-attempt task-level budget ceiling per ADR-010, emitting `REPAIR_BUDGET_EXHAUSTED` timeline events upon exhaustion, and detecting duplicate failed repair patches via SHA-256 hashing.
+- `backend/sandbox/workspace_manager.py`:
+  - Integrated `run_tests()`, `get_test_history()`, `get_repair_budget_status()`, `record_repair_attempt()`, and `get_repair_history()`.
+  - Recorded timeline events across the entire test execution and repair attempt lifecycle.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Registered canonical tools `TOOL_RUN_TESTS` (`run_tests`) and `TOOL_RECORD_REPAIR` (`record_repair_attempt`) with Devu's `ToolRouter`.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceTestRunner`, `TOOL_RUN_TESTS`, `TOOL_RECORD_REPAIR`, and Day 4 exceptions.
+- `Docs/restricted_test_runner_bounded_repair_audit.md`:
+  - Authored comprehensive Week 3 Day 4 Architecture, Restricted Test Runner, Failure Classification, and Bounded Repair Loop Audit Report.
+- `backend/tests/test_prit_w3_d4_restricted_test_runner.py`:
+  - 18 comprehensive unit and integration tests covering framework autodetection, explicit overrides, unsupported frameworks, allowlist enforcement, shell injection blocking, path traversal containment, output parsing, failure classification, secret redaction, output truncation, 3-attempt repair budget enforcement, duplicate patch rejection, WorkspaceManager integration, timeline events, and ToolRouter dispatch (100% pass rate).
+
+**Impact:** Delivers sandboxed test execution and bounded auto-repair enforcement for Meet's agent self-repair loop, Dev's failure diagnosis, Yug's test APIs, and Dhramraj's live repair counter UI.
+
+**Related Docs:** `Docs/restricted_test_runner_bounded_repair_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/engineering/14_changelog.md`
+
+---
+
+### [W3-Day5] 2026-10-30 — Independent Diff Verification, Secret Leak Scanning, Authorized Git Push & Draft PR Preparation
+**Type:** Feature / Git Publication & Independent Verification  
+**Developer:** Prit  
+**Changes:**
+- `backend/sandbox/constants.py`:
+  - Added `PROTECTED_BRANCHES` (`main`, `master`, `develop`, `dev`, `release`, `production`, `prod`, `staging`).
+  - Added `CRITICAL_PROJECT_FILES` (`README.md`, `package.json`, `pyproject.toml`, `setup.py`, `requirements.txt`, `tsconfig.json`, `Cargo.toml`, `go.mod`, `pom.xml`, `Dockerfile`).
+  - Added `SECRET_SCAN_PATTERNS` regex detectors for OpenAI API keys, GitHub tokens, AWS access key IDs, Google API keys, private keys, and generic credential assignments.
+- `backend/sandbox/exceptions.py`:
+  - Added `WorkspaceDiffError`, `WorkspaceDiffValidationError`, `WorkspaceSecretLeakDetectedError`, `WorkspaceProtectedBranchError`, `WorkspaceCommitError`, `WorkspacePublicationUnauthorizedError`, `WorkspacePushError`, and `WorkspaceDraftPRError`.
+- `backend/app/schemas/workspace.py`:
+  - Added 8 new timeline event types: `DIFF_INSPECTED`, `DIFF_VALIDATED`, `DIFF_VALIDATION_FAILED`, `PUBLICATION_AUTHORIZED`, `CHANGES_COMMITTED`, `BRANCH_PUSHED`, `PR_CREATED`, and `PUBLICATION_FAILED`.
+  - Implemented `FileChangeType` (`MODIFIED`, `ADDED`, `DELETED`), `FileDiffHunk`, `FileDiffSummary`, `WorkspaceDiffRequest`, `WorkspaceDiffResult`, `SecretScanFinding`, `DiffValidationRequest`, `DiffValidationResult`, `WorkspaceCommitRequest`, `WorkspaceCommitResult`, `WorkspacePushRequest`, `WorkspacePushResult`, `WorkspaceDraftPRRequest`, and `WorkspaceDraftPRResult`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 5 diff verification, commit, push, and draft PR schemas.
+- `backend/sandbox/diff_verifier.py`:
+  - Implemented `WorkspaceDiffVerifier` providing unified and per-file diff extraction against base revisions, hunk-level diff parsing, task plan scope boundary validation, critical manifest deletion protection, and diff addition-level secret leak scanning.
+- `backend/sandbox/workspace_manager.py`:
+  - Bound `_diff_verifier = WorkspaceDiffVerifier()`.
+  - Implemented `get_workspace_diff()` emitting `DIFF_INSPECTED` timeline events.
+  - Implemented `validate_workspace_diff()` with scope verification, critical manifest protection, and addition-level secret scanning, emitting `DIFF_VALIDATED` or `DIFF_VALIDATION_FAILED`.
+  - Implemented `commit_task_changes()` enforcing protected branch guards, sanitized commit messages, `Task-ID` metadata trailers, and `CHANGES_COMMITTED` timeline events.
+  - Implemented `push_task_branch()` enforcing the mandatory human publication authorization gate (ADR-010, F37), protected branch guards, credential redaction, and `BRANCH_PUSHED` timeline events.
+  - Implemented `create_draft_pr()` guaranteeing unconditional Draft PR status (`is_draft=True`, zero auto-merge per ADR-010), automated Markdown task summary synthesis, and `PR_CREATED` timeline events.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Added canonical tool constants: `TOOL_INSPECT_DIFF`, `TOOL_VALIDATE_DIFF`, `TOOL_COMMIT_CHANGES`, `TOOL_PUSH_BRANCH`, `TOOL_CREATE_DRAFT_PR`.
+  - Added policy validation rules and execution dispatch for all 5 Day 5 tools.
+  - Registered all 5 tools with Devu's `ToolRouter` via `register_workspace_tools()`.
+- `backend/sandbox/__init__.py`:
+  - Re-exported `WorkspaceDiffVerifier`, Day 5 constants, exceptions, and canonical tool constants.
+- `Docs/independent_verification_and_draft_pr_audit.md`:
+  - Authored comprehensive Week 3 Day 5 Architecture, Independent Diff Verification, Security Scanning, Git Push & Draft PR Preparation Audit Report.
+- `backend/tests/test_prit_w3_d5_verification_and_draft_pr.py`:
+  - 30 comprehensive unit and integration tests covering diff extraction, scope validation, manifest deletion protection, addition secret scanning, protected branch guards, publication authorization gates, commit creation, git push credential redaction, draft PR synthesis, timeline event emissions, and ToolRouter dispatch (100% pass rate).
+
+**Impact:** Provides verified, security-scanned, and human-authorized Git publication and Draft PR preparation for Dev's independent verifier, Parth's GitHub service, Yug's PR endpoints, and Dhramraj's PR status UI.
+
+**Related Docs:** `Docs/independent_verification_and_draft_pr_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
+
+---
+
+### [W3-Day6] 2026-10-30 — Workspace Reliability, Crash Recovery, Stale Revision Detection, Diff Immutability, and Hardened Orphan Collection
+**Type:** Feature / Reliability, Security & Failure Recovery  
+**Developer:** Prit  
+**Changes:**
+- `backend/sandbox/constants.py`:
+  - Added Day 6 constants: `DEFAULT_MAX_ORPHAN_AGE_SECONDS` (86400s), `DEFAULT_MAX_WORKSPACE_FILES` (1000), `RECOVERY_STALE_TIMEOUT_SECONDS` (3600s), and `MAX_TASK_LOCK_TIMEOUT_SECONDS` (30s).
+  - Enhanced `SECRET_SCAN_PATTERNS` regex to detect GitHub personal access tokens (`ghp_[a-zA-Z0-9]{20,}`).
+- `backend/sandbox/exceptions.py`:
+  - Added 7 reliability and security exceptions: `WorkspaceStaleRevisionError`, `WorkspacePostVerificationMutationError`, `WorkspaceDiffDivergedError`, `WorkspaceDiskQuotaExceededError`, `WorkspaceConcurrentOperationError`, `WorkspaceInvariantViolationError`, and `WorkspaceRecoveryError`.
+- `backend/app/schemas/workspace.py`:
+  - Added 5 new timeline event types: `WORKER_CRASH_RECOVERED`, `STALE_REVISION_DETECTED`, `POST_VERIFICATION_MUTATION_DETECTED`, `ORPHANED_WORKSPACES_CLEANED`, and `INVARIANT_VIOLATION_DETECTED`.
+  - Added `last_active_at` and `verification_diff_hash` fields to `WorkspaceMetadata`.
+  - Implemented Day 6 schemas: `StaleRevisionCheckRequest`, `StaleRevisionCheckResult`, `DiffImmutabilityCheckRequest`, `DiffImmutabilityCheckResult`, `WorkspaceRecoveryRecord`, `WorkspaceRecoveryResult`, `WorkspaceOrphanCleanupResult`, `WorkspaceInvariantCheckResult`, and `WorkspaceDiskUsageResult`.
+- `backend/app/schemas/__init__.py`:
+  - Re-exported all Day 6 recovery, stale check, diff immutability, and cleanup schemas.
+- `backend/sandbox/command_runner.py`:
+  - Added `execute_raw_command` and `RawCommandResult` for safe internal git operations and unit-test mocking.
+- `backend/sandbox/diff_verifier.py`:
+  - Excluded `*metadata.json` from git diff pathspecs (`-- . ":(exclude)*metadata.json"`) so internal state writes do not mutate git diffs.
+- `backend/sandbox/workspace_manager.py`:
+  - Added atomic metadata disk persistence (`_save_metadata_file`) on every state transition and workspace creation.
+  - Implemented `recover_workspaces()`: discovers and reconstructs workspace state after worker crashes/restarts, safely marks interrupted creation as `FAILED`, and transitions stale `IN_USE` tasks to `STOPPED`.
+  - Implemented `reconcile_workspace(task_id)`: dynamically reloads evicted workspace metadata from disk into in-memory caches.
+  - Implemented `detect_stale_base_revision()` and `assert_not_stale()`: compares base revisions against remote tracking branches, computes commits behind via `git rev-list --count`, and halts stale publication with rebase remediation.
+  - Implemented `compute_verification_diff_hash()` and `verify_diff_immutability()`: computes SHA-256 fingerprint of verified diffs, asserts post-verification immutability, and raises `WorkspacePostVerificationMutationError` upon tampering.
+  - Implemented `cleanup_orphaned_workspaces()`: sweeps abandoned or untracked directories older than threshold, strictly protects active workspaces, and supports non-destructive `dry_run=True`.
+  - Implemented `validate_workspace_invariants()`: audits sandbox containment, directory existence, git repo validity, approval consistency, and secret hygiene.
+  - Implemented `get_task_lock()`: thread-safe task mutex locks to serialize concurrent workspace operations.
+  - Implemented `sanitize_log()`: scrubs tokens, API keys, and credentials from logs and output payloads.
+  - Implemented `check_disk_budget()`: audits byte and file usage against resource limits.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Registered 6 canonical Day 6 tools: `TOOL_RECOVER_WORKSPACE`, `TOOL_CHECK_STALE_REVISION`, `TOOL_VERIFY_DIFF_IMMUTABILITY`, `TOOL_CLEANUP_ORPHANED`, `TOOL_VALIDATE_INVARIANTS`, and `TOOL_CHECK_DISK_BUDGET`.
+  - Added argument validation schemas and execution routing handlers for all Day 6 tools.
+- `backend/sandbox/__init__.py`:
+  - Re-exported Day 6 constants, exceptions, tools, and schemas.
+- `Docs/reliability_security_and_failure_recovery_audit.md`:
+  - Authored comprehensive Week 3 Day 6 Architecture, Crash Recovery, Stale Revision Detection, Diff Immutability, and Invariant Audit Report.
+- `backend/tests/test_prit_w3_d6_reliability_and_recovery.py`:
+  - 32 comprehensive unit and integration tests across 9 test suites (100% pass rate; 169/169 passed across all Week 3 test suites).
+
+**Impact:** Guarantees failure recovery across worker crashes/restarts, protects against silent remote branch divergence, enforces post-verification diff immutability, prevents storage exhaustion via orphan collection, and provides tamper-proof execution integrity for the entire agent pipeline.
+
+**Related Docs:** `Docs/reliability_security_and_failure_recovery_audit.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
+
+---
+
+### [W3-Day7] 2026-10-31 — End-to-End Acceptance, Scenarios A–J Verification, and Live Demo
+**Type:** Feature / Acceptance & Demonstration  
+**Developer:** Prit  
+**Changes:**
+- `backend/sandbox/command_runner.py`:
+  - Added Windows path fallback in `run_command` resolving `pytest` to `[sys.executable, "-m", "pytest", *args]` when `shutil.which("pytest")` is `None`.
+  - Added `APPDATA` and `LOCALAPPDATA` to `safe_keys` in `sanitize_environment` so Windows Python user packages (`site-packages`) are recognized in subprocesses.
+- `backend/sandbox/diff_verifier.py`:
+  - Updated `_run_git_diff` excludes to add `:(exclude)*__pycache__*`, `:(exclude)*.pyc`, and `:(exclude)*.pytest_cache*` ensuring bytecode never leaks into verified diffs.
+- `backend/sandbox/workspace_manager.py`:
+  - Updated `record_timeline_event` to redact `message` and string values in `payload` with `redact()`.
+  - Fixed `_format_draft_pr_summary` to map `passed_count`, `failed_count`, `skipped_count`, and `duration_ms / 1000.0`.
+  - Updated `recover_workspaces` stale check to accept `stale_timeout_seconds >= 0` for sub-second crash recovery assertions.
+- `backend/tests/test_prit_w3_d7_acceptance.py`:
+  - Implemented 25 comprehensive end-to-end acceptance tests across 13 test suites covering:
+    - 17-step full lifecycle workflow execution and zero manual intervention audit.
+    - Scenarios A through J (happy path, plan rejection, plan mutation, repair budget exhaustion, malicious tool requests, verification failures, GitHub uncertainty, worker restart, permission revocation, diff tampering).
+    - Week 2 shared intelligence integration (AST parser, framework detector, review source mapper).
+    - Latency SLA benchmarks (creation <1s, command execution <3s, diff validation <500ms, crash recovery <1s).
+    - Timeline event audit trail provenance and zero secret leakage.
+  - 100% pass rate (25/25 passed; 194/194 total Week 3 tests passing).
+- `Docs/week3_day7_workspace_acceptance_report.md`:
+  - Authored comprehensive Week 3 Day 7 Acceptance & Demo Report detailing 17-step workflow, Scenarios A–J verification, SLA benchmarks, and release checklist.
+- `Docs/daily_tasks.md` & `Docs/engineering/10_development_tasks.md`:
+  - Updated task tracking boards and deliverables for Day 7 signoff.
+
+**Impact:** Certifies the Repository Engine & Sandbox Execution system for production release, guaranteeing mathematically isolated, human-gated, and fail-safe autonomous code modification.
+
+**Related Docs:** `Docs/week3_day7_workspace_acceptance_report.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`, `Docs/week3.md`
+---
+
+### [W3-Day2] 2026-10-27 — Task Planning, Plan Versioning & Human Approval Persistence
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- `backend/app/models/task.py`:
+  - Added canonical `to_dict()` serialization methods across `TaskPlan`, `TaskApproval`, `Workspace`, `TaskCheckpoint`, `TaskEvent`, and `TaskPullRequest`, guaranteeing exact conformity with Week 3 Pydantic response schemas.
+- `backend/app/repositories/task_repository.py`:
+  - Enhanced `save_plan()` to automatically mark older proposed/approved plans as `SUPERSEDED`, invalidate prior approvals (`task.approved_plan_version = None`), and transition task status to `PENDING_APPROVAL`.
+  - Implemented `get_plan()` supporting both latest and specific plan version retrieval.
+  - Implemented `list_plans()` returning all historical plan versions ordered ascending.
+  - Implemented `approve_plan()` and `reject_plan()` with immutable decision recording and human feedback.
+  - Implemented `get_approval()` and `list_approvals()` for decision history inspection.
+  - Implemented `update_task_context()` linking Week 2 intelligence context with automated credential scrubbing.
+- `backend/app/services/task_history_service.py`:
+  - Implemented `TaskHistoryService` providing production-grade session management, multi-tenant isolation, and high-level orchestration across task intake, planning, approvals, and recovery.
+- `backend/app/services/__init__.py`:
+  - Exported `TaskHistoryService` in public service API.
+- `backend/app/main.py` & `backend/app/core/lifespan.py`:
+  - Registered `app.state.task_history_service` in FastAPI application lifespan.
+- `backend/tests/test_om_w3_d2_planning_persistence.py`:
+  - Added 15 comprehensive unit and integration tests (100% pass rate) verifying plan versioning, approval/rejection lifecycle, approval invalidation upon plan revision, multi-tenant boundaries, secret scrubbing, and Pydantic schema validation.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`:
+  - Updated Week 3 Day 2 milestone tasks and active team assignments.
+- `Docs/persistence_week3_day2_report.md`:
+  - Authored and published formal Week 3 Day 2 Persistence Deliverable Report.
+
+**Impact:** Establishes a rock-solid persistence and service layer for Day 2 task planning and human approval gating, enabling Meet (TaskPlanner), Yug (API Orchestration), and Dhramraj (Frontend Plan Review) to build seamlessly against persisted task plans and approvals.
+
+**Related Docs:** `Docs/persistence_week3_day2_report.md`, `Docs/week3.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day3-Day4] 2026-10-28 — Workspace Tracking, Tool Auditing, Test Run Logging & Bounded Repair Persistence
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- `backend/app/models/task.py`:
+  - Added canonical `to_dict()` serialization methods to `TaskExecution`, `ToolInvocation`, `TestRun`, and `RepairAttempt` conforming to Pydantic responses.
+  - Added `__test__ = False` on `TestRun` and `TestRunResponse` to prevent pytest collection warnings.
+- `backend/app/schemas/task.py`:
+  - Added Pydantic response models: `WorkspaceResponse`, `TaskExecutionResponse`, `ToolInvocationResponse`, `TestRunResponse` (`__test__ = False`), and `RepairAttemptResponse`. Added to `__all__`.
+- `backend/app/repositories/task_repository.py`:
+  - Day 3 Workspace & Execution: `get_workspace()`, `update_workspace_status()`, `record_execution_start()`, `record_execution_finish()`, `get_executions()`, and `get_tool_invocations()`.
+  - Day 3 Precondition Enforcement: Blocked `EXECUTING` state without `approved_plan_version` and initialized workspace.
+  - Day 3 Tool Auditing: Credential scrubbing (`ghp_*`, `sk-*`, `eyJ*`) in arguments and output summaries.
+  - Day 4 Test Run Logging: `record_test_run()`, `get_test_runs()`, `get_latest_test_run()` capturing test command, status, exit code, test counts, duration, sanitized logs, and target revision.
+  - Day 4 Bounded Repair Loop: Hardened `increment_repair_attempt()` and `get_repair_attempts()` enforcing the strict **3-attempt ceiling** (`RETRY_EXHAUSTED` -> `FAILED`), blocking transitions to `REPAIRING` when budget is exhausted, and ensuring retry counters survive worker/app restarts.
+- `backend/app/services/task_history_service.py`:
+  - Added Day 3 & Day 4 orchestration methods wrapping `TaskRepository` with session management: `record_workspace`, `get_workspace`, `update_workspace_status`, `record_execution_start`, `record_execution_finish`, `get_executions`, `record_tool_invocation`, `get_tool_invocations`, `record_test_run`, `get_test_runs`, `get_latest_test_run`, `increment_repair_attempt`, `get_repair_attempts`.
+- `backend/tests/test_om_w3_d3_d4_execution_persistence.py`:
+  - Added 11 comprehensive automated tests (100% passing) verifying workspace lifecycle, execution tracking, tool auditing and secret scrubbing, execution start preconditions, test run logging, bounded repair loop 3-attempt ceiling, budget persistence across restarts, cross-repository multi-tenant isolation, ordered timeline events, and model-to-schema serialization.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`:
+  - Updated Week 3 Day 3 and Day 4 task boards and milestone progress.
+- `Docs/persistence_week3_day3_day4_report.md`:
+  - Authored formal Week 3 Day 3 & Day 4 Persistence Deliverable Report.
+
+**Impact:** Provides the core persistence foundation for Prit (WorkspaceManager), Devu (ToolRouter & PolicyEngine), Meet (Agent Execution Loop & Bounded Repair), and Dev (Test Strategy & Diagnosis). All workspace lifecycles, execution states, tool audit trails, test runs, and repair attempts are reliably persisted with tamper-proof budget bounds.
+
+**Related Docs:** `Docs/persistence_week3_day3_day4_report.md`, `Docs/week3.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [W3-Day5] 2026-10-29 — Independent Verification, Publication Gate, Draft PR Persistence & End-to-End Traceability
+**Type:** Feature / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- `backend/app/models/task.py`:
+  - Added canonical `to_dict()` serialization method to `VerificationResult` matching `VerificationResultResponse` schema.
+- `backend/app/schemas/task.py`, `backend/app/schemas/__init__.py`:
+  - Added and exported `PublicationAuthorizationRequest`, `PublicationAuthorizationResponse`, and `TaskTraceabilityResponse` schemas with comprehensive field definitions and documentation.
+- `backend/app/repositories/task_repository.py`:
+  - Eagerly loads `Task.finding` with `selectinload(Task.finding)` in `get_task()`.
+  - Enhanced `record_verification_result()`: validates non-terminal task status, sets `task.status = READY_FOR_PUBLICATION` if `PASSED` without blockers, sets `task.status = BLOCKED` if `FAILED` or has blocking findings, and logs `VERIFICATION_COMPLETED` event.
+  - Added `get_verification_results()` and `get_latest_verification_result()`.
+  - Added `authorize_publication()`: verifies `READY_FOR_PUBLICATION`, enforces `head_sha` match with latest verified revision with `PASSED` status and zero blockers, transitions task to `PUBLISHING`, and logs `PUBLICATION_AUTHORIZED` event.
+  - Enhanced `record_pull_request()`: validates `PUBLISHING` or `READY_FOR_PUBLICATION` status, guarantees idempotency on retry, transitions task to `DRAFT_PR_CREATED`, and logs `DRAFT_PR_CREATED` event.
+  - Added `get_pull_request()`.
+  - Added `get_task_traceability()`: constructs complete end-to-end graph (`task`, `finding`, `latest_plan`, `latest_approval`, `workspace`, `latest_execution`, `latest_test_run`, `repair_attempts_used`, `latest_repair`, `latest_verification`, `pull_request`, `timeline`, `traceability_status`).
+  - Added idempotent self-transition in `transition_status()`.
+- `backend/app/services/task_history_service.py`:
+  - Added Day 5 orchestration methods wrapping `TaskRepository` with session management: `record_verification_result`, `get_verification_results`, `get_latest_verification_result`, `authorize_publication`, `record_pull_request`, `get_pull_request`, `get_task_traceability`.
+- `backend/tests/test_om_w3_d5_verification_pr_traceability.py`:
+  - Authored 15 comprehensive automated tests (100% passing) verifying verification persistence, publication authorization gate, draft PR persistence, end-to-end traceability graph, multi-tenant isolation, and Pydantic schema validation.
+- `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`:
+  - Marked Om's Day 5 deliverables complete with all 54 Week 3 tests passing.
+- `Docs/persistence_week3_day5_report.md`:
+  - Published formal Week 3 Day 5 Persistence Deliverable Report.
+
+**Impact:** Provides the core persistence foundation and state machine gates for Dev & Keval (W3-08 Independent Verification), Parth & Yug (W3-09 Authorized Push & Draft PR Creator), and Dhramraj (W3-10 Task Dashboard, Progress & Timeline UI). All artifacts from original finding to GitHub Draft PR are interconnected in an auditable, tamper-resistant graph.
+
+**Related Docs:** `Docs/persistence_week3_day5_report.md`, `Docs/week3.md`, `Docs/daily_tasks.md`, `Docs/engineering/10_development_tasks.md`
 
 
+---
 
+### [W3-Day6-Day7] 2026-10-30 — Query Performance, Audit Consistency, Crash Recovery & 17-Step E2E Acceptance
+**Type:** Feature / Performance / Database & Persistence  
+**Developer:** Om  
+**Changes:**
+- ackend/app/models/task.py:
+  - Added composite indexes across all core tables for sub-millisecond query performance:
+    - Workspace: ix_workspaces_task_status on (task_id, status)
+    - TaskExecution: ix_task_executions_task_attempt on (task_id, attempt_number), ix_task_executions_task_created on (task_id, created_at)
+    - ToolInvocation: ix_tool_invocations_task_created on (task_id, created_at), ix_tool_invocations_task_tool on (task_id, tool_name)
+    - TestRun: ix_test_runs_task_created on (task_id, created_at), ix_test_runs_task_status on (task_id, status)
+    - VerificationResult: ix_verification_results_task_revision on (task_id, verified_revision), ix_verification_results_task_created on (task_id, created_at)
+    - TaskCheckpoint: ix_task_checkpoints_task_created on (task_id, created_at)
+    - TaskPullRequest: ix_task_pull_requests_repo_pr on (repository_id, pr_number)
+  - Added new audit event types: CRASH_DETECTED, CRASH_RECOVERED, RECOVERY_FAILED.
+- ackend/app/schemas/task.py, ackend/app/schemas/__init__.py:
+  - Added and exported TaskRecoveryResponse Pydantic response schema.
+  - Enhanced TaskTraceabilityResponse with 	ool_invocations, 	est_runs, 
+epair_attempts, and is_complete_workflow: bool.
+- ackend/app/repositories/task_repository.py:
+  - Implemented get_active_tasks_for_repository() leveraging composite index (repository_id, status) with pagination and terminal status filtering.
+  - Enforced audit event consistency & immutability: delete_event(), update_event(), update_approval() raise PermissionError to preserve append-only compliance.
+  - Implemented worker crash recovery & restart resilience: 
+econcile_crashed_task() and 
+ecover_interrupted_tasks(). Automatically identifies volatile states (EXECUTING, TESTING, REPAIRING, WORKSPACE_SETUP), marks dangling running executions as FAILED, restores latest checkpoint with CRASH_RECOVERED event into RECOVERY_REQUIRED, preserves retry counter 
+epair_attempts_used, and marks FAILED with RECOVERY_FAILED if retry budget ($\ge 3$) is exhausted.
+  - Made crash recovery strictly idempotent on non-volatile terminal or publication-ready tasks.
+  - Enhanced get_task_traceability(): deterministic approval retrieval by (plan_version, created_at), eager tool invocation / test run / repair attempt tracking, and computation of is_complete_workflow.
+- ackend/app/services/task_history_service.py:
+  - Added session-managed wrappers: get_active_tasks, 
+econcile_crashed_task, 
+ecover_interrupted_tasks.
+- ackend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py:
+  - Authored 20 automated tests (100% passing) verifying query performance, composite indexes, query SLA benchmarks (<100ms), audit event immutability, worker crash recovery, 17-step end-to-end lifecycle acceptance, and multi-tenant isolation.
+- Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md:
+  - Marked Om's Week 3 Day 6 and Day 7 deliverables complete with all 74 cumulative persistence tests passing.
+- Docs/persistence_week3_day6_day7_report.md:
+  - Published comprehensive Week 3 Day 6 & Day 7 Deliverable Report.
 
+**Impact:** Completes Om's entire Week 3 persistence deliverables (Days 1–7), delivering an ultra-fast, crash-resilient, immutable, and fully traceable persistence backbone. Supports all downstream team modules with guaranteed query performance SLAs (<100ms) and complete referential integrity across the 17-step autonomous development lifecycle.
 
-
-
-
+**Related Docs:** Docs/persistence_week3_day6_day7_report.md, Docs/week3.md, Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md

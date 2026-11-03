@@ -1,0 +1,1012 @@
+"""Database models for Week 3 Workflow Automation, Task Planning, and Recovery.
+
+Owner: Om — Database & Persistence Lead.
+Implements: Feature F39 — Persistence, Checkpoints and Recovery.
+
+Provides the comprehensive data models for:
+- Task entity with lifecycle state machine and source references
+- TaskPlan and plan versioning
+- TaskApproval (immutable approval records)
+- Workspace execution tracking
+- TaskExecution attempts
+- ToolInvocation auditing
+- TestRun logging and metrics
+- RepairAttempt tracking (max 3 task-level attempts)
+- VerificationResult strictly tied to verified revision
+- TaskCheckpoint for safe failure recovery (secret-scrubbed)
+- TaskEvent for complete ordered audit timeline
+- TaskPullRequest for GitHub Draft PR tracking
+"""
+
+from __future__ import annotations
+
+import enum
+import uuid
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, List, Optional
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+from app.models.base import TimestampedModel
+
+if TYPE_CHECKING:
+    from app.models.analysis_finding import AnalysisFinding
+    from app.models.repository import Repository
+    from app.models.user import User
+
+
+class TaskStatus(str, enum.Enum):
+    """Lifecycle states for workflow automation tasks (Week 3 — §7.1)."""
+
+    CREATED = "CREATED"
+    PLANNING = "PLANNING"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    WORKSPACE_SETUP = "WORKSPACE_SETUP"
+    EXECUTING = "EXECUTING"
+    TESTING = "TESTING"
+    REPAIRING = "REPAIRING"
+    VERIFYING = "VERIFYING"
+    READY_FOR_PUBLICATION = "READY_FOR_PUBLICATION"
+    PUBLISHING = "PUBLISHING"
+    DRAFT_PR_CREATED = "DRAFT_PR_CREATED"
+
+    # Terminal or exceptional states
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    BLOCKED = "BLOCKED"
+
+
+class TaskSourceType(str, enum.Enum):
+    """Source origin of a development task."""
+
+    GITHUB_ISSUE = "GITHUB_ISSUE"
+    USER_REQUIREMENT = "USER_REQUIREMENT"
+    USER_PROMPT = "USER_PROMPT"
+    DIRECT = "DIRECT"
+    BUG_FINDING = "BUG_FINDING"
+    REVIEW_FINDING = "REVIEW_FINDING"
+
+
+class TaskPlanStatus(str, enum.Enum):
+    """Status of an implementation plan version."""
+
+    DRAFT = "DRAFT"
+    PROPOSED = "PROPOSED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class ApprovalDecision(str, enum.Enum):
+    """Decision recorded in task approvals."""
+
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class WorkspaceStatus(str, enum.Enum):
+    """Lifecycle of isolated task workspace environments."""
+
+    NOT_CREATED = "NOT_CREATED"
+    CREATING = "CREATING"
+    READY = "READY"
+    IN_USE = "IN_USE"
+    STOPPED = "STOPPED"
+    FAILED = "FAILED"
+    CLEANUP_PENDING = "CLEANUP_PENDING"
+    CLEANED = "CLEANED"
+
+
+class ExecutionStatus(str, enum.Enum):
+    """Status of task worker execution attempts."""
+
+    STARTED = "STARTED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ToolInvocationStatus(str, enum.Enum):
+    """Outcome status of controlled tool router executions."""
+
+    ALLOWED = "ALLOWED"
+    BLOCKED = "BLOCKED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class TestRunStatus(str, enum.Enum):
+    """Outcome status of permitted test suite runs."""
+
+    __test__ = False
+
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    TIMED_OUT = "TIMED_OUT"
+    ERROR = "ERROR"
+
+
+class RepairResult(str, enum.Enum):
+    """Outcome of a bounded repair attempt."""
+
+    SUCCESS = "SUCCESS"
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
+    FAILED = "FAILED"
+
+
+class VerificationStatus(str, enum.Enum):
+    """Independent verification status."""
+
+    PASSED = "PASSED"
+    FAILED = "FAILED"
+    REQUIRES_HUMAN_REVIEW = "REQUIRES_HUMAN_REVIEW"
+    INCONCLUSIVE = "INCONCLUSIVE"
+
+
+class TaskEventType(str, enum.Enum):
+    """Event types for ordered audit timeline."""
+
+    TASK_CREATED = "TASK_CREATED"
+    ISSUE_IMPORTED = "ISSUE_IMPORTED"
+    PLAN_GENERATED = "PLAN_GENERATED"
+    PLAN_APPROVED = "PLAN_APPROVED"
+    PLAN_REJECTED = "PLAN_REJECTED"
+    WORKSPACE_CREATED = "WORKSPACE_CREATED"
+    TOOL_INVOKED = "TOOL_INVOKED"
+    TESTS_EXECUTED = "TESTS_EXECUTED"
+    REPAIR_ATTEMPTED = "REPAIR_ATTEMPTED"
+    VERIFICATION_COMPLETED = "VERIFICATION_COMPLETED"
+    PUBLICATION_AUTHORIZED = "PUBLICATION_AUTHORIZED"
+    BRANCH_PUSHED = "BRANCH_PUSHED"
+    DRAFT_PR_CREATED = "DRAFT_PR_CREATED"
+    EXECUTION_FAILED = "EXECUTION_FAILED"
+    RECOVERY_TRIGGERED = "RECOVERY_TRIGGERED"
+    STATE_TRANSITIONED = "STATE_TRANSITIONED"
+    CRASH_DETECTED = "CRASH_DETECTED"
+    CRASH_RECOVERED = "CRASH_RECOVERED"
+    RECOVERY_FAILED = "RECOVERY_FAILED"
+    CHECKPOINT_SAVED = "CHECKPOINT_SAVED"
+
+
+# ---------------------------------------------------------------------------
+# 0. GitHub Issue Model (Week 3 F31)
+# ---------------------------------------------------------------------------
+
+
+class GitHubIssue(TimestampedModel, Base):
+    """Persisted GitHub issue imported into or created from the platform (F31)."""
+
+    __tablename__ = "github_issues"
+
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    state: Mapped[str] = mapped_column(String(32), default="open", nullable=False)
+    labels: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    author: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    origin_finding_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("analysis_findings.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    tasks: Mapped[List["Task"]] = relationship(
+        "Task",
+        back_populates="github_issue",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "repository_id",
+            "issue_number",
+            name="uq_github_issues_repo_issue_number",
+        ),
+        Index("ix_github_issues_repo_number", "repository_id", "issue_number"),
+    )
+
+
+# 1. Main Task Model
+# ---------------------------------------------------------------------------
+
+
+class Task(TimestampedModel, Base):
+    """Core development task model managing workflow automation, approval, and execution state."""
+
+    __tablename__ = "tasks"
+
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=TaskStatus.CREATED.value,
+        index=True,
+        nullable=False,
+    )
+
+    source_type: Mapped[str] = mapped_column(
+        String(64),
+        default=TaskSourceType.GITHUB_ISSUE.value,
+        index=True,
+        nullable=False,
+    )
+    source_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    source_metadata: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+
+    # Issue-to-task persistence relationships: foreign key to Week 2 findings
+    finding_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("analysis_findings.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    base_revision: Mapped[str] = mapped_column(String(128), default="main", nullable=False)
+    plan_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    approved_plan_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Bounded repair loop controls
+    repair_attempts_used: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    repair_attempts_max: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+
+    context_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Week 3 F31 & F32 extended fields
+    github_issue_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("github_issues.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    @property
+    def origin_finding_id(self) -> Optional[uuid.UUID]:
+        return self.finding_id
+
+    @origin_finding_id.setter
+    def origin_finding_id(self, val: Optional[uuid.UUID]) -> None:
+        self.finding_id = val
+    source_ref: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    requirements: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    assumptions: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+    constraints: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, nullable=False)
+
+    # Relationships
+    finding: Mapped[Optional["AnalysisFinding"]] = relationship(
+        "AnalysisFinding",
+        foreign_keys=[finding_id],
+    )
+    repository: Mapped["Repository"] = relationship(
+        "Repository",
+        foreign_keys=[repository_id],
+    )
+    user: Mapped[Optional["User"]] = relationship(
+        "User",
+        foreign_keys=[user_id],
+    )
+    github_issue: Mapped[Optional["GitHubIssue"]] = relationship(
+        "GitHubIssue",
+        back_populates="tasks",
+    )
+
+    plans: Mapped[List["TaskPlan"]] = relationship(
+        "TaskPlan",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskPlan.version.desc()",
+    )
+    approvals: Mapped[List["TaskApproval"]] = relationship(
+        "TaskApproval",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskApproval.created_at.desc()",
+    )
+    executions: Mapped[List["TaskExecution"]] = relationship(
+        "TaskExecution",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskExecution.started_at.desc()",
+    )
+    workspace: Mapped[Optional["Workspace"]] = relationship(
+        "Workspace",
+        back_populates="task",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+    tool_invocations: Mapped[List["ToolInvocation"]] = relationship(
+        "ToolInvocation",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="ToolInvocation.created_at.asc()",
+    )
+    test_runs: Mapped[List["TestRun"]] = relationship(
+        "TestRun",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TestRun.created_at.desc()",
+    )
+    repair_attempts: Mapped[List["RepairAttempt"]] = relationship(
+        "RepairAttempt",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="RepairAttempt.attempt_number.asc()",
+    )
+    verification_results: Mapped[List["VerificationResult"]] = relationship(
+        "VerificationResult",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="VerificationResult.created_at.desc()",
+    )
+    checkpoints: Mapped[List["TaskCheckpoint"]] = relationship(
+        "TaskCheckpoint",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskCheckpoint.created_at.desc()",
+    )
+    events: Mapped[List["TaskEvent"]] = relationship(
+        "TaskEvent",
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="TaskEvent.created_at.asc()",
+    )
+    pull_request: Mapped[Optional["TaskPullRequest"]] = relationship(
+        "TaskPullRequest",
+        back_populates="task",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("ix_tasks_repo_status", "repository_id", "status"),
+        Index("ix_tasks_repo_created", "repository_id", "created_at"),
+        Index("ix_tasks_repo_source", "repository_id", "source_type", "source_id"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert Task model to canonical response envelope dictionary (§7.3)."""
+        return {
+            "task_id": str(self.id),
+            "repository_id": str(self.repository_id),
+            "user_id": str(self.user_id) if self.user_id else None,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "source_metadata": self.source_metadata,
+            "finding_id": str(self.finding_id) if self.finding_id else None,
+            "base_revision": self.base_revision,
+            "plan_version": self.plan_version,
+            "approved_plan_version": self.approved_plan_version,
+            "repair_attempts_used": self.repair_attempts_used,
+            "repair_attempts_max": self.repair_attempts_max,
+            "context_summary": self.context_summary,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# 2. Implementation Plans & Approvals
+# ---------------------------------------------------------------------------
+
+
+class TaskPlan(TimestampedModel, Base):
+    """Structured implementation plan version for a task."""
+
+    __tablename__ = "task_plans"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    base_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    summary: Mapped[str] = mapped_column(String(512), nullable=False)
+    problem_statement: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Ordered implementation steps, expected files, and test commands
+    steps: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    expected_files: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    tests_to_run: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+    validation_strategy: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    risks: Mapped[Optional[list[str]]] = mapped_column(JSONB, nullable=True)
+
+    # Week 3 F32 plan extensions
+    plan_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    assumptions: Mapped[list[Any]] = mapped_column(JSONB, default=list, nullable=False)
+    relevant_files: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    relevant_symbols: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    required_permissions: Mapped[list[str]] = mapped_column(JSONB, default=list, nullable=False)
+    resource_budget: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    @property
+    def test_targets(self) -> list[str]:
+        return self.tests_to_run or []
+
+    @test_targets.setter
+    def test_targets(self, val: Optional[list[str]]) -> None:
+        self.tests_to_run = val
+
+    @property
+    def plan_version(self) -> int:
+        return self.version
+
+    @plan_version.setter
+    def plan_version(self, value: int) -> None:
+        self.version = value
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=TaskPlanStatus.PROPOSED.value,
+        index=True,
+        nullable=False,
+    )
+
+    task: Mapped["Task"] = relationship("Task", back_populates="plans")
+
+    __table_args__ = (
+        Index("ix_task_plans_task_version", "task_id", "version", unique=True),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskPlan model to canonical response envelope dictionary."""
+        return {
+            "plan_id": str(self.id),
+            "task_id": str(self.task_id),
+            "version": self.version,
+            "base_revision": getattr(self, "base_revision", "main") or "main",
+            "status": self.status,
+            "summary": self.summary,
+            "problem_statement": getattr(self, "problem_statement", None),
+            "steps": self.steps or [],
+            "expected_files": self.expected_files or [],
+            "tests_to_run": getattr(self, "tests_to_run", []) or [],
+            "test_targets": self.test_targets or [],
+            "validation_strategy": self.validation_strategy,
+            "risks": self.risks or [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskApproval(TimestampedModel, Base):
+    """Immutable human approval or rejection record for a specific plan version."""
+
+    __tablename__ = "task_approvals"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("task_plans.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+    plan_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    base_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # APPROVED / REJECTED
+    feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="approvals")
+    user: Mapped[Optional["User"]] = relationship("User")
+
+    @property
+    def comment(self) -> Optional[str]:
+        return self.feedback
+
+    @comment.setter
+    def comment(self, val: Optional[str]) -> None:
+        self.feedback = val
+
+    @property
+    def approver_id(self) -> Optional[uuid.UUID]:
+        return self.user_id
+
+    @approver_id.setter
+    def approver_id(self, val: Optional[uuid.UUID]) -> None:
+        self.user_id = val
+
+    __table_args__ = (
+        Index("ix_task_approvals_task_plan", "task_id", "plan_version"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. Workspace & Execution Tracking
+# ---------------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskApproval model to canonical response envelope dictionary."""
+        return {
+            "approval_id": str(self.id),
+            "task_id": str(self.task_id),
+            "plan_version": self.plan_version,
+            "decision": self.decision,
+            "feedback": self.feedback,
+            "approved_by": str(self.user_id) if self.user_id else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Workspace(TimestampedModel, Base):
+    """Dedicated workspace directory and Git worktree metadata for task execution."""
+
+    __tablename__ = "workspaces"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    workspace_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    task_branch: Mapped[str] = mapped_column(String(256), nullable=False)
+    base_revision: Mapped[str] = mapped_column(String(128), nullable=False)
+    current_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=WorkspaceStatus.NOT_CREATED.value,
+        index=True,
+        nullable=False,
+    )
+    cleanup_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="workspace")
+
+    __table_args__ = (
+        Index("ix_workspaces_task_status", "task_id", "status"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert Workspace model to dictionary."""
+        return {
+            "workspace_id": str(self.id),
+            "task_id": str(self.task_id),
+            "workspace_path": self.workspace_path,
+            "task_branch": self.task_branch,
+            "base_revision": self.base_revision,
+            "current_revision": self.current_revision,
+            "status": self.status,
+            "cleanup_at": self.cleanup_at.isoformat() if self.cleanup_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskExecution(TimestampedModel, Base):
+    """Record of worker execution attempts for an approved task."""
+
+    __tablename__ = "task_executions"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    worker_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=ExecutionStatus.STARTED.value,
+        index=True,
+        nullable=False,
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="executions")
+
+    __table_args__ = (
+        Index("ix_task_executions_task_attempt", "task_id", "attempt_number"),
+        Index("ix_task_executions_task_created", "task_id", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. Tool Invocations, Test Runs & Repair Attempts
+# ---------------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskExecution model to canonical dictionary."""
+        return {
+            "execution_id": str(self.id),
+            "task_id": str(self.task_id),
+            "attempt_number": self.attempt_number,
+            "worker_id": self.worker_id,
+            "status": self.status,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "error_message": self.error_message,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class ToolInvocation(TimestampedModel, Base):
+    """Audit record for operations routed through the controlled ToolRouter."""
+
+    __tablename__ = "tool_invocations"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    tool_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    sanitized_arguments: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # ALLOWED, BLOCKED, COMPLETED, FAILED
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="tool_invocations")
+
+    __table_args__ = (
+        Index("ix_tool_invocations_task_created", "task_id", "created_at"),
+        Index("ix_tool_invocations_task_tool", "task_id", "tool_name"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert ToolInvocation model to canonical dictionary."""
+        return {
+            "invocation_id": str(self.id),
+            "task_id": str(self.task_id),
+            "tool_name": self.tool_name,
+            "sanitized_arguments": self.sanitized_arguments or {},
+            "status": self.status,
+            "duration_ms": self.duration_ms,
+            "output_summary": self.output_summary,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TestRun(TimestampedModel, Base):
+    """Execution outcome, counts, and exit code from permitted test commands."""
+
+    __test__ = False
+
+    __tablename__ = "test_runs"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    command: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # PASSED, FAILED, TIMED_OUT, ERROR
+    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tests_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tests_passed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tests_failed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sanitized_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    target_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="test_runs")
+
+    __table_args__ = (
+        Index("ix_test_runs_task_created", "task_id", "created_at"),
+        Index("ix_test_runs_task_status", "task_id", "status"),
+    )
+
+    __test__ = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TestRun model to canonical dictionary."""
+        return {
+            "test_run_id": str(self.id),
+            "task_id": str(self.task_id),
+            "command": self.command,
+            "status": self.status,
+            "exit_code": self.exit_code,
+            "duration_ms": self.duration_ms,
+            "tests_total": self.tests_total,
+            "tests_passed": self.tests_passed,
+            "tests_failed": self.tests_failed,
+            "sanitized_output": self.sanitized_output,
+            "target_revision": self.target_revision,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class RepairAttempt(TimestampedModel, Base):
+    """Bounded repair cycle attempt (max 3 task-level attempts)."""
+
+    __tablename__ = "repair_attempts"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    failure_classification: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    diagnosis: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applied_patch: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(String(32), nullable=False)  # SUCCESS, RETRY_EXHAUSTED, FAILED
+
+    task: Mapped["Task"] = relationship("Task", back_populates="repair_attempts")
+
+    __table_args__ = (
+        Index("ix_repair_attempts_task_attempt", "task_id", "attempt_number", unique=True),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. Independent Verification, Checkpoints, Timeline & Pull Requests
+# ---------------------------------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert RepairAttempt model to canonical dictionary."""
+        return {
+            "repair_id": str(self.id),
+            "task_id": str(self.task_id),
+            "attempt_number": self.attempt_number,
+            "failure_classification": self.failure_classification,
+            "diagnosis": self.diagnosis,
+            "applied_patch": self.applied_patch,
+            "result": self.result,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class VerificationResult(TimestampedModel, Base):
+    """Multi-dimensional verification result tied strictly to verified revision."""
+
+    __tablename__ = "verification_results"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    verified_revision: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+
+    checks: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB, nullable=True)
+    blocking_findings: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB, nullable=True)
+    warnings: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSONB, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="verification_results")
+
+    __table_args__ = (
+        Index("ix_verification_results_task_revision", "task_id", "verified_revision"),
+        Index("ix_verification_results_task_created", "task_id", "created_at"),
+    )
+
+    @property
+    def target_revision(self) -> str:
+        return self.verified_revision
+
+    @property
+    def blocking_findings_count(self) -> int:
+        return len(self.blocking_findings or [])
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert VerificationResult model to canonical response envelope dictionary."""
+        return {
+            "verification_id": str(self.id),
+            "id": str(self.id),
+            "task_id": str(self.task_id),
+            "verified_revision": self.verified_revision,
+            "target_revision": self.verified_revision,
+            "status": self.status,
+            "checks": self.checks or [],
+            "blocking_findings": self.blocking_findings or [],
+            "warnings": self.warnings or [],
+            "summary": self.summary,
+            "blocking_findings_count": len(self.blocking_findings or []),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskCheckpoint(TimestampedModel, Base):
+    """Persisted snapshot state for safe worker restart recovery (secret-scrubbed)."""
+
+    __tablename__ = "task_checkpoints"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    step_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
+    state_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    recovery_instructions: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="checkpoints")
+
+    __table_args__ = (
+        Index("ix_task_checkpoints_task_created", "task_id", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskCheckpoint model to canonical response envelope dictionary."""
+        return {
+            "checkpoint_id": str(self.id),
+            "task_id": str(self.task_id),
+            "step_name": self.step_name,
+            "state_data": self.state_data or {},
+            "recovery_instructions": self.recovery_instructions,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskEvent(TimestampedModel, Base):
+    """Ordered audit event and state transition record for timeline visualization."""
+
+    __tablename__ = "task_events"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    event_data: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(nullable=True)
+    from_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    to_status: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return self.event_data or {}
+
+    @payload.setter
+    def payload(self, val: dict[str, Any]) -> None:
+        self.event_data = val
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+        nullable=True,
+    )
+
+    task: Mapped["Task"] = relationship("Task", back_populates="events")
+    user: Mapped[Optional["User"]] = relationship("User")
+
+    @property
+    def approver_id(self) -> Optional[uuid.UUID]:
+        return self.user_id
+
+    @approver_id.setter
+    def approver_id(self, val: Optional[uuid.UUID]) -> None:
+        self.user_id = val
+
+    __table_args__ = (
+        Index("ix_task_events_task_created", "task_id", "created_at"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskEvent model to canonical response envelope dictionary."""
+        return {
+            "event_id": str(self.id),
+            "task_id": str(self.task_id),
+            "event_type": self.event_type,
+            "event_data": self.event_data,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class TaskPullRequest(TimestampedModel, Base):
+    """Published GitHub Draft PR metadata and revision tracking."""
+
+    __tablename__ = "task_pull_requests"
+
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    repository_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("repositories.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    github_pr_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    pr_number: Mapped[Optional[int]] = mapped_column(Integer, index=True, nullable=True)
+    pr_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    base_branch: Mapped[str] = mapped_column(String(256), nullable=False)
+    head_branch: Mapped[str] = mapped_column(String(256), nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_draft: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    task: Mapped["Task"] = relationship("Task", back_populates="pull_request")
+    repository: Mapped["Repository"] = relationship("Repository")
+
+    __table_args__ = (
+        Index("ix_task_pull_requests_repo_pr", "repository_id", "pr_number"),
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert TaskPullRequest model to canonical response envelope dictionary."""
+        return {
+            "pr_id": str(self.id),
+            "task_id": str(self.task_id),
+            "repository_id": str(self.repository_id),
+            "pr_number": self.pr_number,
+            "pr_url": self.pr_url,
+            "base_branch": self.base_branch,
+            "head_branch": self.head_branch,
+            "head_sha": self.head_sha,
+            "is_draft": self.is_draft,
+            "title": self.title,
+            "body": self.body,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+__all__ = [
+    "TaskStatus",
+    "TaskSourceType",
+    "TaskPlanStatus",
+    "ApprovalDecision",
+    "WorkspaceStatus",
+    "ExecutionStatus",
+    "ToolInvocationStatus",
+    "TestRunStatus",
+    "RepairResult",
+    "VerificationStatus",
+    "TaskEventType",
+    "Task",
+    "TaskPlan",
+    "TaskApproval",
+    "Workspace",
+    "TaskExecution",
+    "ToolInvocation",
+    "TestRun",
+    "RepairAttempt",
+    "VerificationResult",
+    "TaskCheckpoint",
+    "TaskEvent",
+    "TaskPullRequest",
+]
+
+# ---------------------------------------------------------------------------
+# Aliases for Week 3 Day 1 & Day 2 Compatibility
+# ---------------------------------------------------------------------------
+AgentTask = Task
+TaskPlanRecord = TaskPlan
+TaskApprovalRecord = TaskApproval
+TaskEventRecord = TaskEvent
