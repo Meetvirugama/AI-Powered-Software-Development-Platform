@@ -112,6 +112,8 @@ class VectorRetriever(Retriever):
                             Must be scoped to the current request / task.
         embedding_service:  EmbeddingService — used to embed the query string.
                             Injected to keep this class testable without a real API.
+        max_distance:       Optional cosine distance threshold in [0.0, 2.0].
+                            When provided, rows with distance > max_distance are filtered out.
 
     Example::
 
@@ -127,15 +129,18 @@ class VectorRetriever(Retriever):
         self,
         db: AsyncSession | async_sessionmaker[AsyncSession] | Any,
         embedding_service: EmbeddingService,
+        max_distance: float | None = None,
     ) -> None:
         self._db = db
         self._embedding_service = embedding_service
+        self._max_distance = max_distance
 
     async def retrieve(
         self,
         query: str,
         repository_id: UUID,
         top_k: int = 30,
+        max_distance: float | None = None,
     ) -> list[CodeChunk]:
         """
         Embed the query and run cosine similarity search against pgvector.
@@ -150,6 +155,7 @@ class VectorRetriever(Retriever):
             repository_id: Scope results to this repository only.
                            Enforced at SQL level — no cross-repo leakage.
             top_k:         Maximum number of chunks to return (default 30 for RRF).
+            max_distance:  Optional cosine distance ceiling override.
 
         Returns:
             List of `CodeChunk` sorted by descending similarity score (best first).
@@ -163,6 +169,7 @@ class VectorRetriever(Retriever):
             return []
 
         repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
+        effective_max_distance = max_distance if max_distance is not None else self._max_distance
 
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
@@ -199,6 +206,8 @@ class VectorRetriever(Retriever):
         chunks: list[CodeChunk] = []
         for row in rows:
             distance = float(row.distance)  # type: ignore[attr-defined]
+            if effective_max_distance is not None and distance > effective_max_distance:
+                continue
             score = max(0.0, min(1.0, 1.0 - distance))  # clamp to [0, 1]
             chunks.append(_row_to_chunk(row, score))
 
@@ -219,4 +228,3 @@ class VectorRetriever(Retriever):
         """Close embedding service resources if supported."""
         if hasattr(self._embedding_service, "aclose") and callable(self._embedding_service.aclose):
             await self._embedding_service.aclose()
-

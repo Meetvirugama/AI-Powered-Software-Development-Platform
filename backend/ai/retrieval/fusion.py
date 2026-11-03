@@ -6,8 +6,9 @@ Day 1: stub + algorithm docstring.
 Day 5: full implementation.
 
 RRF formula:
-    score(chunk) = Σ 1 / (k + rank_i)
-    where k=60 (constant) and rank_i is the chunk's 1-based position in each list.
+    score(chunk) = Σ w_i / (k + rank_i)
+    where k=60 (constant), w_i is the source weight (default 1.0), and
+    rank_i is the chunk's 1-based position in each list.
 
 Input:  two lists of CodeChunk (top-30 each from Vector and Lexical retrievers)
 Output: single merged list of up to 30 unique chunks, sorted by RRF score desc.
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import re
 from collections import defaultdict
 from uuid import UUID
 
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 _RRF_K = 60          # Standard constant — do not change without benchmarking
 _DEFAULT_TOP_N = 30  # Max fused candidates passed to CrossEncoderReranker
+
+_SYMBOL_QUERY_RE = re.compile(
+    r"(`[^`]+`|[A-Za-z0-9_]+\.[A-Za-z0-9_]+|[a-z]+_[a-z0-9_]+|[a-z]+[A-Z][A-Za-z0-9]*|\b(?:def|class|fn|func|interface|struct)\s+\w+)"
+)
 
 
 class RRFFusion:
@@ -37,10 +43,11 @@ class RRFFusion:
     This makes it robust to different score scales across retrieval methods.
 
     Formula:
-        score(chunk) = Σ  1 / (k + rank_i)
+        score(chunk) = Σ  w_i / (k + rank_i)
 
-    where ``k=60`` is a smoothing constant and ``rank_i`` is the chunk's
-    1-based position in result list ``i``.
+    where ``k=60`` is a smoothing constant, ``w_i`` is an optional per-source
+    weight (default 1.0), and ``rank_i`` is the chunk's 1-based position in
+    result list ``i``.
 
     Usage::
 
@@ -49,11 +56,21 @@ class RRFFusion:
         # combined → top-30 unique chunks by RRF score, ready for reranker
     """
 
+    @staticmethod
+    def detect_query_intent(query: str) -> str:
+        """Classify query intent as 'symbol' (exact identifier/path) or 'conceptual'."""
+        if not query or not query.strip():
+            return "conceptual"
+        if _SYMBOL_QUERY_RE.search(query):
+            return "symbol"
+        return "conceptual"
+
     def fuse(
         self,
         *result_lists: list[CodeChunk],
         k: int = _RRF_K,
         top_n: int = _DEFAULT_TOP_N,
+        weights: list[float] | None = None,
     ) -> list[CodeChunk]:
         """
         Apply RRF across any number of ranked result lists.
@@ -72,6 +89,8 @@ class RRFFusion:
                            without benchmarking on the full dataset).
             top_n:         Maximum number of fused candidates to return
                            (default 30 — feeds the CrossEncoderReranker).
+            weights:       Optional per-source weight multipliers matching
+                           ``result_lists`` length (defaults to 1.0 for each source).
 
         Returns:
             Merged, deduplicated list of ``CodeChunk`` sorted by descending
@@ -89,13 +108,19 @@ class RRFFusion:
         if k <= 0:
             raise ValueError(f"RRF smoothing constant k must be positive, got {k}")
 
+        effective_weights = weights or [1.0] * len(result_lists)
+        if len(effective_weights) != len(result_lists):
+            raise ValueError(
+                f"weights length ({len(effective_weights)}) must match result_lists count ({len(result_lists)})"
+            )
+
         # Accumulate RRF scores across all source lists
         scores: dict[UUID, float] = defaultdict(float)
         chunk_map: dict[UUID, CodeChunk] = {}
 
-        for results in result_lists:
+        for weight, results in zip(effective_weights, result_lists):
             for rank, chunk in enumerate(results, start=1):
-                scores[chunk.id] += 1.0 / (k + rank)
+                scores[chunk.id] += float(weight) / (k + rank)
                 # Keep the latest seen object (all should be identical by id)
                 chunk_map[chunk.id] = chunk
 
@@ -124,3 +149,17 @@ class RRFFusion:
         )
 
         return fused
+
+    def fuse_adaptive(
+        self,
+        query: str,
+        vector_results: list[CodeChunk],
+        lexical_results: list[CodeChunk],
+        *,
+        k: int = _RRF_K,
+        top_n: int = _DEFAULT_TOP_N,
+    ) -> list[CodeChunk]:
+        """Fuse vector and lexical results with query-intent-aware source weights."""
+        intent = self.detect_query_intent(query)
+        weights = [0.8, 1.4] if intent == "symbol" else [1.2, 0.9]
+        return self.fuse(vector_results, lexical_results, k=k, top_n=top_n, weights=weights)
