@@ -143,9 +143,16 @@ class RepositoryRepository:
         from app.models.sync_job import SyncJob
         from app.models.memory_entry import MemoryEntry
         from app.models.pull_request import PullRequest
+        from app.models.task import GitHubIssue, Task
         from sqlalchemy import delete
 
         try:
+            # Delete Week 3 tasks (and cascade task child entities via ORM) and GitHub issues first
+            tasks = list(self.session.scalars(select(Task).where(Task.repository_id == repo_id)).all())
+            for task_obj in tasks:
+                self.session.delete(task_obj)
+            self.session.flush()
+            self.session.execute(delete(GitHubIssue).where(GitHubIssue.repository_id == repo_id))
             self.session.execute(delete(AnalysisFinding).where(AnalysisFinding.repository_id == repo_id))
             self.session.execute(delete(AnalysisRun).where(AnalysisRun.repository_id == repo_id))
             self.session.execute(delete(PullRequest).where(PullRequest.repository_id == repo_id))

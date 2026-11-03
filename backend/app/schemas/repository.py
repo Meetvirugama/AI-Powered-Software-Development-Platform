@@ -81,10 +81,19 @@ class SyncJobResponse(BaseModel):
 
 
 class RepositorySearchRequest(BaseModel):
-    """A repository-scoped hybrid-search request."""
+    """A repository-scoped hybrid-search request (supports both query/top_k and q/limit aliases)."""
 
-    query: str = Field(min_length=1, max_length=1_000)
-    top_k: int = Field(default=8, ge=1, le=30)
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(min_length=1, max_length=1_000, validation_alias="q")
+    top_k: int = Field(default=8, ge=1, le=30, validation_alias="limit")
+
+    def __init__(self, **data):
+        if "query" in data and "q" not in data:
+            data["q"] = data["query"]
+        if "top_k" in data and "limit" not in data:
+            data["limit"] = data["top_k"]
+        super().__init__(**data)
 
     @field_validator("query")
     @classmethod
