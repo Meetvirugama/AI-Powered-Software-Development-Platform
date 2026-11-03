@@ -75,6 +75,16 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/source/commit/?$"), 20, 60, "user"),
         RateLimitRule("repo_pr_metadata", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/source/pr-metadata/?$"), 20, 60, "user"),
+        RateLimitRule(
+            "repo_source_task_ops",
+            frozenset({"POST"}),
+            re.compile(
+                rf"^{p}/repositories/[^/]+/source/(?:task-branch/(?:isolate|validate-base)|task-workspace/(?:tests|repair)|task/(?:verify|publish-pr|recover|cleanup|execute-pipeline))/?$"
+            ),
+            20,
+            60,
+            "user",
+        ),
         RateLimitRule("repo_issues", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/issues(?:/import)?/?$"), 20, 60, "user"),
         RateLimitRule("tasks_create", frozenset({"POST"}),

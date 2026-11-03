@@ -143,7 +143,27 @@ class BoundedRepairManager:
 
         Guards against path traversal and symlink escapes.
         """
-        ws = Path(workspace_path).resolve()
+        from app.services.git_branch import _PROTECTED_SYSTEM_PREFIXES, _REPO_ROOT
+
+        raw_ws_str = str(workspace_path or "").strip()
+        if not raw_ws_str or "\x00" in raw_ws_str or ".." in raw_ws_str.replace("\\", "/").split("/"):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Unsafe workspace_path.")
+
+        ws = Path(raw_ws_str).resolve()
+        resolved_str = ws.as_posix()
+        for prefix in _PROTECTED_SYSTEM_PREFIXES:
+            if resolved_str == prefix or resolved_str.startswith(prefix + "/"):
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    f"Workspace path points to a protected system directory: {workspace_path}",
+                )
+        if ws in (_REPO_ROOT, _REPO_ROOT / "backend", _REPO_ROOT / "frontend"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Refusing to apply repair patch directly against the host platform repository.",
+            )
         if not ws.exists() or not ws.is_dir():
             raise APIError(400, ErrorCode.WORKSPACE_CREATION_FAILED, f"Workspace does not exist: {ws}")
 
@@ -198,7 +218,27 @@ class BoundedRepairManager:
         timeout_seconds: float = 30.0,
     ) -> RepairAttemptRecord:
         """Perform a single bounded repair cycle: validate eligibility -> apply patch -> re-run tests."""
-        ws = Path(workspace_path).resolve()
+        from app.services.git_branch import _PROTECTED_SYSTEM_PREFIXES, _REPO_ROOT
+
+        raw_ws_str = str(workspace_path or "").strip()
+        if not raw_ws_str or "\x00" in raw_ws_str or ".." in raw_ws_str.replace("\\", "/").split("/"):
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Unsafe workspace_path.")
+
+        ws = Path(raw_ws_str).resolve()
+        resolved_str = ws.as_posix()
+        for prefix in _PROTECTED_SYSTEM_PREFIXES:
+            if resolved_str == prefix or resolved_str.startswith(prefix + "/"):
+                raise APIError(
+                    400,
+                    ErrorCode.INVALID_REQUEST,
+                    f"Workspace path points to a protected system directory: {workspace_path}",
+                )
+        if ws in (_REPO_ROOT, _REPO_ROOT / "backend", _REPO_ROOT / "frontend"):
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Refusing to execute repair attempt directly against the host platform repository.",
+            )
         used = current_attempts_used if current_attempts_used is not None else self.get_attempts_used(task_id)
 
         eligibility = self.evaluate_eligibility(
@@ -234,11 +274,19 @@ class BoundedRepairManager:
             new_content=new_content,
             patch_text=patch_text,
         )
+        safe_rel_target = validate_repo_relative_path(target_file)
 
         # Stage and commit locally on the task branch
         new_rev = prev_rev
         if (ws / ".git").exists():
-            await asyncio.create_subprocess_exec("git", "add", target_file, cwd=str(ws))
+            add_proc = await asyncio.create_subprocess_exec(
+                "git", "add", "--", safe_rel_target,
+                cwd=str(ws),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await add_proc.communicate()
+
             c_proc = await asyncio.create_subprocess_exec(
                 "git", "commit", "-m", f"fix(agent): auto-repair attempt {attempt_num} for task {task_id}",
                 cwd=str(ws),
@@ -269,7 +317,7 @@ class BoundedRepairManager:
         record = RepairAttemptRecord(
             attempt_number=attempt_num,
             diagnosis=diagnosis,
-            target_file=target_file,
+            target_file=safe_rel_target,
             patch_applied=True,
             previous_revision=prev_rev,
             new_revision=new_rev,

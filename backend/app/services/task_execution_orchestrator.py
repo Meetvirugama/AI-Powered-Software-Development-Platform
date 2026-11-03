@@ -235,14 +235,61 @@ class TaskExecutionOrchestrator:
             task.repository_id,
             db_ws.base_revision or task.base_revision or "main",
         )
-        create_req = WorkspaceCreateRequest(
-            task_id=task_id_str,
-            repository_id=str(task.repository_id),
-            base_revision=ws_base_rev,
-            branch_name=branch_name,
-            isolation_type="directory_copy",
-        )
-        meta = self.workspace_manager.create_workspace(create_req)
+        # Reconcile existing workspace directory on disk WITHOUT wiping files (_safe_remove_dir)
+        meta: WorkspaceMetadata | None = None
+        if ws_path.exists() and any(ws_path.iterdir()):
+            try:
+                self.workspace_manager.reconcile_workspace(task_id_str)
+                meta = self.workspace_manager.get_workspace(task_id_str)
+            except Exception:
+                meta = None
+            if meta is None:
+                meta = WorkspaceMetadata(
+                    workspace_id=str(db_ws.id),
+                    task_id=task_id_str,
+                    repository_id=str(task.repository_id),
+                    base_revision=ws_base_rev,
+                    branch_name=branch_name,
+                    workspace_path=str(ws_path.resolve()),
+                    status=WorkspaceStatus.IN_USE,
+                    isolation_type="directory_copy",
+                )
+                self.workspace_manager._workspaces[task_id_str] = meta
+        else:
+            create_req = WorkspaceCreateRequest(
+                task_id=task_id_str,
+                repository_id=str(task.repository_id),
+                base_revision=ws_base_rev,
+                branch_name=branch_name,
+                isolation_type="directory_copy",
+            )
+            meta = self.workspace_manager.create_workspace(create_req)
+
+        # Recover verification_diff_hash if available
+        saved_diff_hash = None
+        if meta.verification_diff_hash:
+            saved_diff_hash = meta.verification_diff_hash
+        else:
+            m_path = ws_path / "metadata.json"
+            if not m_path.exists():
+                m_path = ws_path / "workspace_metadata.json"
+            if m_path.exists():
+                try:
+                    m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                    saved_diff_hash = m_data.get("verification_diff_hash")
+                except Exception:
+                    pass
+            if not saved_diff_hash:
+                ver_rec = task_repo.get_latest_verification_result(task.id)
+                if ver_rec and getattr(ver_rec, "checks", None):
+                    for chk in ver_rec.checks:
+                        if isinstance(chk, dict) and chk.get("details", {}).get("diff_hash"):
+                            saved_diff_hash = chk["details"]["diff_hash"]
+                            break
+        if saved_diff_hash:
+            meta.verification_diff_hash = saved_diff_hash
+            self.workspace_manager._save_metadata_file(meta)
+
         target_status_str = (db_ws.status or "READY").upper()
         try:
             target_ws_status = WorkspaceStatus(target_status_str)
@@ -1493,6 +1540,21 @@ class TaskExecutionOrchestrator:
                 f"Task verification status is '{ver.status}' with {len(ver.blocking_findings or [])} blocking finding(s). Publication is blocked.",
             )
 
+        # Enforce authorized_head_sha matches ver.verified_revision if publication authorized (B4)
+        latest_auth_event = None
+        for ev in reversed(task_repo.list_events(task.id)):
+            if ev.event_type == TaskEventType.PUBLICATION_AUTHORIZED.value:
+                latest_auth_event = ev
+                break
+        if latest_auth_event and isinstance(latest_auth_event.event_data, dict):
+            auth_sha = latest_auth_event.event_data.get("authorized_head_sha")
+            if auth_sha and auth_sha.strip().lower() != (ver.verified_revision or "").strip().lower():
+                raise APIError(
+                    409,
+                    ErrorCode.VERIFICATION_FAILED,
+                    f"Publication authorization head SHA '{auth_sha[:8]}' does not match verified revision '{(ver.verified_revision or '')[:8]}'. Re-authorization required.",
+                )
+
         # Post-verification diff immutability check (Docs/week3.md §9 & §10)
         if meta.verification_diff_hash:
             imm_check = self.workspace_manager.verify_diff_immutability(
@@ -1576,14 +1638,25 @@ class TaskExecutionOrchestrator:
             publication_authorized=True,
         )
 
+        ws_path = Path(meta.workspace_path)
+        has_remote = False
+        if (ws_path / ".git").exists():
+            proc_rem = subprocess.run(
+                ["git", "-C", str(ws_path), "remote", "get-url", "--", remote_name],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            has_remote = (proc_rem.returncode == 0 and bool(proc_rem.stdout.strip()))
+
         try:
             push_res = self.workspace_manager.push_task_branch(push_req)
         except WorkspacePushError as exc:
-            if strict_remote:
+            if strict_remote or has_remote:
                 raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, redact(str(exc))) from exc
             # In local/sandbox environments without a configured remote 'origin', record simulated push telemetry
             pushed_sha = meta.base_revision
-            ws_path = Path(meta.workspace_path)
             if (ws_path / ".git").exists():
                 proc = subprocess.run(
                     ["git", "-C", str(ws_path), "rev-parse", "HEAD"],
@@ -1618,6 +1691,7 @@ class TaskExecutionOrchestrator:
                 "branch": push_res.branch,
                 "pushed_sha": push_res.pushed_sha,
                 "remote_name": push_res.remote_name,
+                "simulated": not has_remote,
             },
             user_id=actor_id,
             summary=f"Pushed verified branch '{push_res.branch}' ({push_res.pushed_sha[:8]}) to '{push_res.remote_name}'.",
@@ -1671,7 +1745,9 @@ class TaskExecutionOrchestrator:
                     f"Head branch '{effective_head}' cannot be a protected branch (ADR-010).",
                 )
 
-            repo_obj = task.repository
+            from app.models.repository import Repository
+
+            repo_obj = task.repository or task_repo.session.get(Repository, task.repository_id)
             effective_base = (
                 base_branch
                 or (getattr(repo_obj, "default_branch", None) if repo_obj else None)
@@ -1726,7 +1802,7 @@ class TaskExecutionOrchestrator:
                 commit_res = self.workspace_manager.commit_task_changes(commit_req)
                 head_sha = commit_res.commit_sha
                 # Refresh verification diff hash after commit
-                self.workspace_manager.compute_verification_diff_hash(str(task.id))
+                self.workspace_manager.compute_verification_diff_hash(str(task.id), record_baseline=True)
             except Exception:
                 head_sha = ver.verified_revision
 
@@ -1734,8 +1810,16 @@ class TaskExecutionOrchestrator:
                 head_sha = hashlib.sha256(f"{task.id}:{effective_head}".encode("utf-8")).hexdigest()[:40]
 
             # 6. Synthesize Draft PR via WorkspaceManager (strictly draft=True, zero auto-merge)
-            repo_owner = getattr(repo_obj, "owner", None) or "Meetvirugama"
-            repo_name = getattr(repo_obj, "name", None) or "AI-Powered-Software-Development-Platform"
+            repo_owner = getattr(repo_obj, "owner", None)
+            repo_name = getattr(repo_obj, "name", None)
+            if not repo_owner or not repo_name:
+                full_n = getattr(repo_obj, "full_name", None) or ""
+                if "/" in full_n:
+                    parts = full_n.split("/", 1)
+                    repo_owner = repo_owner or parts[0]
+                    repo_name = repo_name or parts[1]
+            repo_owner = repo_owner or "local"
+            repo_name = repo_name or "repository"
 
             custom_body = body or ver.summary or ""
             if task.finding_id:

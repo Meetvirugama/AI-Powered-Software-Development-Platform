@@ -250,7 +250,7 @@ def init_intelligence_services(app: FastAPI) -> bool:
                 from ai.services.task_planner import TaskPlanner
                 app.state.task_planner = TaskPlanner(
                     llm_gateway=llm_gateway,
-                    model=settings.gemini_chat_model,
+                    model=settings.active_chat_model,
                 )
                 app.state.service_readiness["task_planner"] = True
                 logger.info("task_planner_ready")

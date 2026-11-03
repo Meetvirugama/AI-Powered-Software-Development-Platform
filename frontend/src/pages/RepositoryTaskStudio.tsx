@@ -241,13 +241,15 @@ export function RepositoryTaskStudio() {
   }, []);
 
   useEffect(() => {
-    fetchTasks();
+    // oxlint-disable-next-line react/set-state-in-effect
+    void fetchTasks();
   }, [fetchTasks]);
 
   useEffect(() => {
     if (selectedTaskId) {
       setSearchParams({ taskId: selectedTaskId }, { replace: true });
-      fetchTaskDetailAndEvents(selectedTaskId);
+      // oxlint-disable-next-line react/set-state-in-effect
+      void fetchTaskDetailAndEvents(selectedTaskId);
     } else {
       setTaskDetail(null);
       setEvents([]);
@@ -565,13 +567,14 @@ export function RepositoryTaskStudio() {
 
   const latestPlan = taskDetail?.latest_plan ?? null;
   const isApproved =
-    taskDetail?.status === 'APPROVED' &&
+    (taskDetail?.status === 'APPROVED' || taskDetail?.status === 'WORKSPACE_SETUP') &&
     taskDetail.approved_plan_version != null &&
     taskDetail.approved_plan_version === latestPlan?.plan_version;
   const hasWorkspace =
     workspaceMeta && workspaceMeta.status && workspaceMeta.status !== 'NOT_CREATED';
   const canPublishPR =
     taskDetail?.status === 'READY_FOR_PUBLICATION' ||
+    taskDetail?.status === 'PUBLISHING' ||
     (verificationResult &&
       (verificationResult.status === 'PASS' || verificationResult.status === 'REQUIRES_HUMAN_REVIEW') &&
       (verificationResult.blocking_findings || []).length === 0);

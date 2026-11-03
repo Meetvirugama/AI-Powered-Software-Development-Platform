@@ -99,7 +99,7 @@ def redact_secrets(text: str | None) -> RedactionResult:
         current = text
 
         def _sub(match: re.Match[str], _name: str = name, _current: str = current) -> str:
-            if match.group(0) == REDACTED:
+            if match.group(0) == REDACTED or (_name == "private_key_block" and REDACTED in match.group(0)):
                 return match.group(0)
             findings.append(SecretFinding(_name, _line_of(_current, match.start())))
             if _name == "private_key_block":

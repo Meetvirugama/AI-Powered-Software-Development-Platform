@@ -446,10 +446,12 @@ class WorkspaceDiffVerifier:
     def _compute_fs_diff(self, workspace_path: Path) -> str:
         """Construct synthetic unified diff from modified files in non-git workspace."""
         lines: list[str] = []
-        for file in workspace_path.rglob("*"):
+        for file in sorted(workspace_path.rglob("*")):
             if not file.is_file() or ".workspaces" in file.parts or ".git" in file.parts:
                 continue
             rel_path = file.relative_to(workspace_path).as_posix()
+            if rel_path in ("metadata.json", "workspace_metadata.json") or rel_path.endswith("/metadata.json"):
+                continue
             try:
                 content = file.read_text(encoding="utf-8", errors="replace")
                 content_lines = content.splitlines()

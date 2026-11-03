@@ -1,16 +1,19 @@
 /// <reference types="vitest" />
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
+
+const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: [
-      { find: 'msw/node', replacement: path.resolve(__dirname, 'src/lib/msw/node.ts') },
-      { find: 'msw/browser', replacement: path.resolve(__dirname, 'src/lib/msw/browser.ts') },
-      { find: 'msw', replacement: path.resolve(__dirname, 'src/lib/msw/index.ts') },
+      { find: 'msw/node', replacement: path.resolve(rootDir, 'src/lib/msw/node.ts') },
+      { find: 'msw/browser', replacement: path.resolve(rootDir, 'src/lib/msw/browser.ts') },
+      { find: 'msw', replacement: path.resolve(rootDir, 'src/lib/msw/index.ts') },
     ],
   },
   build: {

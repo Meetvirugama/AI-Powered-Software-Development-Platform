@@ -112,7 +112,7 @@ def scan_text(line: str) -> list[tuple[str, str, bool]]:
             value = m.groupdict().get("value") or m.group(0)
             if name == "private_key_block":
                 is_placeholder = False  # a key header is never "just a placeholder" — review it
-                if re.search(r"(?i)\\n\.\.\.\\n|<[^>]+>", line):
+                if re.search(r"(?i)\\n\.\.\.\\n|<[^>]+>|\[REDACTED\]", line):
                     is_placeholder = True  # e.g. docs: -----BEGIN ... KEY-----\n...\n-----END
             else:
                 is_placeholder = bool(PLACEHOLDER_HINTS.search(value)) or bool(

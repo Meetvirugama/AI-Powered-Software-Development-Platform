@@ -117,13 +117,6 @@ def test_timeout_is_capped_and_no_shell_is_used(sandbox_dir, monkeypatch):
     assert Path(seen["kwargs"]["cwd"]).resolve() == sandbox_dir.resolve()
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Known gap B8 (owner: Prit): on timeout only the direct child process is killed; "
-        "processes it started keep running. Needs a process group / job object kill."
-    ),
-    strict=False,
-)
 def test_timeout_also_stops_child_processes(sandbox_dir):
     marker = sandbox_dir / "child_survived.txt"
     _write(

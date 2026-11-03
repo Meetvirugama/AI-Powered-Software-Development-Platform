@@ -83,6 +83,8 @@ class TestGenerationServiceProtocol(Protocol):
     negative, and boundary edge cases without auto-executing untrusted code.
     """
 
+    __test__ = False
+
     async def generate_tests(
         self,
         repository_id: UUID,

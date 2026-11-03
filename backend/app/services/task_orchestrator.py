@@ -30,8 +30,14 @@ from typing import Any, Optional
 from uuid import UUID
 
 from app.core.errors import APIError, ErrorCode
+from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.schemas.task import TaskStatus
-from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT, format_agent_branch_name
+from app.services.git_branch import (
+    GitBranchService,
+    _DEFAULT_WORKSPACE_ROOT,
+    _validate_safe_workspace_path,
+    format_agent_branch_name,
+)
 from app.services.independent_verifier import IndependentVerifier
 from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
 from app.services.task_recovery import TaskRecoveryService
@@ -97,6 +103,11 @@ class TaskExecutionOrchestrator:
         short_id = str(task_uuid)[:8]
         branch_name = format_agent_branch_name(task_uuid)
 
+        try:
+            safe_target_file = validate_repo_relative_path(target_file)
+        except UnsafePathError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Unsafe target_file path: {exc}") from exc
+
         steps: list[PipelineStepRecord] = []
         resolved_ws = Path(workspace_path) if workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
 
@@ -113,7 +124,7 @@ class TaskExecutionOrchestrator:
             step_number=2,
             name="Task Plan & Base Revision Spec",
             status="COMPLETED",
-            details={"base_revision": base_revision, "target_file": target_file},
+            details={"base_revision": base_revision, "target_file": safe_target_file},
         ))
 
         # Step 3: Human Approval Gate Validation
@@ -157,6 +168,7 @@ class TaskExecutionOrchestrator:
             workspace_path=resolved_ws,
             create_workspace=True,
         )
+        resolved_ws = _validate_safe_workspace_path(resolved_ws)
         steps.append(PipelineStepRecord(
             step_number=5,
             name="Branch Isolation (Rule 563)",
@@ -178,15 +190,19 @@ class TaskExecutionOrchestrator:
             status="COMPLETED",
         ))
 
-        # Step 8: Apply Planned File Edits
-        file_path = (resolved_ws / target_file).resolve()
+        # Step 8: Apply Planned File Edits (with strict workspace confinement)
+        file_path = (resolved_ws / safe_target_file).resolve()
+        try:
+            file_path.relative_to(resolved_ws)
+        except ValueError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Target file escapes workspace: {target_file}") from exc
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(new_content, encoding="utf-8")
         steps.append(PipelineStepRecord(
             step_number=8,
             name="Apply File Changes",
             status="COMPLETED",
-            details={"target_file": target_file, "bytes": len(new_content.encode("utf-8"))},
+            details={"target_file": safe_target_file, "bytes": len(new_content.encode("utf-8"))},
         ))
 
         # Step 9: Workspace Commit
@@ -236,7 +252,7 @@ class TaskExecutionOrchestrator:
                 task_id=task_uuid,
                 workspace_path=resolved_ws,
                 diagnosis="Self-repairing test failure in pipeline",
-                target_file=target_file,
+                target_file=safe_target_file,
                 patch_text=repair_patch,
                 test_command=test_command,
                 current_attempts_used=0,

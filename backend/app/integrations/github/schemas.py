@@ -450,6 +450,8 @@ class BaseRevisionValidationResponse(BaseModel):
 
 class TestRunnerRequest(BaseModel):
     """Request to execute restricted test suite inside task workspace."""
+    __test__ = False
+
     task_id: UUID | str = Field(..., description="Target task ID")
     command: list[str] | str = Field(default="pytest", description="Permitted test command (pytest, python -m unittest, npm test)")
     timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0, description="Test execution timeout limit in seconds")
@@ -458,6 +460,8 @@ class TestRunnerRequest(BaseModel):
 
 class TestRunnerResponse(BaseModel):
     """Sanitized and bounded outcome of restricted test execution."""
+    __test__ = False
+
     task_id: UUID
     status: str = Field(..., description="Outcome: PASSED, FAILED, TIMEOUT, or INFRASTRUCTURE_ERROR")
     exit_code: int = 0

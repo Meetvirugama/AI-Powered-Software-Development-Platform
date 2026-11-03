@@ -45,6 +45,7 @@ const SECRET_KV_REGEX = new RegExp(
  * Client-side credential sanitization applied as defense in depth.
  * Server-side redaction remains authoritative.
  */
+// oxlint-disable-next-line react/only-export-components
 export function sanitizeSecurityMessage(raw: unknown): string {
   if (raw === null || raw === undefined) {
     return 'Security policy enforcement blocked the requested operation.';
