@@ -17,7 +17,7 @@ import time
 from collections.abc import Sequence
 from typing import Self
 
-from .client import DimensionMismatchError, EmbeddingError, EmbeddingProvider
+from .client import DimensionMismatchError, EmbeddingError, EmbeddingProfile, EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,40 @@ class EmbeddingService:
     def model_name(self) -> str:
         """Configured model name from underlying provider."""
         return getattr(self._provider, "model_name", "models/gemini-embedding-001")
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        """Declared embedding profile for this service."""
+        return self._provider.profile
+
+    @property
+    def profile_version(self) -> str:
+        """Active profile version."""
+        return self.profile.profile_version
+
+    def validate_query_profile(self, target_profile: EmbeddingProfile | None) -> None:
+        """
+        Validate that target indexed profile matches this embedding service's profile.
+
+        Raises:
+            DimensionMismatchError: if dimensions differ.
+            EmbeddingError: if provider or model differ.
+        """
+        if target_profile is None:
+            return
+        if not self.profile.is_compatible_with(target_profile):
+            if self.profile.dimensions != target_profile.dimensions:
+                raise DimensionMismatchError(
+                    expected=target_profile.dimensions,
+                    actual=self.profile.dimensions,
+                    provider=self.profile.provider,
+                )
+            raise EmbeddingError(
+                f"Embedding profile mismatch: current service is {self.profile.provider}/{self.profile.model} "
+                f"but target index was created with {target_profile.provider}/{target_profile.model}",
+                retryable=False,
+                provider=self.profile.provider,
+            )
 
     # ------------------------------------------------------------------
     # Public API

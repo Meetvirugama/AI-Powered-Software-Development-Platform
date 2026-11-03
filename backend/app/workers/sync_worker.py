@@ -49,18 +49,25 @@ async def run_worker() -> None:
 
     worker_task = asyncio.create_task(sync_worker_loop(github_service))
 
-    # Wait until stop event is set or worker task terminates
+    stop_wait_task = asyncio.create_task(stop_event.wait())
     done, pending = await asyncio.wait(
-        [worker_task, asyncio.create_task(stop_event.wait())],
+        [worker_task, stop_wait_task],
         return_when=asyncio.FIRST_COMPLETED,
     )
+
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     if not worker_task.done():
         logger.info("Cancelling worker task gracefully...")
         worker_task.cancel()
         try:
             await worker_task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             pass
 
     try:

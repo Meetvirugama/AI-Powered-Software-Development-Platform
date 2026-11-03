@@ -5,14 +5,20 @@ Architecture & System Contracts (team_rules.md):
 - Every LLM call in the platform MUST route through ``LLMGateway.generate()``.
 - No application domain or controller may import vendor LLM SDKs directly.
 - Emits structured telemetry logs on every invocation:
-  model, input_tokens, output_tokens, latency_ms, provider, and success/failure.
+  request_id, model, input_tokens, output_tokens, latency_ms, provider, and success/failure.
 - Encapsulates provider delegation, fallback execution, and lifecycle management.
+- Hardened for production reliability (task2.md P0.1):
+  * Explicit fallback policy (auth error fallback disabled by default).
+  * Explicit cross-provider model translation mapping.
+  * Preservation of request semantics during fallback.
+  * Resource safety on aclose() (both providers cleaned up reliably).
 """
 
 from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Self
 
 from .provider import LLMProvider
@@ -24,9 +30,28 @@ from .schemas import (
     LLMResponse,
     LLMTimeoutError,
     LLMUnavailableError,
+    LLMValidationError,
 )
 
 logger = logging.getLogger(__name__)
+
+# Canonical cross-vendor model translations
+CROSS_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
+    "groq": "openai/gpt-oss-120b",
+    "gemini": "gemini-flash-latest",
+}
+
+EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
+    # (exact_requested_model, target_provider_name) -> target_model_name
+    ("gemini-flash-lite-latest", "groq"): "openai/gpt-oss-120b",
+    ("gemini-flash-latest", "groq"): "openai/gpt-oss-120b",
+    ("gemini-1.5-flash", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.0-flash", "groq"): "openai/gpt-oss-120b",
+    ("gemini-1.5-pro", "groq"): "openai/gpt-oss-120b",
+    ("openai/gpt-oss-120b", "gemini"): "gemini-flash-latest",
+    ("llama-3.3-70b-versatile", "gemini"): "gemini-flash-latest",
+    ("qwen/qwen3.8-27b", "gemini"): "gemini-flash-latest",
+}
 
 
 class LLMGateway:
@@ -52,11 +77,16 @@ class LLMGateway:
         self,
         provider: LLMProvider,
         fallback_provider: LLMProvider | None = None,
+        *,
+        fallback_on_auth_error: bool = False,
+        model_map: dict[tuple[str, str], str] | None = None,
     ) -> None:
         if provider is None:
             raise ValueError("LLMGateway requires a valid LLMProvider.")
         self._provider = provider
         self._fallback_provider = fallback_provider
+        self._fallback_on_auth_error = fallback_on_auth_error
+        self._model_map = model_map or {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -77,6 +107,11 @@ class LLMGateway:
         """Optional secondary provider for disaster recovery."""
         return self._fallback_provider
 
+    @property
+    def fallback_on_auth_error(self) -> bool:
+        """Whether authentication errors trigger fallback."""
+        return self._fallback_on_auth_error
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -89,6 +124,7 @@ class LLMGateway:
         - Returns a validated, typed ``LLMResponse``.
         - Emits structured logging metrics on both success and failure.
         - Translates transient outages to optional fallback provider if configured.
+        - Preserves request semantics (response schema, temperature, max tokens).
         - Resource lifecycle management.
 
         Args:
@@ -102,6 +138,7 @@ class LLMGateway:
             LLMRateLimitError: If rate limits are exhausted.
             LLMUnavailableError: If provider is down or unreachable.
             LLMValidationError: If structured output fails schema validation.
+            LLMAuthenticationError: If credentials fail and fallback_on_auth_error is False.
             LLMError: For any other unrecoverable provider failure.
         """
         if not isinstance(request, LLMRequest):
@@ -109,6 +146,7 @@ class LLMGateway:
         if not request.messages:
             raise ValueError("LLMRequest must contain at least one Message turn.")
 
+        request_id = getattr(request, "request_id", None) or uuid.uuid4().hex[:12]
         start_time = time.monotonic()
         success = False
         response: LLMResponse | None = None
@@ -125,38 +163,22 @@ class LLMGateway:
                 LLMRateLimitError,
                 LLMAuthenticationError,
             ) as exc:
+                # Do not fallback on auth errors by default (P0.1)
+                if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
+                    raise
+
                 if self._fallback_provider is not None:
                     logger.warning(
                         "llm_gateway_primary_failed_trying_fallback",
                         extra={
+                            "request_id": request_id,
                             "primary": self._provider.provider_name,
                             "fallback": self._fallback_provider.provider_name,
                             "error_type": type(exc).__name__,
                         },
                     )
                     effective_provider = self._fallback_provider
-                    fallback_request = request
-                    # If request model was provider-specific or default, adjust for fallback
-                    primary_default = getattr(self._provider, "default_model", None)
-                    req_model = (request.model or "").strip().lower()
-                    fb_name = (self._fallback_provider.provider_name or "").lower()
-                    is_cross_vendor_model = (
-                        (fb_name == "groq" and req_model.startswith("gemini"))
-                        or (fb_name == "gemini" and (req_model.startswith("openai/") or req_model.startswith("llama") or req_model.startswith("qwen")))
-                    )
-                    if (
-                        not request.model
-                        or request.model == "default"
-                        or request.model == primary_default
-                        or is_cross_vendor_model
-                    ):
-                        fallback_request = LLMRequest(
-                            messages=request.messages,
-                            model=self._fallback_provider.default_model,
-                            temperature=request.temperature,
-                            max_tokens=request.max_tokens,
-                            response_schema=request.response_schema,
-                        )
+                    fallback_request = self._build_fallback_request(request)
                     effective_model = fallback_request.model
                     response = await self._fallback_provider.generate(fallback_request)
                 else:
@@ -180,6 +202,7 @@ class LLMGateway:
             logger.info(
                 "llm_call",
                 extra={
+                    "request_id": request_id,
                     "provider": effective_provider.provider_name,
                     "effective_provider": effective_provider.provider_name,
                     "requested_provider": self._provider.provider_name,
@@ -196,11 +219,78 @@ class LLMGateway:
                 },
             )
 
+    def _build_fallback_request(self, request: LLMRequest) -> LLMRequest:
+        """
+        Translate request model for the fallback provider while strictly preserving
+        all request semantics (messages, temperature, max_tokens, response_schema).
+        """
+        assert self._fallback_provider is not None
+        fb_name = (self._fallback_provider.provider_name or "").lower()
+        primary_name = (self._provider.provider_name or "").lower()
+        req_model = (request.model or "").strip()
+        primary_default = getattr(self._provider, "default_model", None)
+
+        target_model: str | None = None
+
+        # 1. Custom model translation map
+        if (req_model, fb_name) in self._model_map:
+            target_model = self._model_map[(req_model, fb_name)]
+        # 2. Explicit model mapping table
+        elif (req_model, fb_name) in EXPLICIT_MODEL_TRANSLATION_MAP:
+            target_model = EXPLICIT_MODEL_TRANSLATION_MAP[(req_model, fb_name)]
+        # 3. Provider default / cross-vendor check
+        elif not req_model or req_model == "default" or req_model == primary_default:
+            target_model = self._fallback_provider.default_model
+        else:
+            # Check if requested model is cross-vendor
+            is_cross_vendor = (
+                (fb_name == "groq" and req_model.lower().startswith("gemini"))
+                or (
+                    fb_name == "gemini"
+                    and (
+                        req_model.lower().startswith("openai/")
+                        or req_model.lower().startswith("llama")
+                        or req_model.lower().startswith("qwen")
+                    )
+                )
+            )
+            if is_cross_vendor:
+                target_model = CROSS_PROVIDER_DEFAULT_MODELS.get(
+                    fb_name, self._fallback_provider.default_model
+                )
+            else:
+                target_model = req_model
+
+        return LLMRequest(
+            messages=request.messages,
+            model=target_model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            response_schema=request.response_schema,
+        )
+
     async def aclose(self) -> None:
-        """Close provider resources."""
-        await self._provider.aclose()
+        """
+        Close provider resources safely (P0.1 requirement 8).
+        Both primary and fallback providers are closed even if closing primary raises.
+        """
+        err: Exception | None = None
+        try:
+            await self._provider.aclose()
+        except Exception as exc:
+            err = exc
+            logger.error("llm_gateway_primary_close_error: %s", exc)
+
         if self._fallback_provider is not None:
-            await self._fallback_provider.aclose()
+            try:
+                await self._fallback_provider.aclose()
+            except Exception as exc:
+                logger.error("llm_gateway_fallback_close_error: %s", exc)
+                if err is None:
+                    err = exc
+
+        if err is not None:
+            raise err
 
     async def __aenter__(self: Self) -> Self:
         return self

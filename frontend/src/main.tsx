@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App.tsx';
+import { enableMocking } from './lib/mswBootstrap.ts';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -12,19 +13,6 @@ const queryClient = new QueryClient({
     },
   },
 });
-
-async function enableMocking(): Promise<void> {
-  if (import.meta.env.DEV && import.meta.env.VITE_ENABLE_MSW !== 'false') {
-    try {
-      const { worker } = await import('./mocks/browser');
-      await worker.start({
-        onUnhandledRequest: 'bypass',
-      });
-    } catch (err) {
-      console.error('MSW failed to start:', err);
-    }
-  }
-}
 
 enableMocking()
   .catch((err) => {

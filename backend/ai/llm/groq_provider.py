@@ -83,6 +83,7 @@ class GroqProvider(LLMProvider):
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
         model: str = _DEFAULT_MODEL,
         client: httpx.AsyncClient | None = None,
+        concurrency_limit: int = 50,
     ) -> None:
         if api_keys:
             self._api_keys = [k.strip() for k in api_keys if k.strip()]
@@ -98,6 +99,7 @@ class GroqProvider(LLMProvider):
         self._default_model = model
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
+        self._semaphore = asyncio.Semaphore(concurrency_limit)
 
     # ------------------------------------------------------------------
     # Properties
@@ -136,11 +138,11 @@ class GroqProvider(LLMProvider):
 
         last_error: LLMError | None = None
 
-        for attempt in range(1, _MAX_RETRIES + 1):
-            api_key = self._next_key()
-            client = self._get_client()
+        async with self._semaphore:
+            for attempt in range(1, _MAX_RETRIES + 1):
+                api_key = self._next_key()
+                client = self._get_client()
 
-            async with _noop_context(client):
                 try:
                     start_ns = time.monotonic_ns()
                     resp = await client.post(
@@ -207,13 +209,13 @@ class GroqProvider(LLMProvider):
                 except httpx.RequestError as exc:
                     last_error = LLMUnavailableError(str(exc), provider=self.provider_name)
 
-            if attempt < _MAX_RETRIES:
-                wait_time = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
-                logger.info(
-                    "groq_retry_backoff",
-                    extra={"attempt": attempt, "wait_seconds": wait_time, "error": str(last_error)},
-                )
-                await asyncio.sleep(wait_time)
+                if attempt < _MAX_RETRIES:
+                    wait_time = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.info(
+                        "groq_retry_backoff",
+                        extra={"attempt": attempt, "wait_seconds": wait_time, "error": str(last_error)},
+                    )
+                    await asyncio.sleep(wait_time)
 
         if last_error is not None:
             raise last_error
@@ -323,21 +325,3 @@ class GroqProvider(LLMProvider):
                 provider="groq",
                 raw_response=content,
             ) from exc
-
-
-class _noop_context:
-    """Async context manager wrapper for reusing persistent client."""
-
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self.client = client
-
-    async def __aenter__(self) -> httpx.AsyncClient:
-        return self.client
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: object,
-    ) -> None:
-        pass

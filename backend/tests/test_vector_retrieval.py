@@ -342,3 +342,99 @@ class TestOrdering:
         )
         assert result[0].content == "best match"
         assert result[2].content == "poor match"
+
+
+class TestEmbeddingProfileAndValidation:
+    """Embedding profile contracts and validation rules."""
+
+    def test_embedding_profile_contract(self):
+        from ai.embeddings.client import EmbeddingProfile, EmbeddingProvider
+        from ai.embeddings.service import EmbeddingService
+
+        class FakeProvider(EmbeddingProvider):
+            @property
+            def embedding_dimensions(self) -> int:
+                return 768
+
+            @property
+            def provider_name(self) -> str:
+                return "test-provider"
+
+            @property
+            def model_name(self) -> str:
+                return "test-model"
+
+            async def embed_batch(self, texts):
+                return [[0.1] * 768 for _ in texts]
+
+        prov = FakeProvider()
+        svc = EmbeddingService(provider=prov)
+
+        prof = svc.profile
+        assert isinstance(prof, EmbeddingProfile)
+        assert prof.provider == "test-provider"
+        assert prof.model == "test-model"
+        assert prof.dimensions == 768
+        assert prof.profile_version == "v1"
+
+    def test_validate_query_profile_mismatch_handling(self):
+        from ai.embeddings.client import DimensionMismatchError, EmbeddingError, EmbeddingProfile, EmbeddingProvider
+        from ai.embeddings.service import EmbeddingService
+
+        class FakeProvider(EmbeddingProvider):
+            @property
+            def embedding_dimensions(self) -> int:
+                return 768
+
+            @property
+            def provider_name(self) -> str:
+                return "test-provider"
+
+            @property
+            def model_name(self) -> str:
+                return "test-model"
+
+            async def embed_batch(self, texts):
+                return [[0.1] * 768 for _ in texts]
+
+        svc = EmbeddingService(provider=FakeProvider())
+
+        # Exact match passes
+        match_profile = EmbeddingProfile(
+            provider="test-provider",
+            model="test-model",
+            dimensions=768,
+        )
+        svc.validate_query_profile(match_profile)
+
+        # Dimension mismatch
+        dim_mismatch_profile = EmbeddingProfile(
+            provider="test-provider",
+            model="test-model",
+            dimensions=1536,
+        )
+        with pytest.raises(DimensionMismatchError):
+            svc.validate_query_profile(dim_mismatch_profile)
+
+        # Model mismatch
+        model_mismatch_profile = EmbeddingProfile(
+            provider="different-provider",
+            model="different-model",
+            dimensions=768,
+        )
+        with pytest.raises(EmbeddingError, match="Embedding profile mismatch"):
+            svc.validate_query_profile(model_mismatch_profile)
+
+    @pytest.mark.asyncio
+    async def test_vector_retriever_checks_dimensions(self, repo_id):
+        from ai.retrieval.vector import VectorRetriever
+
+        # Return vector with wrong dimension (e.g. 512 instead of 768)
+        db = _make_db_session([])
+        svc = _make_embedding_service([0.1] * 512)
+        svc.dimensions = 768  # declared dimensions is 768
+        rv = VectorRetriever(db=db, embedding_service=svc)
+
+        with pytest.raises(ValueError, match="Vector dimension mismatch"):
+            await rv.retrieve("query", repo_id)
+

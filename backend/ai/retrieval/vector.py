@@ -166,7 +166,9 @@ class VectorRetriever(Retriever):
 
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
-        raw_dim = getattr(self._embedding_service, "dimension", None)
+        raw_dim = getattr(self._embedding_service, "dimensions", None) or getattr(
+            self._embedding_service, "dimension", None
+        )
         expected_dim = raw_dim if isinstance(raw_dim, int) else None
         query_vec_literal = _vec_to_pg_literal(query_vector, expected_dim=expected_dim)
 

@@ -46,19 +46,23 @@
 | GET | `/api/v1/repositories/{id}/analysis-runs/summary` | Analysis Run Summary, DB Integrity & Retention Metrics | Yes | 🟢 Done |
 | GET | `/api/v1/analysis-runs/{run_id}` | Get Specific Analysis Run & Findings | Yes | 🟢 Done (API Contract) |
 
-### Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)
+### Workflow Automation & GitHub Ecosystem (Week 3 — Implemented & Verified)
 
 | Method | Endpoint | Feature | Auth Required | Status |
 |---|---|---|---|---|
-| POST | `/api/v1/repositories/{id}/issues/import` | Import Issue into Task Workflow | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks` | Create Natural-Language Task | Yes | ⚪ Todo |
-| GET | `/api/v1/tasks/{id}` | Get Task Status & Timeline | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/plan` | Generate Structured Implementation Plan | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/approve` | Human Approval Gate (Proceed to Execute) | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/reject` | Reject Plan / Cancel Task | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/execute` | Execute Plan in Isolated Workspace | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/verify` | Run Independent Verification Checks | Yes | ⚪ Todo |
-| POST | `/api/v1/tasks/{id}/create-pr` | Authorize Push & Create GitHub Draft PR | Yes | ⚪ Todo |
+| POST | `/api/v1/repositories/{id}/issues/import` | Import Issue into Task Workflow | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks` | Create Natural-Language Task | Yes | 🟢 Done (Implemented & Verified) |
+| GET | `/api/v1/tasks/{id}` | Get Task Status & Timeline | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/plan` | Generate Structured Implementation Plan | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/approve` | Human Approval Gate (Proceed to Execute) | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/reject` | Reject Plan / Cancel Task | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/execute` | Execute Plan in Isolated Workspace | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/tests` | Execute Tests in Isolated Workspace | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/repair` | Bounded Repair Loop (max 3 attempts) | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/verify` | Run Independent Verification Checks | Yes | 🟢 Done (Implemented & Verified) |
+| POST | `/api/v1/tasks/{id}/create-pr` | Authorize Push & Create GitHub Draft PR | Yes | 🟢 Done (Implemented & Verified) |
+| GET | `/api/v1/tasks/{id}/events` | Task Event Log & Audit Trail | Yes | 🟢 Done (Implemented & Verified) |
+| GET | `/api/v1/tasks/{id}/stream` | Real-Time SSE Status & Execution Stream | Yes | 🟢 Done (Implemented & Verified) |
 
 
 ---
@@ -826,6 +830,107 @@ Chat API → RAGPipeline.chat()
 
 ---
 
+## Task & Autonomous Execution Endpoints (Week 3)
+
+### POST `/api/v1/tasks`
+**Purpose:** Create a natural-language task bound to a repository and tenant.
+**Authentication:** Required (Bearer JWT or httpOnly cookie)
+**Request Body:**
+```json
+{
+  "repository_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "title": "Fix SQL injection in authentication query",
+  "description": "Parameterize raw SQL queries in user authentication module",
+  "source": {
+    "type": "USER_PROMPT",
+    "base_revision": "abcdef012345"
+  },
+  "requirements": [
+    {
+      "id": "req-1",
+      "description": "Parameterize raw queries",
+      "category": "security",
+      "target_files": ["backend/auth.py"],
+      "acceptance_criteria": ["Sanitize SQL input"]
+    }
+  ],
+  "base_revision": "abcdef012345"
+}
+```
+**Response (201 Created):**
+```json
+{
+  "task_id": "d3b07384-d113-4600-a548-3a7b9ef25bf8",
+  "repository_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "title": "Fix SQL injection in authentication query",
+  "status": "CREATED",
+  "plan_version": null,
+  "created_at": "2026-11-04T00:00:00Z"
+}
+```
+
+---
+
+### POST `/api/v1/tasks/{task_id}/plan`
+**Purpose:** Generate or regenerate structured task plan. Re-planning an already approved task strictly resets status to `PENDING_APPROVAL` and clears `approved_plan_version`.
+**Authentication:** Required
+**Response (200 OK):**
+```json
+{
+  "task_id": "d3b07384-d113-4600-a548-3a7b9ef25bf8",
+  "plan_version": 1,
+  "status": "PENDING_APPROVAL",
+  "steps": [
+    {
+      "step_id": 1,
+      "description": "Replace concatenated string queries with parameterized statements in backend/auth.py",
+      "target_files": ["backend/auth.py"],
+      "tool": "modify_file"
+    }
+  ],
+  "explanation": "Security remediation plan replacing raw query strings."
+}
+```
+
+---
+
+### POST `/api/v1/tasks/{task_id}/approve`
+**Purpose:** Human gatekeeper records explicit approval for a specific plan version.
+**Authentication:** Required
+**Request Body:** `{"plan_version": 1}`
+**Response (200 OK):** Status transitions to `APPROVED`.
+
+---
+
+### POST `/api/v1/tasks/{task_id}/execute`
+**Purpose:** Begin autonomous execution in isolated workspace. Fails with 403 `APPROVAL_REQUIRED` if plan is unapproved or superseded.
+**Authentication:** Required
+**Response (200 OK / 202 Accepted):** Task transitions to `EXECUTING`.
+
+---
+
+### POST `/api/v1/tasks/{task_id}/verify`
+**Purpose:** Run independent verification checks (test suite, security secrets scanner, diff boundaries).
+**Authentication:** Required
+**Response (200 OK):** Returns `VerificationResult` (`PASSED`, `FAILED`, or `REQUIRES_HUMAN_REVIEW`) and records `verification_diff_hash`.
+
+---
+
+### POST `/api/v1/tasks/{task_id}/create-pr`
+**Purpose:** Enforce human publication authorization and post-verification diff immutability, push branch, and create GitHub Draft PR.
+**Authentication:** Required
+**Request Body:** `{"publication_authorized": true, "draft": true}`
+**Response (200 OK):** Returns PR URL, branch name, and commits.
+
+---
+
+### GET `/api/v1/tasks/{task_id}/stream`
+**Purpose:** Real-time Server-Sent Events (SSE) stream of lifecycle events and stdout logs.
+**Authentication:** Required
+**Content-Type:** `text/event-stream`
+
+---
+
 ## Standard Error Format
 
 All error responses follow this envelope:
@@ -846,6 +951,11 @@ All error responses follow this envelope:
 | `UNAUTHORIZED` | 401 | Not authenticated or token invalid |
 | `FORBIDDEN` | 403 | Authenticated but lacks permission |
 | `REPOSITORY_NOT_FOUND` | 404 | Repository does not exist |
+| `TASK_NOT_FOUND` | 404 | Task does not exist or tenant lacks permission |
+| `APPROVAL_REQUIRED` | 403/409 | Task plan has not received human approval or approval was invalidated by re-planning |
+| `VERIFICATION_FAILED` | 409 | Independent verification failed, workspace was modified post-verification, or missing diff hash |
+| `PUBLICATION_AUTHORIZATION_REQUIRED` | 403 | Explicit human publication authorization (`publication_authorized=True`) is required |
+| `INVALID_STATE_TRANSITION` | 409 | Illegal state jump rejected by task lifecycle state machine |
 | `OAUTH_STATE_INVALID` | 400 | CSRF state mismatch or expired |
 | `OAUTH_EXCHANGE_FAILED` | 401/502 | GitHub rejected authorization code |
 | `GITHUB_PROFILE_FAILED` | 502 | GitHub returned incomplete user profile |

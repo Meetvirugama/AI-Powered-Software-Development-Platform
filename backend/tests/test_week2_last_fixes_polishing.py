@@ -292,7 +292,7 @@ async def test_llm_gateway_fails_over_on_auth_error_and_translates_model() -> No
             )
 
     fallback = _HealthyFallback()
-    gw = LLMGateway(provider=_FailingPrimary(), fallback_provider=fallback)
+    gw = LLMGateway(provider=_FailingPrimary(), fallback_provider=fallback, fallback_on_auth_error=True)
     resp = await gw.generate(
         LLMRequest(
             model="gemini-flash-lite-latest",

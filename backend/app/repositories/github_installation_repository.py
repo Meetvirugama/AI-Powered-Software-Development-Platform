@@ -32,6 +32,11 @@ class GitHubInstallationRepository:
     ) -> GitHubInstallation:
         existing = self.get_by_installation_id(installation_id)
         if existing:
+            if existing.user_id != user_id:
+                raise ValueError(
+                    f"GitHub installation {installation_id} is already linked to user {existing.user_id} "
+                    f"and cannot be reassigned to user {user_id}."
+                )
             existing.user_id = user_id
             existing.account_login = account_login
             existing.permissions = permissions

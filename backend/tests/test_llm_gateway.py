@@ -424,3 +424,114 @@ class TestSDE3GatewayFeatures:
         assert provider._resolve_model("qwen/qwen3.8-27b") == "qwen/qwen3.8-27b"
         assert provider._resolve_model("unknown-model") == "openai/gpt-oss-120b"
 
+    @pytest.mark.asyncio
+    async def test_gateway_auth_error_no_fallback_by_default(self, llm_request):
+        from ai.llm.client import LLMGateway
+        from ai.llm.schemas import LLMAuthenticationError
+
+        primary_mock = AsyncMock()
+        primary_mock.provider_name = "primary-mock"
+        primary_mock.generate.side_effect = LLMAuthenticationError("Bad API Key", status_code=401)
+
+        fallback_mock = AsyncMock()
+        fallback_mock.provider_name = "fallback-mock"
+
+        gateway = LLMGateway(provider=primary_mock, fallback_provider=fallback_mock)
+
+        with pytest.raises(LLMAuthenticationError):
+            await gateway.generate(llm_request)
+
+        assert primary_mock.generate.call_count == 1
+        assert fallback_mock.generate.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_gateway_auth_error_fallback_when_enabled(self, llm_request):
+        from ai.llm.client import LLMGateway
+        from ai.llm.schemas import LLMAuthenticationError, LLMResponse
+
+        primary_mock = AsyncMock()
+        primary_mock.provider_name = "primary-mock"
+        primary_mock.generate.side_effect = LLMAuthenticationError("Bad API Key", status_code=401)
+
+        fallback_mock = AsyncMock()
+        fallback_mock.provider_name = "fallback-mock"
+        fallback_mock.generate.return_value = LLMResponse(
+            content="Fallback after auth failure",
+            model="fallback-model",
+            input_tokens=10,
+            output_tokens=10,
+            latency_ms=20.0,
+        )
+
+        gateway = LLMGateway(
+            provider=primary_mock,
+            fallback_provider=fallback_mock,
+            fallback_on_auth_error=True,
+        )
+
+        resp = await gateway.generate(llm_request)
+        assert resp.content == "Fallback after auth failure"
+        assert primary_mock.generate.call_count == 1
+        assert fallback_mock.generate.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_gateway_aclose_both_providers_when_primary_fails(self):
+        from ai.llm.client import LLMGateway
+
+        primary_mock = AsyncMock()
+        primary_mock.provider_name = "primary-mock"
+        primary_mock.aclose.side_effect = RuntimeError("Primary aclose failed")
+
+        fallback_mock = AsyncMock()
+        fallback_mock.provider_name = "fallback-mock"
+
+        gateway = LLMGateway(provider=primary_mock, fallback_provider=fallback_mock)
+        with pytest.raises(RuntimeError, match="Primary aclose failed"):
+            await gateway.aclose()
+
+        assert primary_mock.aclose.call_count == 1
+        assert fallback_mock.aclose.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_gateway_fallback_preserves_semantics(self):
+        from ai.llm.client import LLMGateway
+        from ai.llm.schemas import LLMRequest, LLMResponse, LLMUnavailableError, Message
+
+        class DummySchema(BaseModel):
+            val: str
+
+        primary_mock = AsyncMock()
+        primary_mock.provider_name = "gemini"
+        primary_mock.generate.side_effect = LLMUnavailableError("503 Overloaded")
+
+        fallback_mock = AsyncMock()
+        fallback_mock.provider_name = "groq"
+        fallback_mock.generate.return_value = LLMResponse(
+            content='{"val": "ok"}',
+            model="openai/gpt-oss-120b",
+            input_tokens=15,
+            output_tokens=5,
+            latency_ms=30.0,
+        )
+
+        gateway = LLMGateway(provider=primary_mock, fallback_provider=fallback_mock)
+
+        req = LLMRequest(
+            model="gemini-flash-latest",
+            messages=[Message(role="user", content="ping")],
+            temperature=0.2,
+            max_tokens=256,
+            response_schema=DummySchema,
+        )
+
+        resp = await gateway.generate(req)
+        assert resp.content == '{"val": "ok"}'
+
+        # Check request sent to fallback
+        fallback_req = fallback_mock.generate.call_args[0][0]
+        assert fallback_req.model == "openai/gpt-oss-120b"
+        assert fallback_req.temperature == 0.2
+        assert fallback_req.max_tokens == 256
+        assert fallback_req.response_schema is DummySchema
+
+

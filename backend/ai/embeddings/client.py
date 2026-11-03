@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Self
 
+from pydantic import BaseModel, Field
+
 
 class EmbeddingError(Exception):
     """
@@ -120,6 +122,26 @@ class DimensionMismatchError(EmbeddingError):
         self.actual = actual
 
 
+class EmbeddingProfile(BaseModel):
+    """
+    Standard profile defining the embedding contract across indexing and retrieval.
+    """
+    provider: str
+    model: str
+    dimensions: int
+    normalization: bool = True
+    distance_metric: str = "cosine"
+    profile_version: str = "v1"
+
+    def is_compatible_with(self, other: EmbeddingProfile) -> bool:
+        """Check compatibility between query profile and indexed profile."""
+        return (
+            self.dimensions == other.dimensions
+            and self.provider == other.provider
+            and self.model == other.model
+        )
+
+
 class EmbeddingProvider(ABC):
     """
     Abstract base class for all embedding provider implementations.
@@ -128,6 +150,18 @@ class EmbeddingProvider(ABC):
     Batch splitting, concurrency limits, and dimension validation are handled
     by the high-level `EmbeddingService`.
     """
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        """Declared embedding profile for this provider."""
+        return EmbeddingProfile(
+            provider=self.provider_name,
+            model=getattr(self, "model_name", "unknown"),
+            dimensions=self.embedding_dimensions,
+            normalization=True,
+            distance_metric="cosine",
+            profile_version="v1",
+        )
 
     async def embed(self, text: str) -> list[float]:
         """

@@ -186,16 +186,16 @@ def test_framework_detection_pytest_and_explicit(test_runner: WorkspaceTestRunne
 
 
 def test_unsupported_framework_reported_explicitly(test_runner: WorkspaceTestRunner, temp_workspace: Path) -> None:
-    """Verify unsupported frameworks (vitest, go) return explicit status without crashing."""
+    """Verify unsupported frameworks (cargo, go) return explicit status without crashing."""
     fw, cmd, args, status = test_runner.detect_test_configuration(
-        temp_workspace, explicit_framework="vitest"
+        temp_workspace, explicit_framework="cargo"
     )
-    assert fw == "vitest"
+    assert fw == "cargo"
     assert status == "UNSUPPORTED_FRAMEWORK"
 
     req = WorkspaceTestExecutionRequest(
         task_id="task-unsupported-fw",
-        framework="vitest",
+        framework="cargo",
     )
     res = test_runner.run_tests(temp_workspace, req)
     assert res.success is False
@@ -203,6 +203,27 @@ def test_unsupported_framework_reported_explicitly(test_runner: WorkspaceTestRun
     assert res.classification == TestFailureClassification.INFRASTRUCTURE_ERROR
     assert res.is_repair_eligible is False
     assert "UNSUPPORTED_FRAMEWORK" in (res.error or "")
+
+
+def test_vitest_framework_supported_and_detected(test_runner: WorkspaceTestRunner, tmp_path: Path) -> None:
+    """Verify Vitest is a supported framework for frontend workspaces."""
+    fw, cmd, args, status = test_runner.detect_test_configuration(
+        tmp_path, explicit_framework="vitest"
+    )
+    assert fw == "vitest"
+    assert cmd == "npm"
+    assert "--run" in args
+    assert status == "CONFIRMED"
+
+    # Test Vitest output parsing
+    output = "Tests  1 failed | 3 passed (4)\nFAIL src/test/App.test.tsx > App > renders"
+    passed, failed, skipped, errors, total, failed_names, _ = test_runner.parse_test_output(
+        "vitest", output, "", 1
+    )
+    assert passed == 3
+    assert failed == 1
+    assert total == 4
+    assert any("App.test.tsx" in fn or "renders" in fn for fn in failed_names)
 
 
 def test_no_config_found_reporting(test_runner: WorkspaceTestRunner, tmp_path: Path) -> None:

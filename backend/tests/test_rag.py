@@ -351,3 +351,54 @@ async def test_rag_pipeline_distinguishes_zero_results_from_retrieval_failure(re
     assert ans.sources == []
     assert ans.confidence == "low"
 
+
+@pytest.mark.asyncio
+async def test_rag_grounding_rejects_file_not_in_retrieved_context(repo_id: UUID):
+    """P0.4: Reject citations to files not present in the current retrieved chunks."""
+    import uuid
+    from ai.schemas.grounding import GroundingValidator
+    from ai.schemas.output import RepositoryAnswer, SourceReference
+    from ai.retrieval.base import CodeChunk
+    from types import SimpleNamespace
+
+    mock_db = MagicMock()
+
+    def mock_get_file(db, repository_id, path):
+        # File exists in repository DB
+        return SimpleNamespace(line_count=50)
+
+    validator = GroundingValidator(db_session=mock_db)
+
+    # Chunks only contain auth.py
+    retrieved_chunk = CodeChunk(
+        id=uuid.uuid4(),
+        repository_id=repo_id,
+        file_id=uuid.uuid4(),
+        symbol_id=None,
+        content="def auth(): pass",
+        token_count=10,
+        start_line=1,
+        end_line=10,
+        content_hash="h1",
+        score=0.9,
+        file_path="src/auth.py",
+    )
+
+    answer = RepositoryAnswer(
+        answer="Auth in auth.py and other in payment.py",
+        sources=[
+            SourceReference(file="src/auth.py", start_line=1, end_line=5),
+            SourceReference(file="src/payment.py", start_line=1, end_line=5),
+        ],
+        confidence="high",
+    )
+
+    from unittest.mock import patch
+    with patch("app.repositories.repository_files.get_file_by_path", side_effect=mock_get_file):
+        # When retrieved_chunks is supplied, payment.py is rejected because it wasn't in retrieved context
+        validated = await validator.validate_sources(answer, repo_id, retrieved_chunks=[retrieved_chunk])
+
+    assert len(validated.sources) == 1
+    assert validated.sources[0].file == "src/auth.py"
+
+

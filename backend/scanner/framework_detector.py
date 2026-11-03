@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FRAMEWORKS = {"pytest", "unittest", "jest"}
+SUPPORTED_FRAMEWORKS = {"pytest", "unittest", "jest", "vitest"}
 
 
 @dataclass
@@ -613,22 +613,23 @@ class FrameworkDetector:
 
         # Resolve ambiguity
         unique_candidates = list(dict.fromkeys(candidate_frameworks))
-        if preferred_framework in ("jest",):
+        if preferred_framework in ("jest", "vitest"):
             detected_framework = preferred_framework
             is_supported = True
             status = "CONFIRMED"
+            test_command = "npm test -- --run" if preferred_framework == "vitest" else "npm test"
         elif len(unique_candidates) == 1:
             detected_framework = unique_candidates[0]
-            if detected_framework == "jest":
+            if detected_framework in ("jest", "vitest"):
                 is_supported = True
                 status = "CONFIRMED"
-                test_command = "npm test"
+                test_command = "npm test -- --run" if detected_framework == "vitest" else "npm test"
             else:
                 is_supported = False
                 status = "UNSUPPORTED_FRAMEWORK"
                 warnings.append(
                     f"Test runner '{detected_framework}' detected, but TestGenerationService "
-                    "currently supports Jest for JavaScript/TypeScript repositories."
+                    "currently supports Jest and Vitest for JavaScript/TypeScript repositories."
                 )
         elif len(unique_candidates) > 1:
             is_ambiguous = True

@@ -71,7 +71,7 @@ ALLOWED_TEST_RUNNERS: frozenset[str] = frozenset(
 
 # Unsupported runners that must return explicit failure rather than attempting blind execution
 UNSUPPORTED_FRAMEWORKS: frozenset[str] = frozenset(
-    {"vitest", "mocha", "jasmine", "cargo", "go", "mvn", "gradle"}
+    {"mocha", "jasmine", "cargo", "go", "mvn", "gradle"}
 )
 
 # Regex patterns for pytest output summary
@@ -148,6 +148,8 @@ class WorkspaceTestRunner:
                 return "unittest", "python", ["-m", "unittest", "-v"], "CONFIRMED"
             if clean_fw in ("jest", "npm"):
                 return "jest", "npm", ["test", "--"], "CONFIRMED"
+            if clean_fw == "vitest":
+                return "vitest", "npm", ["test", "--", "--run"], "CONFIRMED"
 
         # Otherwise inspect workspace filesystem via FrameworkDetector
         try:
@@ -162,7 +164,16 @@ class WorkspaceTestRunner:
                 # Fallback check: look for pytest.ini, tests directory or package.json
                 if (workspace_root / "pytest.ini").exists() or (workspace_root / "tests").is_dir():
                     return "pytest", "pytest", ["-v"], "CONFIRMED"
-                if (workspace_root / "package.json").exists():
+                pkg_json = workspace_root / "package.json"
+                if not pkg_json.exists():
+                    pkg_json = workspace_root / "frontend" / "package.json"
+                if pkg_json.exists():
+                    try:
+                        content = pkg_json.read_text(encoding="utf-8")
+                        if "vitest" in content:
+                            return "vitest", "npm", ["test", "--", "--run"], "CONFIRMED"
+                    except Exception:
+                        pass
                     return "jest", "npm", ["test", "--"], "CONFIRMED"
                 return "none", "", [], "NO_CONFIG_FOUND"
 
@@ -171,6 +182,8 @@ class WorkspaceTestRunner:
                 return "pytest", "pytest", ["-v"], "CONFIRMED"
             elif fw_lower == "unittest":
                 return "unittest", "python", ["-m", "unittest", "-v"], "CONFIRMED"
+            elif fw_lower == "vitest":
+                return "vitest", "npm", ["test", "--", "--run"], "CONFIRMED"
             elif fw_lower == "jest":
                 return "jest", "npm", ["test", "--"], "CONFIRMED"
             else:
@@ -315,13 +328,37 @@ class WorkspaceTestRunner:
                 failed = len(failed_names) if failed_names else 1
                 total = max(total, failed + passed)
 
-        elif framework == "jest":
-            match = _JEST_TESTS_SUMMARY_RE.search(combined)
-            if match:
-                failed = int(match.group("failed") or 0)
-                passed = int(match.group("passed") or 0)
-                skipped = int(match.group("skipped") or 0)
-                total = int(match.group("total") or (failed + passed + skipped))
+        elif framework in ("vitest", "jest"):
+            # Check for Vitest summary: "Tests  1 failed | 3 passed (4)" or "Tests  5 passed (5)"
+            vitest_match = re.search(
+                r"Tests\s+(?:(?P<failed>\d+)\s+failed\s*(?:\||,)\s*)?"
+                r"(?:(?P<passed>\d+)\s+passed\s*)?"
+                r"(?:\((?P<total>\d+)\)|.*?(?P<total2>\d+)\s+total)?",
+                combined,
+                re.IGNORECASE,
+            )
+            if vitest_match and (vitest_match.group("passed") or vitest_match.group("failed")):
+                failed = int(vitest_match.group("failed") or 0)
+                passed = int(vitest_match.group("passed") or 0)
+                tot_val = vitest_match.group("total") or vitest_match.group("total2")
+                total = int(tot_val) if tot_val else (failed + passed)
+            else:
+                match = _JEST_TESTS_SUMMARY_RE.search(combined)
+                if match:
+                    failed = int(match.group("failed") or 0)
+                    passed = int(match.group("passed") or 0)
+                    skipped = int(match.group("skipped") or 0)
+                    total = int(match.group("total") or (failed + passed + skipped))
+
+            # Match failure lines from Vitest or Jest
+            for line in combined.splitlines():
+                line_s = line.strip()
+                if line_s.startswith("FAIL "):
+                    failed_names.append(line_s.removeprefix("FAIL ").strip())
+                elif "✕ " in line_s:
+                    parts = line_s.split("✕ ", 1)
+                    if len(parts) > 1 and parts[1].strip() not in failed_names:
+                        failed_names.append(parts[1].strip())
 
             for item in _JEST_FAILED_ITEM_RE.finditer(combined):
                 name = item.group(1).strip()

@@ -138,7 +138,11 @@ export function RepositoryExplainStudio() {
             onTargetChange={handleTargetChange}
             highlightedSource={activeSourceReference}
             onClearHighlightedSource={() => setActiveSourceReference(null)}
-            onTriggerExplain={handleRunExplain}
+            action={{
+              label: 'Explain target',
+              onClick: handleRunExplain,
+              isPending: explainMutation.isPending,
+            }}
             isAnalyzing={explainMutation.isPending}
           />
         ) : (

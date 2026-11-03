@@ -123,7 +123,11 @@ export function RepositoryTestStudio() {
             onTargetChange={handleTargetChange}
             highlightedSource={activeSourceReference}
             onClearHighlightedSource={() => setActiveSourceReference(null)}
-            onTriggerExplain={handleRunGenerate}
+            action={{
+              label: 'Generate tests',
+              onClick: handleRunGenerate,
+              isPending: testMutation.isPending,
+            }}
             isAnalyzing={testMutation.isPending}
           />
         ) : (

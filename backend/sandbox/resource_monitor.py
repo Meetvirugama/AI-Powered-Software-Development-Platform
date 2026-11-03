@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from app.schemas.workspace import WorkspaceResourceLimits
+from sandbox.constants import MAX_COMMAND_OUTPUT_BYTES
 from sandbox.exceptions import WorkspaceLimitExceededError
 
 
@@ -66,3 +67,8 @@ class WorkspaceResourceMonitor:
     @property
     def modified_files_count(self) -> int:
         return len(self._modified_files)
+
+    def check_output_limit(self, current_bytes: int) -> bool:
+        """Validate whether streamed output bytes exceed command output limit."""
+        return current_bytes >= MAX_COMMAND_OUTPUT_BYTES
+
