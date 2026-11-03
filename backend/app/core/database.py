@@ -5,6 +5,8 @@ shared application infrastructure they will use.
 """
 
 from collections.abc import AsyncGenerator, Generator
+import logging
+import re
 from typing import Any
 
 from sqlalchemy import create_engine
@@ -13,7 +15,16 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _sanitize_db_url(url: str) -> str:
+    """Remove user credentials from database URL for safe logging."""
+    if not url:
+        return ""
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:[REDACTED]@", url)
+
 
 db_kwargs: dict[str, Any] = {"pool_pre_ping": True}
 if not settings.database_url.startswith("sqlite"):
@@ -43,24 +54,45 @@ def _resolve_async_database_url(sync_url: str) -> str:
     return sync_url
 
 
-def _create_safe_async_engine(sync_url: str, kwargs: dict[str, Any]) -> tuple[AsyncEngine | None, async_sessionmaker[AsyncSession] | None]:
+def _create_safe_async_engine(
+    sync_url: str, kwargs: dict[str, Any]
+) -> tuple[AsyncEngine | None, async_sessionmaker[AsyncSession] | None]:
     """Create the async SQLAlchemy engine safely without crashing on synchronous sqlite test URLs."""
     if sync_url.startswith("sqlite") and "+aiosqlite" not in sync_url:
+        logger.debug("async_engine_skipped_for_sync_sqlite")
         return None, None
     async_url = _resolve_async_database_url(sync_url)
     try:
         eng = create_async_engine(async_url, **kwargs)
         maker = async_sessionmaker(eng, expire_on_commit=False)
         return eng, maker
-    except Exception:
+    except Exception as exc:
+        safe_url = _sanitize_db_url(async_url)
+        logger.warning(
+            "async_engine_primary_driver_failed",
+            extra={"url": safe_url, "error": str(exc)},
+        )
         # Fallback to standard psycopg dialect if psycopg_async alias is unavailable
         try:
             fallback_url = sync_url.replace("postgresql://", "postgresql+psycopg://", 1)
             eng = create_async_engine(fallback_url, **kwargs)
             maker = async_sessionmaker(eng, expire_on_commit=False)
             return eng, maker
-        except Exception:
+        except Exception as fb_exc:
+            logger.error(
+                "async_database_init_failed",
+                extra={"url": _sanitize_db_url(fallback_url), "error": str(fb_exc)},
+            )
             return None, None
+
+
+def init_async_db(
+    url: str | None = None, kwargs: dict[str, Any] | None = None
+) -> tuple[AsyncEngine | None, async_sessionmaker[AsyncSession] | None]:
+    """Explicit initializer allowing runtime or test injection without relying only on module load globals."""
+    target_url = url or settings.database_url
+    target_kwargs = kwargs if kwargs is not None else db_kwargs
+    return _create_safe_async_engine(target_url, target_kwargs)
 
 
 _async_database_url = _resolve_async_database_url(settings.database_url)

@@ -100,6 +100,14 @@ def init_rag_pipeline(app: FastAPI) -> bool:
         from ai.schemas.grounding import GroundingValidator
         from app.core.database import AsyncSessionLocal
 
+        if settings.is_production and AsyncSessionLocal is None:
+            logger.error(
+                "rag_pipeline_init_failed: production mode requires an operational async database (AsyncSessionLocal is None)"
+            )
+            app.state.rag_pipeline = None
+            app.state.service_readiness["rag_pipeline"] = False
+            return False
+
         retriever = None
         gemini_keys = settings.all_gemini_keys
         if gemini_keys:
@@ -108,6 +116,7 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                 dimensions=settings.embedding_dimensions,
             )
             embedding_service = EmbeddingService(provider=embedding_provider)
+            app.state.embedding_service = embedding_service
             vector_retriever = VectorRetriever(
                 db=AsyncSessionLocal,
                 embedding_service=embedding_service,
@@ -425,6 +434,20 @@ async def lifespan(app: FastAPI):
             pass
 
     # Clean shutdown of infrastructure
+    gw = getattr(app.state, "llm_gateway", None)
+    if gw is not None and hasattr(gw, "aclose"):
+        try:
+            await gw.aclose()
+        except Exception as exc:
+            logger.debug("llm_gateway_cleanup_error", extra={"error": str(exc)})
+
+    emb = getattr(app.state, "embedding_service", None)
+    if emb is not None and hasattr(emb, "aclose"):
+        try:
+            await emb.aclose()
+        except Exception as exc:
+            logger.debug("embedding_service_cleanup_error", extra={"error": str(exc)})
+
     try:
         from app.core.redis import close_redis, close_redis_async
         close_redis()

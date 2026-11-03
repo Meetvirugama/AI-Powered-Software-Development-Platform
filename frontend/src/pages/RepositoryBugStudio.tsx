@@ -139,7 +139,11 @@ export function RepositoryBugStudio() {
               onTargetChange={handleTargetChange}
               highlightedSource={activeSourceReference}
               onClearHighlightedSource={() => setActiveSourceReference(null)}
-              onTriggerExplain={handleRunScan}
+              action={{
+                label: 'Scan for bugs',
+                onClick: handleRunScan,
+                isPending: bugMutation.isPending,
+              }}
               isAnalyzing={bugMutation.isPending}
             />
           ) : (

@@ -62,20 +62,69 @@ async def list_github_repositories(
     installation_repo = GitHubInstallationRepository(db)
     user = UserRepository(db).get_by_id(user_id)
 
-    # If installation_id passed in query params, ensure it is linked to this user (without hijacking another tenant)
+    # If installation_id passed in query params, verify ownership before linking
     if installation_id and user:
-        try:
-            installation_repo.upsert(
-                user_id=user.id,
-                installation_id=str(installation_id).strip(),
-                account_login=user.login,
-                permissions={},
-                allow_reassign=False,
-            )
-        except APIError:
-            raise
-        except Exception as exc:
-            logger.warning("query_installation_link_error", extra={"error": str(exc)})
+        clean_inst_id = str(installation_id).strip()
+        existing = installation_repo.get_by_installation_id(clean_inst_id)
+        if existing:
+            if existing.user_id != user.id:
+                raise APIError(
+                    403,
+                    ErrorCode.FORBIDDEN,
+                    "GitHub installation is linked to another user account.",
+                )
+        else:
+            # Installation not yet in DB; verify with GitHub App API before linking
+            github_service = getattr(request.app.state, "github_service", None)
+            if github_service:
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        resp = await client.get(
+                            f"https://api.github.com/app/installations/{clean_inst_id}",
+                            headers=github_service._app_auth_headers(),
+                        )
+                        if resp.is_success:
+                            inst_data = resp.json()
+                            acc_login = (inst_data.get("account") or {}).get("login", "")
+                            acc_id = str(inst_data.get("target_id") or (inst_data.get("account") or {}).get("id") or "")
+                            if (
+                                (acc_login and acc_login.lower() == user.login.lower())
+                                or (user.github_id and acc_id == str(user.github_id))
+                            ):
+                                installation_repo.upsert(
+                                    user_id=user.id,
+                                    installation_id=clean_inst_id,
+                                    account_login=acc_login or user.login,
+                                    permissions=inst_data.get("permissions", {}),
+                                    allow_reassign=False,
+                                )
+                            else:
+                                raise APIError(
+                                    403,
+                                    ErrorCode.FORBIDDEN,
+                                    "GitHub installation account does not match the authenticated user.",
+                                )
+                        elif resp.status_code == 404:
+                            raise APIError(
+                                404,
+                                ErrorCode.RESOURCE_NOT_FOUND,
+                                "GitHub installation was not found on GitHub App.",
+                            )
+                        else:
+                            raise APIError(
+                                403,
+                                ErrorCode.FORBIDDEN,
+                                "Unable to verify GitHub installation ownership.",
+                            )
+                except APIError:
+                    raise
+                except Exception as exc:
+                    logger.warning("query_installation_link_error", extra={"error": str(exc)})
+            else:
+                logger.warning(
+                    "query_installation_link_blocked_no_service",
+                    extra={"installation_id": clean_inst_id, "user_id": str(user.id)},
+                )
 
     installations = installation_repo.list_by_user(user_id)
 
@@ -103,6 +152,7 @@ async def list_github_repositories(
                                     installation_id=str(inst["id"]),
                                     account_login=acc_login or user.login,
                                     permissions=inst.get("permissions", {}),
+                                    allow_reassign=False,
                                 )
                         installations = installation_repo.list_by_user(user_id)
             except Exception as exc:
@@ -379,7 +429,7 @@ async def github_webhook(
         raise APIError(413, ErrorCode.BAD_REQUEST, "Webhook payload exceeds maximum allowed size.")
 
     # Security Fix: Fail closed if webhook secret is not configured
-    if not settings.github_webhook_secret:
+    if not settings.github_webhook_secret or not settings.github_webhook_secret.strip():
         raise APIError(
             503,
             ErrorCode.SERVICE_UNAVAILABLE,

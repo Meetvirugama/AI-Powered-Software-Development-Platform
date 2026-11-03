@@ -13,7 +13,7 @@
  * Owner: Dhramraj & Yug — Week 3 Day 1–7 Deliverable (Docs/week3.md §6 F31–F39)
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -43,7 +43,19 @@ import {
   Wrench,
   XCircle,
 } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '../lib/utils';
+import {
+  useTasks,
+  useTask,
+  useTaskEvents,
+  useTaskWorkspace,
+  useTaskTests,
+  useTaskRepairBudget,
+  useTaskVerification,
+  useTaskPullRequest,
+  taskKeys,
+} from '../hooks/useTasks';
 import {
   approveTaskPlan,
   cancelTask,
@@ -52,15 +64,7 @@ import {
   createTaskDraftPR,
   executeTask,
   generateTaskPlan,
-  getTaskDetail,
-  getTaskEvents,
-  getTaskPullRequest,
-  getTaskRepairBudget,
-  getTaskTests,
-  getTaskVerification,
-  getTaskWorkspace,
   importGitHubIssue,
-  listTasks,
   pauseTask,
   recoverTask,
   rejectTaskPlan,
@@ -75,10 +79,6 @@ import type {
   TaskEvent,
   TaskPullRequestResponse,
   TaskSummary,
-  TaskTestResultsResponse,
-  VerificationResult,
-  WorkspaceMetadata,
-  WorkspaceRepairBudgetStatus,
 } from '../types/task';
 
 const STATUS_BADGE_MAP: Record<
@@ -167,22 +167,89 @@ export function RepositoryTaskStudio() {
   const [searchParams, setSearchParams] = useSearchParams();
   const repoId = id ?? '';
 
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
-    searchParams.get('taskId')
-  );
-  const [taskDetail, setTaskDetail] = useState<TaskDetail | null>(null);
-  const [events, setEvents] = useState<TaskEvent[]>([]);
-  const [workspaceMeta, setWorkspaceMeta] = useState<WorkspaceMetadata | null>(null);
-  const [testResults, setTestResults] = useState<TaskTestResultsResponse | null>(null);
-  const [repairBudget, setRepairBudget] = useState<WorkspaceRepairBudgetStatus | null>(null);
-  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
-  const [draftPR, setDraftPR] = useState<TaskPullRequestResponse | null>(null);
-
-  const [loadingList, setLoadingList] = useState(false);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+
+  // 1. Task List Query (P0.4: independent of selectedTaskId, fetched via useTasks)
+  const {
+    data: taskListData,
+    isLoading: loadingList,
+    error: taskListError,
+  } = useTasks({ repository_id: repoId, page_size: 50 }, { enabled: Boolean(repoId) });
+
+  const tasks: TaskSummary[] = useMemo(() => taskListData?.items ?? [], [taskListData?.items]);
+
+  // 2. Selected Task State (P0.3 & P0.4)
+  const urlTaskId = searchParams.get('taskId');
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(urlTaskId);
+  const [prevUrlTaskId, setPrevUrlTaskId] = useState<string | null>(urlTaskId);
+
+  if (urlTaskId !== prevUrlTaskId) {
+    setPrevUrlTaskId(urlTaskId);
+    setSelectedTaskId(urlTaskId);
+  }
+
+  const activeTaskId = selectedTaskId || (tasks.length > 0 ? tasks[0].task_id : null);
+  const isTaskActive = Boolean(activeTaskId);
+
+  const handleSelectTask = useCallback(
+    (taskId: string) => {
+      setErrorBanner(null);
+      setSelectedTaskId(taskId);
+      setSearchParams({ taskId }, { replace: true });
+    },
+    [setSearchParams]
+  );
+
+  // 3. Task Resource Queries (P0.3: scoped strictly to activeTaskId)
+  const {
+    data: taskDetailData,
+    isLoading: loadingDetail,
+    error: taskDetailError,
+  } = useTask(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+  });
+  const taskDetail = (isTaskActive ? taskDetailData : null) as TaskDetail | null;
+
+  const { data: eventsData } = useTaskEvents(activeTaskId ?? undefined, undefined, {
+    enabled: isTaskActive,
+  });
+  const events: TaskEvent[] = isTaskActive
+    ? (Array.isArray(eventsData) ? eventsData : (eventsData as any)?.items || [])
+    : [];
+
+  const { data: workspaceData } = useTaskWorkspace(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+  });
+  const workspaceMeta = isTaskActive ? (workspaceData ?? null) : null;
+
+  const { data: testResultsData } = useTaskTests(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+  });
+  const testResults = isTaskActive ? (testResultsData ?? null) : null;
+
+  const { data: repairBudgetData } = useTaskRepairBudget(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+  });
+  const repairBudget = isTaskActive ? (repairBudgetData ?? null) : null;
+
+  const { data: verificationData } = useTaskVerification(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+  });
+  const verificationResult = isTaskActive ? (verificationData ?? null) : null;
+
+  const { data: draftPRData } = useTaskPullRequest(activeTaskId ?? undefined, {
+    enabled: isTaskActive,
+    repositoryId: repoId,
+  });
+  const draftPR = (isTaskActive ? (draftPRData ?? null) : null) as TaskPullRequestResponse | null;
+
+  // Surface task list or detail errors if no manual error banner is active
+  const effectiveErrorBanner =
+    errorBanner ||
+    (taskListError ? (taskListError as any)?.message || 'Failed to load repository tasks.' : null) ||
+    (taskDetailError ? (taskDetailError as any)?.message || 'Failed to load task details.' : null);
 
   // Import GitHub Issue state
   const [issueNumberInput, setIssueNumberInput] = useState('');
@@ -198,68 +265,24 @@ export function RepositoryTaskStudio() {
   const [revisionNotes, setRevisionNotes] = useState('');
   const [publicationAuthorized, setPublicationAuthorized] = useState(false);
 
-  const fetchTasks = useCallback(async () => {
-    if (!repoId) return;
-    setLoadingList(true);
-    try {
-      const res = await listTasks({ repository_id: repoId, page_size: 50 });
-      setTasks(res.items);
-      if (!selectedTaskId && res.items.length > 0) {
-        setSelectedTaskId(res.items[0].task_id);
+  const refreshTasksAndCurrentDetail = useCallback(
+    async (targetTaskId?: string) => {
+      const tid = targetTaskId || activeTaskId;
+      await queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      if (tid) {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: taskKeys.detail(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.events(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.workspace(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.tests(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.verification(tid) }),
+          queryClient.invalidateQueries({ queryKey: taskKeys.pullRequest(tid) }),
+        ]);
       }
-    } catch (err: any) {
-      setErrorBanner(err?.message || 'Failed to load repository tasks.');
-    } finally {
-      setLoadingList(false);
-    }
-  }, [repoId, selectedTaskId]);
-
-  const fetchTaskDetailAndEvents = useCallback(async (taskId: string) => {
-    setLoadingDetail(true);
-    try {
-      const [detail, evtList, ws, tests, budget, ver, pr] = await Promise.all([
-        getTaskDetail(taskId),
-        getTaskEvents(taskId),
-        getTaskWorkspace(taskId).catch(() => null),
-        getTaskTests(taskId).catch(() => null),
-        getTaskRepairBudget(taskId).catch(() => null),
-        getTaskVerification(taskId).catch(() => null),
-        getTaskPullRequest(taskId).catch(() => null),
-      ]);
-      setTaskDetail(detail);
-      setEvents(Array.isArray(evtList) ? evtList : (evtList as any)?.items || []);
-      setWorkspaceMeta(ws);
-      setTestResults(tests);
-      setRepairBudget(budget);
-      setVerificationResult(ver);
-      setDraftPR(pr);
-    } catch (err: any) {
-      setErrorBanner(err?.message || 'Failed to load task details.');
-    } finally {
-      setLoadingDetail(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // oxlint-disable-next-line react/set-state-in-effect
-    void fetchTasks();
-  }, [fetchTasks]);
-
-  useEffect(() => {
-    if (selectedTaskId) {
-      setSearchParams({ taskId: selectedTaskId }, { replace: true });
-      // oxlint-disable-next-line react/set-state-in-effect
-      void fetchTaskDetailAndEvents(selectedTaskId);
-    } else {
-      setTaskDetail(null);
-      setEvents([]);
-      setWorkspaceMeta(null);
-      setTestResults(null);
-      setRepairBudget(null);
-      setVerificationResult(null);
-      setDraftPR(null);
-    }
-  }, [selectedTaskId, fetchTaskDetailAndEvents, setSearchParams]);
+    },
+    [queryClient, activeTaskId]
+  );
 
   async function handleImportIssue(e: React.FormEvent) {
     e.preventDefault();
@@ -276,8 +299,8 @@ export function RepositoryTaskStudio() {
         title: `GitHub Issue #${num}`,
       });
       setIssueNumberInput('');
-      await fetchTasks();
-      setSelectedTaskId(res.task_id);
+      handleSelectTask(res.task_id);
+      await refreshTasksAndCurrentDetail(res.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || `Failed to import issue #${num}.`);
     } finally {
@@ -341,8 +364,8 @@ export function RepositoryTaskStudio() {
       setNewTaskTitle('');
       setNewTaskDesc('');
       setNewTaskFiles('');
-      await fetchTasks();
-      setSelectedTaskId(created.task_id);
+      handleSelectTask(created.task_id);
+      await refreshTasksAndCurrentDetail(created.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to create task.');
     } finally {
@@ -359,8 +382,7 @@ export function RepositoryTaskStudio() {
         revision_notes: revisionNotes.trim() || undefined,
       });
       setRevisionNotes('');
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to generate implementation plan.');
     } finally {
@@ -379,8 +401,7 @@ export function RepositoryTaskStudio() {
         comment: approvalComment.trim() || 'Approved for isolated workspace execution.',
       });
       setApprovalComment('');
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to approve plan.');
     } finally {
@@ -398,8 +419,7 @@ export function RepositoryTaskStudio() {
         reason: rejectionReason.trim() || 'Plan rejected; requires revision.',
       });
       setRejectionReason('');
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to reject plan.');
     } finally {
@@ -413,8 +433,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await executeTask(taskDetail.task_id, { run_steps: runSteps });
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Execution blocked by approval gate.');
     } finally {
@@ -428,7 +447,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await pauseTask(taskDetail.task_id);
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to pause workspace execution.');
     } finally {
@@ -442,7 +461,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await resumeTask(taskDetail.task_id);
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to resume workspace execution.');
     } finally {
@@ -456,8 +475,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await cancelTask(taskDetail.task_id);
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to cancel task.');
     } finally {
@@ -471,8 +489,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await triggerTaskTests(taskDetail.task_id, { framework: 'pytest' });
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to run workspace tests.');
     } finally {
@@ -486,8 +503,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await triggerTaskRepair(taskDetail.task_id, { framework: 'pytest' });
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Bounded self-repair failed or budget exhausted.');
     } finally {
@@ -504,8 +520,7 @@ export function RepositoryTaskStudio() {
         require_passing_tests: true,
         strict_scope: true,
       });
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Independent verification failed.');
     } finally {
@@ -521,7 +536,7 @@ export function RepositoryTaskStudio() {
       await commitTaskChanges(taskDetail.task_id, {
         message: `feat(task): implement ${taskDetail.title}`,
       });
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to commit workspace changes.');
     } finally {
@@ -538,9 +553,8 @@ export function RepositoryTaskStudio() {
         publication_authorized: publicationAuthorized,
         title: `feat: ${taskDetail.title}`,
       });
-      setDraftPR(pr);
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      queryClient.setQueryData(taskKeys.pullRequest(taskDetail.task_id), pr);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(
         err?.message || 'Publication blocked: Independent verification and explicit human authorization are required.'
@@ -556,8 +570,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       await recoverTask(taskDetail.task_id);
-      await fetchTasks();
-      await fetchTaskDetailAndEvents(taskDetail.task_id);
+      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to recover interrupted task.');
     } finally {
@@ -625,11 +638,11 @@ export function RepositoryTaskStudio() {
         </div>
       </div>
 
-      {errorBanner && (
+      {effectiveErrorBanner && (
         <div className="shrink-0 px-4 py-2 bg-destructive/10 border-b border-destructive/30 text-xs text-destructive flex items-center justify-between">
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span>{errorBanner}</span>
+            <span>{effectiveErrorBanner}</span>
           </div>
           <button
             type="button"
@@ -729,7 +742,7 @@ export function RepositoryTaskStudio() {
             <span>Tasks ({tasks.length})</span>
             <button
               type="button"
-              onClick={fetchTasks}
+              onClick={() => refreshTasksAndCurrentDetail()}
               className="text-muted-foreground hover:text-foreground p-1"
               title="Refresh tasks"
             >
@@ -751,12 +764,12 @@ export function RepositoryTaskStudio() {
                   label: t.status,
                   className: 'bg-muted text-muted-foreground border-border',
                 };
-                const isSelected = t.task_id === selectedTaskId;
+                const isSelected = t.task_id === activeTaskId;
                 return (
                   <button
                     key={t.task_id}
                     type="button"
-                    onClick={() => setSelectedTaskId(t.task_id)}
+                    onClick={() => handleSelectTask(t.task_id)}
                     className={cn(
                       'w-full text-left p-3 space-y-1.5 transition-colors hover:bg-accent/40',
                       isSelected && 'bg-primary/10 border-l-2 border-l-primary'

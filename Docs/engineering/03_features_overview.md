@@ -49,19 +49,19 @@
 
 ---
 
-## 3. Workflow Automation & GitHub Ecosystem (Week 3 — UPCOMING)
+## 3. Workflow Automation & GitHub Ecosystem (Week 3 — Implemented & Verified)
 
-| ID | Feature | Priority | Status | Owner | Planned Capability |
+| ID | Feature | Priority | Status | Owner | Implemented Capability |
 |---|---|---|---|---|---|
-| F-22 | GitHub Issue Intake & Creation (F31) | P0 | ⚪ Todo | Parth / Yug | Import issue, create issue from finding |
-| F-23 | Task Planner & Implementation Steps (F32) | P0 | ⚪ Todo | Meet / Dev | Structured plan, affected files, test strategy |
-| F-24 | Mandatory Human Approval Gate (F32) | P0 | ⚪ Todo | Meet / Dhramraj | Server-enforced approval, invalidation on revision |
-| F-25 | Isolated Workspace & Task Branch (F33) | P0 | ⚪ Todo | Prit / Parth | `.workspaces/task-<id>`, `agent/task-<id>` |
-| F-26 | Controlled Tool Router & Policy Engine (F34) | P0 | ⚪ Todo | Devu / Sukun | Command template allowlist, argument validation |
-| F-27 | Restricted Test Runner (F35) | P0 | ⚪ Todo | Prit / Devu | Test execution with timeout and output bounds |
-| F-28 | Bounded Self-Repair Loop (F35) | P0 | ⚪ Todo | Meet / Dev | Targeted repair on failure, ceiling of 3 attempts |
-| F-29 | Independent Verification & AI Review (F36) | P0 | ⚪ Todo | Dev / Keval | Verification check, static scan, PR summary |
-| F-30 | Git Branch Push & GitHub Draft PR (F37) | P0 | ⚪ Todo | Parth / Yug | Human authorization, branch push, Draft PR creation |
-| F-31 | Task Dashboard & Execution Timeline (F38) | P0 | ⚪ Todo | Dhramraj | Live task execution progress, timeline events |
-| F-32 | Checkpoints & Crash Recovery (F39) | P0 | ⚪ Todo | Om / Yug | Task recovery state, idempotent operations |
-| F-33 | Security Attack Matrix & Release Gate (F40) | P0 | ⚪ Todo | Sukun / Keval | End-to-end verification and release sign-off |
+| F-22 | GitHub Issue Intake & Creation (F31) | P0 | 🟢 Done | Parth / Yug | Import issue, create issue from finding, issue-to-task linking |
+| F-23 | Task Planner & Implementation Steps (F32) | P0 | 🟢 Done | Meet / Dev | Structured plan, affected files, test strategy, plan versioning |
+| F-24 | Mandatory Human Approval Gate (F32) | P0 | 🟢 Done | Meet / Dhramraj | Server-enforced approval, invalidation on revision/re-planning |
+| F-25 | Isolated Workspace & Task Branch (F33) | P0 | 🟢 Done | Prit / Parth | `.workspaces/task-<id>`, path traversal guards, `agent/task-<id>` |
+| F-26 | Controlled Tool Router & Policy Engine (F34) | P0 | 🟢 Done | Devu / Sukun | Command template allowlist, argument validation, process group isolation |
+| F-27 | Restricted Test Runner (F35) | P0 | 🟢 Done | Prit / Devu | Pytest, Unittest, Jest, and Vitest execution with output bounds |
+| F-28 | Bounded Self-Repair Loop (F35) | P0 | 🟢 Done | Meet / Dev | Targeted repair on failure, ceiling of 3 attempts, anti-cycling guards |
+| F-29 | Independent Verification & AI Review (F36) | P0 | 🟢 Done | Dev / Keval | Verification check, static scan, diff immutability check, PR summary |
+| F-30 | Git Branch Push & GitHub Draft PR (F37) | P0 | 🟢 Done | Parth / Yug | Human authorization, diff immutability check, branch push, Draft PR |
+| F-31 | Task Dashboard & Execution Timeline (F38) | P0 | 🟢 Done | Dhramraj | Live task execution progress, timeline events, SSE streaming |
+| F-32 | Checkpoints & Crash Recovery (F39) | P0 | 🟢 Done | Om / Yug | Task recovery state, idempotent operations, crash reconciliation |
+| F-33 | Security Attack Matrix & Release Gate (F40) | P0 | 🟢 Done | Sukun / Keval | Process-tree killpg, tenant isolation, diff tampering defense, release sign-off |

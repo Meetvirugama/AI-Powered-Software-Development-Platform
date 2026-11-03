@@ -61,6 +61,7 @@ from app.schemas.verification import (
 )
 from app.services.independent_verifier import IndependentVerifier
 from app.schemas.workspace import (
+    DiffImmutabilityCheckResult,
     TestOutcomeStatus,
     WorkspaceCommitRequest,
     WorkspaceCommitResult,
@@ -635,6 +636,7 @@ class TaskExecutionOrchestrator:
         timeout_seconds: int = 60,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
+        task_repo.verify_execution_approval_gate(task)
         # Sukun W3 Day 4: extra test-runner arguments come from API callers. Refuse paths
         # outside the workspace (other tasks' folders, absolute paths) and unsafe pytest flags.
         if arguments:
@@ -704,6 +706,7 @@ class TaskExecutionOrchestrator:
         target_files: list[str] | None = None,
     ) -> BoundedRepairOutcome:
         """Execute bounded self-repair (max 3 attempts) and synchronize DB RepairAttempt & Task state."""
+        task_repo.verify_execution_approval_gate(task)
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(404, ErrorCode.NOT_FOUND, f"No workspace found for task '{task.id}'.")
@@ -1345,7 +1348,15 @@ class TaskExecutionOrchestrator:
             task_repo.session.commit()
 
         # Ensure task status & timeline reflect verification verdict
-        if ver_schema.is_eligible_for_publication:
+        required_gates = {"tests", "diff_scope", "secret_scan", "static_analysis", "ai_code_review"}
+        evaluated_gates = {c.name: c.status for c in checks}
+        all_gates_passed = (
+            required_gates.issubset(evaluated_gates.keys())
+            and all(evaluated_gates[g] == "PASSED" for g in required_gates)
+            and len(blocking_findings) == 0
+        )
+
+        if ver_schema.is_eligible_for_publication and all_gates_passed:
             if TaskStatus(task.status) in (TaskStatus.VERIFYING, TaskStatus.BLOCKED):
                 task_repo.transition_status(
                     task,
@@ -1556,18 +1567,36 @@ class TaskExecutionOrchestrator:
                 )
 
         # Post-verification diff immutability check (Docs/week3.md §9 & §10)
-        if meta.verification_diff_hash:
-            imm_check = self.workspace_manager.verify_diff_immutability(
-                str(task.id),
-                expected_diff_hash=meta.verification_diff_hash,
+        expected_hash = meta.verification_diff_hash
+        if not expected_hash:
+            # Attempt to resolve from latest verification event payload if present
+            events = task_repo.list_events(task.id)
+            for evt in events:
+                if evt.event_type in ("VERIFICATION_PASSED", "VERIFICATION_RECORDED", TaskEventType.VERIFICATION_COMPLETED.value):
+                    evt_payload = evt.event_data or {}
+                    if evt_payload.get("diff_hash"):
+                        expected_hash = evt_payload["diff_hash"]
+                        meta.verification_diff_hash = expected_hash
+                        break
+
+        if not expected_hash:
+            raise APIError(
+                409,
+                ErrorCode.VERIFICATION_FAILED,
+                "Verification diff hash is missing or unrecorded. Independent verification must be re-executed before publishing.",
             )
-            if not imm_check.is_immutable:
-                raise APIError(
-                    409,
-                    ErrorCode.VERIFICATION_FAILED,
-                    imm_check.error_message
-                    or "Workspace files were modified after independent verification. Re-run verification before publishing.",
-                )
+
+        imm_check = self.workspace_manager.verify_diff_immutability(
+            str(task.id),
+            expected_diff_hash=expected_hash,
+        )
+        if not imm_check.is_immutable:
+            raise APIError(
+                409,
+                ErrorCode.VERIFICATION_FAILED,
+                imm_check.error_message
+                or "Workspace files were modified after independent verification. Re-run verification before publishing.",
+            )
 
         # Also run a live diff validation to guarantee no secrets or critical deletions slipped in
         diff_val = self.workspace_manager.validate_workspace_diff(str(task.id))
@@ -1887,6 +1916,9 @@ class TaskExecutionOrchestrator:
         finally:
             lock.release()
 
+    # Alias for publication API consistency
+    publish_draft_pr = create_draft_pull_request
+
     # -----------------------------------------------------------------------
     # Day 6 — Checkpoints, Crash Recovery & Sandbox Invariants (F39)
     # -----------------------------------------------------------------------
@@ -2060,13 +2092,26 @@ class TaskExecutionOrchestrator:
 
         inv_res = self.workspace_manager.validate_workspace_invariants(str(task.id))
         disk_res = self.workspace_manager.check_disk_budget(str(task.id))
-        imm_res = self.workspace_manager.verify_diff_immutability(str(task.id))
-
         all_violations = list(inv_res.violations)
         if not disk_res.within_budget and disk_res.error_message:
             all_violations.append(disk_res.error_message)
-        if not imm_res.is_immutable and imm_res.error_message:
-            all_violations.append(imm_res.error_message)
+
+        if meta.verification_diff_hash:
+            imm_res = self.workspace_manager.verify_diff_immutability(
+                str(task.id), expected_diff_hash=meta.verification_diff_hash
+            )
+            if not imm_res.is_immutable and imm_res.error_message:
+                all_violations.append(imm_res.error_message)
+        else:
+            imm_res = DiffImmutabilityCheckResult(
+                task_id=str(task.id),
+                immutable=True,
+                is_immutable=True,
+                expected_diff_hash="",
+                current_diff_hash="",
+                verified_diff_hash="",
+                message="Task has not undergone independent verification yet.",
+            )
 
         return redact_obj(
             {

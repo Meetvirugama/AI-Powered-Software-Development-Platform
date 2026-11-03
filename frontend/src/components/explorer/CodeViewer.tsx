@@ -6,6 +6,15 @@ import { cn } from '../../lib/utils';
 import type { RepositoryFile, CodeSymbol } from '../../types/api';
 import type { AnalysisTarget, SourceReference } from '../../types/analysis';
 
+export interface CodeViewerAction {
+  label: string;
+  onClick: () => void;
+  isPending?: boolean;
+  icon?: React.ReactNode;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
 export interface CodeViewerProps {
   repositoryId: string;
   file: RepositoryFile;
@@ -13,7 +22,7 @@ export interface CodeViewerProps {
   onTargetChange: (target: AnalysisTarget) => void;
   highlightedSource?: SourceReference | null;
   onClearHighlightedSource?: () => void;
-  onTriggerExplain?: () => void;
+  action?: CodeViewerAction;
   isAnalyzing?: boolean;
   className?: string;
 }
@@ -200,7 +209,7 @@ export function CodeViewer({
   onTargetChange,
   highlightedSource,
   onClearHighlightedSource,
-  onTriggerExplain,
+  action,
   isAnalyzing = false,
   className,
 }: CodeViewerProps) {
@@ -359,16 +368,20 @@ export function CodeViewer({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          {onTriggerExplain && (
+          {action && (
             <button
               type="button"
-              disabled={isAnalyzing}
-              onClick={onTriggerExplain}
+              disabled={action.disabled || action.isPending || isAnalyzing}
+              onClick={action.onClick}
               className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground transition-all shadow-xs disabled:opacity-50 disabled:pointer-events-none"
-              title={isAnalyzing ? 'Analysis in progress…' : 'Explain current target'}
+              title={action.disabledReason || (action.isPending ? `${action.label} in progress…` : action.label)}
             >
-              <Sparkles className={cn('h-3 w-3', isAnalyzing && 'animate-spin')} />
-              <span>{isAnalyzing ? 'Explaining…' : 'Explain Target'}</span>
+              {action.icon ? (
+                action.icon
+              ) : (
+                <Sparkles className={cn('h-3 w-3', (action.isPending || isAnalyzing) && 'animate-spin')} />
+              )}
+              <span>{action.isPending ? `${action.label}…` : action.label}</span>
             </button>
           )}
 

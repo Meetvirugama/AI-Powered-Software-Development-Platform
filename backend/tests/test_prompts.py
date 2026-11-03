@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import pytest
 from ai.prompts import (
+    PROMPT_REGISTRY,
+    PromptMetadata,
     PromptNotFoundError,
     PromptRenderError,
     clear_prompt_cache,
+    get_prompt_metadata,
     list_available_prompts,
     load_prompt,
     render_prompt,
@@ -71,6 +74,30 @@ class TestPromptsSubsystem:
     def test_render_prompt_missing_key_raises_render_error(self) -> None:
         with pytest.raises(PromptRenderError):
             render_prompt("repair_system", schema_name="RepositoryAnswer")
+
+    def test_get_prompt_metadata_registered_and_unregistered(self) -> None:
+        meta = get_prompt_metadata("chat_system")
+        assert meta is not None
+        assert isinstance(meta, PromptMetadata)
+        assert meta.prompt_id == "prompt-chat-sys-001"
+        assert meta.version == "1.0.0"
+        assert meta.capability == "chat"
+        assert meta.owner == "AI Team"
+
+        meta_with_ext = get_prompt_metadata("chat_system.txt")
+        assert meta_with_ext == meta
+
+        none_meta = get_prompt_metadata("unknown_prompt_xyz")
+        assert none_meta is None
+
+    def test_prompt_registry_covers_core_prompts(self) -> None:
+        expected = ["chat_system", "repository_chat", "bug_detection_system", "code_review_system", "explanation_system", "test_generation_system", "repair_system", "grounding_system"]
+        for name in expected:
+            assert name in PROMPT_REGISTRY
+            meta = PROMPT_REGISTRY[name]
+            assert meta.prompt_id.startswith("prompt-")
+            assert meta.version
+            assert meta.capability
 
 
 class TestPromptBuilderExtended:

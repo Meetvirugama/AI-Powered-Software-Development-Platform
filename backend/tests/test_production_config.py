@@ -113,3 +113,35 @@ def test_gemini_chat_model_can_be_overridden() -> None:
     """F-15: Model configuration can be overridden by environment or kwargs."""
     s = Settings(_env_file=None, gemini_chat_model="custom-model-v2")
     assert s.gemini_chat_model == "custom-model-v2"
+
+
+def test_is_production_property_and_worker_setting() -> None:
+    """P0.1 & P0.2: is_production property normalization and embedded worker flag."""
+    dev = Settings(_env_file=None, app_env="development")
+    assert dev.is_production is False
+    assert dev.disable_embedded_sync_worker is False
+
+    test_env = Settings(_env_file=None, app_env="test")
+    assert test_env.is_production is False
+
+    # Production valid configurations
+    prod1 = Settings(
+        _env_file=None,
+        app_env="production",
+        jwt_secret="a" * 32,
+        cookie_secure=True,
+        cors_allowed_origins="https://app.example.com",
+    )
+    assert prod1.is_production is True
+
+    prod2 = Settings(
+        _env_file=None,
+        app_env=" Prod ",
+        jwt_secret="a" * 32,
+        cookie_secure=True,
+        cors_allowed_origins="https://app.example.com",
+        disable_embedded_sync_worker=True,
+    )
+    assert prod2.is_production is True
+    assert prod2.disable_embedded_sync_worker is True
+

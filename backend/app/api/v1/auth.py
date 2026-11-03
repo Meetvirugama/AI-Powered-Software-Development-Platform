@@ -84,12 +84,49 @@ async def github_callback(
             try:
                 user = UserRepository(db).get_by_id(UUID(user_id_str))
                 if user:
-                    GitHubInstallationRepository(db).upsert(
-                        user_id=user.id,
-                        installation_id=str(installation_id),
-                        account_login=user.login,
-                        permissions={},
-                    )
+                    clean_inst_id = str(installation_id).strip()
+                    inst_repo = GitHubInstallationRepository(db)
+                    existing = inst_repo.get_by_installation_id(clean_inst_id)
+                    if existing and existing.user_id != user.id:
+                        logger.warning(
+                            "oauth_callback_cross_tenant_installation_blocked",
+                            extra={"user_id": str(user.id), "installation_id": clean_inst_id},
+                        )
+                    else:
+                        github_service = getattr(request.app.state, "github_service", None)
+                        is_verified = False
+                        acc_login = user.login
+                        permissions = {}
+                        if github_service:
+                            try:
+                                async with httpx.AsyncClient(timeout=10.0) as client:
+                                    resp = await client.get(
+                                        f"https://api.github.com/app/installations/{clean_inst_id}",
+                                        headers=github_service._app_auth_headers(),
+                                    )
+                                    if resp.is_success:
+                                        inst_data = resp.json()
+                                        inst_login = (inst_data.get("account") or {}).get("login", "")
+                                        inst_acc_id = str(inst_data.get("target_id") or (inst_data.get("account") or {}).get("id") or "")
+                                        if (
+                                            (inst_login and inst_login.lower() == user.login.lower())
+                                            or (user.github_id and inst_acc_id == str(user.github_id))
+                                        ):
+                                            is_verified = True
+                                            acc_login = inst_login or user.login
+                                            permissions = inst_data.get("permissions", {})
+                            except Exception as exc:
+                                logger.warning("oauth_callback_verify_error", extra={"error": str(exc)})
+                        elif existing and existing.user_id == user.id:
+                            is_verified = True
+
+                        if is_verified:
+                            inst_repo.upsert(
+                                user_id=user.id,
+                                installation_id=clean_inst_id,
+                                account_login=acc_login,
+                                permissions=permissions,
+                            )
             except Exception:
                 pass
         return RedirectResponse(

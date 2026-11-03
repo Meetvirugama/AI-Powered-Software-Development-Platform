@@ -447,7 +447,13 @@ class WorkspaceDiffVerifier:
         """Construct synthetic unified diff from modified files in non-git workspace."""
         lines: list[str] = []
         for file in sorted(workspace_path.rglob("*")):
-            if not file.is_file() or ".workspaces" in file.parts or ".git" in file.parts:
+            if (
+                not file.is_file()
+                or ".workspaces" in file.parts
+                or ".git" in file.parts
+                or file.name in ("metadata.json", "workspace_metadata.json", ".metadata.json")
+                or file.name.endswith(".metadata.json")
+            ):
                 continue
             rel_path = file.relative_to(workspace_path).as_posix()
             if rel_path in ("metadata.json", "workspace_metadata.json") or rel_path.endswith("/metadata.json"):

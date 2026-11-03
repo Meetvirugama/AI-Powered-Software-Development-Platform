@@ -370,6 +370,24 @@ class TestRRFFusion:
         ids = [r.id for r in result]
         assert ids.count(chunk.id) == 1, "Duplicate chunk IDs must be deduplicated"
 
+    def test_stable_tie_breaking_for_equal_scores(self, fusion):
+        """When multiple chunks have identical RRF scores, tie-breaking is deterministic by UUID."""
+        id_a = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        id_b = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        chunk_a = _make_chunk(id=id_a)
+        chunk_b = _make_chunk(id=id_b)
+
+        # In list 1: chunk_a at rank 1, chunk_b at rank 2
+        # In list 2: chunk_b at rank 1, chunk_a at rank 2
+        # Both chunks have identical RRF score: 1/(60+1) + 1/(60+2)
+        result1 = fusion.fuse([chunk_a, chunk_b], [chunk_b, chunk_a])
+        result2 = fusion.fuse([chunk_b, chunk_a], [chunk_a, chunk_b])
+
+        assert result1[0].id == id_a
+        assert result1[1].id == id_b
+        assert result2[0].id == id_a
+        assert result2[1].id == id_b
+
     def test_empty_list_is_ignored(self, fusion):
         """An empty list mixed with a real list should not crash."""
         chunks = [_make_chunk()]

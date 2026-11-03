@@ -58,6 +58,7 @@ class GeminiProvider(LLMProvider):
         timeout_seconds: float = 30.0,
         max_retries: int = 3,
         client: httpx.AsyncClient | None = None,
+        concurrency_limit: int = 50,
     ) -> None:
         valid_keys = [k.strip() for k in api_keys if k and k.strip()]
         if not valid_keys:
@@ -70,6 +71,7 @@ class GeminiProvider(LLMProvider):
         self._max_retries = max_retries
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
+        self._semaphore = asyncio.Semaphore(concurrency_limit)
 
     @property
     def provider_name(self) -> str:
@@ -144,134 +146,135 @@ class GeminiProvider(LLMProvider):
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Execute chat completion against Gemini API with retry & rotation."""
-        payload, model = self._build_payload(request)
-        client = self._get_client()
+        async with self._semaphore:
+            payload, model = self._build_payload(request)
+            client = self._get_client()
 
-        last_error: Exception | None = None
-        start_time = time.monotonic()
+            last_error: Exception | None = None
+            start_time = time.monotonic()
 
-        for attempt in range(self._max_retries):
-            current_key = self._next_key()
-            url = f"{_GEMINI_API_BASE}/{model}:generateContent"
-            headers = {"x-goog-api-key": current_key}
+            for attempt in range(self._max_retries):
+                current_key = self._next_key()
+                url = f"{_GEMINI_API_BASE}/{model}:generateContent"
+                headers = {"x-goog-api-key": current_key}
 
-            try:
-                response = await client.post(url, json=payload, headers=headers)
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
 
-                if response.status_code == 200:
-                    data = response.json()
-                    latency_ms = (time.monotonic() - start_time) * 1000.0
+                    if response.status_code == 200:
+                        data = response.json()
+                        latency_ms = (time.monotonic() - start_time) * 1000.0
 
-                    candidates = data.get("candidates", [])
-                    if not candidates:
-                        raise LLMValidationError(
-                            f"Gemini returned 0 candidates: {data}",
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            raise LLMValidationError(
+                                f"Gemini returned 0 candidates: {data}",
+                                provider=self.provider_name,
+                            )
+
+                        candidate = candidates[0]
+                        content_parts = candidate.get("content", {}).get("parts", [])
+                        content_text = "".join(p.get("text", "") for p in content_parts)
+
+                        usage = data.get("usageMetadata", {})
+                        input_tokens = usage.get("promptTokenCount", 0)
+                        output_tokens = usage.get("candidatesTokenCount", 0)
+
+                        # Validate JSON schema if required
+                        if request.response_schema is not None:
+                            raw = content_text.strip()
+                            if raw.startswith("```"):
+                                lines = raw.splitlines()
+                                if len(lines) >= 2 and lines[0].startswith("```"):
+                                    raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+
+                            first_brace = raw.find("{")
+                            first_bracket = raw.find("[")
+                            if (
+                                first_bracket != -1
+                                and (first_brace == -1 or first_bracket < first_brace)
+                                and "]" in raw
+                            ):
+                                raw = raw[first_bracket : raw.rfind("]") + 1]
+                            elif first_brace != -1 and "}" in raw:
+                                raw = raw[first_brace : raw.rfind("}") + 1]
+
+                            try:
+                                parsed_json = json.loads(raw)
+                                if (
+                                    isinstance(parsed_json, list)
+                                    and hasattr(request.response_schema, "model_fields")
+                                    and "findings" in getattr(request.response_schema, "model_fields", {})
+                                ):
+                                    parsed_json = {"findings": parsed_json}
+                                if hasattr(request.response_schema, "model_validate"):
+                                    request.response_schema.model_validate(parsed_json)
+                            except Exception as val_exc:
+                                raise LLMValidationError(
+                                    f"Structured output schema validation failed: {val_exc}",
+                                    provider=self.provider_name,
+                                    raw_response=content_text,
+                                ) from val_exc
+
+                        return LLMResponse(
+                            content=content_text,
+                            model=model,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            latency_ms=round(latency_ms, 2),
+                        )
+
+                    if response.status_code in (401, 403):
+                        error_msg = _redact_key(response.text, current_key)
+                        logger.error("gemini_auth_failed", extra={"status": response.status_code, "body": error_msg[:200]})
+                        raise LLMAuthenticationError(
+                            f"Gemini authentication failed (HTTP {response.status_code})",
+                            status_code=response.status_code,
                             provider=self.provider_name,
                         )
 
-                    candidate = candidates[0]
-                    content_parts = candidate.get("content", {}).get("parts", [])
-                    content_text = "".join(p.get("text", "") for p in content_parts)
+                    if response.status_code == 429:
+                        logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1})
+                        last_error = LLMRateLimitError(
+                            "Gemini rate limit exceeded (HTTP 429)",
+                            provider=self.provider_name,
+                        )
+                        await asyncio.sleep(0.1)
+                        continue
 
-                    usage = data.get("usageMetadata", {})
-                    input_tokens = usage.get("promptTokenCount", 0)
-                    output_tokens = usage.get("candidatesTokenCount", 0)
+                    if response.status_code in _RETRYABLE_STATUS_CODES:
+                        safe_body = _redact_key(response.text[:200], current_key)
+                        logger.warning("gemini_transient_error", extra={"status": response.status_code, "attempt": attempt + 1})
+                        last_error = LLMUnavailableError(
+                            f"Gemini service error (HTTP {response.status_code}): {safe_body}",
+                            status_code=response.status_code,
+                            provider=self.provider_name,
+                        )
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
 
-                    # Validate JSON schema if required
-                    if request.response_schema is not None:
-                        raw = content_text.strip()
-                        if raw.startswith("```"):
-                            lines = raw.splitlines()
-                            if len(lines) >= 2 and lines[0].startswith("```"):
-                                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
-
-                        first_brace = raw.find("{")
-                        first_bracket = raw.find("[")
-                        if (
-                            first_bracket != -1
-                            and (first_brace == -1 or first_bracket < first_brace)
-                            and "]" in raw
-                        ):
-                            raw = raw[first_bracket : raw.rfind("]") + 1]
-                        elif first_brace != -1 and "}" in raw:
-                            raw = raw[first_brace : raw.rfind("}") + 1]
-
-                        try:
-                            parsed_json = json.loads(raw)
-                            if (
-                                isinstance(parsed_json, list)
-                                and hasattr(request.response_schema, "model_fields")
-                                and "findings" in getattr(request.response_schema, "model_fields", {})
-                            ):
-                                parsed_json = {"findings": parsed_json}
-                            if hasattr(request.response_schema, "model_validate"):
-                                request.response_schema.model_validate(parsed_json)
-                        except Exception as val_exc:
-                            raise LLMValidationError(
-                                f"Structured output schema validation failed: {val_exc}",
-                                provider=self.provider_name,
-                                raw_response=content_text,
-                            ) from val_exc
-
-                    return LLMResponse(
-                        content=content_text,
-                        model=model,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        latency_ms=round(latency_ms, 2),
-                    )
-
-                if response.status_code in (401, 403):
-                    error_msg = _redact_key(response.text, current_key)
-                    logger.error("gemini_auth_failed", extra={"status": response.status_code, "body": error_msg[:200]})
-                    raise LLMAuthenticationError(
-                        f"Gemini authentication failed (HTTP {response.status_code})",
+                    # Non-retryable error
+                    safe_body = _redact_key(response.text[:300], current_key)
+                    raise LLMError(
+                        f"Gemini API error (HTTP {response.status_code}): {safe_body}",
                         status_code=response.status_code,
                         provider=self.provider_name,
                     )
 
-                if response.status_code == 429:
-                    logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1})
-                    last_error = LLMRateLimitError(
-                        "Gemini rate limit exceeded (HTTP 429)",
-                        provider=self.provider_name,
-                    )
-                    await asyncio.sleep(0.1)
-                    continue
+                except (httpx.TimeoutException, httpx.ConnectTimeout) as exc:
+                    safe_err = _redact_key(str(exc), current_key)
+                    last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
+                    logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
+                    await asyncio.sleep(0.5)
+                except (httpx.NetworkError, httpx.TransportError) as exc:
+                    safe_err = _redact_key(str(exc), current_key)
+                    last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
+                    logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
+                    await asyncio.sleep(0.5)
 
-                if response.status_code in _RETRYABLE_STATUS_CODES:
-                    safe_body = _redact_key(response.text[:200], current_key)
-                    logger.warning("gemini_transient_error", extra={"status": response.status_code, "attempt": attempt + 1})
-                    last_error = LLMUnavailableError(
-                        f"Gemini service error (HTTP {response.status_code}): {safe_body}",
-                        status_code=response.status_code,
-                        provider=self.provider_name,
-                    )
-                    await asyncio.sleep(1.0 * (attempt + 1))
-                    continue
-
-                # Non-retryable error
-                safe_body = _redact_key(response.text[:300], current_key)
-                raise LLMError(
-                    f"Gemini API error (HTTP {response.status_code}): {safe_body}",
-                    status_code=response.status_code,
-                    provider=self.provider_name,
-                )
-
-            except (httpx.TimeoutException, httpx.ConnectTimeout) as exc:
-                safe_err = _redact_key(str(exc), current_key)
-                last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
-                logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
-                await asyncio.sleep(0.5)
-            except (httpx.NetworkError, httpx.TransportError) as exc:
-                safe_err = _redact_key(str(exc), current_key)
-                last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
-                logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
-                await asyncio.sleep(0.5)
-
-        if isinstance(last_error, LLMError):
-            raise last_error
-        raise LLMUnavailableError(f"Gemini failed after {self._max_retries} attempts.", provider=self.provider_name)
+            if isinstance(last_error, LLMError):
+                raise last_error
+            raise LLMUnavailableError(f"Gemini failed after {self._max_retries} attempts.", provider=self.provider_name)
 
     async def aclose(self) -> None:
         if self._client is not None and not self._client.is_closed:

@@ -69,6 +69,7 @@ class GroundingValidator:
         self,
         citation: SourceReference,
         repository_id: UUID,
+        retrieved_chunks: Sequence[Any] | None = None,
     ) -> GroundingResult:
         """
         Validate a single source citation against the authoritative repository database.
@@ -79,12 +80,18 @@ class GroundingValidator:
         repo_exists = await self._repository_exists(repository_id)
         if not repo_exists:
             return GroundingResult(source=citation, grounded=False, reason="repository_not_found")
+        if retrieved_chunks is not None:
+            try:
+                return await self._check_source(citation, repository_id, retrieved_chunks=retrieved_chunks)
+            except TypeError:
+                return await self._check_source(citation, repository_id)
         return await self._check_source(citation, repository_id)
 
     async def validate_answer(
         self,
         repository_id: UUID,
         answer: RepositoryAnswer,
+        retrieved_chunks: Sequence[Any] | None = None,
     ) -> list[GroundingResult]:
         """
         Validate all citations in an answer and return detailed GroundingResult list.
@@ -102,7 +109,13 @@ class GroundingValidator:
             ]
         results: list[GroundingResult] = []
         for s in answer.sources:
-            res = await self._check_source(s, repository_id)
+            if retrieved_chunks is not None:
+                try:
+                    res = await self._check_source(s, repository_id, retrieved_chunks=retrieved_chunks)
+                except TypeError:
+                    res = await self._check_source(s, repository_id)
+            else:
+                res = await self._check_source(s, repository_id)
             results.append(res)
         return results
 
@@ -110,6 +123,7 @@ class GroundingValidator:
         self,
         answer: RepositoryAnswer,
         repository_id: UUID,
+        retrieved_chunks: Sequence[Any] | None = None,
     ) -> RepositoryAnswer:
         """
         Check every source in ``answer.sources`` against the repository database.
@@ -140,7 +154,13 @@ class GroundingValidator:
 
         results: list[GroundingResult] = []
         for source in answer.sources:
-            result = await self._check_source(source, repository_id)
+            if retrieved_chunks is not None:
+                try:
+                    result = await self._check_source(source, repository_id, retrieved_chunks=retrieved_chunks)
+                except TypeError:
+                    result = await self._check_source(source, repository_id)
+            else:
+                result = await self._check_source(source, repository_id)
             results.append(result)
 
         grounded = [r for r in results if r.grounded]
@@ -250,14 +270,16 @@ class GroundingValidator:
         self,
         source: SourceReference,
         repository_id: UUID,
+        retrieved_chunks: Sequence[Any] | None = None,
     ) -> GroundingResult:
         """
         Run grounding checks on a single source citation:
         1. Reject path traversal or malformed paths.
         2. Validate line range numbers (start >= 1, end >= start).
-        3. Fail closed if DB is absent.
-        4. Query repository_files for the authoritative file row.
-        5. Verify line range does not exceed actual file line_count.
+        3. Reject citations not present in retrieved context (if retrieved_chunks provided).
+        4. Fail closed if DB is absent.
+        5. Query repository_files for the authoritative file row.
+        6. Verify line range does not exceed actual file line_count.
         """
         # Path traversal guard
         clean_file = (source.file or "").strip()
@@ -269,6 +291,25 @@ class GroundingValidator:
         # Line range numerical validity
         if source.start_line < 1 or source.end_line < source.start_line:
             return GroundingResult(source=source, grounded=False, reason="line_range_invalid")
+
+        # Check against retrieved chunks if provided (P0.4)
+        if retrieved_chunks is not None:
+            retrieved_files = {
+                (getattr(c, "file_path", None) or "").replace("\\", "/").strip().lstrip("/")
+                for c in retrieved_chunks
+            }
+            clean_cited = clean_file.replace("\\", "/").strip().lstrip("/")
+            matched = False
+            for rf in retrieved_files:
+                if rf == clean_cited or rf.endswith("/" + clean_cited) or clean_cited.endswith("/" + rf):
+                    matched = True
+                    break
+            if not matched:
+                logger.info(
+                    "grounding_not_in_retrieved_context",
+                    extra={"file": source.file, "retrieved_files": list(retrieved_files)},
+                )
+                return GroundingResult(source=source, grounded=False, reason="not_in_retrieved_context")
 
         # Fail closed if no database session
         if self._db is None:

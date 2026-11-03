@@ -3,7 +3,7 @@
 Owner: Prit Zania — Week 3 Day 1 Deliverable (Docs/week3.md §6 F33, §8 Day 1)
 """
 
-from sandbox.command_runner import WorkspaceCommandRunner
+from sandbox.command_runner import WorkspaceCommandRunner, kill_process_tree
 from sandbox.constants import (
     ALLOWED_COMMAND_TEMPLATES,
     CRITICAL_PROJECT_FILES,
@@ -115,6 +115,7 @@ __all__ = [
     "RECOVERY_STALE_TIMEOUT_SECONDS",
     "SECRET_SCAN_PATTERNS",
     "SENSITIVE_ENV_VARS",
+    "kill_process_tree",
     "TOOL_CHECK_DISK_BUDGET",
     "TOOL_CHECK_STALE_REVISION",
     "TOOL_CLEANUP_ORPHANED",

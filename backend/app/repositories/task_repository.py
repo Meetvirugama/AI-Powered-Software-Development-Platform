@@ -59,7 +59,7 @@ from app.models.task import (
     WorkspaceStatus,
 )
 from app.schemas.plan import PlannerSchema
-from app.schemas.task import TaskIntakePayload, can_transition
+from app.schemas.task import TaskIntakePayload, VALID_TASK_TRANSITIONS, can_transition
 
 
 class InvalidStateTransitionError(APIError, ValueError):
@@ -112,43 +112,7 @@ class PlanNotFoundError(APIError, LookupError):
 # ---------------------------------------------------------------------------
 
 VALID_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
-    TaskStatus.CREATED: {TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.FAILED},
-    TaskStatus.PLANNING: {TaskStatus.PENDING_APPROVAL, TaskStatus.FAILED, TaskStatus.CANCELLED},
-    TaskStatus.PENDING_APPROVAL: {TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED},
-    TaskStatus.REJECTED: {TaskStatus.PLANNING, TaskStatus.CANCELLED},
-    TaskStatus.APPROVED: {TaskStatus.WORKSPACE_SETUP, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.FAILED},
-    TaskStatus.WORKSPACE_SETUP: {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED},
-    TaskStatus.EXECUTING: {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED},
-    TaskStatus.TESTING: {TaskStatus.VERIFYING, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED},
-    TaskStatus.REPAIRING: {TaskStatus.TESTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED},
-    TaskStatus.VERIFYING: {TaskStatus.READY_FOR_PUBLICATION, TaskStatus.REPAIRING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.RECOVERY_REQUIRED, TaskStatus.BLOCKED},
-    TaskStatus.READY_FOR_PUBLICATION: {TaskStatus.PUBLISHING, TaskStatus.VERIFYING, TaskStatus.CANCELLED, TaskStatus.BLOCKED},
-    TaskStatus.PUBLISHING: {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.RECOVERY_REQUIRED},
-    TaskStatus.DRAFT_PR_CREATED: set(),
-    TaskStatus.FAILED: {TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING},
-    TaskStatus.CANCELLED: set(),
-    TaskStatus.RECOVERY_REQUIRED: {
-        TaskStatus.PLANNING,
-        TaskStatus.APPROVED,
-        TaskStatus.WORKSPACE_SETUP,
-        TaskStatus.EXECUTING,
-        TaskStatus.TESTING,
-        TaskStatus.VERIFYING,
-        TaskStatus.READY_FOR_PUBLICATION,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-    },
-    TaskStatus.BLOCKED: {
-        TaskStatus.PLANNING,
-        TaskStatus.PENDING_APPROVAL,
-        TaskStatus.APPROVED,
-        TaskStatus.EXECUTING,
-        TaskStatus.TESTING,
-        TaskStatus.VERIFYING,
-        TaskStatus.READY_FOR_PUBLICATION,
-        TaskStatus.FAILED,
-        TaskStatus.CANCELLED,
-    },
+    status: set(targets) for status, targets in VALID_TASK_TRANSITIONS.items()
 }
 
 
@@ -350,8 +314,9 @@ class TaskRepository:
         self,
         task_id: uuid.UUID | str,
         repository_id: Optional[uuid.UUID | str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
     ) -> Optional[Task]:
-        """Fetch task enforcing strict multi-tenant repository isolation when repository_id is supplied."""
+        """Fetch task enforcing strict multi-tenant isolation when repository_id or user_id is supplied."""
         t_uuid = _ensure_uuid(task_id)
         if not t_uuid:
             return None
@@ -362,6 +327,11 @@ class TaskRepository:
             if not r_uuid:
                 return None
             stmt = stmt.where(Task.repository_id == r_uuid)
+        if user_id is not None:
+            u_uuid = _ensure_uuid(user_id)
+            if not u_uuid:
+                return None
+            stmt = stmt.where(Task.user_id == u_uuid)
 
         stmt = stmt.options(
             selectinload(Task.plans),
@@ -371,8 +341,18 @@ class TaskRepository:
             selectinload(Task.verification_results),
             selectinload(Task.pull_request),
             selectinload(Task.finding),
+            selectinload(Task.events),
+            selectinload(Task.executions),
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_task_for_user(
+        self,
+        task_id: uuid.UUID | str,
+        user_id: uuid.UUID | str,
+    ) -> Optional[Task]:
+        """Fetch a task verifying user ownership."""
+        return self.get_task(task_id, user_id=user_id)
 
     def list_tasks(
         self,
@@ -653,6 +633,19 @@ class TaskRepository:
         new_version = highest_v + 1
         rev = base_revision or target_task.base_revision
 
+        curr_status = TaskStatus(target_task.status)
+        if curr_status != TaskStatus.PLANNING:
+            if not can_transition(curr_status, TaskStatus.PLANNING):
+                raise APIError(
+                    409,
+                    ErrorCode.INVALID_STATE_TRANSITION,
+                    f"Cannot generate plan when task is in state '{curr_status.value}'.",
+                )
+            target_task.status = TaskStatus.PLANNING.value
+
+        prior_approved = target_task.approved_plan_version
+        approval_invalidated = prior_approved is not None
+
         # Mark previous active plans as SUPERSEDED
         existing_plans = list(
             self.session.execute(
@@ -693,17 +686,8 @@ class TaskRepository:
         self.session.add(plan)
 
         target_task.plan_version = new_version
-        if target_task.approved_plan_version is not None:
-            target_task.approved_plan_version = None
-
-        if target_task.status in (
-            TaskStatus.CREATED.value,
-            TaskStatus.PLANNING.value,
-            TaskStatus.APPROVED.value,
-            TaskStatus.REJECTED.value,
-            TaskStatus.PENDING_APPROVAL.value,
-        ):
-            target_task.status = TaskStatus.PENDING_APPROVAL.value
+        target_task.approved_plan_version = None
+        target_task.status = TaskStatus.PENDING_APPROVAL.value
 
         self.session.flush()
 
@@ -716,8 +700,16 @@ class TaskRepository:
                 "summary": plan.summary,
                 "step_count": len(steps or []),
                 "base_revision": rev,
+                "approval_invalidated": approval_invalidated,
+                "prior_approved_plan_version": prior_approved,
             },
             user_id=actor_id,
+            from_status=curr_status.value,
+            to_status=TaskStatus.PENDING_APPROVAL.value,
+            summary=(
+                f"Generated implementation plan v{new_version}."
+                + (f" Previous approval for v{prior_approved} invalidated." if approval_invalidated else "")
+            ),
         )
 
         self.session.commit()
@@ -1278,9 +1270,10 @@ class TaskRepository:
         self,
         task_id: uuid.UUID | str,
         repository_id: uuid.UUID | str,
+        user_id: Optional[uuid.UUID | str] = None,
     ) -> Optional[Workspace]:
         """Fetch isolated workspace for an authorized task."""
-        task = self.get_task(task_id, repository_id)
+        task = self.get_task(task_id, repository_id=repository_id, user_id=user_id)
         if not task:
             raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
 
@@ -2284,11 +2277,19 @@ class TaskRepository:
         )
         return self.session.scalars(stmt).first()
 
-    def get_workspace_record(self, task_id: uuid.UUID | str) -> Optional[Workspace]:
-        """Return persisted Workspace record for a task if one exists."""
+    def get_workspace_record(
+        self,
+        task_id: uuid.UUID | str,
+        user_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[Workspace]:
+        """Return persisted Workspace record for an authorized task if one exists."""
         t_uuid = _ensure_uuid(task_id)
         if t_uuid is None:
             return None
+        if user_id is not None:
+            task = self.get_task(t_uuid, user_id=user_id)
+            if not task:
+                return None
         stmt = select(Workspace).where(Workspace.task_id == t_uuid)
         return self.session.execute(stmt).scalar_one_or_none()
 

@@ -158,16 +158,17 @@ class Settings(BaseSettings):
     # sets X-Forwarded-For and X-Forwarded-Proto. Otherwise clients could spoof
     # their IP to dodge the per-IP rate limit.
     trust_proxy_headers: bool = False
+    disable_embedded_sync_worker: bool = False
+
+    @property
+    def is_production(self) -> bool:
+        """Return True if application is running in production mode."""
+        return self.app_env.strip().lower() in {"production", "prod"}
 
     @property
     def cors_origins(self) -> list[str]:
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
         return [o for o in origins if o != "*"]
-
-    @property
-    def is_production(self) -> bool:
-        """Return True when running in production environment."""
-        return self.app_env.lower().strip() in ("production", "prod")
 
     @property
     def effective_cookie_samesite(self) -> str:

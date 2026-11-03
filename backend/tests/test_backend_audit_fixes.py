@@ -355,3 +355,71 @@ def test_secret_redaction_covers_groq_and_gemini_api_keys() -> None:
     assert fake_groq not in scrubbed
     assert fake_gemini not in scrubbed
     assert "[REDACTED]" in scrubbed
+
+
+def test_rate_limit_rule_coverage_for_expensive_routes() -> None:
+    """P0.5: Verify every expensive API route pattern matches an explicit RateLimitRule."""
+    from starlette.requests import Request
+    from app.core.rate_limit import RateLimitMiddleware
+
+    mw = RateLimitMiddleware(app=None, api_prefix="/api/v1")
+
+    expensive_test_paths = [
+        ("POST", "/api/v1/auth/github/callback"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/sync"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/chat"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/explain"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/detect-bugs"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/generate-tests"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/review"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/source/agent-branch"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/source/commit"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/source/pr-metadata"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/issues"),
+        ("POST", "/api/v1/repositories/123e4567-e89b-12d3-a456-426614174000/issues/import"),
+        ("POST", "/api/v1/tasks"),
+        ("POST", "/api/v1/tasks/task-123/plan"),
+        ("POST", "/api/v1/tasks/task-123/execute"),
+        ("POST", "/api/v1/tasks/task-123/tests"),
+        ("POST", "/api/v1/tasks/task-123/repair"),
+        ("POST", "/api/v1/tasks/task-123/verify"),
+        ("POST", "/api/v1/tasks/task-123/branch"),
+        ("POST", "/api/v1/tasks/task-123/commit"),
+        ("POST", "/api/v1/tasks/task-123/push"),
+        ("POST", "/api/v1/tasks/task-123/authorize-publication"),
+        ("POST", "/api/v1/tasks/task-123/create-pr"),
+        ("POST", "/api/v1/tasks/task-123/publish"),
+        ("POST", "/api/v1/tasks/task-123/recover"),
+        ("POST", "/api/v1/tasks/task-123/run-workflow"),
+    ]
+
+    for method, path in expensive_test_paths:
+        scope = {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "headers": [],
+        }
+        req = Request(scope)
+        rule = mw._match(req)
+        assert rule is not None, f"Expected path '{method} {path}' to match an explicit RateLimitRule"
+
+
+def test_bounded_in_memory_rate_limit_store_behavior() -> None:
+    """P0.5: Test bounded in-memory store eviction and expiry pruning."""
+    from app.core.rate_limit import BoundedInMemoryRateLimitStore
+
+    store = BoundedInMemoryRateLimitStore(max_keys=10)
+
+    # Insert 10 keys
+    for i in range(10):
+        c = store.hit(f"key_{i}", window_seconds=60)
+        assert c == 1
+
+    # Eleventh key triggers pruning
+    store.hit("key_10", window_seconds=60)
+    assert len(store._counts) <= 10
+
+    # Test increment
+    assert store.hit("key_10", window_seconds=60) == 2
+

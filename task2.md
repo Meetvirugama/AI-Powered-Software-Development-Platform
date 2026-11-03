@@ -1,539 +1,1037 @@
-I’ll complete the remaining database and Redis audits in this same conversation, using the uploaded project ZIP and the same depth as the frontend, backend, and AI audits.
-
-I’ll cover:
-1. Database: schema, SQLAlchemy models, migrations, relationships, indexes, constraints, transactions, query efficiency, connection pooling, data integrity, security, and Supabase/pgvector compatibility.
-2. Redis: queues, caching, sessions, rate limiting, pub/sub or streams, TTLs, failure handling, concurrency, memory limits, and production configuration.
-3. Cross-layer audit: how the frontend, backend, AI, database, and Redis interact; duplicated responsibilities, inconsistent contracts, and deployment risks.
-4. Final implementation plan: what to keep, remove, refactor, test, and prioritize for production readiness through Week 2.
-I’ll distinguish confirmed source-code issues from recommendations that still need runtime or production verification.
-1. Database audit
-The database layer is built around PostgreSQL, SQLAlchemy 2.x, Alembic, and pgvector. The overall direction is sound, and the project already has useful foundations: UUID primary keys, timestamp fields, repository-scoped records, vector and full-text indexes, and a migration history.
-
-However, I found several areas that should be addressed before treating the database as production-ready.
-1.1 Critical findings
-Priority	Finding	Why it matters
-P0	Database migrations and ORM models need a formal drift check	The application can expect a different schema from the one actually deployed.
-P0	Repository/file/chunk relationships lack consistent deletion rules	Deleting or re-indexing a repository can leave orphaned records or fail unexpectedly.
-P1	Repository file paths lack a repository-scoped uniqueness constraint	Repeated syncs can create duplicate rows for the same file.
-P1	Analysis history stores potentially large JSONB and text payloads	Unbounded history can increase storage, query cost, and backup size.
-P1	Connection-pool sizing is fixed per process	Multiple Azure workers can collectively exhaust Supabase PostgreSQL connections.
-P1	pgvector index and embedding dimensions are tightly coupled	Changing the embedding model or dimensions requires a coordinated migration and re-indexing.
-
-These are source-level findings and risks; I have not connected to your live Supabase database to inspect its actual schema or data.
-1.2 Database infrastructure
-File: backend/app/core/database.py
-
-What is already good:
-- Separate synchronous and asynchronous SQLAlchemy engines.
-- pool_pre_ping=True to detect stale connections.
-- Configurable pool size, overflow, timeout, and recycle.
-- expire_on_commit=False for the async session factory.
-- A session dependency that closes the synchronous session.
-What needs improvement:
-1. There is no matching get_db_async() dependency in this module. Async services currently receive session factories or sessions through different paths. Standardize this instead of letting each service decide how to acquire and close sessions.
-2. Both engines have independently configured pools. With pool_size=20 and max_overflow=10, one API process could theoretically open up to 60 connections across its sync and async engines. Multiple processes multiply that number.
-3. The async URL is constructed using a string replacement. Validate the driver explicitly at startup, especially if a deployment changes from postgresql+psycopg to another PostgreSQL URL.
-4. Pool sizing should be derived from the actual Supabase connection limit, number of API processes, worker processes, and migration/admin connections.
-Recommended target: one documented session lifecycle for sync code and one for async code, explicit connection budgets, and startup validation.
-1.3 ORM models and schema design
-The main models are:
-- User, GitHubInstallation, Repository
-- RepositoryFile, CodeSymbol, SymbolEdge
-- CodeChunk, MemoryEntry
-- SyncJob, PullRequest
-- AnalysisRun, AnalysisFinding
-Important changes:
-- RepositoryFile: add a unique constraint on (repository_id, path) after cleaning existing duplicates.
-- CodeChunk: define a stable identity for a chunk, including repository/file, source revision, chunk location or symbol, and content hash. The current (repository_id, content_hash) index is not unique, so duplicate chunks can be inserted.
-- CodeSymbol: consider uniqueness based on file, symbol identity, and source revision; avoid assuming a symbol name is unique within a file.
-- SymbolEdge: add uniqueness for the source symbol, target symbol, edge type, and revision where appropriate. Add indexes for both source and target traversal.
-- Repository: consider a unique constraint on the GitHub repository identity. Confirm whether the same GitHub repository can legitimately appear under multiple installation records in your product before choosing the exact constraint.
-- SyncJob: add fields for attempts, last error code, started time, completed time, and next retry time if retries are required.
-- AnalysisRun: validate status and feature type using database constraints or native enums consistently, rather than relying only on application code.
-- AnalysisFinding: constrain line numbers, severity, confidence, and source type to valid values.
-Do not add every suggested constraint blindly. First check existing rows and the intended semantics, then migrate safely.
-1.4 Relationships and deletion behaviour
-Several foreign keys do not specify ondelete, including important relationships involving repository files, code symbols, chunks, and memory entries.
-
-That creates inconsistent deletion behaviour. For example, a repository may be deleted while dependent chunks or symbols remain, depending on the exact foreign-key path and current database state.
-
-Define a consistent policy:
-- Deleting a repository should delete its files, chunks, symbols, edges, memory, sync jobs, analysis runs, and findings where those records have no independent retention requirement.
-- Deleting a user should follow an explicit account-retention policy; do not automatically delete audit history if you need it for compliance or operational investigation.
-- Deleting a file should remove its chunks and symbols.
-- Deleting a symbol should either remove its edges or use a deliberate restricted-deletion policy.
-Use database-level ON DELETE rules and matching ORM relationship cascades. Do not rely only on application-level cleanup.
-1.5 Migrations and Alembic
-Files: backend/migrations/env.py and backend/migrations/versions/
-
-The migration chain is linear:
-
-pgvector extension → identity schema → content tables → sync jobs → chunks and memory → analysis runs and findings
-
-The model registry is imported in env.py, which is good for autogeneration.
-
-What I would change:
-- Add a CI check that compares the current ORM metadata against the latest migration.
-- Test migrations from an empty database and from the previous production schema.
-- Test downgrade scripts in a disposable database.
-- Verify that the Supabase PostgreSQL role has permission to use the vector extension. Extension installation may require elevated privileges.
-- Do not use alembic upgrade head concurrently from every application replica. Run migrations as a single deployment step.
-- Review the raw enum creation and subsequent ALTER COLUMN operations. Keep enum creation, ORM enum names, and downgrade behaviour consistent.
-- Treat the embedding dimension as a schema contract. Do not change Vector(768) without a migration and a complete embedding refresh plan.
-One important production rule: never use Base.metadata.create_all() as a replacement for Alembic migrations in deployment.
-1.6 pgvector and retrieval indexes
-File: backend/app/models/code_chunk.py
-
-The model already defines:
-- A 768-dimensional vector.
-- An HNSW index using cosine distance.
-- A GIN full-text index.
-- A repository/content-hash index.
-This is a useful baseline, but test the actual query plans against representative data.
-
-Recommended checks:
-- Confirm the vector query uses the HNSW index at realistic repository sizes.
-- Confirm the lexical query uses the GIN index.
-- Check that repository filtering is applied to both retrieval paths.
-- Test whether a composite or partial index improves repository-scoped retrieval.
-- Benchmark HNSW m, ef_construction, and query-time ef_search instead of assuming defaults are optimal.
-- Monitor index size and insertion/update latency during repository re-indexing.
-Do not change the embedding model, vector dimensions, or chunk identity in isolation. These changes must be coordinated with the AI indexing and database migration phases.
-1.7 A critical indexing transaction problem
-File: backend/indexer/incremental.py
-
-This is one of the most important database findings.
-
-The production sync worker passes AsyncSessionLocal—a session factory—to IncrementalIndexer. In _execute(), when the supplied object is a factory rather than a session, the indexer opens a new session, executes one SQL statement, and commits it.
-
-That means a single file update can be committed as several separate transactions:
-1. Delete old chunks.
-2. Delete old symbol edges.
-3. Delete old symbols.
-4. Update the file record.
-5. Insert replacement symbols.
-6. Insert replacement chunks.
-7. Insert dependency edges.
-If a later operation fails, earlier changes have already committed. The final _commit() does not repair this: the factory itself has no transaction to commit.
-
-Required fix: open one AsyncSession for a defined indexing transaction, pass that session into the indexer, and commit or roll back at the correct boundary. For very large repositories, use bounded transactions per file or per batch—but make each file's replacement atomic.
-
-Also fix these related indexing problems:
-- Files removed from GitHub are not visibly reconciled against existing repository_files records in this sync flow. Add a missing-file reconciliation step so deleted files do not remain searchable.
-- A modified file has old chunks deleted before replacement chunks are successfully embedded and inserted. With separate commits, an embedding or database failure can leave the file with no usable chunks.
-- Validate that the embedding result count exactly matches the chunk count before insertion. Do not insert null vectors into the non-null embedding column or silently accept incomplete batches.
-- Add a failure-recovery test that simulates an exception after old chunks are deleted and verifies that the previous file index remains intact or that the operation is safely resumable.
-1.8 Repository deletion and transaction safety
-File: backend/app/repositories/repository_repository.py
-
-The repository deletion method manually deletes dependent records. That is understandable given the current foreign-key definitions, but it has two problems:
-- It wraps some deletes in broad except Exception: pass blocks. In PostgreSQL, a failed statement can leave the transaction aborted. Swallowing the exception does not restore the transaction; subsequent statements can fail too.
-- The deletion logic is duplicated application-level knowledge of the schema. Every new dependent table must be added manually.
-Fix: remove broad exception swallowing, use one explicit transaction, and add database-level deletion rules where appropriate. If a delete fails, roll back and return a controlled error. Add an integration test that deletes a repository containing every dependent record type.
-1.9 Data lifecycle and query performance
-Additional changes to schedule:
-- Add retention policies for old analysis runs, findings, and large generated test outputs. Keep the policy configurable and do not delete records required for audit.
-- Paginate repository and analysis history queries at the database level. Avoid fetching all rows and slicing in application memory.
-- Add composite indexes based on real query patterns, not just one index per column.
-- Review the standalone indexes on analysis_runs and analysis_findings against their composite indexes using EXPLAIN (ANALYZE, BUFFERS).
-- Add database constraints for valid line ranges (start_line > 0, end_line >= start_line when present) and non-negative file sizes and line counts.
-- Ensure updated_at is maintained for raw SQL updates as well as ORM updates. The current mixin's onupdate=func.now() is an ORM-side update behaviour, not a database-wide trigger.
-- Review JSON versus JSONB use. Use JSONB where you need PostgreSQL querying/indexing; retain ordinary JSON where you only store and retrieve a document.
-
-2. Redis audit
-Redis is used for several different responsibilities. These should not all be treated as equivalent: losing a cache entry is usually recoverable, but losing a repository-sync job or an authentication revocation record can affect correctness or security.
-2.1 Current Redis usage
-Responsibility	Current implementation	Assessment
-Repository sync queue	Redis list: sync_jobs	Critical  Not reliably acknowledged
-Embedding queue	Redis lists: embedding_queue and embedding_queue:processing	Critical  Failure handling can lose work
-GitHub installation tokens	gh_token:{installation_id}, TTL 55 minutes	Good foundation; needs concurrent refresh protection
-JWT revocation	auth:blocklist:{jti}, TTL until token expiry	Good pattern; Redis availability is security-critical
-Rate limiting	ratelimit:*, fixed one-minute windows	Good baseline; fallback is process-local
-Repository source cache	SourceRevisionCache	Implemented, but not wired into the normal GitHub source-service construction
-Real-time events	Redis Pub/Sub channel platform_events	Suitable for transient notifications, not durable events
-
-2.2 Critical: repository sync queue can lose jobs
-Files:
-- backend/app/services/repository_sync.py
-- backend/app/services/sync_worker.py
-The API pushes a job to the Redis list using RPUSH. The worker consumes it with BLPOP.
-
-BLPOP removes the job immediately. If the worker process crashes after receiving the item but before completing the sync, Redis no longer has that job in the pending queue.
-
-The database has a stale-job reconciliation routine, but it marks old jobs as failed; it does not reliably re-deliver the lost work.
-
-There is also a database/Redis dual-write problem:
-1. The database job is committed.
-2. The API pushes the job into Redis.
-3. If the process crashes between those steps, the database contains a queued job that Redis never received.
-Recommended solution: use a transactional outbox.
-- Create the SyncJob and an outbox event in the same PostgreSQL transaction.
-- A dispatcher publishes pending outbox events to Redis.
-- Use Redis Streams consumer groups, or another queue with explicit acknowledgement and pending-message recovery.
-- Track attempts, delivery time, last error, and dead-letter status.
-- Make the sync handler idempotent so a retried job cannot corrupt the repository index.
-Do not simply switch from BLPOP to another list command and assume the reliability problem is solved.
-2.3 Critical: embedding queue acknowledges failed persistence
-File: backend/indexer/embedding_queue.py
-
-I found several concrete problems:
-1. If db_session is absent, the method can still remove the processed items from the processing queue.
-2. If database persistence fails, the exception is logged and the transaction rolled back, but the code still acknowledges and removes the items.
-3. The returned embedding count is not checked against the number of queued chunks.
-4. Items moved into embedding_queue:processing are not recovered automatically after a worker crash.
-5. The fallback path using LPOP followed by RPUSH is not atomic.
-6. The implementation uses synchronous Redis and database operations inside an async method, which can block the event loop.
-There is an additional architectural issue: I found no production construction/use of EmbeddingQueue outside its tests. The main sync flow currently calls EmbeddingService directly through IncrementalIndexer.
-
-Recommendation: do not maintain two competing embedding pipelines. First decide whether embeddings are processed directly during repository sync or through a separate queue. Keep one production path. If the queue is retained, require successful embedding generation, exact result-count validation, successful database commit, and only then acknowledgement.
-2.4 Redis connection management
-File: backend/app/core/redis.py
-
-Good:
-- Lazy client creation.
-- Separate sync and async clients.
-- Connection and socket timeouts.
-- Explicit shutdown functions.
-Improvements:
-- Add configurable maximum connections and pool sizing.
-- Add a bounded retry policy for transient connection failures.
-- Avoid silently swallowing every close error; log at debug or warning level.
-- Make async client initialization safe against concurrent first requests.
-- Use distinct key prefixes for environments and application components.
-- Add a Redis client lifecycle test covering startup, reconnect, and shutdown.
-A single Redis database number is not a reliable isolation boundary between development, staging, and production. Use separate instances or clearly separated deployment namespaces and credentials.
-2.5 Source cache is not actually using Redis in the normal route path
-Files:
-- backend/app/integrations/github/cache.py
-- backend/app/integrations/github/source_service.py
-- backend/app/integrations/github/routes.py
-SourceRevisionCache supports Redis, but GitHubSourceService defaults to SourceRevisionCache() with no Redis client. The normal routes construct GitHubSourceService(db) without supplying a Redis-backed cache.
-
-So the implemented source cache is effectively process-local in those paths, not shared Redis caching.
-
-There is another issue: the in-memory cache does not enforce the Redis TTL. Entries can remain in process memory indefinitely, and each API process has a separate cache.
-
-Fix: inject a shared Redis-backed cache through application startup, enforce expiration in the memory layer, bound its size, and make invalidation behaviour explicit. Keep the revision and commit-SHA validation; that is important for source correctness.
-2.6 Authentication revocation and Redis outages
-Files:
-- backend/app/core/auth.py
-- backend/app/api/v1/auth.py
-The blocklist design is sensible: the JWT ID is stored with a TTL equal to the remaining token lifetime.
-
-However, Redis availability is part of authentication correctness. The middleware currently returns a service-unavailable response when it cannot check the blocklist. That is a deliberate fail-closed policy and should remain so unless you replace it with another secure revocation design.
-
-Required tests:
-- Revoked token is rejected.
-- Expired blocklist entry is removed automatically.
-- Redis unavailable causes protected requests to fail closed.
-- Logout does not report success when revocation could not be persisted.
-- Multiple API processes see the same revocation.
-Do not change authentication revocation to fail open just to improve availability.
-2.7 Rate limiting
-File: backend/app/core/rate_limit.py
-
-This is one of the better Redis integrations:
-- Uses a fixed time window.
-- Uses a Redis pipeline for increment and expiry.
-- Uses user identity for expensive AI routes.
-- Uses IP identity for OAuth callback limits.
-- Has a bounded local fallback for expensive AI operations.
-Remaining risks:
-- The in-memory fallback is per process, so multiple Azure instances do not share the fallback count.
-- Non-AI endpoints fail open when Redis is unavailable.
-- X-Forwarded-For must only be trusted behind a correctly configured trusted proxy.
-- Add explicit tests for the same identity reaching different API instances.
-- Add limits for other costly operations, including large repository syncs and any future agent execution endpoints.
-Keep the current fallback for AI endpoints, but monitor Redis failures and expose fallback activation in metrics.
-2.8 GitHub token cache
-File: backend/app/integrations/github/token_manager.py
-
-The 55-minute TTL for a token with a 60-minute lifetime is sensible.
-
-The main missing feature is protection against concurrent cache misses. If many requests arrive together for the same installation, they can all attempt to mint a token.
-
-Add a short-lived per-installation distributed lock or another single-flight mechanism, with a safe lock-release strategy. Also test token invalidation after GitHub returns 401.
-2.9 Redis Pub/Sub and SSE
-Files:
-- backend/app/services/sync_worker.py
-- backend/app/api/v1/events.py
-Pub/Sub is suitable for transient UI notifications. It is not durable: a disconnected frontend misses messages published while it is offline.
-
-That is acceptable if the frontend always refreshes authoritative state from the API after reconnecting. It is not acceptable if the event itself is the only record of a completed operation.
-
-Additional concerns:
-- Use structured, validated event payloads.
-- Do not allow malformed event payloads to be broadcast to clients.
-- Keep user and repository authorization checks strict.
-- Reconnect or terminate cleanly when Redis Pub/Sub fails.
-- Consider one subscription per SSE connection's lifecycle, with bounded connection counts and cleanup.
-- Do not send sensitive source content, tokens, or raw analysis payloads through broad Pub/Sub channels.
-Keep Pub/Sub for notifications; keep the database as the source of truth.
-2.10 Redis deployment configuration
-Files: backend/app/core/config.py, .env.example, docker-compose.yml
-
-The local Docker Compose configuration is appropriate for development, but it is not a production Redis configuration.
-
-The current production settings validation checks JWT and cookie security, but it does not validate database or Redis connection security.
-
-For your deployment:
-Component	Recommended configuration
-PostgreSQL	Supabase PostgreSQL connection string with SSL
-Redis	Upstash Redis connection URL using TLS (rediss://)
-Redis credentials	Stored only in Azure environment variables
-Redis pools	Bounded connections with timeouts
-Database pools	Sized for all API and worker processes combined
-Local Docker	Keep local PostgreSQL and Redis for development only
-
-Add production validation for:
-- A configured database URL.
-- A configured Redis URL.
-- TLS for externally hosted production Redis.
-- No default local credentials or localhost service URLs in production.
-- Connection pool limits appropriate for the hosting plan.
-Do not commit real .env files or connection strings.
-
-3. Cross-layer audit: frontend + backend + AI + database + Redis
-This is where the biggest architectural problems appear. Each individual layer has useful functionality, but their responsibilities and failure behaviour are not yet consistently coordinated.
-3.1 Recommended target architecture
-React frontend — Vercel
-
-Repositories · Studios · Chat · Analysis history · SSE
-
-
-FastAPI API — Azure
-
-Authentication · Authorization · Validation · API contracts · Orchestration
-
-Supabase PostgreSQL
-
-Source of truth · History · Jobs · Files · pgvector
-
-
-Upstash Redis
-
-Queues · Cache · Rate limits · Token revocation · Events
-
-
-
-
-Separate background worker — Azure
-
-Repository sync · Clone · Scan · Index · Embedding · Retry
-
-
-AI services
-
-LLM Gateway · RAG · Hybrid retrieval · Grounding · Explain · Bug detection · Tests · Review
-
-
-Important architectural rule: PostgreSQL is the source of truth. Redis is an operational support layer, not the permanent owner of important application data.
-3.2 Cross-layer problems to resolve
-Problem	Layers affected	Required resolution
-Sync job can be committed to DB but never dispatched to Redis	Backend + DB + Redis	Transactional outbox
-Worker can lose a job after BLPOP	Backend + Redis	Acknowledgement and recovery
-Indexing can partially commit	AI/indexer + DB	Explicit transaction boundaries
-Deleted GitHub files can remain in the index	GitHub + indexer + DB + RAG	Deleted-file reconciliation
-Source cache is not injected with Redis	Backend + Redis	Central cache initialization
-Source revision and embedding model must stay aligned	AI + DB	Versioned indexing contract
-SSE events are transient	Backend + Redis + frontend	Re-fetch authoritative state on reconnect
-Sync state may not reflect the actual worker state	Backend + DB + frontend	Explicit job state transitions
-Database pool limits multiply across processes	Azure + DB	Global connection budget
-Rate-limit fallback is process-local	Backend + Redis + Azure	Monitor degraded operation and bound fallback
-
-3.3 Define one repository indexing lifecycle
-Your repository sync, indexing, AI retrieval, and frontend status should follow one consistent lifecycle.
-#chatgpt-mermaid-_r_s8_{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:16px;fill:rgb(237, 237, 237);}@keyframes edge-animation-frame{from{stroke-dashoffset:0;}}@keyframes dash{to{stroke-dashoffset:0;}}#chatgpt-mermaid-_r_s8_ .edge-animation-slow{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 50s linear infinite;stroke-linecap:round;}#chatgpt-mermaid-_r_s8_ .edge-animation-fast{stroke-dasharray:9,5!important;stroke-dashoffset:900;animation:dash 20s linear infinite;stroke-linecap:round;}#chatgpt-mermaid-_r_s8_ .error-icon{fill:rgb(48, 48, 48);}#chatgpt-mermaid-_r_s8_ .error-text{fill:rgb(237, 237, 237);stroke:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .edge-thickness-normal{stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .edge-thickness-thick{stroke-width:3.5px;}#chatgpt-mermaid-_r_s8_ .edge-pattern-solid{stroke-dasharray:0;}#chatgpt-mermaid-_r_s8_ .edge-thickness-invisible{stroke-width:0;fill:none;}#chatgpt-mermaid-_r_s8_ .edge-pattern-dashed{stroke-dasharray:3;}#chatgpt-mermaid-_r_s8_ .edge-pattern-dotted{stroke-dasharray:2;}#chatgpt-mermaid-_r_s8_ .marker{fill:rgb(175, 175, 175);stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_s8_ .marker.cross{stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_s8_ svg{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:16px;}#chatgpt-mermaid-_r_s8_ p{margin:0;}#chatgpt-mermaid-_r_s8_ .label{font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .cluster-label text{fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .cluster-label span{color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .cluster-label span p{background-color:transparent;}#chatgpt-mermaid-_r_s8_ .label text,#chatgpt-mermaid-_r_s8_ span{fill:rgb(237, 237, 237);color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .node rect,#chatgpt-mermaid-_r_s8_ .node circle,#chatgpt-mermaid-_r_s8_ .node ellipse,#chatgpt-mermaid-_r_s8_ .node polygon,#chatgpt-mermaid-_r_s8_ .node path{fill:rgb(9, 23, 44);stroke:rgb(31, 78, 148);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .rough-node .label text,#chatgpt-mermaid-_r_s8_ .node .label text,#chatgpt-mermaid-_r_s8_ .image-shape .label,#chatgpt-mermaid-_r_s8_ .icon-shape .label{text-anchor:middle;}#chatgpt-mermaid-_r_s8_ .node .katex path{fill:#000;stroke:#000;stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .rough-node .label,#chatgpt-mermaid-_r_s8_ .node .label,#chatgpt-mermaid-_r_s8_ .image-shape .label,#chatgpt-mermaid-_r_s8_ .icon-shape .label{text-align:center;}#chatgpt-mermaid-_r_s8_ .node.clickable{cursor:pointer;}#chatgpt-mermaid-_r_s8_ .root .anchor path{fill:rgb(175, 175, 175)!important;stroke-width:0;stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_s8_ .arrowheadPath{fill:rgb(175, 175, 175);}#chatgpt-mermaid-_r_s8_ .edgePath .path{stroke:rgb(175, 175, 175);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .flowchart-link{stroke:rgb(175, 175, 175);fill:none;}#chatgpt-mermaid-_r_s8_ .edgeLabel{background-color:rgb(0, 0, 0);text-align:center;}#chatgpt-mermaid-_r_s8_ .edgeLabel p{background-color:rgb(0, 0, 0);}#chatgpt-mermaid-_r_s8_ .edgeLabel rect{opacity:0.5;background-color:rgb(0, 0, 0);fill:rgb(0, 0, 0);}#chatgpt-mermaid-_r_s8_ .labelBkg{background-color:rgba(0, 0, 0, 0.5);}#chatgpt-mermaid-_r_s8_ .cluster rect{fill:rgb(48, 48, 48);stroke:rgba(255, 255, 255, 0.15);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .cluster text{fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ .cluster span{color:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ div.mermaidTooltip{position:absolute;text-align:center;max-width:200px;padding:2px;font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;font-size:12px;background:rgb(48, 48, 48);border:1px solid rgba(255, 255, 255, 0.15);border-radius:2px;pointer-events:none;z-index:100;}#chatgpt-mermaid-_r_s8_ .flowchartTitleText{text-anchor:middle;font-size:18px;fill:rgb(237, 237, 237);}#chatgpt-mermaid-_r_s8_ rect.text{fill:none;stroke-width:0;}#chatgpt-mermaid-_r_s8_ .icon-shape,#chatgpt-mermaid-_r_s8_ .image-shape{background-color:rgb(0, 0, 0);text-align:center;}#chatgpt-mermaid-_r_s8_ .icon-shape p,#chatgpt-mermaid-_r_s8_ .image-shape p{background-color:rgb(0, 0, 0);padding:2px;}#chatgpt-mermaid-_r_s8_ .icon-shape .label rect,#chatgpt-mermaid-_r_s8_ .image-shape .label rect{opacity:0.5;background-color:rgb(0, 0, 0);fill:rgb(0, 0, 0);}#chatgpt-mermaid-_r_s8_ .label-icon{display:inline-block;height:1em;overflow:visible;vertical-align:-0.125em;}#chatgpt-mermaid-_r_s8_ .node .label-icon path{fill:currentColor;stroke:revert;stroke-width:revert;}#chatgpt-mermaid-_r_s8_ .node .neo-node{stroke:rgb(31, 78, 148);}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node rect,#chatgpt-mermaid-_r_s8_ [data-look="neo"].cluster rect,#chatgpt-mermaid-_r_s8_ [data-look="neo"].node polygon{stroke:url(#chatgpt-mermaid-_r_s8_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_s8_ [data-look="neo"].swimlane.cluster rect{filter:none;}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node path{stroke:url(#chatgpt-mermaid-_r_s8_-gradient);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node .outer-path{filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node .neo-line path{stroke:rgb(31, 78, 148);filter:none;}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node circle{stroke:url(#chatgpt-mermaid-_r_s8_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_s8_ [data-look="neo"].node circle .state-start{fill:#000000;}#chatgpt-mermaid-_r_s8_ [data-look="neo"].icon-shape .icon{fill:url(#chatgpt-mermaid-_r_s8_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_s8_ [data-look="neo"].icon-shape .icon-neo path{stroke:url(#chatgpt-mermaid-_r_s8_-gradient);filter:drop-shadow( 1px 2px 2px rgba(185,185,185,1));}#chatgpt-mermaid-_r_s8_ .node text{font-size:14px;font-weight:600;letter-spacing:normal;fill:rgb(153, 206, 255);}#chatgpt-mermaid-_r_s8_ .edgeLabels text{font-size:13px;font-weight:600;letter-spacing:-0.08px;fill:rgb(153, 206, 255);}#chatgpt-mermaid-_r_s8_ .node tspan[font-weight="normal"],#chatgpt-mermaid-_r_s8_ .edgeLabels tspan[font-weight="normal"]{font-weight:600;}#chatgpt-mermaid-_r_s8_ .edgeLabel .label rect{opacity:1;rx:13px;ry:13px;fill:rgb(0, 14, 26);stroke:rgb(26, 62, 95);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .node rect,#chatgpt-mermaid-_r_s8_ .node circle,#chatgpt-mermaid-_r_s8_ .node ellipse,#chatgpt-mermaid-_r_s8_ .node polygon,#chatgpt-mermaid-_r_s8_ .node path{fill:rgb(0, 40, 77);stroke:rgba(255, 255, 255, 0.1);stroke-width:1px;}#chatgpt-mermaid-_r_s8_ .node rect{rx:16px;ry:16px;}#chatgpt-mermaid-_r_s8_ .mermaid-decision .label-container{fill:rgb(0, 14, 26);stroke:rgb(26, 62, 95);stroke-dasharray:2,2;}#chatgpt-mermaid-_r_s8_ .edgePaths .flowchart-link{stroke:rgb(175, 175, 175);stroke-width:1px;stroke-linecap:round;stroke-linejoin:round;}#chatgpt-mermaid-_r_s8_ .marker{fill:rgb(175, 175, 175);stroke:rgb(175, 175, 175);}#chatgpt-mermaid-_r_s8_ :root{--mermaid-font-family:-apple-system-body,ui-sans-serif,-apple-system,system-ui,Segoe UI,Helvetica,Apple Color Emoji,Arial,sans-serif,Segoe UI Emoji,Segoe UI Symbol;}User requests repository syncAPI authorizes repositoryCreate SyncJob + Outboxevent in PostgreSQLDispatcher publishes jobWorker claims jobClone repositoryScan and compare file hashesIdentify new, changed anddeleted filesParse symbols and createchunksRedact secrets and generateembeddingsAtomically persist eachindexing batchValidate index and sourcerevisionMark job and repositorySYNCEDPublish repository.updatedFrontend refreshes repositorystateFailure / retryRetry with bounded attemptsDead-letter / terminal failure
-
-
-
-
-
-Do not mark the repository SYNCED until the required indexing work has completed and its final state has been verified.
-3.4 Standardize status and error contracts
-Use a single job status vocabulary across the database, worker, API, and frontend.
-Status	Meaning
-QUEUED	Persisted and waiting for a worker
-RUNNING	Worker has claimed the job
-RETRYING	Failed temporarily; eligible for retry
-COMPLETED	All required work completed
-FAILED	Terminal failure
-CANCELLED	Explicitly cancelled
-
-Add separate progress stages such as CLONING, SCANNING, INDEXING, and EMBEDDING rather than overloading the job status.
-
-The frontend should not infer these stages from a generic SYNCING status. The backend must provide them.
-3.5 Keep responsibilities separated
-Component	Should own	Should not own
-Frontend	UI state, interaction, presentation	Database or Redis business logic
-API	Auth, authorization, request validation, orchestration	Long-running repository processing
-Database	Durable records, constraints, transactions	Temporary cache
-Redis	Queue transport, cache, rate limits, revocation	Permanent job history
-Worker	Sync, indexing, retries, recovery	HTTP request lifecycle
-AI services	Retrieval, prompts, generation, validation	Direct ownership of repository lifecycle
-
-
-4. What to keep, refactor, and remove
-The goal should be to reduce duplication without removing working functionality.
-Database
-File or component	Decision
-app/core/database.py	Keep; standardize session lifecycle and pool configuration
-app/models/base.py	Keep; standardize timestamp handling
-All existing ORM models	Keep; improve constraints and deletion policies
-migrations/versions/	Keep all migration history
-migrations/env.py	Keep; improve migration configuration and CI checks
-app/repositories/repository_repository.py	Refactor deletion and transaction handling
-indexer/incremental.py	Refactor transaction ownership and file reconciliation
-app/repositories/analysis_run_repository.py	Keep; optimize pagination and query patterns
-
-There is already a migration smoke test at backend/tests/test_migration_smoke.py. It checks the migration chain, clean migration lifecycle, and ORM schema drift. Keep it and make sure CI actually runs it against PostgreSQL with pgvector. Its database-dependent checks skip when the database is unavailable, so a green test run alone does not prove the migration checks executed.
-Redis
-File or component	Decision
-app/core/redis.py	Keep; improve pools, lifecycle, and production validation
-app/core/rate_limit.py	Keep; improve distributed fallback and monitoring
-app/core/auth.py	Keep; preserve fail-closed revocation checks
-app/integrations/github/token_manager.py	Keep; add concurrent refresh protection
-app/integrations/github/cache.py	Keep; fix TTL and wire Redis into actual routes
-app/services/repository_sync.py	Refactor around durable dispatch
-app/services/sync_worker.py	Refactor job acknowledgement and recovery
-indexer/embedding_queue.py	Do not keep as a second production embedding path unless deliberately redesigned
-
-Do not delete the Redis embedding queue immediately. First confirm whether any deployment or external worker consumes it. The source search found no production construction outside its tests, but deployment configuration should also be checked before removal.
-
-5. Final priority plan — production readiness through Week 2
-This is the combined plan for all audited areas, not a request to rewrite the whole project at once.
-P0 — Fix before production use
-Task	Area	Deliverable
-P0.1	Database	Fix IncrementalIndexer session and transaction handling
-P0.2	Database	Reconcile removed files during indexing
-P0.3	Database	Validate embedding batch count and prevent incomplete persistence
-P0.4	Redis	Replace destructive sync-job consumption with reliable acknowledgement
-P0.5	DB + Redis	Add transactional outbox for sync dispatch
-P0.6	Redis	Fix embedding queue acknowledgement and recovery, or retire unused path
-P0.7	Backend	Separate API process from worker process
-P0.8	Security	Preserve strict repository isolation, auth revocation, and prompt/tool boundaries
-P0.9	Database	Verify migrations against actual Supabase schema
-P0.10	Deployment	Validate production database and Redis TLS/configuration
-
-P1 — Required for a robust Week 2 release
-Task	Area	Deliverable
-P1.1	Database	Add repository-scoped file uniqueness and safe chunk identity
-P1.2	Database	Define consistent foreign-key deletion policies
-P1.3	Database	Remove broad exception swallowing in repository deletion
-P1.4	Database	Define analysis history retention and pagination
-P1.5	Redis	Inject Redis-backed source cache into GitHub source routes
-P1.6	Redis	Enforce memory-cache TTL and maximum size
-P1.7	Redis	Add token refresh single-flight protection
-P1.8	Redis	Add queue retries, dead-letter handling, and worker recovery
-P1.9	Azure + DB	Calculate connection budget for API and worker instances
-P1.10	Frontend	Refresh authoritative sync state after SSE reconnect
-P1.11	AI + DB	Preserve embedding model, dimensions, and source revision consistency
-
-P2 — Optimization and maintainability
-- Benchmark pgvector HNSW and lexical indexes with representative repository data.
-- Remove redundant database indexes only after query-plan analysis.
-- Add Redis memory and eviction monitoring.
-- Add queue depth, oldest pending job, retry count, and failure metrics.
-- Add analysis history cleanup jobs.
-- Add database query latency and pool saturation monitoring.
-- Add structured logs with request ID, repository ID, job ID, and worker ID.
-- Add production backup and restore drills.
-- Add performance benchmarks for large repositories.
-
-6. Testing checklist before declaring the platform production-ready
-Release verification
-0/14 passed
-
-
-
-[ ] Database migration
-
-Fresh PostgreSQL + pgvector database upgrades to head successfully.
-
-
-[ ] Schema parity
-
-ORM metadata and deployed schema have no unexplained differences.
-
-
-[ ] Indexing rollback
-
-An injected failure during file replacement does not leave a partial index.
-
-
-[ ] Deleted files
-
-Files removed from GitHub are removed from the searchable index.
-
-
-[ ] Embedding integrity
-
-A short or malformed embedding batch is rejected without acknowledging work.
-
-
-[ ] Repository isolation
-
-One user cannot retrieve another user's files, chunks, findings, or events.
-
-
-[ ] Sync queue recovery
-
-A worker crash after claiming a job results in safe redelivery.
-
-
-[ ] Outbox recovery
-
-A dispatcher crash does not permanently lose a committed sync request.
-
-
-[ ] Duplicate requests
-
-Repeated sync requests do not create uncontrolled duplicate work.
-
-
-[ ] Redis outage
-
-Authentication fails closed; expensive AI operations retain bounded fallback limits.
-
-
-[ ] Cache expiry
-
-Expired source data is not returned from process memory.
-
-
-[ ] SSE reconnect
-
-The frontend reloads actual job status after reconnecting.
-
-
-[ ] Connection budget
-
-Load testing does not exhaust Supabase connection limits.
-
-
-[ ] Retention
-
-History cleanup does not remove records still required by the product.
-
-
-Reset checklist
-7. Final assessment
-My assessment of the current architecture
-- Frontend: needs consolidation of duplicated studio UI and improved state handling.
-- Backend: needs stronger worker separation, transaction boundaries, and job reliability.
-- AI: has a good foundation, but needs canonical pipeline and model/grounding consistency.
-- Database: has a reasonable schema foundation, but indexing transaction safety and data lifecycle need attention.
-- Redis: has useful integrations, but queue durability and cache wiring need attention.
-The most urgent two fixes are the indexing transaction problem and the sync queue reliability problem. They affect whether the platform can reliably synchronize a repository and produce trustworthy AI retrieval results.
-
-What I would not do
-- Do not replace PostgreSQL with another database.
-- Do not remove pgvector or the existing hybrid retrieval architecture.
-- Do not add another queue system before fixing the current queue's reliability.
-- Do not introduce a second production embedding pipeline.
-- Do not change the embedding model or vector dimensions without a coordinated re-indexing migration.
-- Do not merge all AI engines into one generic engine.
-- Do not enable autonomous agent tool execution before authorization, sandboxing, and approval controls are ready.
-Audit limitation: this is a source-level audit of the uploaded ZIP. I inspected the database models, migrations, Redis clients, queue implementations, indexing flow, cache, rate limiter, and related tests. I did not connect to live Supabase or Upstash, execute a full migration against your production schema, run a multi-worker crash-recovery test, or verify Azure/Vercel deployment behaviour. No source files have been changed.
-
-The best next implementation milestone is to fix P0.1–P0.6 as one coordinated database/Redis reliability phase, then run the release checklist before starting the lower-priority cleanup.
+# AI Layer Audit & File-by-File Implementation Plan
+
+**Repository:** `AI-Powered-Software-Development-Platform`  
+**Scope:** `backend/ai/` plus its integration boundaries in `backend/app/`, `backend/indexer/`, and AI-related tests.  
+**Purpose:** Make the AI layer reliable, secure, cost-aware, measurable, maintainable, and production-ready without rewriting working components unnecessarily.
+
+---
+
+## 1. Executive assessment
+
+The repository already has a substantial AI architecture rather than a minimal LLM wrapper. It contains:
+
+- A central LLM gateway with Gemini and Groq providers and fallback support.
+- An embedding abstraction and Gemini embedding provider.
+- Hybrid retrieval built from vector search, PostgreSQL full-text search, fusion, and optional reranking.
+- A RAG pipeline with context assembly, prompt construction, output validation, and grounding checks.
+- Dedicated services for code review, bug detection, explanation, test generation, task planning, agent execution, bounded repair, and requirement verification.
+- Specialized context builders and prompt templates for each capability.
+
+The main improvement is **not** to replace this architecture with another framework. The priority is to reduce overlapping orchestration, enforce end-to-end contracts, improve retrieval/grounding quality, make provider behavior deterministic, and put hard safety/cost limits around agentic code changes.
+
+### Highest-priority risks to address
+
+1. **One canonical execution path per capability.** The `backend/ai/services/*` engines coexist with large `backend/app/services/*_orchestrator.py` implementations. Confirm which layer owns business orchestration and which owns reusable AI logic. Avoid maintaining two implementations of the same workflow.
+2. **LLM provider fallback correctness.** `LLMGateway` retries on authentication errors as well as transient errors. A bad key/configuration should normally be surfaced rather than silently routed to another provider. Cross-provider model-name translation must be explicit and tested.
+3. **Provider lifecycle and concurrency.** Ensure HTTP clients, key rotation, rate-limit handling, retry budgets, timeouts, cancellation, and shutdown are consistent across Gemini/Groq and embeddings.
+4. **RAG evidence quality.** Vector and lexical results must be fused with stable scores, deduplicated, filtered to the authorized repository, and converted into source references that can be checked against actual indexed content.
+5. **Grounded output validation.** Schema-valid JSON is not necessarily correct. Every code finding, explanation, test, and answer needs source/evidence validation appropriate to the task.
+6. **Agent write safety.** Planning, tool calls, patch application, repair loops, test execution, and requirement verification need explicit budgets, path boundaries, approvals, and rollback behavior.
+7. **Cost and latency controls.** Enforce per-operation token ceilings, context budgets, model routing, request concurrency, provider quotas, caching, and telemetry at the gateway—not independently in every endpoint.
+8. **Evaluation before prompt/model changes.** Establish a versioned regression dataset and quality metrics before changing prompts, retrieval weights, chunking, model defaults, or repair behavior.
+
+---
+
+## 2. Scope and verified inventory
+
+Static source inspection found **64 files under `backend/ai/`**, including **52 Python files** and **12 prompt/documentation text files**. The Python files contain approximately **11,971 lines**.
+
+Largest AI Python modules by line count:
+
+| File | Lines | Recommendation |
+|---|---:|---|
+| `backend/ai/pipeline.py` | 672 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/context/service.py` | 540 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/agent_execution_loop.py` | 533 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/bounded_repair_loop.py` | 498 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/task_planner.py` | 457 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/issue_task_adapter.py` | 400 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/ai_quality_evaluator.py` | 388 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/context/models.py` | 384 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/schemas/grounding.py` | 366 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/llm/groq_provider.py` | 343 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/retrieval_optimizer.py` | 310 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/services/requirement_verifier.py` | 307 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/context/review_context.py` | 280 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/llm/gemini_provider.py` | 279 | Split by responsibility after tests and contracts are in place. |
+| `backend/ai/llm/schemas.py` | 276 | Split by responsibility after tests and contracts are in place. |
+
+
+This is a source audit, not a claim that the full application has passed runtime tests. No live provider calls, database integration run, load test, or end-to-end agent execution was performed as part of this static inspection.
+
+---
+
+## 3. Target architecture
+
+Keep the existing package boundaries, but make ownership explicit:
+
+```text
+API / application orchestrators
+        |
+        v
+Capability services
+  - chat / repository Q&A
+  - code review
+  - bug detection
+  - explanation
+  - test generation
+  - task planning / code modification
+        |
+        +-------------------------------+
+        |                               |
+        v                               v
+Context & retrieval                 Agent safety layer
+  - context builder                   - tool policy
+  - token budget                      - workspace boundary
+  - hybrid retriever                  - patch validation
+  - reranker                          - test runner limits
+  - source references                 - approval / rollback
+        |                               |
+        v                               v
+Grounding + output validation      Sandbox execution
+        |
+        v
+LLM Gateway / Embedding Gateway
+        |
+        +--> Gemini
+        +--> Groq
+        +--> future local / OpenAI-compatible provider
+        |
+        v
+Telemetry, budgets, cache, evaluation
+```
+
+### Ownership rules
+
+- `backend/ai/llm/` owns provider-independent LLM request/response contracts and provider adapters.
+- `backend/ai/embeddings/` owns embedding contracts, batching, dimensions, and provider adapters.
+- `backend/ai/retrieval/` owns retrieval algorithms only. It must not own API response formatting or task lifecycle.
+- `backend/ai/context/` owns context extraction/assembly and token budgeting. It must not make provider calls.
+- `backend/ai/schemas/` owns structured output contracts, parsing, validation, and grounding rules.
+- `backend/ai/services/` owns reusable AI capability logic.
+- `backend/app/services/` owns application workflows, authorization, persistence, task state, and orchestration with repositories/sandbox.
+- `backend/agent/` and `backend/sandbox/` own tool execution and isolation. AI-generated content is always untrusted input to these packages.
+
+---
+
+## 4. P0 — Fix correctness and safety before refactoring
+
+### P0.1 LLM gateway and provider behavior
+
+**Files**
+- `backend/ai/llm/client.py`
+- `backend/ai/llm/provider.py`
+- `backend/ai/llm/schemas.py`
+- `backend/ai/llm/gemini_provider.py`
+- `backend/ai/llm/groq_provider.py`
+- `backend/app/core/lifespan.py`
+
+**Required changes**
+
+1. Define a provider error taxonomy with clear retryability:
+   - Retryable: connection reset, provider 5xx, timeout, temporary overload, rate limit after bounded backoff.
+   - Non-retryable: invalid request, unsupported model, malformed schema, invalid credentials, policy rejection.
+2. Do not automatically fallback on `LLMAuthenticationError` by default. Make authentication fallback an explicit policy because it can hide broken credentials and complicate incident diagnosis.
+3. Make fallback policy configurable per capability and request sensitivity. Do not fallback if the secondary model cannot satisfy the requested structured-output contract.
+4. Add explicit model compatibility mapping. Do not infer compatibility from broad string prefixes alone.
+5. Preserve the original request semantics during fallback: system/developer instructions, response schema, temperature, max output tokens, safety settings, and tool restrictions.
+6. Add one bounded retry policy with exponential backoff and jitter. Avoid retry multiplication across gateway, provider SDK, endpoint, and task worker.
+7. Add request timeout, total deadline, max in-flight calls, and cancellation propagation.
+8. Ensure `aclose()` closes both provider clients even if closing the primary raises; report cleanup failures without leaking resources.
+9. Add a stable request/correlation ID to logs and traces. Never log prompts, source code, secrets, or full model output by default.
+10. Normalize provider usage metadata. Distinguish provider-reported token usage from local estimates.
+
+**Acceptance tests**
+- Primary success; fallback on timeout; fallback on transient 5xx; no fallback on invalid credentials unless policy explicitly permits it.
+- Cross-provider model mapping; structured-output schema preservation.
+- Both providers close even if one close operation fails.
+- Timeout and cancellation stop the operation within the configured deadline.
+- Rate-limit retry respects `Retry-After` where available and never exceeds the request retry budget.
+
+### P0.2 Gemini and Groq adapters
+
+**Files**
+- `backend/ai/llm/gemini_provider.py`
+- `backend/ai/llm/groq_provider.py`
+- `backend/ai/llm/provider.py`
+- `backend/ai/llm/schemas.py`
+
+**Required changes**
+
+- Normalize SDK-specific response formats in the provider adapter; no Gemini/Groq response parsing in capability services.
+- Validate model names and provider capabilities at startup or configuration validation time.
+- Make API-key rotation deterministic and concurrency-safe. Track which key was selected, but never log the key or a reversible fragment.
+- Distinguish quota exhaustion from temporary rate limiting and invalid credentials.
+- Ensure provider SDK retries are either disabled or included in the gateway's global retry budget.
+- Bound response size and reject empty/truncated/malformed responses with typed errors.
+- Normalize finish reasons, safety blocks, tool-call responses, usage fields, and provider request IDs.
+- Add per-provider concurrency semaphores to prevent one provider from exhausting sockets or quotas.
+- Review every broad `except Exception`; translate known provider failures and re-raise unknown programming errors rather than converting all errors into a generic provider outage.
+- Inspect the `pass` at `backend/ai/llm/groq_provider.py` near the end of the file. Determine whether it is an intentional abstract/no-op cleanup branch or an unfinished implementation; replace it with explicit behavior or remove it. Do not leave ambiguous silent no-ops.
+
+### P0.3 Embedding correctness and model versioning
+
+**Files**
+- `backend/ai/embeddings/client.py`
+- `backend/ai/embeddings/service.py`
+- `backend/ai/embeddings/gemini_provider.py`
+- `backend/app/core/lifespan.py`
+- `backend/app/services/sync_worker.py`
+- `backend/indexer/` (embedding/index write path)
+- `backend/ai/retrieval/vector.py`
+
+**Required changes**
+
+1. Define a single embedding profile: provider, model, dimensions, normalization, distance metric, and profile version.
+2. Store the embedding profile/version with each indexed chunk or repository index generation.
+3. Reject queries whose embedding profile/dimensions do not match the indexed vectors. Do not silently mix models or dimensions.
+4. Make embedding batch size and concurrency configurable, with conservative defaults and provider-specific caps.
+5. Retry only retryable failures. Preserve input ordering after concurrent batch execution.
+6. Validate vector length, numeric finiteness, and normalization expectations. Reject NaN/Infinity and malformed vectors before database writes.
+7. Add idempotent indexing behavior so retries do not create duplicate chunk vectors.
+8. Make re-embedding a controlled index migration, not an implicit side effect of a model change.
+9. Track embedding latency, batch count, item count, failure count, and provider usage.
+10. Test empty batches, one item, exact batch boundary, multi-batch order preservation, partial batch failure, dimension mismatch, and cancellation.
+
+### P0.4 Grounding and structured output
+
+**Files**
+- `backend/ai/schemas/grounding.py`
+- `backend/ai/schemas/output.py`
+- `backend/ai/schemas/validator.py`
+- `backend/ai/schemas/prompt_builder.py`
+- `backend/ai/schemas/errors.py`
+- `backend/ai/prompts/grounding_system.txt`
+- `backend/ai/prompts/source_grounding.txt`
+
+**Required changes**
+
+- Treat parsing, schema validation, semantic validation, and evidence validation as separate stages.
+- Validate source references against retrieved chunk IDs, repository ID, file path, and line ranges.
+- Reject citations to files/chunks not present in the current authorized retrieval result.
+- Ensure line ranges are positive, ordered, and within the source file's known line count.
+- Validate that generated findings have a severity, category, actionable message, and evidence where required.
+- Do not let the model invent file paths, symbols, line numbers, or repository IDs.
+- For code review and bug detection, distinguish confirmed issue, possible issue, and informational observation.
+- For repository chat, allow an explicit “insufficient evidence” answer when retrieval is weak.
+- Add adversarial tests for prompt injection inside repository files, comments, README content, commit messages, and issue descriptions.
+- Ensure any fallback parser is strict and bounded. Never use `eval` or permissive parsing that can execute model output.
+- Preserve raw model output only in access-controlled, retention-limited diagnostic storage if needed.
+
+### P0.5 Agentic code-change safety
+
+**Files**
+- `backend/ai/services/agent_execution_loop.py`
+- `backend/ai/services/bounded_repair_loop.py`
+- `backend/ai/services/requirement_verifier.py`
+- `backend/ai/services/task_planner.py`
+- `backend/ai/services/issue_task_adapter.py`
+- `backend/app/services/task_execution_orchestrator.py`
+- `backend/agent/`
+- `backend/sandbox/`
+
+**Required changes**
+
+1. Define a strict task state machine: planned → approved/running → validating → completed/failed/cancelled. Disallow illegal transitions.
+2. Separate model planning from tool authorization. The model may propose an action; deterministic policy decides whether it is allowed.
+3. Give every task hard limits: wall-clock time, model calls, total tokens, tool calls, changed files, patch size, test duration, process count, and repair iterations.
+4. Enforce repository/workspace ownership and path boundaries at the tool boundary, not only in prompts.
+5. Require diff validation before tests and again before commit/PR creation.
+6. Do not allow generated code to change CI, deployment secrets, permissions, or security policy without explicit approval.
+7. Treat repository files and issue text as untrusted instructions. They are data, not system prompts.
+8. Make test execution isolated, resource-limited, network-restricted by default, and killable.
+9. Require requirement verification to cite concrete diff/test evidence. “The model says it is done” is not completion.
+10. Persist an audit trail of plan, approved tools, actions, diffs, test results, and final decision.
+11. Make repair loops stop on repeated identical failures, no-progress patches, budget exhaustion, or regression.
+12. Add cancellation checks before and after every model call and tool execution.
+
+---
+
+## 5. P1 — Improve RAG and code intelligence quality
+
+### P1.1 Retrieval pipeline
+
+**Files**
+- `backend/ai/retrieval/base.py`
+- `backend/ai/retrieval/vector.py`
+- `backend/ai/retrieval/lexical.py`
+- `backend/ai/retrieval/hybrid.py`
+- `backend/ai/retrieval/fusion.py`
+- `backend/ai/retrieval/reranker.py`
+- `backend/ai/retrieval/pipeline.py`
+- `backend/ai/services/retrieval_optimizer.py`
+- `backend/app/api/v1/repositories.py`
+- `backend/indexer/`
+
+**Required changes**
+
+- Keep vector and lexical retrievers independently testable behind the same `Retriever` contract.
+- Add repository and tenant authorization filters to every retrieval query. Verify that `repository_id` cannot be swapped to access another user's indexed code.
+- Make retrieval `top_k`, candidate pool size, RRF constant, reranker candidate count, and score thresholds configurable per operation.
+- Deduplicate by stable chunk ID/content hash before fusion and again after reranking.
+- Use reciprocal-rank fusion as a robust baseline; do not combine raw vector cosine scores and lexical scores as if they were calibrated.
+- Ensure lexical query sanitization handles stop words, punctuation-only strings, identifiers, snake_case, camelCase, paths, and quoted symbols.
+- Consider code-aware tokenization and PostgreSQL text-search configurations for programming identifiers; English stemming alone is insufficient for code.
+- Add path, symbol, language, file type, and chunk metadata filters where useful.
+- Apply reranking only when candidate count and latency budget justify it. Provide a deterministic no-reranker path.
+- Add query rewriting only when it improves retrieval on an evaluation set; keep the original query and rewritten query traceable.
+- Return retrieval diagnostics (candidate counts, source retriever, rank, scores, reranker score) internally, without leaking sensitive code to ordinary logs.
+- Add explicit empty-index and retrieval-unavailable behavior. Do not present “no evidence” as “repository has no bug.”
+- Add query-level caching keyed by repository index generation and embedding profile; invalidate on reindex.
+- Review SQL execution and transaction/session ownership for both session instances and session factories. Avoid consuming results after the session is closed.
+
+**Acceptance tests**
+- Cross-repository isolation.
+- Empty index, no lexical tokens, vector provider unavailable, lexical DB failure, reranker unavailable.
+- Duplicate chunks across retrievers.
+- Stable ordering for equal scores.
+- Code identifiers and file-path queries.
+- Index-generation cache invalidation.
+- Retrieval latency and result-count budgets.
+
+### P1.2 Context construction and token budgeting
+
+**Files**
+- `backend/ai/context/builder.py`
+- `backend/ai/context/models.py`
+- `backend/ai/context/service.py`
+- `backend/ai/context/token_budget.py`
+- `backend/ai/context/chat_context.py`
+- `backend/ai/context/intelligence_context.py`
+- `backend/ai/context/bug_context.py`
+- `backend/ai/context/review_context.py`
+- `backend/ai/context/explanation.py`
+- `backend/ai/context/test_context.py`
+- `backend/ai/context/renderers.py`
+
+**Required changes**
+
+- Establish one canonical context model and a clear set of operation-specific adapters.
+- Keep context extraction deterministic and separate from prompt rendering.
+- Define token budgets for system instructions, task instructions, conversation history, repository evidence, and output reserve.
+- Use the selected model's tokenizer when available; otherwise use a documented conservative estimate.
+- Never truncate source code in a way that removes the relevant line range or breaks a syntax boundary without marking it as partial.
+- Deduplicate repeated files/symbols and avoid sending the same code in both conversation history and retrieved context.
+- Rank context by task relevance, dependency importance, recency, and evidence quality—not only retrieval score.
+- Preserve source metadata (repository, file, symbol, start/end line, chunk ID, content hash).
+- Add deterministic overflow behavior: remove low-value context first, retain mandatory instructions and evidence metadata, and return a visible “context limited” state.
+- Add token-budget tests for tiny budgets, large files, long histories, duplicated chunks, Unicode, and code-heavy content.
+
+### P1.3 RAG pipeline and repository chat
+
+**Files**
+- `backend/ai/pipeline.py`
+- `backend/ai/schemas/output.py`
+- `backend/ai/schemas/grounding.py`
+- `backend/ai/prompts/chat_system.txt`
+- `backend/ai/prompts/repository_chat.txt`
+- `backend/ai/prompts/context_summary.txt`
+- `backend/ai/prompts/summary_system.txt`
+- `backend/app/api/v1/chat.py`
+- `backend/app/api/v1/repositories.py`
+
+**Required changes**
+
+- Make the RAG pipeline a thin sequence of explicit stages: authorize → retrieve → build context → prompt → generate → parse → validate → ground → format.
+- Return a typed internal result with answer, source references, retrieval diagnostics, model/provider metadata, and failure/degraded status.
+- Separate “no matching evidence,” “index unavailable,” “provider unavailable,” and “answer generation failed.”
+- Require citations for repository-specific factual claims. If evidence is insufficient, answer with uncertainty instead of hallucinating.
+- Add conversation memory only when it is relevant and authorized; do not let memory override repository evidence.
+- Add context summarization with provenance and expiry/versioning; never treat a summary as equivalent to source code.
+- Protect against prompt injection in retrieved code. Explicitly label repository content as untrusted data and prohibit it from changing system instructions or tool permissions.
+- Add response caching only for safe, repository-versioned queries. Avoid caching user-specific/private responses across users.
+- Stream responses only if partial output can be safely terminated and the final response still passes validation; otherwise return a complete validated response.
+- Add tests for prompt injection, conflicting evidence, stale index, empty retrieval, and answer/source mismatch.
+
+---
+
+## 6. P1 — Capability services
+
+### P1.1 Code review
+
+**Files**
+- `backend/ai/services/code_review_engine.py`
+- `backend/app/services/code_review_orchestrator.py`
+- `backend/ai/context/review_context.py`
+- `backend/ai/prompts/code_review_system.txt`
+- `backend/ai/schemas/validator.py`
+- `backend/ai/schemas/grounding.py`
+
+**Required changes**
+
+- Define a canonical finding schema and stable finding identity (file + rule/category + normalized location + fingerprint).
+- Deduplicate findings across static scanner and LLM output.
+- Make static analysis findings authoritative for deterministic rules; use LLM for reasoning and prioritization, not to overwrite scanner facts.
+- Require exact diff/file evidence and line ranges for findings.
+- Add confidence and evidence strength separately from severity.
+- Suppress speculative style opinions unless requested.
+- Add changed-lines-only mode and full-repository mode as explicit configurations.
+- Prevent the model from reporting a finding on code not in the analyzed revision.
+- Track false-positive feedback and create a regression corpus from accepted/rejected findings.
+
+### P1.2 Bug detection
+
+**Files**
+- `backend/ai/services/bug_detection_engine.py`
+- `backend/app/services/bug_detection_orchestrator.py`
+- `backend/ai/context/bug_context.py`
+- `backend/ai/prompts/bug_detection_system.txt`
+
+**Required changes**
+
+- Separate static scanner evidence from LLM hypotheses.
+- Require a reproducible failure path or clearly label the result as a hypothesis.
+- Validate referenced symbols and line ranges against the exact repository revision.
+- Add severity calibration and duplicate suppression.
+- Avoid claims that a bug is confirmed solely because the model generated a plausible explanation.
+- Add known-bug, no-bug, edge-case, and adversarial test sets.
+
+### P1.3 Explanation
+
+**Files**
+- `backend/ai/services/explanation_service.py`
+- `backend/app/services/explanation_orchestrator.py`
+- `backend/ai/context/explanation.py`
+- `backend/ai/prompts/explanation_system.txt`
+
+**Required changes**
+
+- Define explanation modes (file, symbol, flow, dependency, selected lines) explicitly.
+- Ground each described function/class/flow in source symbols and file locations.
+- Make depth and output length configurable with a bounded default.
+- Avoid explaining stale code when repository revision changed during the request.
+- Add tests for missing symbols, generated code, very large files, and cross-file call flows.
+
+### P1.4 Test generation
+
+**Files**
+- `backend/ai/services/test_generation_service.py`
+- `backend/app/services/test_generation_orchestrator.py`
+- `backend/ai/context/test_context.py`
+- `backend/ai/prompts/test_generation_system.txt`
+
+**Required changes**
+
+- Generate tests from behavior/contracts and existing test conventions, not only source text.
+- Detect the project's test framework, package manager, fixture patterns, and import conventions.
+- Validate generated tests syntactically before writing them.
+- Run generated tests in the sandbox with resource and network limits.
+- Distinguish test-generation success from test-execution success.
+- Report failing tests and environment assumptions transparently.
+- Reject generated tests that contain real secrets or destructive setup.
+- Add tests for missing dependencies, async functions, fixtures, parameterized tests, and existing-test conflicts.
+
+### P1.5 Task planning and issue-to-task adaptation
+
+**Files**
+- `backend/ai/services/task_planner.py`
+- `backend/ai/services/issue_task_adapter.py`
+- `backend/app/api/v1/issues.py`
+- `backend/app/api/v1/tasks.py`
+- `backend/ai/prompts/repair_system.txt`
+- `backend/ai/prompts/summary_system.txt`
+
+**Required changes**
+
+- Use typed plan steps with IDs, dependencies, affected files, expected outcomes, and validation commands.
+- Validate dependency graphs for cycles, missing prerequisites, and impossible ordering.
+- Separate issue parsing from execution planning.
+- Treat GitHub issue bodies/comments as untrusted user content.
+- Require plans to cite repository evidence and identify unknowns.
+- Add a human-readable preview and explicit approval gate before applying code changes.
+- Ensure plan generation cannot directly invoke privileged tools.
+
+---
+
+## 7. P1 — Prompt management
+
+**Files**
+- `backend/ai/prompts/__init__.py`
+- `backend/ai/prompts/README.md`
+- `backend/ai/prompts/bug_detection_system.txt`
+- `backend/ai/prompts/chat_system.txt`
+- `backend/ai/prompts/code_review_system.txt`
+- `backend/ai/prompts/context_summary.txt`
+- `backend/ai/prompts/explanation_system.txt`
+- `backend/ai/prompts/grounding_system.txt`
+- `backend/ai/prompts/repair_system.txt`
+- `backend/ai/prompts/repository_chat.txt`
+- `backend/ai/prompts/source_grounding.txt`
+- `backend/ai/prompts/summary_system.txt`
+- `backend/ai/prompts/test_generation_system.txt`
+
+**Required changes**
+
+- Add prompt IDs, semantic versions, owner, capability, expected output schema, and last evaluation date.
+- Keep prompts as templates; validate required variables and reject missing/extra variables consistently.
+- Add prompt-injection boundaries to every prompt that consumes repository or issue content.
+- Keep policy and tool permissions in code, not in prompt text.
+- Add prompt unit tests for rendering, escaping/fencing, empty variables, long inputs, and adversarial source text.
+- Build a prompt regression suite using representative repositories and expected structured outputs.
+- Track prompt version in every AI operation record so regressions can be attributed.
+- Avoid maintaining multiple prompts with subtly conflicting definitions of severity, confidence, citations, or completion.
+
+---
+
+## 8. P1 — AI quality evaluation and observability
+
+**Files**
+- `backend/ai/services/ai_quality_evaluator.py`
+- `backend/ai/llm/client.py`
+- `backend/ai/embeddings/service.py`
+- `backend/ai/services/retrieval_optimizer.py`
+- `backend/app/core/telemetry.py`
+- `backend/app/core/lifespan.py`
+
+**Required changes**
+
+### Quality metrics
+
+- Retrieval: Recall@K, MRR, nDCG, source coverage, duplicate rate.
+- Grounding: citation precision, citation recall, unsupported-claim rate.
+- Code review/bug detection: precision, recall, false-positive rate, severity calibration.
+- Test generation: syntax pass rate, collection pass rate, execution pass rate, useful coverage delta.
+- Agent: task completion rate, regression rate, repair success rate, human intervention rate.
+- Product: latency p50/p95, cost per successful task, provider fallback rate, timeout rate.
+
+### Telemetry requirements
+
+- Record operation ID, repository/index revision, capability, prompt version, provider, model, latency, token usage, retries, fallback, retrieval counts, validation outcome, and error class.
+- Do not log source code, full prompts, API keys, access tokens, or unredacted private repository content.
+- Distinguish estimated cost from provider-billed cost.
+- Add per-user, per-repository, and per-task budget enforcement.
+- Add dashboards/alerts for provider error rate, quota exhaustion, rising latency, empty retrieval, grounding failures, and agent repair loops.
+- Ensure telemetry failure never breaks the user-facing AI operation, but make telemetry loss observable.
+
+---
+
+## 9. P2 — Maintainability and performance
+
+1. Split large modules only after behavior is protected by tests. Avoid a large-bang rewrite.
+2. Remove duplicate prompt construction and provider-specific parsing from application orchestrators.
+3. Replace broad `Any` and duck-typed session handling with explicit protocols/types where practical.
+4. Standardize async database session ownership in retrievers.
+5. Add bounded caches for embeddings, retrieval, and safe deterministic context operations. Cache keys must include model/profile and repository index revision.
+6. Add batch ingestion and backpressure for indexing; do not let indexing starve interactive inference.
+7. Add graceful degradation: reranker unavailable should not necessarily disable lexical/vector retrieval; provider outage should return typed degraded status.
+8. Keep optional model dependencies (e.g., cross-encoder reranker) lazy-loaded and health-checked. Avoid blocking model downloads during API startup.
+9. Pin provider SDK versions and test upgrades against adapter contract tests.
+10. Add configuration validation for missing API keys, invalid dimensions, unsupported models, impossible token budgets, and conflicting provider settings.
+
+---
+
+## 10. File-by-file change matrix
+
+The table below is the implementation checklist for every Python file under `backend/ai/`. “Keep” means retain the file and its responsibility; it does not mean no changes are needed.
+
+| File | Action | Concrete work |
+|---|---|---|
+| `backend/ai/__init__.py` | Keep; expose only stable public interfaces and avoid eager imports that initialize optional dependencies. |
+| `backend/ai/context/__init__.py` | Keep; avoid exporting unstable implementation details. |
+| `backend/ai/context/bug_context.py` | Keep/refine; ensure bug evidence includes exact revision, symbol and line ranges. |
+| `backend/ai/context/builder.py` | Refactor; canonical context contracts, provenance, repository revision and deterministic ordering. |
+| `backend/ai/context/chat_context.py` | Keep/refine; isolate conversation history from repository evidence and prevent stale context. |
+| `backend/ai/context/explanation.py` | Keep/refine; symbol/flow context and exact source mapping. |
+| `backend/ai/context/intelligence_context.py` | Keep/refine; define shared context fields used by review/bug/explain/test capabilities. |
+| `backend/ai/context/models.py` | Keep/refine; typed immutable context models with source provenance and validation. |
+| `backend/ai/context/renderers.py` | Keep/refine; centralize rendering/escaping and keep source data separate from prompt text. |
+| `backend/ai/context/review_context.py` | Keep/refine; changed-file/diff awareness, source provenance and deterministic prioritization. |
+| `backend/ai/context/service.py` | Refactor; make it a facade/composition layer, not a second independent implementation of each context builder. |
+| `backend/ai/context/test_context.py` | Keep/refine; test framework conventions, fixtures, dependency mocks and safe test context. |
+| `backend/ai/context/token_budget.py` | P0/P1; explicit model-aware budgets, output reserve, overflow priorities and deterministic truncation. |
+| `backend/ai/embeddings/__init__.py` | Keep; expose provider-independent embedding interfaces. |
+| `backend/ai/embeddings/client.py` | Keep/refine; define typed embedding provider errors and profile metadata. |
+| `backend/ai/embeddings/gemini_provider.py` | P0 refactor; normalize provider errors, model/dimension contract, quotas and lifecycle. |
+| `backend/ai/embeddings/service.py` | P0 refactor; validate finite vectors/dimensions, configurable batch/concurrency, retry budgets and metrics. |
+| `backend/ai/interfaces.py` | Keep; make capability protocols explicit and align signatures with concrete services. |
+| `backend/ai/llm/__init__.py` | Keep; export stable provider contracts only. |
+| `backend/ai/llm/client.py` | P0 refactor; centralize retry/fallback/deadline/concurrency/telemetry policy and fix error-specific fallback. |
+| `backend/ai/llm/gemini_provider.py` | P0 refactor; normalize SDK errors, key rotation, structured output, usage, timeout and client lifecycle. |
+| `backend/ai/llm/groq_provider.py` | P0 refactor; same adapter contract as Gemini; investigate silent `pass` branch and remove ambiguous no-op. |
+| `backend/ai/llm/provider.py` | Keep; formalize provider protocol, capability declaration, and lifecycle contract. |
+| `backend/ai/llm/schemas.py` | Keep; strengthen typed request/response/error contracts and normalized usage/finish metadata. |
+| `backend/ai/pipeline.py` | Refactor; keep as canonical RAG orchestration only, split stages into small collaborators and add typed result/degraded states. |
+| `backend/ai/prompts/__init__.py` | Inspect; retain if used, otherwise deprecate only after reference and test search. |
+| `backend/ai/retrieval/__init__.py` | Keep; stable retrieval exports. |
+| `backend/ai/retrieval/base.py` | Keep; define canonical CodeChunk/Retriever contracts and metadata invariants. |
+| `backend/ai/retrieval/fusion.py` | P1; document/test RRF formula, stable tie-breaking and duplicate handling. |
+| `backend/ai/retrieval/hybrid.py` | P1; define candidate pool, fusion order, deduplication, filters and graceful degradation. |
+| `backend/ai/retrieval/lexical.py` | P1; improve code identifier tokenization, safe tsquery handling, repository filtering and SQL/session tests. |
+| `backend/ai/retrieval/pipeline.py` | Review/merge; check overlap with top-level `ai/pipeline.py`; retain one canonical pipeline and deprecate duplicate entry points. |
+| `backend/ai/retrieval/reranker.py` | P1; bound model loading/candidate count, add timeout/fallback and evaluate whether reranking improves quality. |
+| `backend/ai/retrieval/vector.py` | P0/P1; enforce repository scope, embedding profile match, session ownership, query timeout and deterministic mapping. |
+| `backend/ai/schemas/__init__.py` | Keep; stable exports. |
+| `backend/ai/schemas/errors.py` | Keep; normalize parse/schema/grounding errors and retryability. |
+| `backend/ai/schemas/grounding.py` | P0; verify citations against retrieved chunks and exact repository revision; add adversarial tests. |
+| `backend/ai/schemas/output.py` | P0; canonical response/finding/test/plan schemas and strict field constraints. |
+| `backend/ai/schemas/prompt_builder.py` | P1; centralize safe prompt assembly, fencing and input labels. |
+| `backend/ai/schemas/validator.py` | P0/P1; separate parsing, schema, semantic, and evidence validation; avoid permissive fallbacks. |
+| `backend/ai/services/__init__.py` | Keep/refine; prevent import-time side effects and expose stable service classes. |
+| `backend/ai/services/agent_execution_loop.py` | P0; strict tool policy, hard budgets, cancellation, audit events, approval and stop conditions. |
+| `backend/ai/services/ai_quality_evaluator.py` | P1; implement reproducible evaluation datasets, metric definitions and regression reports. |
+| `backend/ai/services/bounded_repair_loop.py` | P0; max iterations/time/cost, no-progress detection, diff validation, sandbox isolation and regression stop. |
+| `backend/ai/services/bug_detection_engine.py` | P1; separate scanner facts from model hypotheses and require reproducible/evidence-backed reports. |
+| `backend/ai/services/code_review_engine.py` | P1; canonical findings, evidence checks, static/LLM deduplication and confidence calibration. |
+| `backend/ai/services/explanation_service.py` | P1; typed explanation modes, symbol grounding and revision consistency. |
+| `backend/ai/services/issue_task_adapter.py` | P1; treat issue content as untrusted, normalize requirements and preserve issue provenance. |
+| `backend/ai/services/requirement_verifier.py` | P0/P1; require evidence from diff/tests and verify acceptance criteria deterministically where possible. |
+| `backend/ai/services/retrieval_optimizer.py` | P1; only optimize against evaluation data; make query rewriting and tuning observable/configurable. |
+| `backend/ai/services/task_planner.py` | P1; typed dependency graph, evidence-backed plans, cycle detection and approval boundary. |
+| `backend/ai/services/test_generation_service.py` | P1; framework-aware test output, syntax validation, sandbox execution and safe fixtures. |
+
+
+### Prompt-file change matrix
+
+| File | Concrete work |
+|---|---|
+| `backend/ai/prompts/bug_detection_system.txt` | Require exact evidence, confidence separate from severity, and explicit hypothesis labeling. |
+| `backend/ai/prompts/chat_system.txt` | State repository evidence boundaries, uncertainty behavior, and prompt-injection handling. |
+| `backend/ai/prompts/code_review_system.txt` | Define finding schema, changed-code scope, duplicate suppression, and evidence requirements. |
+| `backend/ai/prompts/context_summary.txt` | Preserve file/symbol/line provenance; mark omissions and stale summaries. |
+| `backend/ai/prompts/explanation_system.txt` | Require source-grounded descriptions and distinguish inference from observed behavior. |
+| `backend/ai/prompts/grounding_system.txt` | Make citation rules explicit; never fabricate paths, symbols, or line numbers. |
+| `backend/ai/prompts/repair_system.txt` | Require minimal diffs, no security-policy bypass, tests, and stop conditions. |
+| `backend/ai/prompts/repository_chat.txt` | Treat repository content as untrusted data; answer only from authorized evidence. |
+| `backend/ai/prompts/source_grounding.txt` | Align with canonical source-reference schema and exact chunk/revision identity. |
+| `backend/ai/prompts/summary_system.txt` | Require concise summaries with provenance and uncertainty. |
+| `backend/ai/prompts/test_generation_system.txt` | Keep safe test requirements; add framework conventions, no destructive actions, and executable completeness. |
+| `backend/ai/prompts/README.md` | Document prompt ownership, versioning, variables, schema, tests, and release procedure. |
+| `backend/ai/prompts/__init__.py` | Keep loader; add prompt version metadata and stronger template validation. |
+
+---
+
+## 11. Application integration files to coordinate
+
+These are not all part of `backend/ai/`, but they determine whether the AI layer is used consistently. Avoid refactoring them independently of the AI contracts.
+
+| File | Required coordination |
+|---|---|
+| `backend/app/core/lifespan.py` | Construct one configured gateway/embedding/retrieval stack; validate readiness and close resources reliably. |
+| `backend/app/api/v1/chat.py` | Keep HTTP validation/auth here; delegate AI logic to canonical chat/RAG service. |
+| `backend/app/api/v1/repositories.py` | Enforce repository ownership before retrieval; keep API response formatting out of retrievers. |
+| `backend/app/api/v1/analysis/common.py` | Share canonical LLM request/response schemas and validation helpers. |
+| `backend/app/api/v1/analysis/*` | Keep endpoints thin; no direct provider SDK calls or duplicate prompt logic. |
+| `backend/app/services/code_review_orchestrator.py` | Own persistence/task lifecycle; delegate model reasoning to `CodeReviewEngine`. |
+| `backend/app/services/bug_detection_orchestrator.py` | Own scan lifecycle; distinguish scanner evidence from LLM hypotheses. |
+| `backend/app/services/explanation_orchestrator.py` | Own request/task lifecycle; delegate explanation generation. |
+| `backend/app/services/test_generation_orchestrator.py` | Own persistence and sandbox execution; delegate generation. |
+| `backend/app/services/task_execution_orchestrator.py` | Coordinate plan → approval → tools → validation; enforce hard budgets. |
+| `backend/app/services/sync_worker.py` | Use the canonical embedding profile and idempotent indexing generation. |
+| `backend/app/core/telemetry.py` | Align provider token/cost metrics with gateway metadata; mark estimated costs as estimates. |
+
+**Important:** The AI services and application orchestrators have overlapping responsibilities. Before deleting or merging anything, build a call graph and confirm which classes are instantiated in `lifespan.py`, dependency injection, workers, and tests. Preserve public imports temporarily with compatibility re-exports if necessary.
+
+---
+
+## 12. AI-related test plan
+
+Create/maintain focused test groups. Do not rely only on mocked “happy path” tests.
+
+### Provider contract tests
+- Gemini and Groq return the same normalized `LLMResponse` contract.
+- Error mapping and retryability.
+- Fallback model mapping and structured-output compatibility.
+- API-key rotation under concurrent calls.
+- Timeout, cancellation, and close behavior.
+
+### Embedding tests
+- Dimension/profile validation.
+- NaN/Infinity rejection.
+- Batch ordering and partial failures.
+- Quota and retry handling.
+- Re-index idempotency and model migration.
+
+### Retrieval tests
+- Tenant/repository isolation.
+- Lexical identifier search and query sanitization.
+- Vector/lexical fusion and deduplication.
+- Reranker degradation.
+- Empty/stale index and DB/provider outages.
+
+### Grounding tests
+- Valid and invalid chunk references.
+- Fabricated file paths/line ranges.
+- Cross-repository citation attempt.
+- Prompt injection inside source files.
+- Contradictory or insufficient evidence.
+
+### Capability tests
+- Code review false positives and duplicate findings.
+- Bug detection hypothesis vs confirmed issue.
+- Explanation symbol/line correctness.
+- Test generation syntax and sandbox execution.
+- Task plan cycle detection and dependency ordering.
+
+### Agent safety tests
+- Path traversal and symlink escape attempts.
+- Disallowed shell/tool invocation.
+- Excessive tool calls, tokens, runtime, patch size, and repair iterations.
+- Repeated no-progress repair.
+- Cancellation mid-run.
+- Secrets in generated diffs/tests.
+- Unauthorized repository/workspace access.
+- Regression test failure blocks completion/PR.
+
+### Evaluation suite
+Build a small but representative fixed benchmark first:
+- 20–50 repository Q&A questions with source references.
+- 20–50 code review cases with accepted/rejected findings.
+- 20–50 bug cases including no-bug examples.
+- 20–50 test-generation targets with expected framework and execution outcome.
+- 10–20 agent tasks with acceptance criteria and expected safe stop behavior.
+
+Record dataset version, repository commit, prompt version, provider/model, retrieval configuration, and evaluator version for every run.
+
+---
+
+## 13. Implementation order and dependencies
+
+### Week 1 — Reliability and contracts
+
+1. Map all gateway and provider call sites; remove any direct vendor SDK use outside adapters.
+2. Finalize LLM request/response/error contracts.
+3. Fix fallback policy, retry budget, deadlines, cancellation, and lifecycle.
+4. Finalize embedding profile/version contract and vector validation.
+5. Add repository authorization tests to vector and lexical retrieval.
+6. Harden grounding and output schema validation.
+7. Add prompt version metadata and prompt-injection test cases.
+
+**Exit criteria:** Provider contract tests pass; invalid credentials do not silently hide; embedding mismatch is rejected; citations cannot point outside retrieved authorized evidence.
+
+### Week 2 — Retrieval and capability quality
+
+1. Establish retrieval benchmark and baseline metrics.
+2. Tune lexical/vector candidate pools and fusion on the benchmark.
+3. Add deduplication and deterministic reranking degradation.
+4. Consolidate context model and token budgeting.
+5. Align code review, bug detection, explanation, and test generation with canonical output schemas.
+6. Add static-vs-LLM finding deduplication and confidence/evidence fields.
+7. Make task planning typed and dependency-aware.
+
+**Exit criteria:** Retrieval and grounding metrics are recorded; no cross-repository leakage; capabilities produce schema-valid, evidence-backed outputs on regression cases.
+
+### Week 3 — Agent safety, evaluation, production readiness
+
+1. Add hard limits to agent and repair loops.
+2. Enforce approval and diff-validation gates.
+3. Add sandbox adversarial tests and cancellation.
+4. Add telemetry dashboards and per-task cost/token budgets.
+5. Add benchmark execution to CI for prompt/model/retrieval changes.
+6. Split oversized modules incrementally, preserving compatibility.
+7. Run end-to-end tests with real test repositories and controlled provider credentials.
+
+**Exit criteria:** Agent cannot exceed configured budgets or workspace boundaries; unverified work cannot be marked complete; model/prompt changes have regression evidence.
+
+---
+
+## 14. Refactor rules — what to remove, merge, and preserve
+
+### Remove only after reference checks
+
+- Duplicate RAG pipeline entry points if `backend/ai/retrieval/pipeline.py` and `backend/ai/pipeline.py` implement overlapping flows. Keep one canonical implementation and a temporary compatibility wrapper if imports require it.
+- Duplicate prompt assembly/response parsing in `backend/app/services/*_orchestrator.py` when the same logic is already in `backend/ai/services/*`.
+- Dead provider-specific branches and unused model aliases after a call-site search and contract tests.
+- Unused context adapters only after proving no API, worker, or test imports them.
+
+### Merge
+
+- Provider retry/fallback/error normalization into `LLMGateway`.
+- Embedding validation, batching, concurrency, and metrics into `EmbeddingService`.
+- Context token allocation into a single `TokenBudget` contract.
+- Citation checks into one reusable grounding validator.
+- Capability output validation into shared schema + semantic validators.
+- Agent budgets and stop conditions into a shared execution policy object.
+
+### Preserve
+
+- The provider abstraction; do not hardwire Gemini/Groq in capability services.
+- Separate embedding provider abstraction; embeddings are not interchangeable with chat completions.
+- Hybrid retrieval; do not remove lexical retrieval just because vector search exists.
+- Prompt templates as versioned assets.
+- Specialized context builders where they encode real domain differences.
+- Sandbox and deterministic scanner checks; LLM output must not replace these safety layers.
+- Existing tests and intentionally adversarial fixtures.
+
+---
+
+## 15. Production acceptance checklist
+
+- [ ] All model calls route through the LLM gateway.
+- [ ] Provider SDKs are isolated to adapter modules.
+- [ ] Fallback is explicit, observable, and schema-compatible.
+- [ ] Retry, timeout, concurrency, and cost budgets are centrally enforced.
+- [ ] Embedding profile and dimensions match every indexed repository generation.
+- [ ] Retrieval always enforces repository authorization.
+- [ ] Hybrid retrieval deduplicates and has stable ordering.
+- [ ] Every repository-specific answer/finding has verifiable evidence or an explicit uncertainty state.
+- [ ] Prompt injection in repository/issue content cannot alter system policy or tool permissions.
+- [ ] Generated tests are syntax-checked and sandbox-executed.
+- [ ] Agent changes are bounded, diff-validated, tested, and auditable.
+- [ ] No task is completed solely on model self-report.
+- [ ] Prompt/model/retrieval changes run the regression benchmark.
+- [ ] Telemetry avoids source-code and secret leakage.
+- [ ] Provider and embedding clients close cleanly during shutdown.
+- [ ] P95 latency, provider failure rate, grounding failure rate, and cost per successful task are monitored.
+
+---
+
+## 16. Audit limitations
+
+This plan is based on static inspection of the supplied repository snapshot. It does not claim that:
+- Gemini/Groq credentials or quotas work in the deployed environment.
+- Supabase/pgvector indexes and PostgreSQL FTS indexes are correctly provisioned.
+- All AI tests pass.
+- Retrieval quality is good on real repositories.
+- The agent is safe under adversarial execution.
+- The deployed provider models match the source defaults.
+
+Before production sign-off, run the existing AI-related pytest suite, database-backed retrieval integration tests, provider contract tests with controlled credentials, sandbox security tests, and a benchmark on representative repositories. Capture the exact commit and configuration used.
+
+**Recommended sequence:** P0 gateway/provider/embedding/grounding/agent safety → P1 retrieval/context/capabilities → P2 evaluation/telemetry/refactoring. Do not refactor the frontend, backend API contracts, and AI service interfaces in parallel without agreeing on shared request/response schemas first.
+| `Docs/README.md` | 67 | **KEEP/UPDATE:** Keep as master index; add ownership, last-verified dates, canonical-vs-historical labels and links to all maintained docs. |
+| `Docs/daily_tasks.md` | 692 | **ARCHIVE/REFORMAT:** Archive as historical execution plan or replace with live issue tracker; reconcile names, owners, dates and completion states. |
+| `Docs/db_migrations.md` | 96 | **KEEP/UPDATE:** Reconcile migration sequence and commands with Alembic config and actual migration files; include rollback/backup cautions. |
+| `Docs/engineering/00_dashboard.md` | 111 | **KEEP/UPDATE:** Make this the single current project status dashboard; derive status from verified tests/deployment, not stale claims. |
+| `Docs/engineering/01_project_overview.md` | 207 | **KEEP/UPDATE:** Keep as stable product context; remove implementation details duplicated elsewhere and update scope. |
+| `Docs/engineering/02_requirements.md` | 128 | **KEEP/UPDATE:** Keep as canonical functional/non-functional requirements; add requirement IDs and acceptance-test traceability. |
+| `Docs/engineering/03_features_overview.md` | 67 | **KEEP/UPDATE:** Keep as compact feature catalogue; link each feature to its spec/API/test and avoid repeating roadmap prose. |
+| `Docs/engineering/04_user_roles_permissions.md` | 89 | **KEEP/UPDATE:** Cross-check every role/permission with auth dependencies and route guards; document least privilege. |
+| `Docs/engineering/05_system_architecture.md` | 146 | **KEEP/UPDATE:** Regenerate diagrams from current architecture; verify every component, queue, provider, DB and deployment boundary. |
+| `Docs/engineering/06_uml_diagrams.md` | 571 | **KEEP/UPDATE:** Validate every diagram against current models/routes/services; remove stale diagrams and add diagram ownership/date. |
+| `Docs/engineering/07_database_documentation.md` | 298 | **KEEP/UPDATE:** Reconcile tables, columns, constraints, indexes and relationships with ORM models and Alembic migrations. |
+| `Docs/engineering/08_api_documentation.md` | 885 | **KEEP/UPDATE:** Regenerate endpoint/method/auth/request/response/error details from OpenAPI and route code; remove stale TODOs. |
+| `Docs/engineering/09_feature_documentation.md` | 679 | **KEEP/UPDATE:** Keep feature specs but link to canonical APIs, services, UI and tests; update status per feature. |
+| `Docs/engineering/10_development_tasks.md` | 108 | **KEEP/UPDATE:** Replace static task claims with current actionable backlog or archive completed historical board. |
+| `Docs/engineering/11_testing_qa.md` | 104 | **KEEP/UPDATE:** Document actual test commands, markers, fixtures, CI gates, coverage scope and last verified run. |
+| `Docs/engineering/12_deployment_devops.md` | 129 | **KEEP/UPDATE:** Replace machine-specific file:// paths with repository-relative links; verify Azure/Vercel/Supabase/Redis deployment config. |
+| `Docs/engineering/13_architecture_decisions.md` | 347 | **KEEP/UPDATE:** Convert to concise ADRs with status, date, context, decision, consequences; replace local absolute links. |
+| `Docs/engineering/14_changelog.md` | 1,009 | **KEEP/UPDATE:** Keep historical record; reconcile entries with git history and clearly distinguish implemented, planned and verified changes. |
+| `Docs/engineering/README.md` | 102 | **MERGE/UPDATE:** Merge navigation responsibility with Docs/README.md or make it a focused engineering index; avoid duplicate master indexes. |
+| `Docs/github_app_setup.md` | 130 | **KEEP/UPDATE:** Verify GitHub App permissions, callback/webhook routes, env names and setup steps; remove stale scopes and secrets examples. |
+| `Docs/github_integration_audit.md` | 153 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/independent_verification_and_draft_pr_audit.md` | 128 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/parser_and_framework_test_report.md` | 146 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_day7_acceptance_report.md` | 171 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_verification_report.md` | 137 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_week3_day1_audit.md` | 273 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_week3_day2_report.md` | 118 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_week3_day3_day4_report.md` | 130 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_week3_day5_report.md` | 193 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/persistence_week3_day6_day7_report.md` | 177 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/project_idea.md` | 750 | **KEEP/UPDATE:** Retain as product vision; mark non-binding ideas vs shipped scope and link implemented capabilities. |
+| `Docs/prompt_architecture.md` | 123 | **KEEP/UPDATE:** Align prompt inventory, versions and injection boundaries with actual prompt loader/templates; link AI evaluation tests. |
+| `Docs/qa_acceptance_matrix.md` | 32 | **KEEP/UPDATE:** Make this the canonical release acceptance matrix with requirement IDs, test IDs, owners and evidence. |
+| `Docs/quality_benchmark_report.md` | 64 | **MERGE/UPDATE:** Merge into one benchmark report or clearly distinguish historical runs; publish dataset size, commit, command, model, config, raw results and limitations. |
+| `Docs/rag_benchmark_results.md` | 58 | **MERGE/UPDATE:** Merge into one benchmark report or clearly distinguish historical runs; publish dataset size, commit, command, model, config, raw results and limitations. |
+| `Docs/reliability_security_and_failure_recovery_audit.md` | 227 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/restricted_test_runner_bounded_repair_audit.md` | 152 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/scanner_languages.md` | 428 | **KEEP/UPDATE:** Verify language support against parser registry, tree-sitter grammars and tests; distinguish parsed vs indexed vs supported semantics. |
+| `Docs/security/week1_security_report.md` | 81 | **ARCHIVE/VERIFY:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/security/week2_security_checklist.md` | 56 | **KEEP/UPDATE:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/security/week2_security_report.md` | 64 | **ARCHIVE/VERIFY:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/security/week3_release_checklist.md` | 95 | **KEEP/UPDATE:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/security/week3_security_report.md` | 120 | **ARCHIVE/VERIFY:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/security/week3_threat_model.md` | 99 | **KEEP/UPDATE:** Keep security evidence but distinguish threat model, checklist and dated execution report; update findings and closure evidence against current code. |
+| `Docs/shared_intelligence_integration_report.md` | 116 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/task_planning_blast_radius_audit.md` | 205 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/team_rules.md` | 601 | **KEEP/UPDATE:** Keep if team workflow remains active; update member ownership to current team and remove obsolete ownership assignments. |
+| `Docs/week1.md` | 1,647 | **KEEP/UPDATE:** Keep as milestone specification/history; clearly separate original plan from actual completion, link evidence/PRs/tests, and never present planned work as shipped. |
+| `Docs/week2.md` | 1,452 | **KEEP/UPDATE:** Keep as milestone specification/history; clearly separate original plan from actual completion, link evidence/PRs/tests, and never present planned work as shipped. |
+| `Docs/week2_day7_ai_acceptance_report.md` | 190 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week2_day7_api_acceptance_report.md` | 63 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week2_day7_ast_acceptance_report.md` | 218 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week2_qa_acceptance_report.md` | 95 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week3.md` | 1,641 | **KEEP/UPDATE:** Keep as milestone specification/history; clearly separate original plan from actual completion, link evidence/PRs/tests, and never present planned work as shipped. |
+| `Docs/week3_day1_frontend_architecture.md` | 264 | **KEEP/UPDATE:** Review against current source; keep only if it has a distinct owner and purpose, otherwise merge into canonical doc or archive. |
+| `Docs/week3_day6_ai_quality_report.md` | 115 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week3_day7_ai_acceptance_report.md` | 132 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week3_day7_api_acceptance_report.md` | 76 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/week3_day7_workspace_acceptance_report.md` | 165 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/workspace_execution_start_audit.md` | 193 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `Docs/workspace_sandbox_architecture_audit.md` | 250 | **ARCHIVE/VERIFY:** Treat as dated audit/evidence, not current specification; verify every claim against this commit, add commit/test command, owner and finding status, then archive superseded reports. |
+| `README.md` | 168 | **KEEP/UPDATE:** Rewrite as concise product entry point; verify features/status/deployment commands against current code; link to canonical docs. |
+| `backend/README.md` | 108 | **KEEP/UPDATE:** Make backend-specific setup, env, migrations, tests, worker and health checks executable and aligned with current config. |
+| `backend/ai/prompts/README.md` | 27 | **KEEP/UPDATE:** Keep as prompt-specific guide; document prompt loader contract, variables, versioning and regression test procedure. |
+| `backend/tests/fixtures/nodejs_sample/README.md` | 8 | **KEEP FIXTURE:** Keep as fixture content; do not merge into user-facing docs. Clearly label adversarial/prompt-injection content as intentionally untrusted test data. |
+| `backend/tests/fixtures/security/prompt_injection/README.md` | 21 | **KEEP FIXTURE:** Keep as fixture content; do not merge into user-facing docs. Clearly label adversarial/prompt-injection content as intentionally untrusted test data. |
+| `backend/tests/fixtures/security/prompt_injection/readme_injection.md` | 16 | **KEEP FIXTURE:** Keep as fixture content; do not merge into user-facing docs. Clearly label adversarial/prompt-injection content as intentionally untrusted test data. |
+| `backend/tests/fixtures/typescript_sample/README.md` | 8 | **KEEP FIXTURE:** Keep as fixture content; do not merge into user-facing docs. Clearly label adversarial/prompt-injection content as intentionally untrusted test data. |
+| `frontend/README.md` | 82 | **KEEP/UPDATE:** Verify frontend setup, scripts, environment variables, API base URL, build and test commands. |
+| `task.md` | 1,566 | **ARCHIVE/REFORMAT:** Move to Docs/audits/ or archive as AI audit artifact; label snapshot date/commit and avoid competing with canonical roadmap. |
+| `task2.md` | 539 | **ARCHIVE/REFORMAT:** Move to Docs/audits/ or archive as database/Redis audit artifact; remove conversational narrative and make findings/evidence actionable. |
+
+
+## 6. Link repair plan
+
+1. Scan all Markdown links, reference-style links, HTML anchors and Mermaid links.
+2. Convert machine-local file URLs to relative repository paths.
+3. Resolve links case-sensitively (important for Linux CI).
+4. Validate anchors against actual heading slugs.
+5. Validate image links and downloadable artifacts.
+6. Add a CI documentation-link check; allow explicit exceptions only for external links that cannot be checked reliably.
+7. Re-run link validation after any directory move.
+
+Recommended conventions:
+- Relative links for files within the repository.
+- GitHub permalinks pinned to a commit for source references in historical audit evidence.
+- No personal desktop paths, local drive letters, private machine usernames or local absolute paths.
+- Avoid links to mutable `main` for evidence that must remain reproducible.
+
+## 7. Documentation metadata standard
+
+Every maintained document should start with a small metadata block:
+
+```yaml
+---
+title: "Document title"
+owner: "Team or role"
+status: "active" # draft | active | historical | deprecated
+created: "YYYY-MM-DD"
+last_verified: "YYYY-MM-DD"
+verified_commit: "<git-sha>"
+source_of_truth: "path/to/source"
+review_trigger: "API or schema change"
+---
+```
+
+For historical reports, also include:
+- Environment and dependency versions.
+- Exact command(s) executed.
+- Dataset/fixture and configuration.
+- Result summary and limitations.
+- Finding status and evidence references.
+
+Do not fabricate dates or commit SHAs. Populate them from Git history and actual test runs.
+
+## 8. Recommended folder organization
+
+Do not move everything immediately; first repair links and assign owners. Then migrate in a controlled PR.
+
+```text
+README.md
+Docs/
+  README.md
+  product/
+    project_idea.md
+    requirements.md
+  engineering/
+    00_dashboard.md
+    01_project_overview.md
+    02_requirements.md
+    03_features_overview.md
+    04_user_roles_permissions.md
+    05_system_architecture.md
+    06_uml_diagrams.md
+    07_database_documentation.md
+    08_api_documentation.md
+    09_feature_documentation.md
+    10_development_tasks.md
+    11_testing_qa.md
+    12_deployment_devops.md
+    13_architecture_decisions.md
+    14_changelog.md
+  security/
+    threat_model.md
+    release_checklist.md
+  quality/
+    acceptance_matrix.md
+    benchmarks/
+  operations/
+    github_app_setup.md
+    db_migrations.md
+  audits/
+    YYYY-MM-DD_<area>_audit.md
+  archive/
+    week1.md
+    week2.md
+    week3.md
+    daily_tasks.md
+```
+
+The structure above is a target organization, not a requirement to move every file. Preserve paths until references and tooling are updated.
+
+## 9. Three-week documentation cleanup plan
+
+### Week 1 — Source-of-truth and correctness
+
+1. Fix all absolute local file links.
+2. Verify README and Docs index status claims.
+3. Make `00_dashboard.md` the only current milestone/status summary.
+4. Reconcile API documentation with FastAPI routes/OpenAPI.
+5. Reconcile DB docs with ORM models and Alembic migrations.
+6. Resolve TODO markers in API and feature documentation.
+7. Add metadata to maintained docs and dated audit reports.
+
+**Exit criteria:** no personal machine paths; current status claims have commit/test evidence; API and DB docs match source.
+
+### Week 2 — Consolidation
+
+1. Clarify root README vs Docs README vs engineering README.
+2. Consolidate benchmark summaries while preserving historical runs.
+3. Consolidate acceptance and security evidence navigation.
+4. Move task.md/task2.md into formal dated audit documents or archive.
+5. Label week plans and daily tasks as historical if they are no longer the active tracker.
+6. Validate UML and architecture diagrams against actual code.
+7. Update role/permission and team ownership docs.
+
+**Exit criteria:** each topic has one canonical document; historical reports remain discoverable but are not mistaken for current truth.
+
+### Week 3 — Automation and maintenance
+
+1. Add Markdown linting and link checking to CI.
+2. Add a check for absolute `file://`, drive-letter and `/Users/...` paths.
+3. Generate API endpoint reference from OpenAPI or test docs against it.
+4. Add a documentation review checklist to PR template.
+5. Add owners and review triggers to maintained docs.
+6. Add benchmark report template and audit report template.
+7. Run full link, heading-anchor, code-fence and metadata checks.
+
+**Exit criteria:** documentation checks run automatically; changes to APIs/schema/security trigger doc review; no stale status claim is presented as verified current state.
+
+## 10. Suggested CI checks
+
+Add lightweight CI jobs for:
+- Markdown lint (headings, whitespace, list consistency).
+- Internal relative-link validation.
+- Anchor validation.
+- Forbidden local path scan (`file:///`, `C:\\Users\\`, `/Users/`, `/home/<user>/`).
+- Required metadata validation for maintained docs.
+- OpenAPI documentation drift check.
+- Migration/schema documentation drift review reminder.
+- Mermaid syntax validation where practical.
+
+Do not fail CI on intentionally external links unless the check can reliably distinguish unavailable external sites from broken internal links.
+
+## 11. What must NOT be deleted
+
+- `backend/tests/fixtures/nodejs_sample/README.md`
+- `backend/tests/fixtures/typescript_sample/README.md`
+- `backend/tests/fixtures/security/prompt_injection/README.md`
+- `backend/tests/fixtures/security/prompt_injection/readme_injection.md`
+
+These are fixture/test inputs. The prompt-injection fixture is intentionally adversarial and should remain untrusted test data. Do not “clean up” its malicious-looking text as if it were ordinary project documentation.
+
+Also preserve dated audit reports until their evidence has been migrated or explicitly deemed obsolete. Archive rather than permanently delete.
+
+## 12. Release acceptance checklist
+
+- [ ] Root README accurately describes shipped capabilities and setup.
+- [ ] Docs README indexes every maintained document and identifies historical documents.
+- [ ] Dashboard status is verified against a named commit and test run.
+- [ ] Architecture diagrams match the current runtime.
+- [ ] API docs match OpenAPI and route implementations.
+- [ ] Database docs match ORM metadata and migration history.
+- [ ] Security docs include current threat model and closure evidence.
+- [ ] Benchmark reports include dataset, commit, config, command and limitations.
+- [ ] Every internal link resolves on a case-sensitive filesystem.
+- [ ] No personal local filesystem paths remain.
+- [ ] Every maintained document has an owner and review trigger.
+- [ ] Historical plans/reports are labelled historical.
+- [ ] Test fixture Markdown files remain unchanged.
+- [ ] CI runs Markdown/link/metadata checks.
+
+## 13. Audit limitations
+
+This review inventoried all Markdown files in the supplied ZIP and performed structural checks plus targeted reading of key documentation. It did not execute documented setup/deployment commands, rerun the benchmark suite, regenerate OpenAPI, compare every database field to migrations, or validate every Mermaid diagram against a running system. Those checks are explicit implementation tasks above.
+
+**Recommended first PR:** repair absolute links, update README/Docs index/dashboard status, and fix API documentation drift. Avoid mass-moving files in that same PR; first establish a clean source-of-truth map, then reorganize in a separate change.

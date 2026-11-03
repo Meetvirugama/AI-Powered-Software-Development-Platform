@@ -19,6 +19,11 @@ from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.api.v1.dependencies import (
+    get_owned_repository,
+    get_owned_task,
+    get_request_user_id,
+)
 from ai.services.task_planner import TaskPlanner
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
@@ -270,16 +275,7 @@ def _owned_repository(repository_id: UUID, user_id: UUID, db: Session) -> Reposi
     return repository
 
 
-def _owned_task(task_id: UUID, request: Request, db: Session) -> tuple[AgentTask, UUID]:
-    user_id = _request_user_id(request)
-    task = TaskRepository(db).get_task_for_user(task_id, user_id)
-    if task is None:
-        raise APIError(
-            404,
-            ErrorCode.TASK_NOT_FOUND,
-            f"Task '{task_id}' was not found or you do not have access.",
-        )
-    return task, user_id
+_owned_task = get_owned_task
 
 
 def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanResponse:

@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,135 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 PROMPTS_DIR: Path = Path(__file__).parent.resolve()
+
+
+@dataclass(frozen=True)
+class PromptMetadata:
+    """Enterprise metadata for versioned AI prompt templates."""
+
+    prompt_id: str
+    version: str
+    owner: str
+    capability: str
+    expected_output_schema: str | None = None
+    last_evaluated: str | None = None
+    description: str | None = None
+    required_variables: tuple[str, ...] = ()
+
+
+PROMPT_REGISTRY: dict[str, PromptMetadata] = {
+    "chat_system": PromptMetadata(
+        prompt_id="prompt-chat-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="chat",
+        expected_output_schema="RepositoryAnswer",
+        last_evaluated="2026-10-31",
+        description="System prompt enforcing repository boundaries, grounding, and citation format",
+    ),
+    "repository_chat": PromptMetadata(
+        prompt_id="prompt-repo-chat-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="chat",
+        expected_output_schema="RepositoryAnswer",
+        last_evaluated="2026-10-31",
+        description="User prompt template combining retrieved code chunks and user question",
+        required_variables=("context", "question"),
+    ),
+    "bug_detection_system": PromptMetadata(
+        prompt_id="prompt-bug-det-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="bug_detection",
+        expected_output_schema="BugDetectionResult",
+        last_evaluated="2026-10-31",
+        description="System prompt for repository bug detection and hypothesis reporting",
+    ),
+    "code_review_system": PromptMetadata(
+        prompt_id="prompt-code-rev-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="code_review",
+        expected_output_schema="CodeReviewResult",
+        last_evaluated="2026-10-31",
+        description="System prompt for code review findings and duplicate suppression",
+    ),
+    "explanation_system": PromptMetadata(
+        prompt_id="prompt-explain-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="explanation",
+        expected_output_schema="ExplanationResult",
+        last_evaluated="2026-10-31",
+        description="System prompt for symbol/flow code explanation",
+    ),
+    "test_generation_system": PromptMetadata(
+        prompt_id="prompt-test-gen-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="test_generation",
+        expected_output_schema="TestGenerationResult",
+        last_evaluated="2026-10-31",
+        description="System prompt for generating unit and regression test suites",
+    ),
+    "repair_system": PromptMetadata(
+        prompt_id="prompt-repair-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="repair",
+        expected_output_schema="RepairedJSON",
+        last_evaluated="2026-10-31",
+        description="System prompt for repairing malformed JSON responses",
+        required_variables=("schema_name", "error_message", "invalid_content"),
+    ),
+    "grounding_system": PromptMetadata(
+        prompt_id="prompt-ground-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="grounding",
+        expected_output_schema="GroundingVerification",
+        last_evaluated="2026-10-31",
+        description="System prompt for citation hallucination detection",
+    ),
+    "source_grounding": PromptMetadata(
+        prompt_id="prompt-src-ground-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="grounding",
+        expected_output_schema="GroundingVerification",
+        last_evaluated="2026-10-31",
+        description="User prompt for validating cited sources against repository ground truth",
+        required_variables=("answer", "sources", "files"),
+    ),
+    "summary_system": PromptMetadata(
+        prompt_id="prompt-sum-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="summarization",
+        expected_output_schema=None,
+        last_evaluated="2026-10-31",
+        description="System prompt for summarizing large code chunks during truncation",
+    ),
+    "context_summary": PromptMetadata(
+        prompt_id="prompt-ctx-sum-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="summarization",
+        expected_output_schema=None,
+        last_evaluated="2026-10-31",
+        description="User prompt template for code chunk summarization",
+        required_variables=("code_content",),
+    ),
+}
+
+
+def get_prompt_metadata(name: str) -> PromptMetadata | None:
+    """Return PromptMetadata for the given template name, or None if unregistered."""
+    clean_name = name.strip()
+    if clean_name.endswith(".txt"):
+        clean_name = clean_name[:-4]
+    return PROMPT_REGISTRY.get(clean_name)
 
 
 class PromptNotFoundError(FileNotFoundError):
@@ -142,10 +272,13 @@ def validate_required_prompts(required: list[str] | None = None) -> list[str]:
 
 __all__ = [
     "PROMPTS_DIR",
+    "PROMPT_REGISTRY",
+    "PromptMetadata",
     "PromptNotFoundError",
     "PromptRenderError",
     "REQUIRED_PROMPTS",
     "clear_prompt_cache",
+    "get_prompt_metadata",
     "list_available_prompts",
     "load_prompt",
     "render_prompt",

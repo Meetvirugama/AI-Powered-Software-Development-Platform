@@ -33,16 +33,22 @@ class GitHubInstallationRepository:
         account_login: str,
         permissions: dict,
         *,
-        allow_reassign: bool = True,
+        allow_reassign: bool | None = None,
     ) -> GitHubInstallation:
         existing = self.get_by_installation_id(installation_id)
         if existing:
-            if not allow_reassign and existing.user_id != user_id:
-                raise APIError(
-                    403,
-                    ErrorCode.FORBIDDEN,
-                    "This GitHub installation is already linked to another user account.",
-                )
+            if existing.user_id != user_id:
+                if allow_reassign is False:
+                    raise APIError(
+                        403,
+                        ErrorCode.FORBIDDEN,
+                        "This GitHub installation is already linked to another user account.",
+                    )
+                if allow_reassign is not True:
+                    raise ValueError(
+                        f"GitHub installation {installation_id} is already linked to user {existing.user_id} "
+                        f"and cannot be reassigned to user {user_id}."
+                    )
             existing.user_id = user_id
             existing.account_login = account_login
             existing.permissions = permissions

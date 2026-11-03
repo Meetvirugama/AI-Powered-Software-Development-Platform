@@ -124,8 +124,8 @@ class RRFFusion:
                 # Keep the latest seen object (all should be identical by id)
                 chunk_map[chunk.id] = chunk
 
-        # Sort by RRF score descending, take top_n
-        sorted_ids = sorted(scores, key=lambda cid: scores[cid], reverse=True)
+        # Sort by RRF score descending with stable UUID tie-breaking, take top_n
+        sorted_ids = sorted(scores, key=lambda cid: (-scores[cid], str(cid)))
         top_ids = sorted_ids[:top_n]
 
         fused: list[CodeChunk] = [
