@@ -593,7 +593,7 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ---
 
-# WEEK 3 — Workflow Automation, GitHub Ecosystem & Production Hardening ⬜ NOT STARTED
+# WEEK 3 — Workflow Automation, GitHub Ecosystem & Production Hardening ✅ COMPLETE
 
 **Week 3 Goal:** Transform developer-intelligence into an end-to-end workflow: Bug Finding -> GitHub Issue -> Task Plan -> Approval -> Sandbox Edit -> Test & Repair -> Verification -> GitHub Draft PR.
 
@@ -602,14 +602,14 @@ This document breaks each day into specific, atomic tasks for every team member.
 ## WEEK 3 — Day 1 GitHub Issue Creation & Task Intake
 
 - ✅ Parth: `GitHubService.create_issue(owner, repo, title, body, labels)` using GitHub App tokens & PR interfaces (`PR #139`)
-- ⬜ Yug: `POST /api/v1/repositories/{id}/issues` validating finding ownership and returning issue URL
-- ⬜ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI
+- ✅ Yug: `POST /api/v1/repositories/{id}/issues` validating finding ownership and returning issue URL (`PR #143, #165`, `backend/app/api/v1/issues.py`)
+- ✅ Dhramraj: Create Issue modal & button in Bug Inspector and Review UI (`PR #154, #161`, `frontend/src/components/CreateIssueModal.tsx`)
 - ✅ Meet: Issue-to-Task context adapter converting issue details into implementation objectives (`backend/ai/services/issue_task_adapter.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Dev: Validated task-intake schema separating requirements, assumptions, and constraints (`backend/app/schemas/task.py`, `backend/app/schemas/verification.py`, `backend/tests/test_dev_w3_day1_task_intake.py`)
 - ✅ Prit: Workspace & sandbox architecture audit, Git worktree verification, WorkspaceManager interface & resource limits (`Docs/workspace_sandbox_architecture_audit.md`, `backend/app/schemas/workspace.py`, `backend/sandbox/workspace_manager.py`, `backend/tests/test_prit_w3_d1_workspace.py`)
 - ✅ Om: Issue-to-task persistence relationships, workflow models, migration `b3c4d5e6f7a8`, and `TaskRepository` (13/13 tests passing)
-- ⬜ Sukun: GitHub issue creation security checks & token confidentiality
-- ⬜ Keval: Acceptance tests for issue creation from bug and review findings
+- ✅ Sukun: GitHub issue creation security checks & token confidentiality (`Docs/security/week3_threat_model.md`, `PR #166`)
+- ✅ Keval: Acceptance tests for issue creation from bug and review findings (`backend/tests/test_week3_day1_day2.py`)
 
 ## WEEK 3 — Day 2 Task Planner & Human Approval Gate
 
@@ -617,10 +617,10 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Prit: Symbol-level blast radius engine, dependency impact analyzer, test discovery planner & pre-flight workspace validator (`Docs/task_planning_blast_radius_audit.md`, `backend/scanner/symbol_blast_radius.py`, `backend/scanner/task_test_planner.py`, `backend/scanner/workspace_preflight.py`, `backend/app/schemas/planner_context.py`, `backend/tests/test_prit_w3_d2_blast_radius_and_test_planner.py`)
 - ✅ Meet: `TaskPlanner` generating ordered implementation steps, affected files, tests, and risk analysis (`backend/ai/services/task_planner.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Dev: `PlannerSchema` and step dependency validation (`backend/app/schemas/plan.py`, `backend/tests/test_dev_w3_day2_planner_schema.py`)
-- ⬜ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`)
-- ⬜ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges
-- ⬜ Sukun: Server-enforced approval gate blocking execution for unapproved plans
-- ⬜ Keval: Acceptance tests for valid plans, rejected plans, and unapproved execution attempts
+- ✅ Yug: Task lifecycle endpoints (`POST /tasks`, `GET /tasks/{id}`, `POST /tasks/{id}/approve`, `POST /tasks/{id}/reject`) (`PR #159, #165`, `backend/app/api/v1/tasks.py`)
+- ✅ Dhramraj: New Task UI and Plan Approval screen with step preview and risk badges (`PR #154, #161`, `frontend/src/components/tasks/PlanReviewPanel.tsx`)
+- ✅ Sukun: Server-enforced approval gate blocking execution for unapproved plans (`PR #168`, `backend/tests/test_security_w3_approval.py`)
+- ✅ Keval: Acceptance tests for valid plans, rejected plans, and unapproved execution attempts (`backend/tests/test_week3_day1_day2.py`)
 - ✅ Om: Plan versioning, immutable approval/rejection persistence, approval invalidation upon plan edits, `TaskHistoryService`, and test suite (`test_om_w3_d2_planning_persistence.py`, 15/15 tests passing)
 
 ## WEEK 3 — Day 3 Isolated Workspace, Tool Routing & Code Execution
@@ -629,19 +629,19 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Parth: Task branch isolation creating `agent/task-<id>` from base revision (`GitBranchService.setup_task_branch_isolation()`, `resolve_base_revision()`, `create_isolated_task_workspace()`, `POST /api/v1/repositories/{id}/source/task-branch/isolate`, `test_week3_day3_task_branch_isolation.py`, `PR #149`)
 - ✅ Devu: Policy-enforced `ToolRouter` and `PolicyEngine` enforcing command allowlists and argument schemas (`backend/agent/tools/router.py`, `backend/tests/test_tool_router.py`)
 - ✅ Meet: Agent execution loop executing approved plan steps with anti-cyclic loop detection (`backend/ai/services/agent_execution_loop.py`, `backend/tests/test_meet_w3_all_days.py`)
-- ⬜ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`)
-- ⬜ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs
-- ⬜ Sukun: Tool-level permission checks and workspace boundary security tests
+- ✅ Yug: Execution APIs (`POST /tasks/{id}/execute`, `/pause`, `/resume`, `/cancel`, `/events`) (`PR #159, #165`, `backend/app/api/v1/tasks.py`)
+- ✅ Dhramraj: Live Execution Timeline UI tracking step progress and terminal logs (`PR #154, #161`, `frontend/src/components/tasks/ExecutionTimeline.tsx`)
+- ✅ Sukun: Tool-level permission checks and workspace boundary security tests (`PR #169`, `backend/app/core/tool_api_policy.py`, `backend/tests/test_security_w3_tools.py`)
 - ✅ Om: Workspace lifecycle persistence (READY, IN_USE, CLEANUP_PENDING, CLEANED), execution tracking start/finish, tool invocation audit logging with secret scrubbing, and execution precondition enforcement
 
 ## WEEK 3 — Day 4 Restricted Test Execution & Bounded Auto-Fix
 
 - ✅ Prit: Restricted test runner (`WorkspaceTestRunner`) executing `pytest` or `npm test` with timeout, 100 KB output bounds, failure classification, bounded 3-attempt auto-repair loop, duplicate patch rejection, and ToolRouter integration (`Docs/restricted_test_runner_bounded_repair_audit.md`, `backend/sandbox/test_runner.py`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/tests/test_prit_w3_d4_restricted_test_runner.py`)
-- ⬜ Devu: Command allowlist enforcement and argument validation
+- ✅ Devu: Command allowlist enforcement and argument validation (`PR #163`, `backend/agent/tools/router.py`, `backend/sandbox/test_runner.py`)
 - ✅ Meet: Bounded self-repair loop: collect failures -> targeted patch -> re-test -> max 3 repair attempts (`backend/ai/services/bounded_repair_loop.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Dev: Failure traceback diagnosis and repair patch validation (`backend/app/schemas/repair.py`, `backend/app/services/repair_service.py`, `backend/tests/test_dev_w3_day4_repair.py`)
-- ⬜ Yug: Test and repair progress APIs and failure reporting
-- ⬜ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts
+- ✅ Yug: Test and repair progress APIs and failure reporting (`PR #159, #165`, `backend/app/api/v1/tasks.py`)
+- ✅ Dhramraj: Test execution & repair attempt counter UI with human intervention alerts (`PR #154, #161`, `frontend/src/components/tasks/TestExecutionPanel.tsx`, `RepairBudgetTracker.tsx`)
 - ✅ Keval: Acceptance tests for passing tests, failing tests, repair success, and 3-attempt ceiling (`backend/tests/test_week3_day4_test_runner_and_repair.py`)
 - ✅ Om: Test run execution logging (counts, exit codes, durations, sanitized logs), bounded repair loop accounting enforcing strict 3-attempt ceiling across worker restarts, and failure transition guards
 
@@ -651,19 +651,19 @@ This document breaks each day into specific, atomic tasks for every team member.
 - ✅ Dev: `IndependentVerifier` returning PASS/FAIL/INCONCLUSIVE and generating Markdown PR summary (`backend/app/schemas/verification.py`, `backend/app/services/independent_verifier.py`, `backend/tests/test_dev_w3_day5_verification.py`)
 - ✅ Meet: Requirement-to-code verification comparing final diff against original plan (`backend/ai/services/requirement_verifier.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Parth: Push `agent/task-<id>` branch and open GitHub Draft PR via `GitHubService.create_pull_request(draft=True)` (`GitBranchService.publish_task_draft_pr()`, `POST /repositories/{id}/source/task/publish-pr`)
-- ⬜ Yug: `POST /api/v1/tasks/{id}/create-pr` & `POST /repositories/{id}/source/task/publish-pr` verifying task passed verification before opening PR
-- ⬜ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR
+- ✅ Yug: `POST /api/v1/tasks/{id}/create-pr` & `POST /repositories/{id}/source/task/publish-pr` verifying task passed verification before opening PR (`PR #165`)
+- ✅ Dhramraj: PR Status screen with side-by-side diff viewer and link to created GitHub Draft PR (`PR #161`, `frontend/src/components/tasks/PublicationPanel.tsx`)
 - ✅ Om: Independent verification persistence, publication authorization gate, GitHub Draft PR persistence, and end-to-end traceability graph linking Finding -> Issue/Task -> Plan -> Approval -> Workspace -> Execution -> Test Run -> Repair -> Verification -> Draft PR (15/15 Day 5 tests, 54/54 Week 3 suite passing)
-- ✅ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff (`scan_diff_for_secrets`, `check_forbidden_files`)
+- ✅ Sukun: PR security checks ensuring zero credentials in PR title, body, or diff (`scan_diff_for_secrets`, `check_forbidden_files`, `PR #171`)
 - ✅ Keval: Independent verification and publication acceptance tests (`backend/tests/test_week3_day5_verification_and_pr.py`)
 
 ## WEEK 3 — Day 6 Security, Reliability & Performance Hardening
 
 - ✅ Prit: Sandbox reliability, worker crash and restart recovery, stale base-revision divergence detection, post-verification diff immutability, hardened cleanup & orphan collection, sandbox invariant auditing, task mutex locking, secret sanitization, and ToolRouter bridge dispatch (`Docs/reliability_security_and_failure_recovery_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`, `backend/sandbox/command_runner.py`, `backend/tests/test_prit_w3_d6_reliability_and_recovery.py`)
-- ⬜ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks)
+- ✅ Sukun: Full attack matrix testing (prompt injection, path traversal, unauthorized approvals, secret leaks) (`PR #172`, `Docs/security/week3_security_report.md`, `backend/tests/test_security_w3_regression.py`)
 - ✅ Meet: Retrieval latency optimization (target P95 < 400ms) and agent token budget checks (`backend/ai/services/retrieval_optimizer.py`, `backend/tests/test_meet_w3_all_days.py`)
 - ✅ Dev: AI quality evaluation, false-positive metrics, and Gemini/Groq provider validation (`Docs/week3_day6_ai_quality_report.md`, `backend/app/schemas/ai_quality.py`, `backend/ai/services/ai_quality_evaluator.py`, `backend/tests/test_dev_w3_day6_ai_quality.py`)
-- ⬜ Yug: API reliability, concurrent request handling, and error response standardization
+- ✅ Yug: API reliability, concurrent request handling, and error response standardization (`PR #165`, `backend/tests/test_yug_w3_day5_day6_day7_acceptance.py`)
 - ✅ Om: Database query performance, index optimization across all tables, append-only audit event consistency and immutability, worker restart crash recovery & retry budget preservation (20/20 tests passing) (`Docs/persistence_week3_day6_day7_report.md`, `backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py`)
 - ✅ Keval: Security, reliability and recovery acceptance tests (`backend/tests/test_week3_day6_reliability_and_recovery.py`)
 
@@ -671,9 +671,10 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 - ✅ Prit: End-to-end sandbox lifecycle acceptance, Scenarios A through J verification, Week 2 intelligence integration, SLA benchmarking (<1s creation/recovery), zero secret leakage audit trail, and published final acceptance report (25/25 acceptance tests passing, 194/194 total Week 3 tests passing) (`Docs/week3_day7_workspace_acceptance_report.md`, `backend/tests/test_prit_w3_d7_acceptance.py`)
 - ✅ Om: Full 17-step end-to-end workflow persistence acceptance, zero manual intervention verification between plan approval and PR creation, and query SLA benchmarks (74/74 cumulative Week 3 persistence tests passing) (`Docs/persistence_week3_day6_day7_report.md`, `backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py`)
-- ⬜ All Leads: Execute full 17-step end-to-end acceptance demo on a real GitHub repository
-- ⬜ Verify complete chain: Finding -> GitHub Issue -> Task Plan -> Approval -> Edit -> Test & Repair -> Verify -> Draft PR
-- ⬜ Verify zero manual interventions between Plan Approval and Draft PR creation
+- ✅ Meet: End-to-end autonomous AI lifecycle acceptance, zero manual intervention verification, P95 latency SLA benchmarks, and published Week 3 AI acceptance report (19/19 tests passing) (`Docs/week3_day7_ai_acceptance_report.md`, `backend/tests/test_meet_w3_all_days.py`)
+- ✅ All Leads: Execute full 17-step end-to-end acceptance demo on a real GitHub repository (`backend/tests/test_week3_day7_e2e_acceptance.py`, `backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py`)
+- ✅ Verify complete chain: Finding -> GitHub Issue -> Task Plan -> Approval -> Edit -> Test & Repair -> Verify -> Draft PR
+- ✅ Verify zero manual interventions between Plan Approval and Draft PR creation
 - ✅ Keval: Publish final engineering acceptance report and release signoff (`backend/tests/test_week3_day7_e2e_acceptance.py`)
 
 ---

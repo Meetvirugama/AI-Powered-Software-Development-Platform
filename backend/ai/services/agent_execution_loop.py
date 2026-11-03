@@ -24,7 +24,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
@@ -40,7 +40,9 @@ from sandbox.exceptions import (
     WorkspaceError,
     WorkspaceStateError,
 )
-from sandbox.workspace_manager import WorkspaceManager
+
+if TYPE_CHECKING:
+    from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 

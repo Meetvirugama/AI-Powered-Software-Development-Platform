@@ -20,7 +20,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from app.core.secret_redaction import redact
 from app.schemas.repair import (
@@ -43,7 +43,9 @@ from app.services.repair_service import (
 )
 from sandbox.exceptions import WorkspaceError
 from sandbox.test_runner import WorkspaceTestRunner
-from sandbox.workspace_manager import WorkspaceManager
+
+if TYPE_CHECKING:
+    from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 

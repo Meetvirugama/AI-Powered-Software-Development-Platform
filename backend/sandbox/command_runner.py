@@ -173,6 +173,10 @@ class WorkspaceCommandRunner:
         )
 
         env = self.sanitize_environment(custom_env)
+        ws_str = str(workspace_root.resolve())
+        cur_pp = env.get("PYTHONPATH", "")
+        if ws_str not in cur_pp:
+            env["PYTHONPATH"] = f"{ws_str}:.:{cur_pp}" if cur_pp else f"{ws_str}:."
         exec_cmd = command
         if command == "python" and not shutil.which("python"):
             exec_cmd = shutil.which("python3") or sys.executable
