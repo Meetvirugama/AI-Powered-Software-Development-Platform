@@ -18,6 +18,15 @@ from app.services.review_history_service import ReviewHistoryService
 from app.services.task_history_service import TaskHistoryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 from app.services.test_generation_orchestrator import LLMTestGenerationService
+from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
+from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
+from app.services.independent_verifier import IndependentVerifier
+from app.services.task_recovery import TaskRecoveryService
+from app.services.task_orchestrator import (
+    PipelineExecutionResult,
+    PipelineStepRecord,
+    TaskExecutionOrchestrator,
+)
 
 __all__ = [
     "AgentBranchInfo",
@@ -34,5 +43,14 @@ __all__ = [
     "ReviewHistoryService",
     "TaskHistoryService",
     "TestGenerationHistoryService",
+    "BoundedRepairManager",
+    "IndependentVerifier",
+    "TaskRecoveryService",
+    "TaskExecutionOrchestrator",
+    "PipelineExecutionResult",
+    "PipelineStepRecord",
+    "CommandPolicyValidator",
+    "MAX_TASK_REPAIR_ATTEMPTS",
+    "RestrictedTestRunner",
     "format_agent_branch_name",
 ]

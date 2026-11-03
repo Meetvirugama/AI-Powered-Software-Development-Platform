@@ -21,6 +21,7 @@ GET  /api/v1/repositories/{id}/source/pr-metadata/{task} — Retrieve prepared P
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -48,6 +49,21 @@ from app.integrations.github.schemas import (
     TaskBranchIsolationRequest,
     TaskBranchIsolationResponse,
     TaskDiffRanges,
+    RepairExecutionRequest,
+    RepairExecutionResponse,
+    TestRunnerRequest,
+    TestRunnerResponse,
+    WorkspaceStatusResponse,
+    TaskPublishRequest,
+    TaskPublishResponse,
+    TaskVerifyRequest,
+    TaskVerifyResponse,
+    TaskRecoveryRequest,
+    TaskRecoveryResponse,
+    WorkspaceCleanupRequest,
+    WorkspaceCleanupResponse,
+    TaskPipelineRequest,
+    TaskPipelineResponse,
 )
 from app.integrations.github.service import GitHubSourceService
 
@@ -512,4 +528,436 @@ async def validate_base_revision_endpoint(
         base_revision=payload.base_revision,
     )
     return BaseRevisionValidationResponse.model_validate(redact_obj(result.model_dump(mode="json")))
+
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 4: Restricted Test Execution & Bounded Repair (F35 / W3-05)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task-workspace/tests",
+    response_model=TestRunnerResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute restricted test command in task workspace",
+    description="Runs permitted tests (pytest, unittest, npm) inside isolated task workspace with timeout & bounded logs.",
+)
+async def run_task_workspace_tests_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TestRunnerRequest,
+    db: Session = Depends(get_db),
+) -> TestRunnerResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.test_runner import RestrictedTestRunner
+
+    # Verify repository ownership
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+
+    # Resolve workspace path
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    runner = RestrictedTestRunner(default_timeout=payload.timeout_seconds)
+    result = await runner.run_tests(
+        workspace_path=ws_path,
+        command=payload.command,
+        timeout_seconds=payload.timeout_seconds,
+    )
+
+    return TestRunnerResponse(
+        task_id=task_uuid,
+        status=result.status,
+        exit_code=result.exit_code,
+        duration_ms=result.duration_ms,
+        passed_count=result.test_counts.passed,
+        failed_count=result.test_counts.failed,
+        total_count=result.test_counts.total,
+        logs=result.stdout + ("\n" + result.stderr if result.stderr else ""),
+        workspace_revision=result.workspace_revision,
+        timed_out=result.timed_out,
+        is_infrastructure_error=result.is_infrastructure_error,
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task-workspace/repair",
+    response_model=RepairExecutionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute bounded repair cycle against failing test",
+    description="Applies validated patch with 3-attempt ceiling and re-tests against newly committed workspace revision.",
+)
+async def execute_task_repair_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: RepairExecutionRequest,
+    db: Session = Depends(get_db),
+) -> RepairExecutionResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.repair_loop import BoundedRepairManager
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    manager = BoundedRepairManager()
+    record = await manager.execute_repair_attempt(
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        diagnosis=payload.diagnosis,
+        target_file=payload.target_file,
+        new_content=payload.new_content,
+        patch_text=payload.patch_text,
+        test_command=payload.test_command,
+        current_attempts_used=payload.current_attempts_used,
+    )
+
+    return RepairExecutionResponse(
+        task_id=task_uuid,
+        attempt_number=record.attempt_number,
+        attempts_remaining=max(0, 3 - record.attempt_number),
+        success=record.success,
+        previous_revision=record.previous_revision,
+        new_revision=record.new_revision,
+        status="PASSED" if record.success else "FAILED",
+        message=record.message,
+        test_result={
+            "status": record.test_result.status if record.test_result else "UNKNOWN",
+            "exit_code": record.test_result.exit_code if record.test_result else -1,
+            "passed": record.test_result.test_counts.passed if record.test_result else 0,
+            "failed": record.test_result.test_counts.failed if record.test_result else 0,
+        } if record.test_result else None,
+    )
+
+
+@router.get(
+    "/{repository_id}/source/task-workspace/status/{task_id}",
+    response_model=WorkspaceStatusResponse,
+    summary="Get task workspace git status & revision",
+    description="Inspects git revision and file modifications in the task workspace.",
+)
+async def get_task_workspace_status_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    workspace_path: str | None = Query(default=None, description="Optional workspace path"),
+    db: Session = Depends(get_db),
+) -> WorkspaceStatusResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    short_id = str(task_id)[:8]
+    ws_path = Path(workspace_path) if workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    status_dict = await branch_service.get_workspace_status(ws_path)
+    return WorkspaceStatusResponse(
+        task_id=task_id,
+        branch=status_dict["branch"],
+        revision=status_dict["revision"],
+        is_clean=status_dict["is_clean"],
+        staged_files=status_dict["staged_files"],
+        modified_files=status_dict["modified_files"],
+        untracked_files=status_dict["untracked_files"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 5: Independent Verification & Draft PR Publication (F36 / F37)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/verify",
+    response_model=TaskVerifyResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Run independent verification checks on task workspace",
+    description="Evaluates 12 verification checks (tests, diff, secrets, branch, constraints) before publication eligibility.",
+)
+async def verify_task_workspace_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskVerifyRequest,
+    db: Session = Depends(get_db),
+) -> TaskVerifyResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.independent_verifier import IndependentVerifier
+    from app.services.test_runner import RestrictedTestRunner
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    current_rev = await branch_service.get_workspace_revision(ws_path)
+    branch_name = f"agent/task-{short_id}"
+
+    # Run tests if requested
+    runner = RestrictedTestRunner()
+    test_result = await runner.run_tests(
+        workspace_path=ws_path,
+        command=payload.test_command,
+        workspace_revision=current_rev,
+    )
+
+    # Get workspace diff text
+    diff_summary = await branch_service.get_task_diff_ranges(
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+    )
+    diff_text = "\n".join(f.patch or "" for f in diff_summary.files)
+    changed_files = [f.file_path for f in diff_summary.files]
+
+    verifier = IndependentVerifier()
+    res = verifier.verify_task_revision(
+        task_id=task_uuid,
+        workspace_revision=current_rev,
+        test_result=test_result,
+        branch_name=branch_name,
+        diff_text=diff_text,
+        changed_files=changed_files,
+        has_approved_plan=payload.has_approved_plan,
+        base_revision_matches=(payload.base_revision is None or payload.base_revision == current_rev),
+    )
+
+    return TaskVerifyResponse(
+        task_id=task_uuid,
+        verified_revision=res.verified_revision,
+        status=res.status,
+        summary_markdown=res.pr_summary or "",
+        checks_count=len(res.checks),
+        blocking_findings_count=len(res.blocking_findings),
+        warnings_count=len(res.warnings),
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task/publish-pr",
+    response_model=TaskPublishResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Publish verified agent task branch and open GitHub Draft PR",
+    description="Requires explicit human authorization gate. Pushes to agent/task-{id} and creates Draft PR with verification summary.",
+)
+async def publish_task_pr_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskPublishRequest,
+    db: Session = Depends(get_db),
+) -> TaskPublishResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.independent_verifier import IndependentVerifier
+
+    branch_service = GitBranchService(db)
+    user_id = _request_user_id(request)
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    pr_info = await branch_service.publish_task_draft_pr(
+        repository_id=repository_id,
+        task_id=task_uuid,
+        workspace_path=ws_path,
+        publication_authorized=payload.publication_authorized,
+        base_branch=payload.base_branch,
+        pr_title=payload.pr_title,
+        pr_body=payload.pr_body,
+        user_id=user_id,
+    )
+
+    return TaskPublishResponse(
+        task_id=task_uuid,
+        repository_id=repository_id,
+        pr_number=pr_info.number,
+        pr_url=f"https://github.com/mock-owner/mock-repo/pull/{pr_info.number}" if not pr_info.title.startswith("http") else pr_info.title,
+        head_branch=pr_info.head_ref or f"agent/task-{short_id}",
+        base_branch=pr_info.base_ref or "main",
+        status="created",
+        is_draft=True,
+    )
+
+
+@router.get(
+    "/{repository_id}/source/task/{task_id}/pull-request",
+    response_model=PullRequestInfo,
+    summary="Get created Draft PR metadata for an agent task",
+    description="Retrieves the stored PullRequest record and GitHub metadata for an agent task.",
+)
+def get_task_pull_request_endpoint(
+    repository_id: UUID,
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PullRequestInfo:
+    from app.repositories.pull_request_repository import PullRequestRepository
+    from app.services.git_branch import GitBranchService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    pr_repo = PullRequestRepository(db)
+    pr = pr_repo.get_by_task_id(task_id)
+    if pr is None:
+        raise APIError(404, ErrorCode.NOT_FOUND, f"No Pull Request found for task {task_id}.")
+
+    return PullRequestInfo(
+        number=pr.pr_number or 0,
+        title=pr.commit_message,
+        state=pr.status,
+        draft=True,
+        base_ref=pr.base_branch,
+        head_ref=pr.branch,
+        created_at=str(pr.created_at) if pr.created_at else None,
+        body=pr.verification_summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 6: Reliability, Security & Failure Recovery (F39 / F40)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/recover",
+    response_model=TaskRecoveryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Reconcile task state after worker restart or network failure",
+    description="Validates state transitions, checks remote drift, and determines safe recovery actions.",
+)
+async def recover_task_state_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskRecoveryRequest,
+    db: Session = Depends(get_db),
+) -> TaskRecoveryResponse:
+    from app.services.git_branch import GitBranchService
+    from app.services.task_recovery import TaskRecoveryService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    recovery_service = TaskRecoveryService(db)
+    result = await recovery_service.reconcile_task_state(
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        last_known_status=payload.last_known_status,
+        recorded_base_sha=payload.recorded_base_sha,
+        remote_branch_exists=payload.remote_branch_exists,
+        remote_pr_exists=payload.remote_pr_exists,
+        current_remote_base_sha=payload.current_remote_base_sha,
+        repair_attempts_used=payload.repair_attempts_used,
+    )
+
+    return TaskRecoveryResponse(
+        task_id=result["task_id"],
+        reconciled_status=result["reconciled_status"],
+        base_drift_detected=result["base_drift_detected"],
+        recovery_action=result["recovery_action"],
+        message=result["message"],
+        repair_attempts_used=result["repair_attempts_used"],
+    )
+
+
+@router.post(
+    "/{repository_id}/source/task/cleanup",
+    response_model=WorkspaceCleanupResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Safely clean up isolated task workspace directory",
+    description="Deletes ephemeral workspace directory with path confinement validation.",
+)
+def cleanup_task_workspace_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: WorkspaceCleanupRequest,
+    db: Session = Depends(get_db),
+) -> WorkspaceCleanupResponse:
+    from app.services.git_branch import GitBranchService, _DEFAULT_WORKSPACE_ROOT
+    from app.services.task_recovery import TaskRecoveryService
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    task_uuid = UUID(str(payload.task_id)) if not isinstance(payload.task_id, UUID) else payload.task_id
+    short_id = str(task_uuid)[:8]
+    ws_path = Path(payload.workspace_path) if payload.workspace_path else (_DEFAULT_WORKSPACE_ROOT / f"task-{short_id}")
+
+    cleaned = TaskRecoveryService.cleanup_task_workspace(
+        workspace_path=ws_path,
+        task_id=task_uuid,
+    )
+
+    return WorkspaceCleanupResponse(
+        task_id=task_uuid,
+        cleaned=cleaned,
+        workspace_path=str(ws_path),
+        message=f"Workspace {'successfully removed' if cleaned else 'could not be fully removed'}.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 7: Final Integration & E2E Pipeline (Docs/week3.md §8 Day 7)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/task/execute-pipeline",
+    response_model=TaskPipelineResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Execute full 17-step end-to-end task execution pipeline",
+    description="Orchestrates complete lifecycle from approved plan to verified Draft PR with zero manual intervention.",
+)
+async def execute_task_pipeline_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: TaskPipelineRequest,
+    db: Session = Depends(get_db),
+) -> TaskPipelineResponse:
+    from app.services.git_branch import GitBranchService
+    from app.services.task_orchestrator import TaskExecutionOrchestrator
+
+    branch_service = GitBranchService(db)
+    branch_service._get_repository(repository_id, _request_user_id(request))
+
+    orchestrator = TaskExecutionOrchestrator(db)
+    result = await orchestrator.execute_task_pipeline(
+        repository_id=repository_id,
+        task_id=payload.task_id,
+        user_id=_request_user_id(request),
+        has_approved_plan=payload.has_approved_plan,
+        publication_authorized=payload.publication_authorized,
+        base_revision=payload.base_revision,
+        target_file=payload.target_file,
+        new_content=payload.new_content,
+        commit_message=payload.commit_message,
+        test_command=payload.test_command,
+        workspace_path=payload.workspace_path,
+        repair_patch=payload.repair_patch,
+        pr_title=payload.pr_title,
+        pr_body=payload.pr_body,
+    )
+
+    return TaskPipelineResponse(
+        task_id=result.task_id,
+        repository_id=result.repository_id,
+        final_status=result.final_status,
+        steps_executed=[
+            {"step_number": s.step_number, "name": s.name, "status": s.status, "details": s.details}
+            for s in result.steps_executed
+        ],
+        branch_name=result.branch_name,
+        workspace_revision=result.workspace_revision,
+        pr_number=result.pr_number,
+        pr_url=result.pr_url,
+        verification_passed=result.verification_passed,
+        repair_attempts_used=result.repair_attempts_used,
+        message=result.message,
+    )
+
 

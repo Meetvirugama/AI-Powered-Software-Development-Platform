@@ -166,8 +166,8 @@ class TaskHistoryService:
         with self._get_session(db) as session:
             repo = TaskRepository(session)
             return repo.transition_status(
-                task_id=task_id,
-                repository_id=repository_id,
+                task_or_id=task_id,
+                repository_id_or_status=repository_id,
                 new_status=new_status,
                 user_id=user_id,
                 reason=reason,

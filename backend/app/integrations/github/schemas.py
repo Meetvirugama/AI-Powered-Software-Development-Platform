@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -442,3 +442,188 @@ class BaseRevisionValidationResponse(BaseModel):
     commit_sha: str
     ref_type: str = "branch"  # "branch" | "commit" | "tag"
     is_valid: bool = True
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 4: Restricted Test Execution & Bounded Repair (F35 / W3-05)
+# ---------------------------------------------------------------------------
+
+class TestRunnerRequest(BaseModel):
+    """Request to execute restricted test suite inside task workspace."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    command: list[str] | str = Field(default="pytest", description="Permitted test command (pytest, python -m unittest, npm test)")
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0, description="Test execution timeout limit in seconds")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class TestRunnerResponse(BaseModel):
+    """Sanitized and bounded outcome of restricted test execution."""
+    task_id: UUID
+    status: str = Field(..., description="Outcome: PASSED, FAILED, TIMEOUT, or INFRASTRUCTURE_ERROR")
+    exit_code: int = 0
+    duration_ms: int = 0
+    passed_count: int = 0
+    failed_count: int = 0
+    total_count: int = 0
+    logs: str = ""
+    workspace_revision: Optional[str] = None
+    timed_out: bool = False
+    is_infrastructure_error: bool = False
+
+
+class RepairExecutionRequest(BaseModel):
+    """Request to execute bounded self-repair cycle against a failing test."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    diagnosis: str = Field(..., min_length=1, description="Root cause failure analysis")
+    target_file: str = Field(..., min_length=1, description="Repository-relative file path to repair")
+    new_content: Optional[str] = Field(default=None, description="Updated file content")
+    patch_text: Optional[str] = Field(default=None, description="Unified diff patch to apply")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to verify repair")
+    current_attempts_used: Optional[int] = Field(default=None, ge=0, le=3, description="Optional override of used repair attempts")
+
+
+class RepairExecutionResponse(BaseModel):
+    """Audit record and outcome of bounded self-repair attempt."""
+    task_id: UUID
+    attempt_number: int
+    attempts_remaining: int
+    success: bool
+    previous_revision: Optional[str] = None
+    new_revision: Optional[str] = None
+    status: str
+    message: str
+    test_result: Optional[dict[str, Any]] = None
+
+
+class WorkspaceStatusResponse(BaseModel):
+    """Git revision and file modification status of task workspace."""
+    task_id: UUID
+    branch: str
+    revision: str
+    is_clean: bool
+    staged_files: list[str] = Field(default_factory=list)
+    modified_files: list[str] = Field(default_factory=list)
+    untracked_files: list[str] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 5: Independent Verification & Draft PR (F36 / F37)
+# ---------------------------------------------------------------------------
+
+class TaskPublishRequest(BaseModel):
+    """Request to authorize branch push and open a GitHub Draft PR."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    publication_authorized: bool = Field(default=False, description="Explicit human approval gate for pushing & opening PR")
+    pr_title: Optional[str] = Field(default=None, description="Custom Pull Request title")
+    pr_body: Optional[str] = Field(default=None, description="Custom Pull Request Markdown description")
+    base_branch: Optional[str] = Field(default=None, description="Target base branch (defaults to repo default branch)")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class TaskPublishResponse(BaseModel):
+    """Result of publishing verified task branch and opening Draft PR."""
+    task_id: UUID
+    repository_id: UUID
+    pr_number: int
+    pr_url: str
+    head_branch: str
+    base_branch: str
+    status: str = "created"
+    is_draft: bool = True
+
+
+class TaskVerifyRequest(BaseModel):
+    """Request to execute independent verification suite against task workspace."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+    has_approved_plan: bool = Field(default=True, description="Whether plan was explicitly approved by user")
+    base_revision: Optional[str] = Field(default=None, description="Base commit SHA recorded in task plan")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to evaluate")
+
+
+class TaskVerifyResponse(BaseModel):
+    """Structured result of independent verification evaluation."""
+    task_id: UUID
+    verified_revision: str
+    status: str
+    summary_markdown: str
+    checks_count: int = 0
+    blocking_findings_count: int = 0
+    warnings_count: int = 0
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 6: Security, Reliability & Failure Recovery (F39 / F40)
+# ---------------------------------------------------------------------------
+
+class TaskRecoveryRequest(BaseModel):
+    """Request to reconcile in-flight task state across worker restart or network failure."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    last_known_status: str = Field(..., description="Last known status of task before restart or failure")
+    recorded_base_sha: Optional[str] = Field(default=None, description="Recorded base revision SHA at plan approval")
+    remote_branch_exists: bool = Field(default=False, description="Whether agent branch exists on remote GitHub")
+    remote_pr_exists: bool = Field(default=False, description="Whether Draft PR already exists on remote GitHub")
+    current_remote_base_sha: Optional[str] = Field(default=None, description="Current remote head SHA of base branch")
+    repair_attempts_used: int = Field(default=0, ge=0, description="Persisted repair attempts budget used")
+
+
+class TaskRecoveryResponse(BaseModel):
+    """Reconciled task state, drift status, and recovery actions."""
+    task_id: UUID
+    reconciled_status: str
+    base_drift_detected: bool
+    recovery_action: str
+    message: str
+    repair_attempts_used: int = 0
+
+
+class WorkspaceCleanupRequest(BaseModel):
+    """Request to safely clean up isolated task workspace directory."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace directory")
+
+
+class WorkspaceCleanupResponse(BaseModel):
+    """Outcome of task workspace directory cleanup."""
+    task_id: UUID
+    cleaned: bool
+    workspace_path: Optional[str] = None
+    message: str
+
+
+# ---------------------------------------------------------------------------
+# Week 3 Day 7: Final Integration & E2E Pipeline (Docs/week3.md §8 Day 7)
+# ---------------------------------------------------------------------------
+
+class TaskPipelineRequest(BaseModel):
+    """Request to execute the full 17-step end-to-end task execution pipeline."""
+    task_id: UUID | str = Field(..., description="Target task ID")
+    has_approved_plan: bool = Field(default=True, description="Human approval gate for task plan")
+    publication_authorized: bool = Field(default=False, description="Human authorization gate for push and Draft PR")
+    base_revision: str = Field(..., description="Target base revision SHA or branch name")
+    target_file: str = Field(..., description="Target file path to modify")
+    new_content: str = Field(..., description="New file content to apply")
+    commit_message: str = Field(..., description="Commit message for workspace commit")
+    test_command: list[str] | str = Field(default="pytest", description="Permitted test command to run")
+    workspace_path: Optional[str] = Field(default=None, description="Path to task workspace")
+    repair_patch: Optional[str] = Field(default=None, description="Optional unified diff patch for self-repair loop")
+    pr_title: Optional[str] = Field(default=None, description="Pull Request title")
+    pr_body: Optional[str] = Field(default=None, description="Pull Request markdown body")
+
+
+class TaskPipelineResponse(BaseModel):
+    """Execution outcome of 17-step end-to-end task pipeline."""
+    task_id: UUID
+    repository_id: UUID
+    final_status: str
+    steps_executed: list[dict[str, Any]] = Field(default_factory=list)
+    branch_name: str
+    workspace_revision: Optional[str] = None
+    pr_number: Optional[int] = None
+    pr_url: Optional[str] = None
+    verification_passed: bool = False
+    repair_attempts_used: int = 0
+    message: str = ""
+
+

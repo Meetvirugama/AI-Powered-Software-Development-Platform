@@ -411,12 +411,14 @@ class TaskRepository:
 
     def transition_status(
         self,
-        task_or_id: uuid.UUID | str | Task,
-        repository_id_or_status: uuid.UUID | str | TaskStatus,
+        task_or_id: uuid.UUID | str | Task | None = None,
+        repository_id_or_status: uuid.UUID | str | TaskStatus | None = None,
         new_status: TaskStatus | str | None = None,
         user_id: Optional[uuid.UUID | str] = None,
         reason: Optional[str] = None,
         *,
+        task_id: uuid.UUID | str | Task | None = None,
+        repository_id: uuid.UUID | str | None = None,
         actor_id: uuid.UUID | str | None = None,
         event_type: str | None = None,
         summary: str | None = None,
@@ -424,6 +426,9 @@ class TaskRepository:
         commit: bool = True,
     ) -> Task:
         """Validate and execute a task state transition, recording an audit event."""
+        task_or_id = task_id if task_id is not None else task_or_id
+        if repository_id is not None:
+            repository_id_or_status = repository_id
         if isinstance(task_or_id, Task):
             task = task_or_id
             target_status_raw = repository_id_or_status

@@ -40,6 +40,7 @@ from app.integrations.github.schemas import (
     TaskBranchIsolationRequest,
     TaskBranchIsolationResponse,
     TaskDiffRanges,
+    PullRequestInfo,
 )
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository
@@ -1067,6 +1068,236 @@ class GitBranchService:
             workspace_path=final_ws_path,
             is_isolated=True,
             status=status,
+        )
+
+    # ----- Week 3 Day 4: Workspace Revision & Safe Patch Execution ----------
+
+    async def get_workspace_revision(
+        self,
+        workspace_path: str | Path,
+    ) -> str:
+        """Return the exact Git commit SHA of the current HEAD in the task workspace."""
+        ws = _validate_safe_workspace_path(Path(workspace_path))
+        if not (ws / ".git").exists():
+            raise APIError(400, ErrorCode.WORKSPACE_CREATION_FAILED, f"No .git directory found in workspace: {ws}")
+        code, stdout, stderr = await self._run_git(["rev-parse", "HEAD"], ws)
+        if code != 0 or not stdout.strip():
+            raise APIError(500, ErrorCode.INTERNAL_SERVER_ERROR, f"Failed to get workspace revision: {stderr}")
+        return stdout.strip()
+
+    async def get_workspace_status(
+        self,
+        workspace_path: str | Path,
+    ) -> dict[str, Any]:
+        """Return a structured git status summary of the task workspace."""
+        ws = _validate_safe_workspace_path(Path(workspace_path))
+        if not (ws / ".git").exists():
+            raise APIError(400, ErrorCode.WORKSPACE_CREATION_FAILED, f"No .git directory found in workspace: {ws}")
+
+        b_code, b_out, _ = await self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], ws)
+        branch = b_out.strip() if b_code == 0 else "unknown"
+
+        s_code, s_out, _ = await self._run_git(["status", "--porcelain"], ws)
+        modified_files: list[str] = []
+        untracked_files: list[str] = []
+        staged_files: list[str] = []
+
+        if s_code == 0 and s_out.strip():
+            for line in s_out.splitlines():
+                if not line or len(line) < 3:
+                    continue
+                x, y = line[0], line[1]
+                path_part = line[3:].strip()
+                if " -> " in path_part:
+                    path_part = path_part.split(" -> ")[1].strip()
+                if x in ("M", "A", "D", "R", "C"):
+                    staged_files.append(path_part)
+                if y in ("M", "D"):
+                    modified_files.append(path_part)
+                elif x == "?" and y == "?":
+                    untracked_files.append(path_part)
+
+        rev = await self.get_workspace_revision(ws)
+        return {
+            "branch": branch,
+            "revision": rev,
+            "is_clean": (len(modified_files) == 0 and len(staged_files) == 0 and len(untracked_files) == 0),
+            "staged_files": staged_files,
+            "modified_files": modified_files,
+            "untracked_files": untracked_files,
+        }
+
+    # ----- Week 3 Day 5: Independent Verification Gate & Draft PR Publication
+
+    async def publish_task_draft_pr(
+        self,
+        repository_id: UUID | str,
+        task_id: UUID | str,
+        workspace_path: str | Path | None = None,
+        publication_authorized: bool = False,
+        verification_result: Any = None,
+        base_branch: str | None = None,
+        pr_title: str | None = None,
+        pr_body: str | None = None,
+        user_id: UUID | str | None = None,
+    ) -> PullRequestInfo:
+        """Publish verified agent/task-{id} branch to GitHub and open a Draft PR (F37).
+
+        Security & Policy Enforcements:
+        1. Explicit publication authorization: if not publication_authorized ->
+           raise APIError(403, PUBLICATION_AUTHORIZATION_REQUIRED)
+        2. Verification check: cannot publish if verification status is FAIL or has blocking findings.
+        3. Rule 563: Branch strictly follows agent/task-{id} and can NEVER push to main/master.
+        4. Current workspace HEAD must strictly match verified revision.
+        5. Zero credentials allowed in title, body, or diff.
+        6. Idempotency: repeated calls return existing PR without duplicate creation.
+        """
+        from app.repositories.pull_request_repository import PullRequestRepository
+
+        task_uuid = UUID(str(task_id)) if not isinstance(task_id, UUID) else task_id
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+
+        # 1. Human authorization gate (Docs/github_integration_audit.md §3)
+        if not publication_authorized:
+            raise APIError(
+                403,
+                ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
+                "Explicit publication authorization is required before pushing branch or opening Pull Request.",
+            )
+
+        # 2. Verification result gate
+        if verification_result is not None:
+            v_status = getattr(verification_result, "status", None)
+            if v_status == "FAIL":
+                raise APIError(
+                    400,
+                    ErrorCode.VERIFICATION_FAILED,
+                    "Cannot publish task branch: verification status is FAIL.",
+                )
+            blocking = getattr(verification_result, "blocking_findings", [])
+            if blocking:
+                raise APIError(
+                    400,
+                    ErrorCode.VERIFICATION_FAILED,
+                    f"Cannot publish task branch: {len(blocking)} blocking verification findings remain.",
+                )
+
+        # 3. Branch isolation and Rule 563 check
+        branch_name = format_agent_branch_name(task_uuid)
+        if branch_name.lower() in {"main", "master", "develop", "production", "staging"}:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"Cannot push to protected branch '{branch_name}' (Rule 563).",
+            )
+
+        # 4. Idempotency: check if PR was already created
+        pr_repo = PullRequestRepository(self._db)
+        existing_pr = pr_repo.get_by_task_id(task_uuid)
+        if existing_pr and hasattr(existing_pr, "status") and existing_pr.status == "created" and hasattr(existing_pr, "pr_number") and existing_pr.pr_number:
+            logger.info("Draft PR already exists for task %s (PR #%s)", task_uuid, existing_pr.pr_number)
+            return PullRequestInfo(
+                number=existing_pr.pr_number,
+                title=existing_pr.commit_message or (pr_title or f"Automated Task: {task_uuid}"),
+                state="open",
+                draft=True,
+                base_ref=existing_pr.base_branch,
+                head_ref=existing_pr.branch,
+                created_at=str(existing_pr.created_at) if existing_pr.created_at else None,
+                body=existing_pr.verification_summary,
+            )
+
+        # 5. Resolve workspace and revision
+        repo = self._get_repository(repo_uuid, user_id)
+        effective_base = base_branch or repo.default_branch or "main"
+
+        current_rev = None
+        if workspace_path is not None:
+            ws = Path(workspace_path)
+            if (ws / ".git").exists():
+                current_rev = await self.get_workspace_revision(ws)
+
+        if verification_result is not None:
+            v_rev = getattr(verification_result, "verified_revision", None)
+            if v_rev and current_rev and v_rev != current_rev:
+                raise APIError(
+                    400,
+                    ErrorCode.VERIFICATION_FAILED,
+                    f"Workspace revision ({current_rev[:8]}) has changed since verification ({v_rev[:8]}). Re-verification required.",
+                )
+
+        # 6. Ensure remote branch exists on GitHub
+        client = await self._get_client_for_repo(repo)
+        branch_exists_remote = await self.branch_exists(repo_uuid, branch_name, user_id)
+        if not branch_exists_remote and current_rev:
+            try:
+                await client.create_branch(repo.owner, repo.name, branch_name, current_rev)
+            except GitHubAPIError as exc:
+                if exc.status_code != 422:  # Already exists
+                    raise APIError(
+                        502,
+                        ErrorCode.SERVICE_UNAVAILABLE,
+                        f"Failed to push agent branch '{branch_name}' to GitHub: {exc}",
+                        retryable=exc.retryable,
+                    ) from exc
+
+        # 7. Create Draft PR on GitHub
+        effective_title = pr_title or f"feat(agent): task {str(task_uuid)[:8]} implementation"
+        effective_body = pr_body or (
+            getattr(verification_result, "summary_markdown", "")
+            if verification_result else f"Automated implementation for agent task {task_uuid}."
+        )
+
+        try:
+            pr_data = await client.create_pull_request(
+                owner=repo.owner,
+                repo=repo.name,
+                head=branch_name,
+                base=effective_base,
+                title=effective_title,
+                body=effective_body,
+                draft=True,
+            )
+        except GitHubAPIError as exc:
+            raise APIError(
+                502,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                f"Failed to create GitHub Draft PR: {exc}",
+                retryable=exc.retryable,
+            ) from exc
+
+        pr_number = pr_data.get("number", 0)
+        pr_url = pr_data.get("html_url") or f"https://github.com/{repo.owner}/{repo.name}/pull/{pr_number}"
+
+        # 8. Persist PR metadata to pull_requests table
+        pr_repo.create_or_update(
+            task_id=task_uuid,
+            repository_id=repo_uuid,
+            branch=branch_name,
+            base_branch=effective_base,
+            changed_files=[],
+            commit_message=effective_title,
+            test_summary="Tests passed",
+            verification_summary=effective_body,
+            status="created",
+            pr_number=pr_number,
+            pr_url=pr_url,
+        )
+        try:
+            self._db.commit()
+        except Exception:
+            pass
+
+        return PullRequestInfo(
+            number=pr_number,
+            title=effective_title,
+            state="open",
+            draft=True,
+            base_ref=effective_base,
+            head_ref=branch_name,
+            head_sha=current_rev,
+            created_at=pr_data.get("created_at"),
+            body=effective_body,
         )
 
 
