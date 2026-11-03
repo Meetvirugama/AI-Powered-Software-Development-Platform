@@ -665,12 +665,6 @@ class TaskExecutionOrchestrator:
             self.workspace_manager.transition_state(str(task.id), WorkspaceStatus.IN_USE)
 
         if task.repair_attempts_used >= task.repair_attempts_max:
-            task_repo.increment_repair_attempt(
-                task_id=task.id,
-                repository_id=task.repository_id,
-                failure_classification="RETRY_BUDGET_EXHAUSTED",
-                diagnosis="Maximum 3 repair attempts already exhausted.",
-            )
             raise APIError(
                 409,
                 ErrorCode.RETRY_BUDGET_EXHAUSTED,

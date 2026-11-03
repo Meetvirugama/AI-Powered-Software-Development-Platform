@@ -34,7 +34,7 @@ from app.models.task import (
     WorkspaceStatus as DBWorkspaceStatus,
 )
 from app.repositories.repository_repository import RepositoryRepository
-from app.repositories.task_repository import TaskRepository
+from app.repositories.task_repository import PlanNotFoundError, TaskRepository
 from app.schemas.plan import (
     PlanApprovalRequest,
     PlanRejectionRequest,
@@ -664,13 +664,20 @@ def approve_task_plan(
     task_repo = TaskRepository(db)
 
     effective_comment = (body.comment or body.notes) if body else None
-    approval = task_repo.approve_plan(
-        task=task,
-        approver_id=user_id,
-        plan_version=body.plan_version if body else None,
-        base_revision=body.base_revision if body else None,
-        comment=effective_comment,
-    )
+    try:
+        approval = task_repo.approve_plan(
+            task=task,
+            approver_id=user_id,
+            plan_version=body.plan_version if body else None,
+            base_revision=body.base_revision if body else None,
+            comment=effective_comment,
+        )
+    except PlanNotFoundError as exc:
+        raise APIError(
+            409,
+            ErrorCode.PLAN_VERSION_MISMATCH,
+            str(exc),
+        )
     approval_resp = _serialize_approval_record(approval, task)
     task_detail = _serialize_task_detail(task, task_repo).model_dump(mode="json")
     merged = {**task_detail, **approval_resp.model_dump(mode="json")}
