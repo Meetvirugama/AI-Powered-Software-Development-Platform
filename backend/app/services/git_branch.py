@@ -94,9 +94,11 @@ class CommitResult:
 def format_agent_branch_name(task_id: UUID | str) -> str:
     """Format an agent branch name following the convention: agent/task-{task_id}.
 
-    Security (W2 Day 7):
+    Security (W2 Day 7 & Bug 5):
     - Strips unsafe characters and rejects empty or option-like task_ids so branch names
       cannot inject git CLI flags or ref traversal (`..`).
+    - Extracts 8-char prefix for standard UUIDs while preserving unique slugs for
+      hyphenated non-UUID task identifiers (e.g. 'task-scenario-1' -> 'agent/task-scenario-1').
     """
     raw = str(task_id or "").strip()
     if not raw or "\x00" in raw or ".." in raw or raw.startswith("-"):
@@ -105,8 +107,15 @@ def format_agent_branch_name(task_id: UUID | str) -> str:
             ErrorCode.INVALID_REQUEST,
             "Invalid task_id for agent branch name.",
         )
-    if "-" in raw:
-        short_id = raw.split("-")[0]
+    uuid_match = re.match(
+        r"^([0-9a-fA-F]{8})-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+        raw,
+    )
+    if uuid_match:
+        short_id = uuid_match.group(1)
+    elif "-" in raw:
+        stripped = re.sub(r"^(?:agent/)?task[-_]", "", raw, flags=re.IGNORECASE)
+        short_id = stripped[:24] if stripped else raw.split("-")[0]
     else:
         short_id = raw[:8] if len(raw) >= 8 else raw
     cleaned_short = _SAFE_TASK_ID_RE.sub("", short_id).lstrip(".-")
@@ -1422,4 +1431,3 @@ def parse_unified_diff(diff_text: str) -> list[FileDiffRange]:
 
     flush_current()
     return files
-

@@ -352,7 +352,21 @@ class WorkspaceManager:
                     continue
                 dest = workspace_path / item.name
                 if item.is_dir():
-                    shutil.copytree(item, dest, symlinks=True, ignore=shutil.ignore_patterns(".git*", "__pycache__"))
+                    resolved_repo_root = repo_root.resolve()
+
+                    def _ignore_unsafe_entries(src_dir: str, names: list[str]) -> set[str]:
+                        ignored = set(shutil.ignore_patterns(".git*", "__pycache__")(src_dir, names))
+                        for name in names:
+                            candidate = Path(src_dir) / name
+                            if candidate.is_symlink():
+                                try:
+                                    target = candidate.resolve()
+                                    target.relative_to(resolved_repo_root)
+                                except Exception:
+                                    ignored.add(name)
+                        return ignored
+
+                    shutil.copytree(item, dest, symlinks=True, ignore=_ignore_unsafe_entries)
                 elif item.is_file():
                     shutil.copy2(item, dest, follow_symlinks=False)
 
@@ -2101,3 +2115,8 @@ class WorkspaceManager:
             file_count=file_count,
             error_message=err_msg,
         )
+
+    def reap_expired_workspaces(self, max_age_seconds: int = 86400) -> list[str]:
+        """Reap orphaned or expired terminal workspaces older than max_age_seconds (GAP-14)."""
+        result = self.cleanup_orphaned_workspaces(max_age_seconds=max_age_seconds, dry_run=False)
+        return list(result.cleaned_task_ids)
