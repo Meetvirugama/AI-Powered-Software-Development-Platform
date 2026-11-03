@@ -33,7 +33,12 @@ if str(BACKEND_DIR) not in sys.path:
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Ensure test JWT and webhook secrets are always configured when running pytest tests/e2e/ directly
+os.environ.setdefault("JWT_SECRET", "e2e-test-jwt-secret-key-at-least-32-chars-long")
+os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
+
 from app.core.config import get_settings
+get_settings.cache_clear()
 from app.core.database import Base, get_db
 from app.core.security import create_access_token
 from app.main import app
@@ -195,6 +200,15 @@ class E2EPipeline:
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    def incr(self, key: str):
+        def _do_incr():
+            curr = int(self._redis.strings.get(key, "0")) + 1
+            self._redis.strings[key] = str(curr)
+            return curr
+
+        self._commands.append(_do_incr)
+        return self
+
     def zadd(self, key: str, mapping: dict, **kwargs):
         self._commands.append(lambda: len(mapping))
         return self
@@ -207,7 +221,7 @@ class E2EPipeline:
         self._commands.append(lambda: 0)
         return self
 
-    def expire(self, key: str, time: int):
+    def expire(self, key: str, time: int, **kwargs):
         self._commands.append(lambda: True)
         return self
 
@@ -288,8 +302,11 @@ def e2e_redis(monkeypatch) -> E2EInMemoryRedis:
 
 
 @pytest.fixture
-def e2e_client(e2e_db: Session, e2e_redis: E2EInMemoryRedis) -> Generator[TestClient, None, None]:
+def e2e_client(e2e_db: Session, e2e_redis: E2EInMemoryRedis, monkeypatch) -> Generator[TestClient, None, None]:
     """Synchronous FastAPI TestClient with real dependency overrides."""
+    monkeypatch.setenv("JWT_SECRET", os.environ.get("JWT_SECRET") or "e2e-test-jwt-secret-key-at-least-32-chars-long")
+    monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", os.environ.get("GITHUB_WEBHOOK_SECRET") or "test-webhook-secret")
+    get_settings.cache_clear()
     app.dependency_overrides[get_db] = lambda: e2e_db
     with TestClient(app, base_url="http://testserver", raise_server_exceptions=False) as c:
         yield c
@@ -297,9 +314,12 @@ def e2e_client(e2e_db: Session, e2e_redis: E2EInMemoryRedis) -> Generator[TestCl
 
 
 @pytest.fixture
-def make_user():
+def make_user(monkeypatch):
     """Helper factory to create users and real auth headers."""
     def _make(db: Session, login: str = "testuser", email: str = "testuser@example.com") -> tuple[User, dict[str, str]]:
+        if not get_settings().jwt_secret:
+            monkeypatch.setenv("JWT_SECRET", "e2e-test-jwt-secret-key-at-least-32-chars-long")
+            get_settings.cache_clear()
         user_id = uuid.uuid4()
         user = User(
             id=user_id,

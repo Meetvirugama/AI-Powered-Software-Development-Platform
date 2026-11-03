@@ -265,12 +265,17 @@ class WorkspaceCommandRunner:
         env = self.sanitize_environment(custom_env)
         ws_str = str(workspace_root.resolve())
         env["PYTHONPATH"] = f"{ws_str}{os.pathsep}."
+        venv_bin = str(Path(sys.executable).parent)
+        curr_path = env.get("PATH", "")
+        if venv_bin and venv_bin not in curr_path.split(os.pathsep):
+            env["PATH"] = f"{venv_bin}{os.pathsep}{curr_path}" if curr_path else venv_bin
+
         exec_cmd = command
-        if command == "python" and not shutil.which("python"):
-            exec_cmd = shutil.which("python3") or sys.executable
+        if command in ("python", "python3"):
+            exec_cmd = sys.executable
 
         cmd_list = [exec_cmd, *args]
-        if command == "pytest" and not shutil.which("pytest"):
+        if command == "pytest":
             cmd_list = [sys.executable, "-m", "pytest", *args]
 
         popen_kwargs: dict[str, object] = {}
