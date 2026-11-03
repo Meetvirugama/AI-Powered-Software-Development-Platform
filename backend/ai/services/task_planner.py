@@ -183,19 +183,48 @@ class TaskPlanner:
             except Exception as exc:
                 logger.warning("planner_context_query_warning", extra={"error": str(exc)})
 
-        # Match candidate files from repo_files if req_target_files is empty
+        # Match candidate files from repo_files if req_target_files is empty (autonomous agent discovery)
         if not req_target_files and repo_files:
-            title_words = [
-                w.lower()
-                for w in task.title.replace("_", " ").replace("-", " ").split()
-                if len(w) >= 4
-            ]
+            corpus_parts = [task.title or "", task.description or ""]
+            for req in task.requirements or []:
+                if isinstance(req, dict):
+                    corpus_parts.append(req.get("description", ""))
+                elif hasattr(req, "description"):
+                    corpus_parts.append(req.description or "")
+            text_corpus = " ".join(corpus_parts).lower()
+
+            # 1. Direct path/file matching (e.g. user mentioned "src/auth.py" or "validation.py")
             for rf in repo_files:
                 rf_lower = rf.lower()
-                if any(w in rf_lower for w in title_words):
+                rf_base = rf.split("/")[-1].lower()
+                if (rf_lower in text_corpus or (len(rf_base) > 4 and rf_base in text_corpus)) and rf not in req_target_files:
                     req_target_files.append(rf)
                     if len(req_target_files) >= 3:
                         break
+
+            # 2. Token overlap matching if direct match didn't resolve enough candidate files
+            if not req_target_files:
+                import re
+                tokens = [
+                    w
+                    for w in re.findall(r"[a-zA-Z0-9_]{3,}", text_corpus)
+                    if len(w) >= 3 and w not in {
+                        "this", "that", "with", "from", "need", "want", "only", "task",
+                        "file", "code", "test", "tests", "make", "change", "please",
+                        "should", "must", "done", "into", "have", "been", "user"
+                    }
+                ]
+                scored: list[tuple[int, str]] = []
+                for rf in repo_files:
+                    rf_lower = rf.lower()
+                    score = sum(1 for tok in tokens if tok in rf_lower)
+                    if score > 0:
+                        scored.append((score, rf))
+                scored.sort(key=lambda x: x[0], reverse=True)
+                for _, fpath in scored[:3]:
+                    req_target_files.append(fpath)
+
+            # 3. Fallback to primary source file if no specific tokens matched
             if not req_target_files:
                 # Pick first non-test source file
                 non_test = [f for f in repo_files if "test" not in f.lower() and not f.endswith(".md")]

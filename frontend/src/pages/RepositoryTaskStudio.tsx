@@ -17,6 +17,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   Clock,
   ExternalLink,
@@ -254,10 +255,14 @@ export function RepositoryTaskStudio() {
   // Import GitHub Issue state
   const [issueNumberInput, setIssueNumberInput] = useState('');
   const [showNewTaskForm, setShowNewTaskForm] = useState(false);
+  const [newTaskPrompt, setNewTaskPrompt] = useState('');
+  const [newTaskCustomTitle, setNewTaskCustomTitle] = useState('');
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskFiles, setNewTaskFiles] = useState('');
   const [newTaskForbidden, setNewTaskForbidden] = useState('.env, .github/workflows/deploy.yml');
+  const [autoPlanImmediately, setAutoPlanImmediately] = useState(true);
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
 
   // Approval / Rejection / Revision / Publication inputs
   const [approvalComment, setApprovalComment] = useState('');
@@ -310,7 +315,16 @@ export function RepositoryTaskStudio() {
 
   async function handleCreateNewTask(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTaskTitle.trim() || !newTaskDesc.trim()) return;
+    const prompt = (newTaskPrompt || newTaskDesc).trim();
+    if (!prompt) return;
+
+    const finalTitle =
+      newTaskCustomTitle.trim() ||
+      newTaskTitle.trim() ||
+      (() => {
+        const firstLine = prompt.split('\n')[0].replace(/^[\s#*•-]+/, '');
+        return firstLine.length > 70 ? firstLine.slice(0, 67) + '...' : firstLine || 'Autonomous Task';
+      })();
 
     const targetFiles = newTaskFiles
       .split(',')
@@ -326,13 +340,13 @@ export function RepositoryTaskStudio() {
     try {
       const created = await createTask({
         repository_id: repoId,
-        title: newTaskTitle.trim(),
-        description: newTaskDesc.trim(),
+        title: finalTitle,
+        description: prompt,
         source: { type: 'USER_PROMPT', repository_id: repoId },
         requirements: [
           {
             id: 'req-1',
-            description: newTaskDesc.trim(),
+            description: prompt,
             category: 'functional',
             target_files: targetFiles,
             acceptance_criteria: [
@@ -354,17 +368,29 @@ export function RepositoryTaskStudio() {
             id: 'cst-1',
             description: 'Protected files must not be modified.',
             constraint_type: 'protected_file',
-            forbidden_files: forbiddenFiles,
+            forbidden_files: forbiddenFiles.length > 0 ? forbiddenFiles : ['.env', '.github/workflows/deploy.yml'],
             forbidden_packages: [],
             max_budget_tokens: 20000,
           },
         ],
       });
       setShowNewTaskForm(false);
+      setNewTaskPrompt('');
+      setNewTaskCustomTitle('');
       setNewTaskTitle('');
       setNewTaskDesc('');
       setNewTaskFiles('');
       handleSelectTask(created.task_id);
+
+      if (autoPlanImmediately) {
+        setActionBusy('plan');
+        try {
+          await generateTaskPlan(created.task_id);
+        } catch (planErr: any) {
+          setErrorBanner(`Task created, but auto-planning encountered an issue: ${planErr?.message || planErr}`);
+        }
+      }
+
       await refreshTasksAndCurrentDetail(created.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to create task.');
@@ -653,82 +679,143 @@ export function RepositoryTaskStudio() {
         </div>
       )}
 
-      {/* Collapsible New Task Intake Form */}
+      {/* Autonomous AI Agent Task Intake Form */}
       {showNewTaskForm && (
         <form
           onSubmit={handleCreateNewTask}
-          className="shrink-0 bg-muted/20 border-b border-border p-4 space-y-3"
+          className="shrink-0 bg-primary/5 border-b border-primary/20 p-4 space-y-3"
         >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
-                Task Title
-              </label>
-              <input
-                type="text"
-                required
-                value={newTaskTitle}
-                onChange={(e) => setNewTaskTitle(e.target.value)}
-                placeholder="e.g. Fix negative amount validation in src/validation.py"
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-              />
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              <span className="text-xs font-semibold text-foreground">
+                Autonomous AI Task Creation
+              </span>
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-primary/10 text-primary border border-primary/20">
+                Agent decides affected files & security boundaries
+              </span>
             </div>
-            <div>
-              <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
-                Target Files (comma-separated, relative paths)
-              </label>
-              <input
-                type="text"
-                value={newTaskFiles}
-                onChange={(e) => setNewTaskFiles(e.target.value)}
-                placeholder="e.g. src/validation.py, tests/test_validation.py"
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground font-mono"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
-                Requirement Description
-              </label>
-              <textarea
-                rows={2}
-                required
-                value={newTaskDesc}
-                onChange={(e) => setNewTaskDesc(e.target.value)}
-                placeholder="Describe what must be built or fixed…"
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
-                Protected / Forbidden Files Constraint
-              </label>
-              <input
-                type="text"
-                value={newTaskForbidden}
-                onChange={(e) => setNewTaskForbidden(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground font-mono"
-              />
-            </div>
-          </div>
-
-          <div className="flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setShowNewTaskForm(false)}
-              className="px-3 py-1 rounded-md border border-border text-xs"
+              onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+              className="text-[11px] text-muted-foreground hover:text-foreground underline flex items-center gap-1"
             >
-              Cancel
+              {showAdvancedOptions ? 'Hide Advanced Settings' : 'Advanced Settings (Optional)'}
             </button>
-            <button
-              type="submit"
-              disabled={actionBusy === 'create'}
-              className="px-3.5 py-1 rounded-md bg-primary text-primary-foreground text-xs font-semibold"
-            >
-              {actionBusy === 'create' ? 'Creating…' : 'Create Task'}
-            </button>
+          </div>
+
+          <div>
+            <label className="text-[11px] font-semibold text-foreground block mb-1">
+              What do you want the agent to do?
+            </label>
+            <textarea
+              rows={3}
+              required
+              autoFocus
+              value={newTaskPrompt}
+              onChange={(e) => {
+                setNewTaskPrompt(e.target.value);
+                setNewTaskDesc(e.target.value);
+              }}
+              placeholder="Describe what must be built, fixed, or refactored (e.g. 'Fix negative amount validation in checkout and add unit tests'). The agent automatically inspects repository files, AST, and symbols to resolve target files and draft the plan."
+              className="w-full px-3.5 py-2 text-xs rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 font-normal leading-relaxed"
+            />
+          </div>
+
+          {/* Autonomous agent file discovery indicator */}
+          <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground bg-background/60 rounded-lg p-2.5 border border-border/60">
+            <Bot className="h-4 w-4 text-emerald-500 shrink-0" />
+            <div className="flex-1">
+              <strong className="text-foreground">Autonomous Resolution:</strong> Write only your task above. The agent automatically discovers target files, enforces protected file shields, and prepares the implementation plan without requiring manual file inputs.
+            </div>
+          </div>
+
+          {/* Collapsible Advanced Overrides */}
+          {showAdvancedOptions && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-border/40">
+              <div>
+                <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
+                  Custom Task Title (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newTaskCustomTitle}
+                  onChange={(e) => {
+                    setNewTaskCustomTitle(e.target.value);
+                    setNewTaskTitle(e.target.value);
+                  }}
+                  placeholder="Auto-derived from prompt if left blank"
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
+                  Manual Target Files Override (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={newTaskFiles}
+                  onChange={(e) => setNewTaskFiles(e.target.value)}
+                  placeholder="Leave empty for autonomous agent detection"
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground font-mono"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-[11px] font-mono uppercase text-muted-foreground block mb-1">
+                  Protected / Forbidden Files Constraint
+                </label>
+                <input
+                  type="text"
+                  value={newTaskForbidden}
+                  onChange={(e) => setNewTaskForbidden(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground font-mono"
+                />
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between pt-1">
+            <label className="flex items-center gap-2 cursor-pointer text-xs text-foreground select-none">
+              <input
+                type="checkbox"
+                checked={autoPlanImmediately}
+                onChange={(e) => setAutoPlanImmediately(e.target.checked)}
+                className="rounded border-border text-primary focus:ring-primary"
+              />
+              <span>Immediately generate plan with AI Agent</span>
+            </label>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowNewTaskForm(false)}
+                className="px-3 py-1 rounded-md border border-border text-xs hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={actionBusy === 'create' || actionBusy === 'plan'}
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 shadow-sm disabled:opacity-50"
+              >
+                {actionBusy === 'create' ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Creating Task…</span>
+                  </>
+                ) : actionBusy === 'plan' ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>Agent Planning…</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span>Start Autonomous Task</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
       )}
