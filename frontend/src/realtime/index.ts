@@ -5,8 +5,9 @@
  * reconnects with jittered exponential backoff when connectivity drops.
  */
 import type { SseEnvelope, SseHandlers } from './events';
+import { API_BASE_URL } from '../services/api';
 
-const SSE_ENDPOINT = '/api/v1/events';
+const SSE_ENDPOINT = `${API_BASE_URL.replace(/\/+$/, '')}/events`;
 
 export type SseConnectionStatus =
   | 'DISCONNECTED'
