@@ -20,13 +20,13 @@
 
 | Metric | Value |
 |---|---|
-| **Development Phase** | Week 2 — Developer Intelligence Suite |
-| **Current Week/Sprint** | Week 2 (Active) |
+| **Development Phase** | Production Hardened & Acceptance Verified |
+| **Current Week/Sprint** | Week 3 (100% Complete) |
 | **Week 1 Progress** | 100% COMPLETE (Repository Intelligence, Hybrid RAG, Auth, UI) |
-| **Week 2 Progress** | In Progress (Shared IntelligenceContext, Output Schemas, Workbench) |
-| **Current Milestone** | W2: Code Explanation, Bug Detection, Test Generation, AI Code Review |
-| **Upcoming Milestone** | W3: Workflow Automation, Approval Gate, Isolated Sandbox & Draft PR |
-| **Test Suite Health** | 369 passed, 1 skipped, 0 failed (71.31% code coverage) |
+| **Week 2 Progress** | 100% COMPLETE (Developer Intelligence Suite: Explain, Bug, TestGen, Review) |
+| **Week 3 Progress** | 100% COMPLETE (Workflow Automation, Approval Gate, Sandbox, Repair, Draft PR) |
+| **Current Milestone** | Production Hardening, Audit Fixes & Acceptance Sign-off |
+| **Test Suite Health** | 100% passing across backend and frontend test suites |
 | **Frontend Health** | 0 lint errors (`oxlint`), production build passing (`tsc -b && vite build`) |
 
 ---
@@ -53,35 +53,35 @@
 | Repository Chat API | Yug / Meet | 🟢 Done | Grounded Q&A with file and line citations |
 | React 19 Frontend Workbench | Dhramraj | 🟢 Done | Fixed-viewport layout, repository explorer, chat UI |
 
-### Week 2 — Developer Intelligence Suite (Active)
+### Week 2 — Developer Intelligence Suite (100% Done)
 
 | Feature | Owner | Status | Notes |
 |---|---|---|---|
 | Shared `IntelligenceContext` & Facade Service | Meet | 🟢 Done | Context enrichment, bug/test/review builders, caching & drift gate |
-| Developer Intelligence Schemas | Dev | 🔵 In Progress | Explanation, BugFinding, TestGen, ReviewReport |
-| Workbench Drawers & Action Triggers | Dhramraj | 🔵 In Progress | Explain, Bug, Test, Review drawer shells |
-| Analysis REST Endpoints | Yug | 🔵 In Progress | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
-| Analysis Persistence (`analysis_runs`) | Om | 🔵 In Progress | Run tracking, finding models, revision mapping |
-| Authorized Diffs & Source Ingestion | Parth | 🔵 In Progress | GitHub commit and PR-diff retrieval |
-| AST Symbol & Line Range Mapper | Prit | 🔵 In Progress | Exact line ranges, function/class resolution |
-| Static Scanner Adapter | Devu | 🔵 In Progress | Ruff, Bandit, secret scanner integration |
-| Prompt-Injection & Security Defense | Sukun | 🔵 In Progress | Data tagging, secret scrubbing, auth guards |
-| Quality Fixtures & QA Matrix | Keval | 🔵 In Progress | Defect fixtures, accuracy baselines |
+| Developer Intelligence Schemas | Dev | 🟢 Done | Explanation, BugFinding, TestGen, ReviewReport |
+| Workbench Drawers & Action Triggers | Dhramraj | 🟢 Done | Explain, Bug, Test, Review drawer shells |
+| Analysis REST Endpoints | Yug | 🟢 Done | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
+| Analysis Persistence (`analysis_runs`) | Om | 🟢 Done | Run tracking, finding models, revision mapping |
+| Authorized Diffs & Source Ingestion | Parth | 🟢 Done | GitHub commit and PR-diff retrieval |
+| AST Symbol & Line Range Mapper | Prit | 🟢 Done | Exact line ranges, function/class resolution |
+| Static Scanner Adapter | Devu | 🟢 Done | Ruff, Bandit, secret scanner integration |
+| Prompt-Injection & Security Defense | Sukun | 🟢 Done | Data tagging, secret scrubbing, auth guards |
+| Quality Fixtures & QA Matrix | Keval | 🟢 Done | Defect fixtures, accuracy baselines |
 
-### Week 3 — Workflow Automation & Production Hardening (Upcoming)
+### Week 3 — Workflow Automation & Production Hardening (100% Done)
 
 | Feature | Owner | Status | Notes |
 |---|---|---|---|
-| GitHub Issue Integration (F31) | Parth | ⚪ Todo | Import issue, create issue from finding |
-| Task Planner & Human Approval Gate (F32) | Meet | ⚪ Todo | Structured plan, explicit approval gate |
-| Isolated Workspace & Worktree (F33) | Prit | ⚪ Todo | `.workspaces/task-<id>`, path traversal guards |
-| Tool Router & Policy Engine (F34) | Devu | ⚪ Todo | Command allowlist, sandboxed tool invocation |
-| Test Runner & Bounded Repair Loop (F35) | Meet | ⚪ Todo | Automated tests, max 3 repair attempts |
-| Independent Verification & Review (F36) | Dev | ⚪ Todo | Revision check, static + AI review, PR summary |
-| Git Push & GitHub Draft PR (F37) | Parth | ⚪ Todo | Branch creation, authorized push, Draft PR |
-| Task Dashboard & Timeline UI (F38) | Dhramraj | ⚪ Todo | Live task progress, approval modal, diff review |
-| Persistence & Crash Recovery (F39) | Om | ⚪ Todo | Task checkpoints, event history, recovery |
-| Security & Release Acceptance (F40) | Sukun / Keval | ⚪ Todo | Attack matrix, end-to-end acceptance demo |
+| GitHub Issue Integration (F31) | Parth | 🟢 Done | Import issue, create issue from finding |
+| Task Planner & Human Approval Gate (F32) | Meet | 🟢 Done | Structured plan, explicit approval gate |
+| Isolated Workspace & Worktree (F33) | Prit | 🟢 Done | `.workspaces/task-<id>`, path traversal guards |
+| Tool Router & Policy Engine (F34) | Devu | 🟢 Done | Command allowlist, sandboxed tool invocation |
+| Test Runner & Bounded Repair Loop (F35) | Meet | 🟢 Done | Automated tests, max 3 repair attempts |
+| Independent Verification & Review (F36) | Dev | 🟢 Done | Revision check, static + AI review, PR summary |
+| Git Push & GitHub Draft PR (F37) | Parth | 🟢 Done | Branch creation, authorized push, Draft PR |
+| Task Dashboard & Timeline UI (F38) | Dhramraj | 🟢 Done | Live task progress, approval modal, diff review |
+| Persistence & Crash Recovery (F39) | Om | 🟢 Done | Task checkpoints, event history, recovery |
+| Security & Release Acceptance (F40) | Sukun / Keval | 🟢 Done | Attack matrix, end-to-end acceptance demo |
 
 ---
 

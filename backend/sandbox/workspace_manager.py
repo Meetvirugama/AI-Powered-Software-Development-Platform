@@ -1747,13 +1747,18 @@ class WorkspaceManager:
                 f"Workspace base revision '{base_rev_display}' is stale{behind_str}: {res.message}. {res.remediation_suggestion or ''}"
             )
 
-    def compute_verification_diff_hash(self, task_id: str, base_revision: str | None = None) -> str:
+    def compute_verification_diff_hash(
+        self,
+        task_id: str,
+        base_revision: str | None = None,
+        record: bool = True,
+    ) -> str:
         """Compute SHA-256 fingerprint of the current workspace unified diff for immutability tracking."""
         diff_res = self.get_workspace_diff(task_id, base_revision=base_revision)
         raw_diff = diff_res.raw_diff or ""
         diff_hash = hashlib.sha256(raw_diff.encode("utf-8")).hexdigest()
         meta = self._workspaces.get(task_id)
-        if meta:
+        if meta and record:
             meta.verification_diff_hash = diff_hash
             self._save_metadata_file(meta)
         return diff_hash
@@ -1767,10 +1772,21 @@ class WorkspaceManager:
         """Verify that workspace changes have not mutated after independent verification has passed."""
         meta = self.get_workspace(task_id)
         expected = (expected_diff_hash or expected_hash or (meta.verification_diff_hash if meta else None) or "").strip().lower()
-        current_hash = self.compute_verification_diff_hash(task_id)
+        current_hash = self.compute_verification_diff_hash(task_id, record=False)
         current_clean = current_hash.strip().lower()
 
-        is_imm = (current_clean == expected) if expected else True
+        if not expected:
+            return DiffImmutabilityCheckResult(
+                task_id=task_id,
+                immutable=False,
+                is_immutable=False,
+                expected_diff_hash="",
+                current_diff_hash=current_clean,
+                verified_diff_hash="",
+                message="Expected verification diff hash is missing or unrecorded.",
+                error_message="Expected verification diff hash is missing or unrecorded.",
+            )
+        is_imm = current_clean == expected
         err_msg = None
         if not is_imm:
             err_msg = (

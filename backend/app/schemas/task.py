@@ -68,7 +68,7 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     ),
     TaskStatus.PENDING_APPROVAL: frozenset(
         # PENDING_APPROVAL CANNOT transition directly to EXECUTING (Docs/week3.md §7.2)
-        {TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED}
+        {TaskStatus.APPROVED, TaskStatus.REJECTED, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.APPROVED: frozenset(
         # Approved plan can enter WORKSPACE_SETUP/EXECUTING, or be re-planned if revised (which invalidates approval)
@@ -76,7 +76,7 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     ),
     TaskStatus.REJECTED: frozenset(
         # Rejected plan can be re-planned, cancelled, or closed; never directly executed
-        {TaskStatus.PLANNING, TaskStatus.CANCELLED}
+        {TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.WORKSPACE_SETUP: frozenset(
         {TaskStatus.EXECUTING, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
@@ -97,10 +97,10 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         {TaskStatus.PUBLISHING, TaskStatus.VERIFYING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}
     ),
     TaskStatus.PUBLISHING: frozenset(
-        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
+        {TaskStatus.DRAFT_PR_CREATED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.BLOCKED, TaskStatus.RECOVERY_REQUIRED}
     ),
     TaskStatus.DRAFT_PR_CREATED: frozenset(),  # Terminal happy path
-    TaskStatus.FAILED: frozenset({TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING}),
+    TaskStatus.FAILED: frozenset({TaskStatus.RECOVERY_REQUIRED, TaskStatus.PLANNING, TaskStatus.CANCELLED, TaskStatus.BLOCKED}),
     TaskStatus.CANCELLED: frozenset(),  # Terminal
     TaskStatus.RECOVERY_REQUIRED: frozenset(
         {
@@ -113,18 +113,23 @@ VALID_TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.READY_FOR_PUBLICATION,
             TaskStatus.FAILED,
             TaskStatus.CANCELLED,
+            TaskStatus.BLOCKED,
         }
     ),
     TaskStatus.BLOCKED: frozenset(
         {
             TaskStatus.PLANNING,
             TaskStatus.PENDING_APPROVAL,
+            TaskStatus.APPROVED,
+            TaskStatus.WORKSPACE_SETUP,
             TaskStatus.EXECUTING,
             TaskStatus.TESTING,
+            TaskStatus.REPAIRING,
             TaskStatus.VERIFYING,
             TaskStatus.READY_FOR_PUBLICATION,
             TaskStatus.FAILED,
             TaskStatus.CANCELLED,
+            TaskStatus.BLOCKED,
         }
     ),
 }

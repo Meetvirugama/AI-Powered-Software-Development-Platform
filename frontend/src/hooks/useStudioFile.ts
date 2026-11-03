@@ -14,13 +14,21 @@
 import { useState, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type { RepositoryFile } from '../types/api';
-import type { AnalysisTarget } from '../types/analysis';
+import type { AnalysisTarget, AnalysisTargetType } from '../types/analysis';
 import { findMatchingRepositoryFile } from '../lib/sourceReference';
 
 export interface TargetRange {
   start_line?: number;
   end_line?: number;
   symbol?: string | null;
+}
+
+interface StoredTargetDescriptor {
+  type: AnalysisTargetType;
+  start_line?: number;
+  end_line?: number;
+  symbol?: string | null;
+  revision?: string | null;
 }
 
 export interface SelectFileOptions {
@@ -72,12 +80,13 @@ export function useStudioFile(
   const [searchParams, setSearchParams] = useSearchParams();
   const [fileOverride, setFileOverride] = useState<{ repoId?: string; file: RepositoryFile } | null>(null);
   const [showFilePicker, setShowFilePicker] = useState(false);
-  const [targetRange, setTargetRange] = useState<TargetRange>({});
+  const [storedTarget, setStoredTarget] = useState<StoredTargetDescriptor | null>(null);
   const [prevRepoId, setPrevRepoId] = useState(repoId);
 
   if (prevRepoId !== repoId) {
     setPrevRepoId(repoId);
-    setTargetRange({});
+    setStoredTarget(null);
+    setFileOverride(null);
   }
 
   const fileQuery = searchParams.get('file');
@@ -105,20 +114,55 @@ export function useStudioFile(
     return null;
   }, [validOverride, fileQuery, files]);
 
-  const activeTarget: AnalysisTarget = useMemo(
+  const activeTarget: AnalysisTarget = useMemo(() => {
+    const path = selectedFile?.path ?? '';
+    if (!storedTarget || storedTarget.type === 'file') {
+      return { type: 'file', path };
+    }
+    if (storedTarget.type === 'symbol') {
+      return {
+        type: 'symbol',
+        path,
+        symbol: storedTarget.symbol ?? null,
+        start_line: typeof storedTarget.start_line === 'number' ? storedTarget.start_line : undefined,
+        end_line: typeof storedTarget.end_line === 'number' ? storedTarget.end_line : undefined,
+        revision: storedTarget.revision ?? null,
+      };
+    }
+    if (storedTarget.type === 'range') {
+      const start = storedTarget.start_line;
+      const end = storedTarget.end_line;
+      const hasValidLines =
+        typeof start === 'number' &&
+        typeof end === 'number' &&
+        start >= 0 &&
+        end >= start;
+      if (hasValidLines) {
+        return {
+          type: 'range',
+          path,
+          start_line: start,
+          end_line: end,
+          symbol: storedTarget.symbol ?? null,
+          revision: storedTarget.revision ?? null,
+        };
+      }
+    }
+    return { type: 'file', path };
+  }, [selectedFile, storedTarget]);
+
+  const targetRange: TargetRange = useMemo(
     () => ({
-      type: targetRange.start_line && targetRange.end_line ? 'range' : 'file',
-      path: selectedFile?.path ?? '',
-      start_line: targetRange.start_line,
-      end_line: targetRange.end_line,
-      symbol: targetRange.symbol,
+      start_line: typeof activeTarget.start_line === 'number' ? activeTarget.start_line : undefined,
+      end_line: typeof activeTarget.end_line === 'number' ? activeTarget.end_line : undefined,
+      symbol: activeTarget.symbol ?? null,
     }),
-    [selectedFile, targetRange]
+    [activeTarget]
   );
 
   const handleSelectFile = (file: RepositoryFile, options?: SelectFileOptions) => {
     setFileOverride({ repoId, file });
-    setTargetRange({});
+    setStoredTarget({ type: 'file' });
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('file', file.path);
@@ -131,14 +175,34 @@ export function useStudioFile(
   };
 
   const handleTargetChange = (target: AnalysisTarget) => {
-    setTargetRange({
-      start_line: target.start_line,
-      end_line: target.end_line,
-      symbol: target.symbol,
-    });
+    if (target.type === 'symbol') {
+      setStoredTarget({
+        type: 'symbol',
+        start_line: typeof target.start_line === 'number' ? target.start_line : undefined,
+        end_line: typeof target.end_line === 'number' ? target.end_line : undefined,
+        symbol: target.symbol ?? null,
+        revision: target.revision ?? null,
+      });
+    } else if (target.type === 'range') {
+      const start = typeof target.start_line === 'number' ? target.start_line : undefined;
+      const end = typeof target.end_line === 'number' ? target.end_line : undefined;
+      if (start !== undefined && end !== undefined && start >= 0 && end >= start) {
+        setStoredTarget({
+          type: 'range',
+          start_line: start,
+          end_line: end,
+          symbol: target.symbol ?? null,
+          revision: target.revision ?? null,
+        });
+      } else {
+        setStoredTarget({ type: 'file' });
+      }
+    } else {
+      setStoredTarget({ type: 'file' });
+    }
   };
 
-  const resetTargetRange = () => setTargetRange({});
+  const resetTargetRange = () => setStoredTarget({ type: 'file' });
 
   return {
     selectedFile,

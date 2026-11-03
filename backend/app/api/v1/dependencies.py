@@ -49,7 +49,33 @@ def get_owned_repository(
     return repository
 
 
+def get_owned_task(
+    task_id: UUID,
+    request: Request,
+    db: Session,
+    task_repo_cls: Any = None,
+) -> tuple[Any, UUID]:
+    """
+    Ensure the task exists and belongs to the authenticated user.
+    Enforces strict tenant isolation across all task endpoints.
+    """
+    if task_repo_cls is None:
+        from app.repositories.task_repository import TaskRepository
+        task_repo_cls = TaskRepository
+    user_id = get_request_user_id(request)
+    task = task_repo_cls(db).get_task(task_id, user_id=user_id)
+    if task is None:
+        raise APIError(
+            404,
+            ErrorCode.TASK_NOT_FOUND,
+            f"Task '{task_id}' was not found or you do not have access.",
+        )
+    return task, user_id
+
+
 # Aliases for backward compatibility
 _request_user_id = get_request_user_id
 _owned_repository = get_owned_repository
+_owned_task = get_owned_task
+
 

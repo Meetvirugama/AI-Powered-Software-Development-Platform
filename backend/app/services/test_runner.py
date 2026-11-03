@@ -67,6 +67,7 @@ TestExecutionStatus = Literal["PASSED", "FAILED", "TIMEOUT", "INFRASTRUCTURE_ERR
 @dataclass
 class TestCounts:
     """Parsed test counts from test runner execution."""
+    __test__ = False
     passed: int = 0
     failed: int = 0
     errors: int = 0

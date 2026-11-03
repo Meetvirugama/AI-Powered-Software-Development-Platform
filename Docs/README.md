@@ -9,8 +9,8 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | Milestone | Document | Focus & Objectives | Status |
 |---|---|---|---|
 | **Week 1** | [Week 1 — Repository Intelligence Foundation](./week1.md) | GitHub App integration, shallow clone, tree-sitter AST parsing, symbol graph, pgvector indexing, hybrid RAG pipeline (vector + lexical + RRF + reranking), grounded chat API, and React 19 Workbench UI. | 🟢 **COMPLETE** (369 tests passing, 71.3% coverage) |
-| **Week 2** | [Week 2 — Developer Intelligence Suite](./week2.md) | Four standalone developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with strict schema validation and persistence. | 🔵 **ACTIVE** |
-| **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | ⚪ **UPCOMING** |
+| **Week 2** | [Week 2 — Developer Intelligence Suite](./week2.md) | Four standalone developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with strict schema validation and persistence. | 🟢 **COMPLETE** (100% test pass, verified schemas) |
+| **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | 🟢 **COMPLETE** (17-step autonomous workflow verified) |
 
 ---
 

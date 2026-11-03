@@ -334,8 +334,11 @@ export function RepositoryDetail() {
                       highlightedSource={highlightedSource}
                       onClearHighlightedSource={() => setUserHighlightedSource(null)}
                       isAnalyzing={false}
-                      onTriggerExplain={() => {
-                        navigate(`/app/repositories/${id}/explain`);
+                      action={{
+                        label: 'Explain in Studio',
+                        onClick: () => {
+                          navigate(`/app/repositories/${id}/explain?file=${encodeURIComponent(selectedFile.path)}`);
+                        },
                       }}
                     />
                   ) : (

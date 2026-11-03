@@ -14,15 +14,26 @@ const repo2Files: RepositoryFile[] = [
   { id: '4', path: 'backend/main.py', language: 'Python', size_bytes: 3000, line_count: 110, content_hash: 'h4', last_indexed_at: '2026-01-01' },
 ];
 
-function TestStudioComponent({ files }: { files: RepositoryFile[] }) {
-  const { selectedFile, handleSelectFile, targetRange, handleTargetChange } = useStudioFile(files);
+function TestStudioComponent({
+  files,
+  onFileChange,
+}: {
+  files: RepositoryFile[];
+  onFileChange?: () => void;
+}) {
+  const { selectedFile, handleSelectFile, targetRange, activeTarget, handleTargetChange, resetTargetRange } =
+    useStudioFile(files, onFileChange);
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
   return (
     <div>
       <div data-testid="selected-file">{selectedFile?.path ?? 'none'}</div>
-      <div data-testid="target-range">{targetRange.start_line ? `${targetRange.start_line}-${targetRange.end_line}` : 'none'}</div>
+      <div data-testid="active-target-type">{activeTarget.type}</div>
+      <div data-testid="active-target-symbol">{activeTarget.symbol ?? 'none'}</div>
+      <div data-testid="target-range">
+        {typeof targetRange.start_line === 'number' ? `${targetRange.start_line}-${targetRange.end_line}` : 'none'}
+      </div>
       <div data-testid="all-params">{searchParams.toString()}</div>
       <button
         onClick={() => handleSelectFile(files[files.length - 1])}
@@ -31,10 +42,42 @@ function TestStudioComponent({ files }: { files: RepositoryFile[] }) {
         Select Last
       </button>
       <button
+        onClick={() => handleSelectFile(files[files.length - 1], { preserveResults: true })}
+        data-testid="select-last-file-preserve"
+      >
+        Select Last Preserve
+      </button>
+      <button
         onClick={() => handleTargetChange({ type: 'range', path: selectedFile?.path ?? '', start_line: 10, end_line: 20 })}
         data-testid="select-range"
       >
         Set Range
+      </button>
+      <button
+        onClick={() => handleTargetChange({ type: 'range', path: selectedFile?.path ?? '', start_line: 0, end_line: 10 })}
+        data-testid="select-range-zero"
+      >
+        Set Range Zero
+      </button>
+      <button
+        onClick={() =>
+          handleTargetChange({
+            type: 'symbol',
+            path: selectedFile?.path ?? '',
+            symbol: 'calculateTotal',
+            start_line: 15,
+            end_line: 30,
+          })
+        }
+        data-testid="select-symbol"
+      >
+        Set Symbol
+      </button>
+      <button
+        onClick={() => resetTargetRange()}
+        data-testid="reset-target"
+      >
+        Reset Target
       </button>
       <button
         onClick={() => navigate('/repositories/repo-2/explain')}
@@ -123,5 +166,87 @@ describe('useStudioFile hook (F-05)', () => {
     // Should now show Repo 2 default file, not Repo 1 stale file
     expect(screen.getByTestId('selected-file').textContent).toBe('backend/main.py');
     expect(screen.getByTestId('target-range').textContent).toBe('none');
+  });
+
+  it('preserves discriminated symbol target without degrading to range or file', () => {
+    render(
+      <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
+        <Routes>
+          <Route path="/repositories/:id/explain" element={<TestStudioComponent files={repo1Files} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('active-target-type').textContent).toBe('file');
+
+    fireEvent.click(screen.getByTestId('select-symbol'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('symbol');
+    expect(screen.getByTestId('active-target-symbol').textContent).toBe('calculateTotal');
+    expect(screen.getByTestId('target-range').textContent).toBe('15-30');
+  });
+
+  it('preserves range target including line 0 without falsy check regression', () => {
+    render(
+      <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
+        <Routes>
+          <Route path="/repositories/:id/explain" element={<TestStudioComponent files={repo1Files} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByTestId('select-range-zero'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('range');
+    expect(screen.getByTestId('target-range').textContent).toBe('0-10');
+  });
+
+  it('resets target to file when selecting a different file or calling resetTargetRange', () => {
+    render(
+      <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
+        <Routes>
+          <Route path="/repositories/:id/explain" element={<TestStudioComponent files={repo1Files} />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByTestId('select-range'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('range');
+
+    fireEvent.click(screen.getByTestId('select-last-file'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('file');
+    expect(screen.getByTestId('target-range').textContent).toBe('none');
+
+    fireEvent.click(screen.getByTestId('select-symbol'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('symbol');
+
+    fireEvent.click(screen.getByTestId('reset-target'));
+    expect(screen.getByTestId('active-target-type').textContent).toBe('file');
+    expect(screen.getByTestId('target-range').textContent).toBe('none');
+  });
+
+  it('respects preserveResults flag on cross-file citation navigation', () => {
+    let fileChangeCalls = 0;
+    render(
+      <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
+        <Routes>
+          <Route
+            path="/repositories/:id/explain"
+            element={
+              <TestStudioComponent
+                files={repo1Files}
+                onFileChange={() => {
+                  fileChangeCalls++;
+                }}
+              />
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    fireEvent.click(screen.getByTestId('select-last-file-preserve'));
+    expect(fileChangeCalls).toBe(0);
+
+    fireEvent.click(screen.getByTestId('select-last-file'));
+    expect(fileChangeCalls).toBe(1);
   });
 });

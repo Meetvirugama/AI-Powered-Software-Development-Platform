@@ -143,7 +143,11 @@ export function RepositoryReviewStudio() {
               onTargetChange={handleTargetChange}
               highlightedSource={activeSourceReference}
               onClearHighlightedSource={() => setActiveSourceReference(null)}
-              onTriggerExplain={handleRunReview}
+              action={{
+                label: 'Review target',
+                onClick: handleRunReview,
+                isPending: reviewMutation.isPending,
+              }}
               isAnalyzing={reviewMutation.isPending}
             />
           ) : (

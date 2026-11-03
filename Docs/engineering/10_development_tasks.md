@@ -69,25 +69,25 @@ Provide four standalone, production-ready developer intelligence capabilities in
 
 ---
 
-## WEEK 3 — Workflow Automation, GitHub Ecosystem & PR (UPCOMING)
+## WEEK 3 — Workflow Automation, GitHub Ecosystem & PR (100% COMPLETE)
 
 ### Week 3 Milestone Goal
 Convert verified developer intelligence into a controlled development workflow: Issue intake -> Task planning -> Human Approval Gate -> Isolated workspace -> Bounded test repair -> Verification -> GitHub Draft PR.
 
 | Task ID | Task | Owner | Priority | Status | Deliverables |
 |---|---|---|---|---|---|
-| W3-01 | GitHub Issue Intake & Finding-to-Issue Converter (F31) | Parth / Yug | P0 | TODO | Issue import API, issue creation from findings |
+| W3-01 | GitHub Issue Intake & Finding-to-Issue Converter (F31) | Parth / Yug | P0 | DONE | Issue import API, finding ownership validation, issue creation from findings (`PR #139, #143, #165`) |
 | W3-02 | Task Planner & Structured Plan Schema (F32) | Meet / Dev | P0 | DONE | Meet: `TaskPlanner`, step dependencies, DAG validation & fallback plan synthesis DONE (`backend/ai/services/task_planner.py`, `backend/tests/test_meet_w3_all_days.py`); Dev: `PlannerSchema` DONE |
 | W3-03 | Mandatory Human Approval Gate (F32) | Meet / Dhramraj | P0 | DONE | Meet: Server-enforced approval, invalidation on plan revision, approval gate endpoints DONE (`backend/ai/services/task_planner.py`, `backend/tests/test_week3_day1_day2.py`); Dhramraj: UI approval screen |
 | W3-04 | Isolated Workspace & Task Branch Manager (F33) | Prit / Parth | P0 | DONE | Prit: `WorkspaceManager` execution start, human approval gate, lifecycle transitions, command allowlist runner, timeline events & Devu `ToolRouter` policy bridge DONE; Parth: Task branch manager |
-| W3-05 | Tool Router & Allowed Command Policy Engine (F34) | Devu / Sukun | P0 | TODO | Command allowlist, sandboxed tool dispatch, audit logging |
+| W3-05 | Tool Router & Allowed Command Policy Engine (F34) | Devu / Sukun | P0 | DONE | Command allowlist, sandboxed tool dispatch, audit logging (`backend/agent/tools/router.py`, `PR #163, #169`) |
 | W3-06 | Restricted Test Runner & Execution Loop (F35) | Prit / Devu | P0 | DONE | Prit: Restricted test runner (`WorkspaceTestRunner`), failure classification, bounded 3-attempt repair loop & ToolRouter bridge DONE; Devu: Command allowlist |
 | W3-07 | Bounded Self-Repair Loop (Max 3 attempts) (F35) | Meet / Dev | P0 | DONE | Meet: `BoundedRepairLoop` orchestrator, 3-attempt ceiling, duplicate patch rejection, re-test cycle DONE (`backend/ai/services/bounded_repair_loop.py`, `backend/tests/test_meet_w3_all_days.py`); Dev: Traceback diagnosis & patch validator DONE |
-| W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval / Prit | P0 | IN PROGRESS | Prit: `WorkspaceDiffVerifier` diff extraction, approved scope validation, addition-level secret scanner & manifest deletion protection DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/diff_verifier.py`, 30/30 tests passed); Dev: AI code review |
-| W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug / Prit | P0 | IN PROGRESS | Prit: Authorized git commit & push, protected branch guards, draft PR preparation with structured task summary & ToolRouter dispatch DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`); Parth: GitHub draft PR API |
-| W3-10 | Task Dashboard, Progress & Timeline UI (F38) | Dhramraj | P0 | TODO | Live task progress, timeline events, side-by-side diff |
+| W3-08 | Independent Verification & Review Engine (F36) | Dev / Keval / Prit | P0 | DONE | Prit: `WorkspaceDiffVerifier` diff extraction, approved scope validation, addition-level secret scanner & manifest deletion protection DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/diff_verifier.py`, 30/30 tests passed); Dev: AI code review (`requirement_verifier.py`) |
+| W3-09 | Authorized Push & GitHub Draft PR Creator (F37) | Parth / Yug / Prit | P0 | DONE | Prit: Authorized git commit & push, protected branch guards, draft PR preparation with structured task summary & ToolRouter dispatch DONE (`Docs/independent_verification_and_draft_pr_audit.md`, `backend/sandbox/workspace_manager.py`, `backend/sandbox/tool_policy_bridge.py`); Parth: GitHub draft PR API |
+| W3-10 | Task Dashboard, Progress & Timeline UI (F38) | Dhramraj | P0 | DONE | Live task progress, timeline events, side-by-side diff (`RepositoryTaskStudio.tsx`, `ExecutionTimeline.tsx`) |
 | W3-11 | Persistence, Checkpoints & Crash Recovery (F39) | Om / Yug / Prit | P0 | DONE | Prit: Workspace crash/restart recovery, stale revision divergence detection, verification diff immutability, orphan collection & task concurrency locking DONE (Docs/reliability_security_and_failure_recovery_audit.md, 32/32 tests passed); Om: Days 1-7 complete: database query performance, composite index optimization across all tables, append-only audit event immutability, worker restart crash recovery with retry budget preservation, 17-step end-to-end workflow acceptance, zero manual intervention verification (74/74 cumulative persistence tests passing) (Docs/persistence_week3_day6_day7_report.md, ackend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py) |
-| W3-12 | Security Attack Matrix & Release Sign-off (F40) | Sukun / Keval / Prit | P0 | IN PROGRESS | Prit: Week 3 Day 7 End-to-End Acceptance (Scenarios A-J, 17-step lifecycle, SLA benchmarks, zero-leak audit trail, 194/194 tests passed) DONE (`Docs/week3_day7_workspace_acceptance_report.md`, `backend/tests/test_prit_w3_d7_acceptance.py`); Sukun/Keval: Full E2E demo signoff |
+| W3-12 | Security Attack Matrix & Release Sign-off (F40) | Sukun / Keval / Prit | P0 | DONE | Prit: Week 3 Day 7 End-to-End Acceptance (Scenarios A-J, 17-step lifecycle, SLA benchmarks, zero-leak audit trail, 194/194 tests passed) DONE (`Docs/week3_day7_workspace_acceptance_report.md`, `backend/tests/test_prit_w3_d7_acceptance.py`); Sukun/Keval: Full E2E demo signoff |
 
 ---
 
@@ -95,14 +95,14 @@ Convert verified developer intelligence into a controlled development workflow: 
 
 | Member | Current Focus | Deliverables |
 |---|---|---|
-| **Meet** | `IntelligenceContext` & Context Enrichment | Shared context builder, caller resolution, token budgeting |
-| **Dev** | Output Schemas & AI Engine Services | Pydantic models for Explanation, Bugs, Tests, and Review |
-| **Dhramraj** | Workbench UI & Feature Drawers | Code intelligence panels in fixed-viewport React 19 layout |
-| **Yug** | Analysis API Layer & Route Guards | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` routes |
+| **Meet** | AI Architecture & Agent Lifecycle Lead | `TaskPlanner`, `AgentExecutionLoop`, `BoundedRepairLoop`, `RequirementVerifier`, AI Acceptance Suite (19/19 passing) |
+| **Dev** | Schemas, AI Engines & Verifier Lead | Pydantic output schemas, failure traceback diagnosis, independent verification, AI quality evaluation |
+| **Dhramraj** | Frontend Studio & Workbench Lead | Task Studio, execution timeline, plan approval panel, repair budget tracker, MSW bootstrap (331/331 tests passing) |
+| **Yug** | API Gateway & Service Orchestration Lead | FastAPI routing, auth guards, task execution lifecycle APIs, publication endpoints, error normalization |
 | **Om** | Workflow Automation, Verification & Traceability Persistence | Database query optimization, crash recovery, 17-step E2E acceptance, draft PR persistence, end-to-end traceability graph (Week 3 Days 1-7 complete, 74/74 tests passing) |
-| **Parth** | Authorized Diff & Commit Provider | Fetching file contents, commit trees, and PR diffs |
-| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceDiffVerifier`, `WorkspaceTestRunner`, `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `SymbolBlastRadiusEngine`, `TaskTestPlanner`, Week 3 Day 7 E2E Acceptance & Scenarios A-J Verification |
-| **Devu** | Static Analysis Adapter | Normalizing Ruff, Bandit, and ESLint findings |
-| **Sukun** | Prompt-Injection Defenses & Scrubbing | Untrusted data boundary markers, secret scrubbers |
-| **Keval** | Quality Fixtures & Regression Testing | Acceptance test suites, fixture codebases with defects |
+| **Parth** | GitHub Ecosystem & Branch Manager Lead | GitHub App OAuth, authorized diffs, task branch isolation, draft PR automation (`PR #139, #149`) |
+| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceDiffVerifier`, `WorkspaceTestRunner`, `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `SymbolBlastRadiusEngine`, `TaskTestPlanner`, Week 3 Day 7 E2E Acceptance & Scenarios A-J Verification (194/194 tests passing) |
+| **Devu** | Tool Router & Policy Lead | Policy-enforced `ToolRouter`, command allowlists, argument schema validation (`router.py`) |
+| **Sukun** | Security Architecture Lead | Prompt-injection defenses, tool policy enforcement, secret scrubbing, full attack matrix sign-off |
+| **Keval** | Quality Assurance Lead | Quality fixtures, regression suites, final 17-step acceptance demo verification & sign-off |
 

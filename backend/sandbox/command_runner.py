@@ -17,12 +17,13 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
-import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from app.core.secret_redaction import redact
 from app.schemas.workspace import WorkspaceCommandResult
@@ -41,6 +42,88 @@ from sandbox.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def kill_process_tree(pid: int, sig: int = signal.SIGKILL) -> None:
+    """Terminate a process and all its child processes in its process group.
+
+    Guarantees that when a subprocess times out, all background jobs,
+    daemons, and descendant processes belonging to its process group are
+    killed immediately, leaving zero orphaned processes.
+
+    Handles ProcessLookupError and OSError gracefully if the process or
+    process group leader has already exited.
+    """
+    if not pid or pid <= 0:
+        return
+
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except Exception:
+            pass
+        return
+
+    # POSIX systems (Linux / macOS):
+    # Attempt to resolve the process group id
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, OSError):
+        # If leader process has already exited, pgid is still the original pid
+        pgid = pid
+
+    # Kill entire process group
+    try:
+        os.killpg(pgid, sig)
+    except (ProcessLookupError, OSError):
+        pass
+
+    # Ensure direct process is killed as fallback
+    try:
+        os.kill(pid, sig)
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def _drain_and_capture_stream(
+    pipe: Any,
+    max_bytes: int,
+    result_holder: dict[str, Any],
+) -> None:
+    """Concurrently drain a subprocess pipe, bounding captured bytes to max_bytes.
+
+    Prevents pipe deadlocks while strictly avoiding unbounded host disk or RAM
+    consumption. Once max_bytes is reached, further incoming bytes are drained
+    with mild throttling to allow runaway subprocesses to block on pipe buffers.
+    """
+    buffer = bytearray()
+    truncated = False
+    try:
+        while True:
+            chunk = pipe.read(65536 if truncated else 4096)
+            if not chunk:
+                break
+            if len(buffer) < max_bytes:
+                available = max_bytes - len(buffer)
+                buffer.extend(chunk[:available])
+                if len(chunk) > available:
+                    truncated = True
+            else:
+                truncated = True
+    except Exception:
+        pass
+    finally:
+        try:
+            pipe.close()
+        except Exception:
+            pass
+    result_holder["data"] = bytes(buffer)
+    result_holder["truncated"] = truncated
 
 
 class WorkspaceCommandRunner:
@@ -186,50 +269,85 @@ class WorkspaceCommandRunner:
             cmd_list = [sys.executable, "-m", "pytest", *args]
 
         try:
-            with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
-                proc = subprocess.Popen(
-                    cmd_list,
-                    cwd=str(workspace_root.resolve()),
-                    env=env,
-                    stdout=out_file,
-                    stderr=err_file,
+            popen_kwargs: dict[str, Any] = {
+                "cwd": str(workspace_root.resolve()),
+                "env": env,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.PIPE,
+                "start_new_session": True,
+            }
+
+            proc = subprocess.Popen(cmd_list, **popen_kwargs)
+
+            stdout_holder: dict[str, Any] = {"data": b"", "truncated": False}
+            stderr_holder: dict[str, Any] = {"data": b"", "truncated": False}
+            t_out = None
+            t_err = None
+
+            if getattr(proc, "stdout", None) is not None:
+                t_out = threading.Thread(
+                    target=_drain_and_capture_stream,
+                    args=(proc.stdout, self._max_output_bytes, stdout_holder),
+                    daemon=True,
                 )
+                t_out.start()
+
+            if getattr(proc, "stderr", None) is not None:
+                t_err = threading.Thread(
+                    target=_drain_and_capture_stream,
+                    args=(proc.stderr, self._max_output_bytes, stderr_holder),
+                    daemon=True,
+                )
+                t_err.start()
+
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                pid = getattr(proc, "pid", None)
+                if pid:
+                    kill_process_tree(pid)
+                else:
+                    if hasattr(proc, "kill"):
+                        proc.kill()
                 try:
-                    proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                    raise
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+                raise
+            finally:
+                if t_out is not None and t_out.is_alive():
+                    t_out.join(timeout=2.0)
+                if t_err is not None and t_err.is_alive():
+                    t_err.join(timeout=2.0)
 
-                duration_ms = (time.perf_counter() - start_time) * 1000.0
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
 
-                out_file.seek(0)
-                raw_out = out_file.read(self._max_output_bytes + 1)
-                is_out_truncated = len(raw_out) > self._max_output_bytes
-                stdout = raw_out[: self._max_output_bytes].decode("utf-8", errors="ignore")
-                if is_out_truncated:
-                    stdout += "\n... [TRUNCATED: output exceeded size limit]"
+            raw_out = stdout_holder.get("data", b"")
+            is_out_truncated = stdout_holder.get("truncated", False)
+            stdout = raw_out.decode("utf-8", errors="ignore")
+            if is_out_truncated:
+                stdout += "\n... [TRUNCATED: output exceeded size limit]"
 
-                err_file.seek(0)
-                raw_err = err_file.read(self._max_output_bytes + 1)
-                is_err_truncated = len(raw_err) > self._max_output_bytes
-                stderr = raw_err[: self._max_output_bytes].decode("utf-8", errors="ignore")
-                if is_err_truncated:
-                    stderr += "\n... [TRUNCATED: error output exceeded size limit]"
+            raw_err = stderr_holder.get("data", b"")
+            is_err_truncated = stderr_holder.get("truncated", False)
+            stderr = raw_err.decode("utf-8", errors="ignore")
+            if is_err_truncated:
+                stderr += "\n... [TRUNCATED: error output exceeded size limit]"
 
-                # Redact secrets from output
-                stdout_clean = redact(stdout)
-                stderr_clean = redact(stderr)
+            # Redact secrets from output
+            stdout_clean = redact(stdout)
+            stderr_clean = redact(stderr)
 
-                return WorkspaceCommandResult(
-                    success=proc.returncode == 0,
-                    command=command,
-                    exit_code=proc.returncode,
-                    stdout=stdout_clean,
-                    stderr=stderr_clean,
-                    duration_ms=duration_ms,
-                    timed_out=False,
-                )
+            retcode = getattr(proc, "returncode", 0)
+            return WorkspaceCommandResult(
+                success=retcode == 0,
+                command=command,
+                exit_code=retcode,
+                stdout=stdout_clean,
+                stderr=stderr_clean,
+                duration_ms=duration_ms,
+                timed_out=False,
+            )
 
         except subprocess.TimeoutExpired as exc:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
@@ -237,11 +355,13 @@ class WorkspaceCommandRunner:
                 "workspace_command_timeout",
                 extra={"command": command, "timeout": timeout, "duration_ms": duration_ms},
             )
+            raw_out = stdout_holder.get("data", b"") if "stdout_holder" in locals() else b""
+            stdout_clean = redact(raw_out.decode("utf-8", errors="ignore"))
             return WorkspaceCommandResult(
                 success=False,
                 command=command,
                 exit_code=-1,
-                stdout="",
+                stdout=stdout_clean,
                 stderr=redact(f"Command execution timed out after {timeout} seconds."),
                 duration_ms=duration_ms,
                 timed_out=True,
@@ -249,6 +369,10 @@ class WorkspaceCommandRunner:
             )
 
         except Exception as exc:
+            if "proc" in locals() and proc is not None:
+                pid = getattr(proc, "pid", None)
+                if pid:
+                    kill_process_tree(pid)
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             logger.error("workspace_command_failed", extra={"command": command, "error": str(exc)})
             return WorkspaceCommandResult(

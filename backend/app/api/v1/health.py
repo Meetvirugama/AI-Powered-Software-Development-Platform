@@ -1,5 +1,6 @@
 """Health and readiness check endpoints used by local tooling, Docker, Kubernetes, and CI."""
 
+import asyncio
 import logging
 from fastapi import APIRouter, Request, Response, status
 from sqlalchemy import text
@@ -42,24 +43,37 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
     """Deep readiness check validating database, Redis, and configured service availability."""
     settings = get_settings()
 
-    # 1. Database check
+    # 1. Database check (non-blocking thread with strict 2.0s timeout)
     db_health = ComponentHealth(status="unhealthy")
-    try:
+    def _sync_db_check() -> None:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
+
+    try:
+        await asyncio.wait_for(asyncio.to_thread(_sync_db_check), timeout=2.0)
         db_health = ComponentHealth(status="healthy", message="Connected to PostgreSQL")
+    except asyncio.TimeoutError:
+        logger.warning("readiness_check_db_timeout")
+        db_health = ComponentHealth(status="unhealthy", message="Database connection timed out")
     except Exception as exc:
         logger.warning("readiness_check_db_failed", extra={"error": str(exc)})
         db_health = ComponentHealth(status="unhealthy", message="Database connection failed")
 
-    # 2. Redis check
+    # 2. Redis check (non-blocking thread with strict 2.0s timeout)
     redis_health = ComponentHealth(status="unhealthy")
-    try:
+    def _sync_redis_check() -> bool:
         redis_client = get_redis()
-        if redis_client.ping():
+        return bool(redis_client.ping())
+
+    try:
+        ping_ok = await asyncio.wait_for(asyncio.to_thread(_sync_redis_check), timeout=2.0)
+        if ping_ok:
             redis_health = ComponentHealth(status="healthy", message="Connected to Redis")
         else:
             redis_health = ComponentHealth(status="degraded", message="Redis ping returned False")
+    except asyncio.TimeoutError:
+        logger.warning("readiness_check_redis_timeout")
+        redis_health = ComponentHealth(status="degraded", message="Redis ping timed out")
     except Exception as exc:
         logger.warning("readiness_check_redis_failed", extra={"error": str(exc)})
         redis_health = ComponentHealth(status="degraded", message="Redis unavailable (caching/rate-limiting degraded)")
