@@ -79,29 +79,29 @@
 | FR-063 | Token Limit Enforcement | Context builder truncates input to stay within token window (tiktoken `cl100k_base`) | System | P0 | 🟢 Done | `ContextBuilder` |
 | FR-064 | Memory Continuity | Memory entries deduplicated and sorted by recency (`memory_entries` table) | System | P0 | 🟢 Done | `MemoryRepository` |
 
-### Week 2 — Developer Intelligence Suite (Active)
+### Week 2 — Developer Intelligence Suite (Live)
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
 | FR-100 | Shared `IntelligenceContext` | Context container with `TargetSnippet`, `SymbolContext`, caller references, and token bounding | System | P0 | 🟢 Done | `ContextBuilder` |
-| FR-101 | Code Explanation Service | Explain purpose, logic flow, key symbols, inputs/outputs, dependencies, and limitations | Developer | P0 | 🔵 In Progress | `CodeExplanationService` |
-| FR-102 | Dedicated Bug Detection | Detect off-by-one, null safety, unhandled exceptions, and resource leaks with static + AI reasoning | Developer | P0 | 🔵 In Progress | `BugDetectionEngine` |
-| FR-103 | Framework-Aware Test Gen | Detect `pytest`, `unittest`, or `jest` and generate executable test files with positive/negative/edge cases | Developer | P0 | 🔵 In Progress | `TestGenerationService` |
-| FR-104 | Standalone AI Code Review | Review single file, commit SHA, or GitHub PR diff across Correctness, Security, Performance, and Reliability | Developer | P0 | 🔵 In Progress | `AICodeReviewEngine` |
-| FR-105 | Analysis Persistence | Persist analysis runs and categorized findings in `analysis_runs` and `code_findings` | System | P0 | 🔵 In Progress | Om (Models & Migration) |
+| FR-101 | Code Explanation Service | Explain purpose, logic flow, key symbols, inputs/outputs, dependencies, and limitations | Developer | P0 | 🟢 Done | `CodeExplanationService` |
+| FR-102 | Dedicated Bug Detection | Detect off-by-one, null safety, unhandled exceptions, and resource leaks with static + AI reasoning | Developer | P0 | 🟢 Done | `BugDetectionEngine` |
+| FR-103 | Framework-Aware Test Gen | Detect `pytest`, `unittest`, or `jest` and generate executable test files with positive/negative/edge cases | Developer | P0 | 🟢 Done | `TestGenerationService` |
+| FR-104 | Standalone AI Code Review | Review single file, commit SHA, or GitHub PR diff across Correctness, Security, Performance, and Reliability | Developer | P0 | 🟢 Done | `AICodeReviewEngine` |
+| FR-105 | Analysis Persistence | Persist analysis runs and categorized findings in `analysis_runs` and `code_findings` | System | P0 | 🟢 Done | Om (Models & Migration) |
 
-### Week 3 — Workflow Automation & Production Hardening (Upcoming)
+### Week 3 — Workflow Automation & Production Hardening (Live)
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
-| FR-110 | GitHub Issue Import & Creation | Import authorized issues or convert approved findings into GitHub issues | Developer | P0 | ⚪ Todo | F31 (Parth) |
-| FR-111 | Structured Task Planning | Convert requirements into ordered steps, affected files, tests, and verification strategy | System | P0 | ⚪ Todo | F32 (Meet) |
-| FR-112 | Mandatory Human Approval Gate | Explicit human approval required before entering isolated workspace execution | Developer | P0 | ⚪ Todo | F32 (Meet / Dhramraj) |
-| FR-113 | Isolated Workspace Management | Disposable `.workspaces/task-<id>` directory with Git worktree and path traversal guards | System | P0 | ⚪ Todo | F33 (Prit) |
-| FR-114 | Policy-Guarded Tool Router | Explicit command template allowlist, sanitized argument validation, and audit logging | System | P0 | ⚪ Todo | F34 (Devu / Sukun) |
-| FR-115 | Bounded Self-Repair Loop | Re-run tests on failure, apply targeted repairs with hard ceiling of 3 task-level attempts | System | P0 | ⚪ Todo | F35 (Meet / Dev) |
-| FR-116 | Independent Verification | Separate verification check evaluating tests, static checks, and AI code review | System | P0 | ⚪ Todo | F36 (Dev) |
-| FR-117 | Human Push Authorization & Draft PR | Require explicit publication authorization, push `agent/task-<id>`, and create GitHub Draft PR | Developer | P0 | ⚪ Todo | F37 (Parth) |
+| FR-110 | GitHub Issue Import & Creation | Import authorized issues or convert approved findings into GitHub issues | Developer | P0 | 🟢 Done | F31 (Parth) |
+| FR-111 | Structured Task Planning | Convert requirements into ordered steps, affected files, tests, and verification strategy | System | P0 | 🟢 Done | F32 (Meet) |
+| FR-112 | Mandatory Human Approval Gate | Explicit human approval required before entering isolated workspace execution | Developer | P0 | 🟢 Done | F32 (Meet / Dhramraj) |
+| FR-113 | Isolated Workspace Management | Disposable `.workspaces/task-<id>` directory with Git worktree and path traversal guards | System | P0 | 🟢 Done | F33 (Prit) |
+| FR-114 | Policy-Guarded Tool Router | Explicit command template allowlist, sanitized argument validation, and audit logging | System | P0 | 🟢 Done | F34 (Devu / Sukun) |
+| FR-115 | Bounded Self-Repair Loop | Re-run tests on failure, apply targeted repairs with hard ceiling of 3 task-level attempts | System | P0 | 🟢 Done | F35 (Meet / Dev) |
+| FR-116 | Independent Verification | Separate verification check evaluating tests, static checks, and AI code review | System | P0 | 🟢 Done | F36 (Dev) |
+| FR-117 | Human Push Authorization & Draft PR | Require explicit publication authorization, push `agent/task-<id>`, and create GitHub Draft PR | Developer | P0 | 🟢 Done | F37 (Parth) |
 
 ---
 
@@ -117,7 +117,7 @@
 | NFR-006 | Security | JWT authentication for all non-health, non-auth endpoints | P0 | 🟢 Done |
 | NFR-007 | Security | Multi-tenant repository isolation strictly enforced (`repository_id` filtering) | P0 | 🟢 Done |
 | NFR-008 | Security | Repository content treated as untrusted data (prompt-injection defense) | P0 | 🟢 Done |
-| NFR-009 | Security | Workspace execution confined to task directory (no host credential escape) | P0 | ⚪ Todo (Week 3) |
+| NFR-009 | Security | Workspace execution confined to task directory (no host credential escape) | P0 | 🟢 Done |
 | NFR-010 | Scalability | Asynchronous batch processing using `asyncio` across retrieval and embeddings | P0 | 🟢 Done |
 | NFR-011 | Scalability | Redis used for session token caching and background sync job queue | P0 | 🟢 Done |
 | NFR-012 | Reliability | LLM retries on 429/5xx with exponential backoff (1s, 2s, 4s) | P0 | 🟢 Done |
