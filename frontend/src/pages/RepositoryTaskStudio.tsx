@@ -269,6 +269,7 @@ export function RepositoryTaskStudio() {
   const [rejectionReason, setRejectionReason] = useState('');
   const [revisionNotes, setRevisionNotes] = useState('');
   const [publicationAuthorized, setPublicationAuthorized] = useState(false);
+  const [showApprovedRevision, setShowApprovedRevision] = useState(false);
 
   const refreshTasksAndCurrentDetail = useCallback(
     async (targetTaskId?: string) => {
@@ -620,15 +621,15 @@ export function RepositoryTaskStudio() {
   return (
     <div className="flex flex-col h-full w-full overflow-hidden bg-background">
       {/* Top Action Toolbar: Issue Import & New Task */}
-      <div className="shrink-0 bg-card border-b border-border px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <ListChecks className="h-4 w-4 text-primary" />
-          <span className="text-xs font-semibold text-foreground">
+      <div className="shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <ListChecks className="h-4 w-4 text-primary shrink-0" />
+          <span className="text-xs font-semibold text-foreground truncate">
             Week 3 Workflow Automation — Task Planner, Sandbox, Bounded Repair, Verification &amp; Draft PR
           </span>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2 shrink-0">
           <form onSubmit={handleImportIssue} className="flex items-center gap-1.5">
             <input
               type="number"
@@ -636,26 +637,27 @@ export function RepositoryTaskStudio() {
               value={issueNumberInput}
               onChange={(e) => setIssueNumberInput(e.target.value)}
               placeholder="GitHub Issue # (e.g. 42)"
-              className="w-44 px-2.5 py-1 text-xs rounded-md border border-border bg-background text-foreground font-mono focus:outline-none focus:border-primary"
+              className="w-36 sm:w-44 px-2.5 py-1 text-xs rounded-md border border-border bg-background text-foreground font-mono focus:outline-none focus:border-primary"
             />
             <button
               type="submit"
               disabled={actionBusy !== null || !issueNumberInput.trim()}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground disabled:opacity-50"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground disabled:opacity-50 shrink-0"
             >
               {actionBusy === 'import' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <GitPullRequestDraft className="h-3.5 w-3.5 text-primary" />
               )}
-              <span>Import Issue</span>
+              <span className="hidden sm:inline">Import Issue</span>
+              <span className="sm:hidden">Import</span>
             </button>
           </form>
 
           <button
             type="button"
             onClick={() => setShowNewTaskForm(!showNewTaskForm)}
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 shrink-0"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>New Task</span>
@@ -904,8 +906,8 @@ export function RepositoryTaskStudio() {
             <>
               {/* Task Header Card */}
               <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3 flex-wrap">
-                  <div className="space-y-1">
+                <div className="flex items-start justify-between gap-4 flex-wrap">
+                  <div className="space-y-1.5 flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
                         className={cn(
@@ -948,10 +950,10 @@ export function RepositoryTaskStudio() {
                         </a>
                       )}
                     </div>
-                    <h2 className="text-base font-bold text-foreground">{taskDetail.title}</h2>
+                    <h2 className="text-base font-bold text-foreground break-words leading-snug">{taskDetail.title}</h2>
                   </div>
 
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap shrink-0">
                     <button
                       type="button"
                       disabled={actionBusy !== null}
@@ -1015,15 +1017,15 @@ export function RepositoryTaskStudio() {
 
                 {/* Segregated Intake Summary: Requirements, Assumptions, Constraints */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-border/60 text-xs">
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
                     <div className="text-[10px] font-mono uppercase text-primary font-bold">
                       Requirements ({taskDetail.requirements.length})
                     </div>
                     {taskDetail.requirements.map((r) => (
-                      <div key={r.id} className="text-[11px] text-foreground/90">
+                      <div key={r.id} className="text-[11px] text-foreground/90 break-words">
                         • {r.description}
                         {r.target_files.length > 0 && (
-                          <div className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                          <div className="text-[10px] font-mono text-muted-foreground mt-0.5 break-all">
                             Files: {r.target_files.join(', ')}
                           </div>
                         )}
@@ -1031,26 +1033,26 @@ export function RepositoryTaskStudio() {
                     ))}
                   </div>
 
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
                     <div className="text-[10px] font-mono uppercase text-amber-400 font-bold">
                       Assumptions ({taskDetail.assumptions.length})
                     </div>
                     {taskDetail.assumptions.map((a) => (
-                      <div key={a.id} className="text-[11px] text-foreground/90">
+                      <div key={a.id} className="text-[11px] text-foreground/90 break-words">
                         • {a.description}
                       </div>
                     ))}
                   </div>
 
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
                     <div className="text-[10px] font-mono uppercase text-rose-400 font-bold">
                       Protected Constraints ({taskDetail.constraints.length})
                     </div>
                     {taskDetail.constraints.map((c) => (
-                      <div key={c.id} className="text-[11px] text-foreground/90">
+                      <div key={c.id} className="text-[11px] text-foreground/90 break-words">
                         • {c.description}
                         {c.forbidden_files.length > 0 && (
-                          <div className="text-[10px] font-mono text-rose-300 mt-0.5">
+                          <div className="text-[10px] font-mono text-rose-300 mt-0.5 break-all">
                             Forbidden: {c.forbidden_files.join(', ')}
                           </div>
                         )}
@@ -1254,98 +1256,217 @@ export function RepositoryTaskStudio() {
                   {/* Server-Enforced Human Approval Gate Card */}
                   <div
                     className={cn(
-                      'rounded-xl border p-4 space-y-3',
+                      'rounded-xl border p-4.5 space-y-3.5 transition-all',
                       isApproved
-                        ? 'border-emerald-500/40 bg-emerald-500/10'
+                        ? 'border-emerald-500/50 bg-gradient-to-r from-emerald-950/20 via-emerald-900/10 to-transparent'
                         : taskDetail.status === 'REJECTED'
-                        ? 'border-rose-500/40 bg-rose-500/10'
-                        : 'border-amber-500/40 bg-amber-500/10'
+                        ? 'border-rose-500/40 bg-gradient-to-r from-rose-950/20 via-rose-900/10 to-transparent'
+                        : 'border-amber-500/50 bg-gradient-to-r from-amber-950/25 via-amber-900/10 to-transparent'
                     )}
                   >
-                    <div className="flex items-start justify-between gap-3 flex-wrap">
-                      <div className="flex items-start gap-2.5">
-                        {isApproved ? (
-                          <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
-                        ) : taskDetail.status === 'REJECTED' ? (
-                          <XCircle className="h-5 w-5 text-rose-400 shrink-0 mt-0.5" />
-                        ) : (
-                          <ShieldAlert className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
-                        )}
-                        <div className="space-y-0.5">
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                            Human Approval Gate — Plan v{latestPlan.plan_version}
-                            {latestPlan.plan_hash ? ` (Hash: ${latestPlan.plan_hash.slice(0, 10)})` : ''}
-                          </h3>
-                          <p className="text-xs text-muted-foreground">
+                    {/* Header Banner */}
+                    <div className="flex items-start justify-between gap-4 flex-wrap">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
+                        <div
+                          className={cn(
+                            'p-2 rounded-lg shrink-0 mt-0.5',
+                            isApproved
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : taskDetail.status === 'REJECTED'
+                              ? 'bg-rose-500/20 text-rose-400'
+                              : 'bg-amber-500/20 text-amber-400'
+                          )}
+                        >
+                          {isApproved ? (
+                            <ShieldCheck className="h-5 w-5" />
+                          ) : taskDetail.status === 'REJECTED' ? (
+                            <XCircle className="h-5 w-5" />
+                          ) : (
+                            <ShieldAlert className="h-5 w-5" />
+                          )}
+                        </div>
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span
+                              className={cn(
+                                'px-2 py-0.5 rounded text-[10px] font-mono font-bold tracking-wider uppercase',
+                                isApproved
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : taskDetail.status === 'REJECTED'
+                                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                                  : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                              )}
+                            >
+                              {isApproved
+                                ? 'Plan Approved & Locked'
+                                : taskDetail.status === 'REJECTED'
+                                ? 'Plan Rejected'
+                                : 'Human Approval Required'}
+                            </span>
+                            <span className="text-[11px] font-mono text-muted-foreground">
+                              Plan v{latestPlan.plan_version}
+                              {latestPlan.plan_hash ? ` • Hash: ${latestPlan.plan_hash.slice(0, 10)}` : ''}
+                            </span>
+                          </div>
+                          <h4 className="text-sm font-bold text-foreground">
+                            {isApproved
+                              ? 'Plan Verified & Ready for Workspace Execution'
+                              : taskDetail.status === 'REJECTED'
+                              ? 'Plan Rejected — Revision Required'
+                              : 'Human Approval Gate (ADR-009 Policy Boundary)'}
+                          </h4>
+                          <p className="text-xs text-muted-foreground leading-relaxed">
                             {isApproved
                               ? `Plan v${latestPlan.plan_version} is explicitly approved. Any change to the plan or base revision will automatically invalidate this approval.`
                               : taskDetail.status === 'REJECTED'
-                              ? `Plan v${latestPlan.plan_version} was rejected. Execution is blocked until a revised plan is generated and approved.`
-                              : `Execution is blocked by backend policy until Plan v${latestPlan.plan_version} is explicitly approved.`}
+                              ? `Plan v${latestPlan.plan_version} was rejected. Execution is completely blocked until a revised plan is generated and approved.`
+                              : `Autonomous workspace execution is blocked by backend policy until Plan v${latestPlan.plan_version} is explicitly approved by a human developer.`}
                           </p>
                         </div>
                       </div>
+
+                      {/* Top Action Shortcut for Approved State */}
+                      {isApproved && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={actionBusy !== null}
+                            onClick={() => handleExecuteTask(true)}
+                            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-md shadow-emerald-950/40 transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+                          >
+                            <Play className="h-4 w-4 fill-white" />
+                            <span>Start Workspace Execution</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    {/* Approve / Reject / Revise Controls */}
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 pt-2 border-t border-border/40">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={approvalComment}
-                          onChange={(e) => setApprovalComment(e.target.value)}
-                          placeholder="Approval note (optional)…"
-                          className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-                        />
+                    {/* Approved State Footer */}
+                    {isApproved && (
+                      <div className="pt-2 border-t border-emerald-500/30 flex items-center justify-between flex-wrap gap-2 text-xs">
+                        <span className="text-[11px] text-emerald-300/90 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                          Ready for execution. Click &ldquo;Start Workspace Execution&rdquo; to launch isolated sandbox.
+                        </span>
                         <button
                           type="button"
-                          disabled={actionBusy !== null || taskDetail.status === 'REJECTED'}
-                          onClick={handleApprovePlan}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 disabled:opacity-40 shrink-0"
+                          onClick={() => setShowApprovedRevision(!showApprovedRevision)}
+                          className="text-[11px] text-muted-foreground hover:text-foreground underline transition-colors"
                         >
-                          <ThumbsUp className="h-3.5 w-3.5" />
-                          <span>Approve v{latestPlan.plan_version}</span>
+                          {showApprovedRevision ? 'Close Revision Controls' : 'Need Changes? Request Plan Revision or Reject'}
                         </button>
                       </div>
+                    )}
 
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={rejectionReason}
-                          onChange={(e) => setRejectionReason(e.target.value)}
-                          placeholder="Rejection reason…"
-                          className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-                        />
-                        <button
-                          type="button"
-                          disabled={actionBusy !== null}
-                          onClick={handleRejectPlan}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-500 disabled:opacity-40 shrink-0"
-                        >
-                          <ThumbsDown className="h-3.5 w-3.5" />
-                          <span>Reject</span>
-                        </button>
-                      </div>
+                    {/* Pending Approval Gate Controls OR Approved Revision Dropdown */}
+                    {(!isApproved || showApprovedRevision) && (
+                      <div className="pt-3 border-t border-border/40 space-y-3">
+                        {/* Primary Approval Row (Visible when not yet approved) */}
+                        {!isApproved && taskDetail.status !== 'REJECTED' && (
+                          <div className="p-3 rounded-lg bg-background/70 border border-emerald-500/30 space-y-2">
+                            <span className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                              <ThumbsUp className="h-3.5 w-3.5 text-emerald-400" />
+                              Approve Plan &amp; Unlock Autonomous Workspace
+                            </span>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                              <input
+                                type="text"
+                                value={approvalComment}
+                                onChange={(e) => setApprovalComment(e.target.value)}
+                                placeholder="Optional approval note or sign-off comment…"
+                                className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
+                              />
+                              <button
+                                type="button"
+                                disabled={actionBusy !== null}
+                                onClick={handleApprovePlan}
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-sm shrink-0 transition-colors disabled:opacity-50"
+                              >
+                                {actionBusy === 'approve' ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <ThumbsUp className="h-3.5 w-3.5" />
+                                )}
+                                <span>Approve Plan v{latestPlan.plan_version}</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={revisionNotes}
-                          onChange={(e) => setRevisionNotes(e.target.value)}
-                          placeholder="Revision instructions for AI planner…"
-                          className="flex-1 px-2.5 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-                        />
-                        <button
-                          type="button"
-                          disabled={actionBusy !== null}
-                          onClick={handleGenerateOrRevisePlan}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border bg-background hover:bg-accent text-xs font-semibold shrink-0"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          <span>Revise</span>
-                        </button>
+                        {/* Revision & Rejection Actions: Clean 2-column layout with no overlap */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {/* Request Changes / Revise Plan */}
+                          <div className="p-3 rounded-lg bg-background/60 border border-border/60 space-y-2 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-semibold text-foreground flex items-center gap-1.5">
+                                <RefreshCw className="h-3 w-3 text-primary" />
+                                Request Plan Revision
+                              </span>
+                              <span className="text-[10px] font-mono text-muted-foreground">
+                                Synthesizes v{latestPlan.plan_version + 1}
+                              </span>
+                            </div>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              <input
+                                type="text"
+                                value={revisionNotes}
+                                onChange={(e) => setRevisionNotes(e.target.value)}
+                                placeholder="Feedback for AI planner…"
+                                className="flex-1 min-w-0 px-2.5 py-1.5 text-xs rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground"
+                              />
+                              <button
+                                type="button"
+                                disabled={actionBusy !== null || !revisionNotes.trim()}
+                                onClick={handleGenerateOrRevisePlan}
+                                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-card hover:bg-accent text-xs font-semibold shrink-0 disabled:opacity-40"
+                              >
+                                {actionBusy === 'plan' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-3 w-3 text-primary" />
+                                )}
+                                <span>Revise</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Reject Plan */}
+                          <div className="p-3 rounded-lg bg-background/60 border border-border/60 space-y-2 min-w-0">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-semibold text-rose-400 flex items-center gap-1.5">
+                                <ThumbsDown className="h-3 w-3" />
+                                Reject Plan
+                              </span>
+                              <span className="text-[10px] font-mono text-muted-foreground">
+                                Blocks execution
+                              </span>
+                            </div>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              <input
+                                type="text"
+                                value={rejectionReason}
+                                onChange={(e) => setRejectionReason(e.target.value)}
+                                placeholder="Reason for rejection…"
+                                className="flex-1 min-w-0 px-2.5 py-1.5 text-xs rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground"
+                              />
+                              <button
+                                type="button"
+                                disabled={actionBusy !== null}
+                                onClick={handleRejectPlan}
+                                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-semibold shrink-0 disabled:opacity-40"
+                              >
+                                {actionBusy === 'reject' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <ThumbsDown className="h-3 w-3" />
+                                )}
+                                <span>Reject</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
 
                   {/* Structured Plan Summary & Steps */}
@@ -1354,9 +1475,9 @@ export function RepositoryTaskStudio() {
                       <div className="text-[10px] font-mono uppercase text-primary font-bold">
                         Plan Summary (v{latestPlan.plan_version})
                       </div>
-                      <p className="text-sm font-medium text-foreground">{latestPlan.summary}</p>
+                      <p className="text-sm font-medium text-foreground leading-snug break-words">{latestPlan.summary}</p>
                       {latestPlan.problem_statement && (
-                        <p className="text-xs text-muted-foreground">{latestPlan.problem_statement}</p>
+                        <p className="text-xs text-muted-foreground break-words">{latestPlan.problem_statement}</p>
                       )}
                     </div>
 
@@ -1368,23 +1489,23 @@ export function RepositoryTaskStudio() {
                       {latestPlan.steps.map((step: PlanStep, idx: number) => (
                         <div
                           key={step.step_id}
-                          className="rounded-lg border border-border/70 bg-muted/15 p-3 space-y-2"
+                          className="rounded-lg border border-border/70 bg-muted/15 p-3 space-y-2 min-w-0 overflow-hidden"
                         >
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <div className="flex items-center gap-2">
-                              <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-[10px] font-bold">
+                          <div className="flex items-start justify-between gap-2.5">
+                            <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
+                              <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-[10px] font-bold shrink-0">
                                 #{idx + 1} • {step.step_id}
                               </span>
-                              <span className="px-2 py-0.5 rounded border border-border text-[10px] font-mono uppercase">
+                              <span className="px-2 py-0.5 rounded border border-border text-[10px] font-mono uppercase text-muted-foreground shrink-0">
                                 {step.action_type || step.step_type}
                               </span>
-                              <span className="text-xs font-semibold text-foreground">
+                              <span className="text-xs font-semibold text-foreground break-words">
                                 {step.title}
                               </span>
                             </div>
                             <span
                               className={cn(
-                                'px-2 py-0.5 rounded border text-[10px] font-mono uppercase',
+                                'px-2 py-0.5 rounded border text-[10px] font-mono uppercase shrink-0',
                                 RISK_BADGE_MAP[step.risk_level || 'low'] || RISK_BADGE_MAP.low
                               )}
                             >
@@ -1392,24 +1513,24 @@ export function RepositoryTaskStudio() {
                             </span>
                           </div>
 
-                          <p className="text-xs text-muted-foreground">{step.description}</p>
+                          <p className="text-xs text-muted-foreground leading-relaxed break-words">{step.description}</p>
 
                           <div className="flex flex-wrap gap-3 text-[11px] font-mono text-muted-foreground">
                             {step.expected_files.length > 0 && (
-                              <span className="inline-flex items-center gap-1">
-                                <FileCode className="h-3 w-3 text-primary" />
+                              <span className="inline-flex items-center gap-1 break-all">
+                                <FileCode className="h-3 w-3 text-primary shrink-0" />
                                 <span>Files: {step.expected_files.join(', ')}</span>
                               </span>
                             )}
                             {(step.depends_on || step.dependencies || []).length > 0 && (
-                              <span>
+                              <span className="break-words">
                                 Depends on: {(step.depends_on || step.dependencies || []).join(', ')}
                               </span>
                             )}
                           </div>
 
                           {step.verification.length > 0 && (
-                            <div className="text-[11px] text-emerald-400/90 font-mono">
+                            <div className="text-[11px] text-emerald-400/90 font-mono break-words">
                               ✓ Verification: {step.verification.join(' | ')}
                             </div>
                           )}
@@ -1419,36 +1540,81 @@ export function RepositoryTaskStudio() {
 
                     {/* Expected Files, Tests to Run, Validation Strategy & Risks */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 border-t border-border/60 text-xs">
-                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-1.5">
-                        <div className="text-[10px] font-mono uppercase text-primary font-bold">
+                      {/* Column 1: Files & Tests */}
+                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-2 min-w-0 overflow-hidden">
+                        <div className="text-[10px] font-mono uppercase text-primary font-bold tracking-wider">
                           Expected Files &amp; Permitted Tests
                         </div>
-                        <div className="text-[11px] font-mono text-foreground/90">
-                          <strong>Files:</strong>{' '}
-                          {(latestPlan.expected_files || latestPlan.expected_files_to_modify || []).join(', ') || 'None'}
-                        </div>
-                        <div className="text-[11px] font-mono text-foreground/90">
-                          <strong>Tests:</strong>{' '}
-                          {(latestPlan.tests_to_run || latestPlan.tests_to_add || []).join(' ; ') || 'pytest'}
+                        <div className="space-y-2">
+                          <div>
+                            <span className="text-[10px] font-mono text-muted-foreground uppercase block mb-1">
+                              Files to Modify ({(latestPlan.expected_files || latestPlan.expected_files_to_modify || []).length})
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {(latestPlan.expected_files || latestPlan.expected_files_to_modify || []).length > 0 ? (
+                                (latestPlan.expected_files || latestPlan.expected_files_to_modify || []).map((f: string) => (
+                                  <span
+                                    key={f}
+                                    className="px-2 py-0.5 rounded bg-background border border-border text-[11px] font-mono text-foreground/90 break-all inline-block"
+                                  >
+                                    {f}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="text-muted-foreground italic text-[11px]">No specific files locked</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="pt-1.5 border-t border-border/40">
+                            <span className="text-[10px] font-mono text-muted-foreground uppercase block mb-1">
+                              Automated Tests to Run
+                            </span>
+                            <div className="flex flex-wrap gap-1.5">
+                              {(latestPlan.tests_to_run || latestPlan.tests_to_add || ['pytest']).map((t: string) => (
+                                <span
+                                  key={t}
+                                  className="px-2 py-0.5 rounded bg-sky-500/10 border border-sky-500/30 text-[11px] font-mono text-sky-300 inline-block"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-1.5">
-                        <div className="text-[10px] font-mono uppercase text-amber-400 font-bold">
+                      {/* Column 2: Risks & Resource Budget */}
+                      <div className="rounded-lg bg-muted/20 border border-border/50 p-3 space-y-2 min-w-0 overflow-hidden">
+                        <div className="text-[10px] font-mono uppercase text-amber-400 font-bold tracking-wider">
                           Risks &amp; Resource Budget
                         </div>
-                        {(latestPlan.risks || []).map((r: any, i: number) => (
-                          <div key={r.id || i} className="text-[11px] text-foreground/90">
-                            • [{String(r.severity || 'medium').toUpperCase()}] {r.description || String(r)} —{' '}
-                            <span className="text-muted-foreground">{r.mitigation || ''}</span>
-                          </div>
-                        ))}
-                        {latestPlan.resource_budget && (
-                          <div className="text-[10px] font-mono text-muted-foreground pt-1">
-                            Budget: max {latestPlan.resource_budget.max_repair_attempts ?? 3} repair attempts •{' '}
-                            {latestPlan.resource_budget.max_tokens ?? 20000} tokens
-                          </div>
-                        )}
+                        <div className="space-y-1.5">
+                          {(latestPlan.risks || []).length > 0 ? (
+                            (latestPlan.risks || []).map((r: any, i: number) => (
+                              <div key={r.id || i} className="text-[11px] text-foreground/90 leading-snug break-words">
+                                <span className="font-mono text-amber-400 font-bold">
+                                  [{String(r.severity || 'medium').toUpperCase()}]
+                                </span>{' '}
+                                {r.description || String(r)}
+                                {r.mitigation && (
+                                  <span className="text-muted-foreground block text-[10px] mt-0.5">
+                                    ↳ Mitigation: {r.mitigation}
+                                  </span>
+                                )}
+                              </div>
+                            ))
+                          ) : (
+                            <div className="text-muted-foreground text-[11px] italic">No high-risk vectors detected</div>
+                          )}
+
+                          {latestPlan.resource_budget && (
+                            <div className="text-[10px] font-mono text-muted-foreground pt-1.5 border-t border-border/40 flex items-center justify-between flex-wrap gap-2">
+                              <span>Max Repairs: <strong>{latestPlan.resource_budget.max_repair_attempts ?? 3}</strong> attempts</span>
+                              <span>Token Budget: <strong>{latestPlan.resource_budget.max_tokens ?? 20000}</strong> tokens</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
