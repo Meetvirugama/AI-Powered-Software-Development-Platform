@@ -10,6 +10,7 @@ between GitHub errors and application-level errors.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Optional
 
@@ -108,6 +109,9 @@ class GitHubClient:
                 if response.status_code == 403:
                     remaining = response.headers.get("x-ratelimit-remaining", "")
                     if remaining == "0":
+                        if attempt < MAX_RETRIES:
+                            await asyncio.sleep(0.05 * (2 ** attempt))
+                            continue
                         raise GitHubAPIError(
                             "GitHub API rate limit exceeded.",
                             status_code=403,
@@ -118,6 +122,9 @@ class GitHubClient:
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after", "")
                     reset_time = response.headers.get("x-ratelimit-reset", "")
+                    if attempt < MAX_RETRIES:
+                        await asyncio.sleep(0.05 * (2 ** attempt))
+                        continue
                     raise GitHubAPIError(
                         f"GitHub API rate limit exceeded (HTTP 429). Retry-After: {retry_after or reset_time}s.",
                         status_code=429,
@@ -138,6 +145,15 @@ class GitHubClient:
                     )
 
                 if response.status_code >= 500:
+                    if attempt < MAX_RETRIES:
+                        logger.warning(
+                            "GitHub API 5xx error (attempt %d/%d): HTTP %s",
+                            attempt + 1,
+                            MAX_RETRIES + 1,
+                            response.status_code,
+                        )
+                        await asyncio.sleep(0.05 * (2 ** attempt))
+                        continue
                     raise GitHubAPIError(
                         f"GitHub server error ({response.status_code}).",
                         status_code=response.status_code,

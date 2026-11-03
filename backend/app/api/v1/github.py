@@ -62,7 +62,7 @@ async def list_github_repositories(
     installation_repo = GitHubInstallationRepository(db)
     user = UserRepository(db).get_by_id(user_id)
 
-    # If installation_id passed in query params, ensure it is linked to this user
+    # If installation_id passed in query params, ensure it is linked to this user (without hijacking another tenant)
     if installation_id and user:
         try:
             installation_repo.upsert(
@@ -70,7 +70,10 @@ async def list_github_repositories(
                 installation_id=str(installation_id).strip(),
                 account_login=user.login,
                 permissions={},
+                allow_reassign=False,
             )
+        except APIError:
+            raise
         except Exception as exc:
             logger.warning("query_installation_link_error", extra={"error": str(exc)})
 
@@ -314,6 +317,7 @@ async def link_github_installation(
         installation_id=inst_id_clean,
         account_login=user.login,
         permissions={},
+        allow_reassign=False,
     )
     return {
         "status": "linked",
@@ -343,6 +347,7 @@ async def github_installation_callback(
                 installation_id=installation_id,
                 account_login=user.login,
                 permissions={},
+                allow_reassign=False,
             )
     except Exception as exc:
         logger.info("installation_callback_without_user", extra={"error": str(exc)})
