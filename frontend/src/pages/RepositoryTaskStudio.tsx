@@ -456,14 +456,15 @@ export function RepositoryTaskStudio() {
 
   async function handleExecuteTask(runSteps = true) {
     if (!taskDetail) return;
+    const tid = taskDetail.task_id;
     setActionBusy('execute');
     setErrorBanner(null);
     try {
-      await executeTask(taskDetail.task_id, { run_steps: runSteps });
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      await executeTask(tid, { run_steps: runSteps });
     } catch (err: any) {
       setErrorBanner(err?.message || 'Execution blocked by approval gate.');
     } finally {
+      await refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
@@ -512,45 +513,48 @@ export function RepositoryTaskStudio() {
 
   async function handleRunTests() {
     if (!taskDetail) return;
+    const tid = taskDetail.task_id;
     setActionBusy('tests');
     setErrorBanner(null);
     try {
-      await triggerTaskTests(taskDetail.task_id, { framework: 'pytest' });
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      await triggerTaskTests(tid, { framework: 'pytest' });
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to run workspace tests.');
     } finally {
+      await refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
 
   async function handleRunRepair() {
     if (!taskDetail) return;
+    const tid = taskDetail.task_id;
     setActionBusy('repair');
     setErrorBanner(null);
     try {
-      await triggerTaskRepair(taskDetail.task_id, { framework: 'pytest' });
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      await triggerTaskRepair(tid, { framework: 'pytest' });
     } catch (err: any) {
       setErrorBanner(err?.message || 'Bounded self-repair failed or budget exhausted.');
     } finally {
+      await refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
 
   async function handleRunVerification() {
     if (!taskDetail) return;
+    const tid = taskDetail.task_id;
     setActionBusy('verify');
     setErrorBanner(null);
     try {
-      await triggerTaskVerification(taskDetail.task_id, {
+      await triggerTaskVerification(tid, {
         require_passing_tests: true,
         strict_scope: true,
       });
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
     } catch (err: any) {
       setErrorBanner(err?.message || 'Independent verification failed.');
     } finally {
+      await refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
