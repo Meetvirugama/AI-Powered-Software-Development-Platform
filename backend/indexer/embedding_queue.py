@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from typing import Any
@@ -40,7 +41,7 @@ class EmbeddingQueue:
         """Durably process up to BATCH_SIZE queued chunks and persist vectors.
         
         Only acknowledges (removes from PROCESSING_QUEUE) after embedding generation
-        AND database persistence successfully commit.
+        AND database persistence successfully commit. Supports both sync Session and AsyncSession.
         """
         raw_items: list[str] = []
         items: list[dict[str, Any]] = []
@@ -88,7 +89,7 @@ class EmbeddingQueue:
                     raise
                 await asyncio.sleep(2**attempt)
 
-        # If db_session provided, persist vectors into CodeChunk
+        # If db_session provided, persist vectors into CodeChunk (supports both Session and AsyncSession)
         if db_session:
             try:
                 for item, vector in zip(items, embeddings):
@@ -97,15 +98,21 @@ class EmbeddingQueue:
                         try:
                             cid = UUID(chunk_id)
                             row = db_session.get(CodeChunk, cid)
+                            if inspect.isawaitable(row):
+                                row = await row
                             if row:
                                 row.embedding = vector
                         except (ValueError, TypeError):
                             pass
-                db_session.commit()
+                commit_res = db_session.commit()
+                if inspect.isawaitable(commit_res):
+                    await commit_res
             except Exception as exc:
                 logger.error("persist_embeddings_failed", extra={"error": str(exc)})
                 if hasattr(db_session, "rollback"):
-                    db_session.rollback()
+                    rb_res = db_session.rollback()
+                    if inspect.isawaitable(rb_res):
+                        await rb_res
                 # Re-queue items back to main queue on DB persistence failure so work is not lost
                 for raw in reversed(raw_items):
                     self.redis.lpush(QUEUE_NAME, raw)

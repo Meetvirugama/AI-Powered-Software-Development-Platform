@@ -963,6 +963,9 @@ class TaskApprovalResponse(BaseModel):
     comment: str | None = None
     notes: str | None = None
     reason: str | None = None
+    title: str | None = None
+    description: str | None = None
+    repository_id: str | None = None
     base_revision: str | None = None
     plan_hash: str
     task_status: TaskStatus

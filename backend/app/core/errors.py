@@ -34,6 +34,7 @@ class ErrorCode:
     GITHUB_API_ERROR = "GITHUB_API_ERROR"
     ANALYSIS_FAILED = "ANALYSIS_FAILED"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    EXTERNAL_SERVICE_ERROR = "EXTERNAL_SERVICE_ERROR"
     INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
     # Week 3 Workflow & Governance Error Codes (Docs/week3.md §7.4)
     TASK_NOT_FOUND = "TASK_NOT_FOUND"
@@ -120,7 +121,8 @@ async def validation_exception_handler(_: Request, exc: RequestValidationError) 
     if failed_fields:
         content["error"]["details"] = {"invalid_fields": failed_fields}
 
-    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, content=content)
+    http_422 = getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422)
+    return JSONResponse(status_code=http_422, content=content)
 
 
 async def unhandled_exception_handler(_: Request, exc: Exception) -> JSONResponse:

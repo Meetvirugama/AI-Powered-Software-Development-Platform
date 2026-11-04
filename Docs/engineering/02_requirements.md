@@ -79,14 +79,14 @@
 | FR-063 | Token Limit Enforcement | Context builder truncates input to stay within token window (tiktoken `cl100k_base`) | System | P0 | 🟢 Done | `ContextBuilder` |
 | FR-064 | Memory Continuity | Memory entries deduplicated and sorted by recency (`memory_entries` table) | System | P0 | 🟢 Done | `MemoryRepository` |
 
-### Week 2 — Developer Intelligence Suite (Active)
+### Week 2 — Developer Intelligence Suite (Live)
 
 | ID | Requirement | Description | Actor | Priority | Status | Related Feature |
 |---|---|---|---|---|---|---|
 | FR-100 | Shared `IntelligenceContext` | Context container with `TargetSnippet`, `SymbolContext`, caller references, and token bounding | System | P0 | 🟢 Done | `ContextBuilder` |
-| FR-101 | Code Explanation Service | Explain purpose, logic flow, key symbols, inputs/outputs, dependencies, and limitations | Developer | P0 | 🔵 In Progress | `CodeExplanationService` |
-| FR-102 | Dedicated Bug Detection | Detect off-by-one, null safety, unhandled exceptions, and resource leaks with static + AI reasoning | Developer | P0 | 🔵 In Progress | `BugDetectionEngine` |
-| FR-103 | Framework-Aware Test Gen | Detect `pytest`, `unittest`, or `jest` and generate executable test files with positive/negative/edge cases | Developer | P0 | 🔵 In Progress | `TestGenerationService` |
+| FR-101 | Code Explanation Service | Explain purpose, logic flow, key symbols, inputs/outputs, dependencies, and limitations | Developer | P0 | 🟢 Done | `CodeExplanationService` |
+| FR-102 | Dedicated Bug Detection | Detect off-by-one, null safety, unhandled exceptions, and resource leaks with static + AI reasoning | Developer | P0 | 🟢 Done | `BugDetectionEngine` |
+| FR-103 | Framework-Aware Test Gen | Detect `pytest`, `unittest`, or `jest` and generate executable test files with positive/negative/edge cases | Developer | P0 | 🟢 Done | `TestGenerationService` |
 | FR-104 | Standalone AI Code Review | Review single file, commit SHA, or GitHub PR diff across Correctness, Security, Performance, and Reliability | Developer | P0 | 🟢 Done | `AICodeReviewEngine` |
 | FR-105 | Analysis Persistence | Persist analysis runs and categorized findings in `analysis_runs` and `code_findings` | System | P0 | 🟢 Done | Om (Models & Migration) |
 

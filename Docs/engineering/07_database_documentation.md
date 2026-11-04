@@ -1,5 +1,5 @@
 # 07. Database Documentation
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Synchronized & Live
+> **Version:** 3.1 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-20 | **Status:** Synchronized & Live
 
 > [!NOTE]
 > Database models are implemented in `backend/app/models/`. Tables reflect the actual SQLAlchemy model definitions and Alembic migrations.
@@ -17,7 +17,7 @@
 
 ---
 
-## ER Diagram (All 9 Tables)
+## ER Diagram (Core & Workflow Tables)
 
 ```mermaid
 erDiagram
@@ -260,7 +260,7 @@ Stores chunked code with pgvector dense embeddings for vector retrieval.
 | `start_line` | INTEGER | No | — | — | — | First line in source file |
 | `end_line` | INTEGER | No | — | — | — | Last line in source file |
 | `content_hash` | VARCHAR | No | — | — | — | Content hash |
-| `embedding` | VECTOR(1536) | Yes | NULL | — | — | pgvector embedding |
+| `embedding` | VECTOR(768) | Yes | NULL | — | — | pgvector embedding (`gemini-embedding-001`, 768 dims per migration `f1a2b3c4d5e6`) |
 | `metadata` | JSONB | Yes | `'{}'` | — | — | Extra context (`file_path`, language) |
 | `created_at` | TIMESTAMPTZ | No | NOW() | — | — | Creation timestamp |
 
@@ -287,6 +287,14 @@ Stores long-term architectural memory, rules, and project learnings.
 
 ---
 
+### 10. `analysis_runs` & `code_findings` (Week 2 — Developer Intelligence Suite)
+Stores persisted explain/bug-detection/test-generation/review runs (`analysis_runs`) and categorized findings (`code_findings`).
+
+### 11. `tasks`, `task_plans`, `task_events`, `verification_results`, `pull_requests`, `github_issues` (Week 3 — Autonomous Workflow)
+Stores bounded task lifecycle records (`tasks`), structured execution plans (`task_plans`), append-only audit timeline events (`task_events`), independent verification gates (`verification_results`), GitHub Draft PR metadata (`pull_requests`), and imported/created GitHub issues (`github_issues`).
+
+---
+
 ## Applied Alembic Migrations
 
 | Revision | Name | Description |
@@ -296,3 +304,7 @@ Stores long-term architectural memory, rules, and project learnings.
 | `aef3bb17eb34` | `aef3bb17eb34_content_tables.py` | Creates `repository_files`, `code_symbols`, `symbol_edges`, `code_chunks` |
 | `cb4e2a7d0f31` | `cb4e2a7d0f31_add_sync_jobs.py` | Creates `sync_jobs` table |
 | `e7b8c9d0f1a2` | `e7b8c9d0f1a2_add_code_chunks_and_memory.py` | Creates `memory_entries` table and pgvector chunk enhancements |
+| `f1a2b3c4d5e6` | `f1a2b3c4d5e6_resize_embedding_to_768.py` | Resizes `code_chunks.embedding` from `VECTOR(1536)` to `VECTOR(768)` |
+| `a9b8c7d6e5f4` | `a9b8c7d6e5f4_add_week2_analysis_tables.py` | Creates `analysis_runs` and `code_findings` tables |
+| `b2c3d4e5f6a7` | `b2c3d4e5f6a7_add_week3_task_and_issue_tables.py` | Creates `tasks`, `task_plans`, `task_events`, `verification_results`, and `github_issues` |
+| `a1b2c3d4e5f6` | `a1b2c3d4e5f6_add_pull_requests_table.py` | Creates `pull_requests` table for GitHub Draft PR persistence |

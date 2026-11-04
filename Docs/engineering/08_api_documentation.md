@@ -29,7 +29,8 @@
 | GET | `/api/v1/repositories` | List Connected Repositories | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}` | Repository Detail & Sync Status | Yes | 🟢 Done |
 | POST | `/api/v1/repositories/{id}/sync` | Queue Repository Sync | Yes | 🟢 Done |
-| POST | `/api/v1/repositories/{id}/search` | Hybrid Vector + Lexical Search | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/search` | Hybrid Vector + Lexical Search (POST JSON) | Yes | 🟢 Done |
+| GET | `/api/v1/repositories/{id}/search` | Hybrid Vector + Lexical Search (GET query params) | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/files` | List Indexed Files | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/symbols` | List Extracted AST Symbols | Yes | 🟢 Done |
 | POST | `/api/v1/repositories/{id}/chat` | Grounded Repository Chat | Yes | 🟢 Done |
@@ -38,13 +39,13 @@
 
 | Method | Endpoint | Feature | Auth Required | Status |
 |---|---|---|---|---|
-| POST | `/api/v1/repositories/{id}/explain` | Code Explanation (file, symbol, range) | Yes | 🟢 Done (API Contract) |
-| POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🟢 Done (API Contract) |
-| POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🟢 Done (API Contract) |
-| POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🟢 Done (API Contract) |
+| POST | `/api/v1/repositories/{id}/explain` | Code Explanation (file, symbol, range) | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/detect-bugs` | Dedicated Bug Detection (Static + AI) | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/generate-tests` | Framework-Aware Test File Generation | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/review` | Standalone AI Code Review (file, commit, PR) | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/analysis-runs` | List Historical Analysis Runs (with `user_id` filter) | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/analysis-runs/summary` | Analysis Run Summary, DB Integrity & Retention Metrics | Yes | 🟢 Done |
-| GET | `/api/v1/analysis-runs/{run_id}` | Get Specific Analysis Run & Findings | Yes | 🟢 Done (API Contract) |
+| GET | `/api/v1/analysis-runs/{run_id}` | Get Specific Analysis Run & Findings | Yes | 🟢 Done |
 
 ### Workflow Automation & GitHub Ecosystem (Week 3 — Implemented & Verified)
 
@@ -63,6 +64,7 @@
 | POST | `/api/v1/tasks/{id}/create-pr` | Authorize Push & Create GitHub Draft PR | Yes | 🟢 Done (Implemented & Verified) |
 | GET | `/api/v1/tasks/{id}/events` | Task Event Log & Audit Trail | Yes | 🟢 Done (Implemented & Verified) |
 | GET | `/api/v1/tasks/{id}/stream` | Real-Time SSE Status & Execution Stream | Yes | 🟢 Done (Implemented & Verified) |
+| GET | `/api/v1/events/stream` | Server-Sent Events (SSE) Real-Time Stream | Yes | 🟢 Done (Implemented & Verified) |
 
 
 ---

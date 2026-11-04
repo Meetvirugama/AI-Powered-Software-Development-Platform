@@ -195,7 +195,7 @@ class WorkspaceCommandRunner:
         """Produce a clean environment dictionary stripped of host credentials and sensitive keys."""
         env: dict[str, str] = {}
 
-        # Preserve only standard non-sensitive system variables
+        # Preserve only standard non-sensitive system variables (never host PYTHONPATH - B3)
         safe_keys = {
             "PATH",
             "SYSTEMROOT",
@@ -205,12 +205,12 @@ class WorkspaceCommandRunner:
             "TMP",
             "APPDATA",
             "LOCALAPPDATA",
+            "HOME",
             "USERPROFILE",
             "HOMEPATH",
             "HOMEDRIVE",
             "LANG",
             "LC_ALL",
-            "PYTHONPATH",
             "PYTHONUNBUFFERED",
             "NODE_ENV",
             "COMSPEC",
@@ -220,6 +220,13 @@ class WorkspaceCommandRunner:
         for k, v in os.environ.items():
             if k.upper() in safe_keys:
                 env[k] = v
+
+        # Enforce offline package/network environment guards inside workspace runner (B3)
+        env["PIP_NO_INDEX"] = "1"
+        env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+        env["NPM_CONFIG_OFFLINE"] = "true"
+        env["NO_PROXY"] = "*"
+        env["no_proxy"] = "*"
 
         # Add / override custom env vars (sanitizing values against safe overridable keys)
         if custom_env:
@@ -257,15 +264,18 @@ class WorkspaceCommandRunner:
 
         env = self.sanitize_environment(custom_env)
         ws_str = str(workspace_root.resolve())
-        cur_pp = env.get("PYTHONPATH", "")
-        if ws_str not in cur_pp:
-            env["PYTHONPATH"] = f"{ws_str}:.:{cur_pp}" if cur_pp else f"{ws_str}:."
+        env["PYTHONPATH"] = f"{ws_str}{os.pathsep}."
+        venv_bin = str(Path(sys.executable).parent)
+        curr_path = env.get("PATH", "")
+        if venv_bin and venv_bin not in curr_path.split(os.pathsep):
+            env["PATH"] = f"{venv_bin}{os.pathsep}{curr_path}" if curr_path else venv_bin
+
         exec_cmd = command
-        if command == "python" and not shutil.which("python"):
-            exec_cmd = shutil.which("python3") or sys.executable
+        if command in ("python", "python3"):
+            exec_cmd = sys.executable
 
         cmd_list = [exec_cmd, *args]
-        if command == "pytest" and not shutil.which("pytest"):
+        if command == "pytest":
             cmd_list = [sys.executable, "-m", "pytest", *args]
 
         try:
@@ -274,8 +284,9 @@ class WorkspaceCommandRunner:
                 "env": env,
                 "stdout": subprocess.PIPE,
                 "stderr": subprocess.PIPE,
-                "start_new_session": True,
             }
+            if os.name == "posix":
+                popen_kwargs["start_new_session"] = True
 
             proc = subprocess.Popen(cmd_list, **popen_kwargs)
 

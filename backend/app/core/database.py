@@ -4,7 +4,7 @@ Models and migrations remain Om's responsibility; this file only provides the
 shared application infrastructure they will use.
 """
 
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 import logging
 import re
 from typing import Any
@@ -24,6 +24,7 @@ def _sanitize_db_url(url: str) -> str:
     if not url:
         return ""
     return re.sub(r"://([^:]+):([^@]+)@", r"://\1:[REDACTED]@", url)
+
 
 db_kwargs: dict[str, Any] = {"pool_pre_ping": True}
 if not settings.database_url.startswith("sqlite"):
@@ -96,6 +97,7 @@ def init_async_db(
 
 _async_database_url = _resolve_async_database_url(settings.database_url)
 async_engine, AsyncSessionLocal = _create_safe_async_engine(settings.database_url, db_kwargs)
+async_session_factory = AsyncSessionLocal
 
 
 class Base(DeclarativeBase):
@@ -109,3 +111,14 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+async def get_db_async() -> AsyncGenerator[AsyncSession, None]:
+    """Yield an asynchronous database session when AsyncSessionLocal is configured (GAP-07)."""
+    if AsyncSessionLocal is None:
+        raise RuntimeError("AsyncSessionLocal is not configured for the active database URL.")
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.close()

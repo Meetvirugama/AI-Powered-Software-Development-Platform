@@ -97,10 +97,12 @@ class TaskPlanner:
         self,
         llm_gateway: "LLMGateway | None" = None,
         *,
-        model: str = "gemini-flash-latest",
+        model: str | None = None,
     ) -> None:
+        from app.core.config import get_settings
+
         self._gateway = llm_gateway
-        self._model = model
+        self._model = model or get_settings().active_chat_model
         self._validator = OutputValidator(llm_gateway=llm_gateway)
 
     # ------------------------------------------------------------------

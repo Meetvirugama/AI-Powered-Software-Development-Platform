@@ -676,7 +676,7 @@ def approve_task_plan(
         )
     approval_resp = _serialize_approval_record(approval, task)
     task_detail = _serialize_task_detail(task, task_repo).model_dump(mode="json")
-    merged = {**task_detail, **approval_resp.model_dump(mode="json")}
+    merged = {**task_detail, **approval_resp.model_dump(mode="json", exclude_none=True)}
     return TaskApprovalResponse.model_validate(merged)
 
 
@@ -703,7 +703,7 @@ def reject_task_plan(
     )
     approval_resp = _serialize_approval_record(approval, task)
     task_detail = _serialize_task_detail(task, task_repo).model_dump(mode="json")
-    merged = {**task_detail, **approval_resp.model_dump(mode="json")}
+    merged = {**task_detail, **approval_resp.model_dump(mode="json", exclude_none=True)}
     return TaskApprovalResponse.model_validate(merged)
 
 

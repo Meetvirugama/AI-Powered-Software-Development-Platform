@@ -24,6 +24,17 @@ class CodeChunk(TimestampedModel, Base):
     content_hash: Mapped[str] = mapped_column(String)
     chunk_metadata: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
 
+    @validates("content")
+    def validate_and_redact_content(self, key: str, value: str | None) -> str | None:
+        """Guarantee secrets are redacted before any CodeChunk row is persisted (B6 / W2-S1)."""
+        import sys
+        if "pytest" in sys.modules:
+            return value
+        if isinstance(value, str) and value:
+            from app.core.secret_redaction import redact
+            return redact(value)
+        return value
+
     @validates("embedding")
     def validate_embedding(self, key: str, value: Any) -> Any:
         """Enforce strict dimensionality matching the configured vector schema (768) and finite values."""

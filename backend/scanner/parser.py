@@ -64,7 +64,8 @@ class Parser:
         if HAS_TREE_SITTER:
             try:
                 language = None
-                if tree_sitter_languages is not None:
+                is_tsx_file = file_info.path.lower().endswith((".tsx", ".jsx"))
+                if tree_sitter_languages is not None and not is_tsx_file:
                     try:
                         language = tree_sitter_languages.get_language(ts_lang_name)
                     except Exception:
@@ -79,7 +80,10 @@ class Parser:
                         language = tree_sitter.Language(tree_sitter_javascript.language())
                     elif ts_lang_name == "typescript":
                         import tree_sitter_typescript
-                        language = tree_sitter.Language(tree_sitter_typescript.language_typescript())
+                        if is_tsx_file and hasattr(tree_sitter_typescript, "language_tsx"):
+                            language = tree_sitter.Language(tree_sitter_typescript.language_tsx())
+                        else:
+                            language = tree_sitter.Language(tree_sitter_typescript.language_typescript())
 
                 if language is not None:
                     try:

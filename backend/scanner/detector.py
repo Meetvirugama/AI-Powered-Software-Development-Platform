@@ -9,12 +9,20 @@ class LanguageDetector:
         self.extension_map = {
             '.py': 'Python',
             '.ts': 'TypeScript',
+            '.tsx': 'TypeScript',
             '.js': 'JavaScript',
+            '.jsx': 'JavaScript',
+            '.mjs': 'JavaScript',
+            '.cjs': 'JavaScript',
             '.java': 'Java',
             '.go': 'Go',
             '.rs': 'Rust',
             '.c': 'C',
-            '.cpp': 'C++'
+            '.h': 'C',
+            '.cpp': 'C++',
+            '.hpp': 'C++',
+            '.cc': 'C++',
+            '.cxx': 'C++',
         }
 
     def detect(self, file_info: FileInfo, root_path: str | Path | None = None) -> str:

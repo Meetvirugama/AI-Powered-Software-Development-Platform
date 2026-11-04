@@ -51,9 +51,13 @@ class CrossEncoderReranker:
         self,
         model_name: str = _DEFAULT_MODEL,
         model: object | None = None,
+        min_logit: float | None = None,
+        max_chars: int | None = None,
     ) -> None:
         self._model_name = model_name
         self._model: object | None = model  # Supports dependency injection
+        self._min_logit = min_logit
+        self._max_chars = max_chars
         self.last_status: str = "initialized"
 
     @property
@@ -70,6 +74,7 @@ class CrossEncoderReranker:
         query: str,
         candidates: list[CodeChunk],
         top_n: int = _DEFAULT_TOP_N,
+        min_logit: float | None = None,
     ) -> list[CodeChunk]:
         """
         Score each candidate against the query and return the top_n.
@@ -78,7 +83,7 @@ class CrossEncoderReranker:
         1. Load the cross-encoder model (lazy — only on first call).
         2. Build ``(query, chunk.content)`` pairs for every candidate.
         3. Batch-predict logit scores via ``CrossEncoder.predict()``.
-        4. Sort by score descending, slice top_n.
+        4. Sort by score descending, filter by optional ``min_logit``, slice top_n.
         5. Replace ``chunk.score`` with the cross-encoder logit score.
 
         Args:
@@ -86,6 +91,7 @@ class CrossEncoderReranker:
             candidates: RRF-fused chunk list (typically ≤ 30).
                         If empty, returns [].
             top_n:      Number of highest-scoring chunks to return (default 8).
+            min_logit:  Optional minimum cross-encoder logit score filter.
 
         Returns:
             Up to ``top_n`` CodeChunks with ``.score`` set to the cross-encoder
@@ -110,8 +116,12 @@ class CrossEncoderReranker:
             )
             return candidates[:top_n]
 
-        # Build input pairs for the cross-encoder
-        pairs = [(query, chunk.content) for chunk in candidates]
+        # Build input pairs for the cross-encoder (optionally bounded by max_chars)
+        max_chars = self._max_chars
+        pairs = [
+            (query, chunk.content[:max_chars] if max_chars and max_chars > 0 else chunk.content)
+            for chunk in candidates
+        ]
 
         try:
             # Batch predict — returns numpy array of float32 logit scores
@@ -126,12 +136,17 @@ class CrossEncoderReranker:
 
         self.last_status = "reranked"
 
-        # Sort by score descending and take top_n
+        effective_min_logit = min_logit if min_logit is not None else self._min_logit
+
+        # Sort by score descending, apply optional min_logit threshold, and take top_n
         ranked = sorted(
             zip(raw_scores, candidates),
             key=lambda x: float(x[0]),
             reverse=True,
         )
+        if effective_min_logit is not None:
+            ranked = [item for item in ranked if float(item[0]) >= effective_min_logit]
+
         top_ranked = ranked[:top_n]
 
         reranked: list[CodeChunk] = [

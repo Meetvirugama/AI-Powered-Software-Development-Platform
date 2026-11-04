@@ -538,24 +538,46 @@ async def create_github_issue(
 
 
 # Route aliases for repo_id compatibility with Verification Gate 3.2
-router.add_api_route(
+@router.post(
     "/{repo_id}/issues/import",
-    import_github_issue,
-    methods=["POST"],
     response_model=IssueImportResponse,
     include_in_schema=False,
 )
-router.add_api_route(
+async def import_github_issue_alias(
+    repo_id: UUID,
+    payload: GitHubIssueImportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> IssueImportResponse:
+    return await import_github_issue(repository_id=repo_id, payload=payload, request=request, db=db)
+
+
+@router.get(
     "/{repo_id}/issues",
-    list_repository_issues,
-    methods=["GET"],
     response_model=list[GitHubIssueResponse],
     include_in_schema=False,
 )
-router.add_api_route(
+async def list_repository_issues_alias(
+    repo_id: UUID,
+    request: Request,
+    state: str = Query(default="all", pattern="^(open|closed|all)$"),
+    sync_remote: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> list[GitHubIssueResponse]:
+    return await list_repository_issues(
+        repository_id=repo_id, request=request, state=state, sync_remote=sync_remote, db=db
+    )
+
+
+@router.post(
     "/{repo_id}/issues",
-    create_github_issue,
-    methods=["POST"],
     response_model=IssueImportResponse,
     include_in_schema=False,
 )
+async def create_github_issue_alias(
+    repo_id: UUID,
+    payload: GitHubIssueCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> IssueImportResponse:
+    return await create_github_issue(repository_id=repo_id, payload=payload, request=request, db=db)

@@ -716,6 +716,8 @@ class TestGenerationResult(BaseModel):
 class TestGenerationResponse(BaseModel):
     """Envelope returned by `POST /api/v1/repositories/{repository_id}/generate-tests`."""
 
+    __test__ = False
+
     run_id: str
     repository_id: str
     status: AnalysisStatus = "COMPLETED"

@@ -109,18 +109,38 @@ def _is_event_authorized_for_user(
 @router.get("/events", summary="Subscribe to real-time platform events (SSE)")
 async def stream_events(
     request: Request,
-    db: Session = Depends(get_db),
 ) -> StreamingResponse:
-    """Stream real-time repository and platform events scoped to the authenticated user."""
+    """Stream real-time repository and platform events scoped to the authenticated user.
+
+    Acquires and closes the database session immediately before returning the
+    long-lived StreamingResponse so SSE connections never exhaust QueuePool.
+    """
+    from app.core.database import SessionLocal
+
     user_uuid = _resolve_optional_user_id(request)
     caller_user_id = str(user_uuid) if user_uuid is not None else getattr(request.state, "user_id", None)
     owned_repo_ids: set[str] | None = None
-    if user_uuid is not None and hasattr(db, "execute"):
-        try:
-            repos = RepositoryRepository(db).list_by_user(user_uuid)
-            owned_repo_ids = {str(r.id) for r in repos if hasattr(r, "id")}
-        except Exception:
-            owned_repo_ids = None
+    if user_uuid is not None:
+        db_override = request.app.dependency_overrides.get(get_db)
+        if db_override is not None:
+            gen = db_override()
+            db = next(gen) if hasattr(gen, "__next__") else gen
+            try:
+                if hasattr(db, "execute"):
+                    repos = RepositoryRepository(db).list_by_user(user_uuid)
+                    owned_repo_ids = {str(r.id) for r in repos if hasattr(r, "id")}
+            except Exception:
+                owned_repo_ids = None
+            finally:
+                if hasattr(gen, "close"):
+                    gen.close()
+        else:
+            try:
+                with SessionLocal() as db:
+                    repos = RepositoryRepository(db).list_by_user(user_uuid)
+                    owned_repo_ids = {str(r.id) for r in repos if hasattr(r, "id")}
+            except Exception:
+                owned_repo_ids = None
 
     async def event_generator():
         connected_payload = json.dumps(

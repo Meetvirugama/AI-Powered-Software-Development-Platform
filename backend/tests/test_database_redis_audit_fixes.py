@@ -57,6 +57,7 @@ def test_github_installation_upsert_updates_user_id():
         installation_id="171308854",
         account_login="Meetvirugama",
         permissions={"metadata": "read"},
+        allow_reassign=True,
     )
 
     assert updated.user_id == user_id

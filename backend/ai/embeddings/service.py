@@ -1,21 +1,25 @@
 """
-Embedding Service — Batching, Dimension Validation, and Concurrency Control.
+Embedding Service — Batching, Dimension Validation, Concurrency Control, and Query Caching.
 
 Coordinates embedding operations across the application:
 - Enforces strict vector dimensionality contracts before ingestion or search.
 - Splits large item collections into provider-optimal sub-batches (default: 100).
 - Governs concurrent sub-batch execution via asyncio.Semaphore to prevent socket exhaustion.
 - Preserves 1:1 positional ordering between input text sequences and output vectors.
+- Provides CachedEmbeddingService with L1 in-memory LRU and optional Redis L2 caching.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+import hashlib
+import json
 import logging
 import math
 import time
 from collections.abc import Sequence
-from typing import Self
+from typing import Any, Self
 
 from .client import DimensionMismatchError, EmbeddingError, EmbeddingProfile, EmbeddingProvider
 
@@ -272,3 +276,71 @@ class EmbeddingService:
         for v in vector:
             if not isinstance(v, (int, float)) or not math.isfinite(v):
                 raise EmbeddingError("Vector contains non-finite or invalid numeric values (NaN/Inf).")
+
+
+class CachedEmbeddingService(EmbeddingService):
+    """EmbeddingService subclass with L1 in-memory LRU cache and optional Redis L2 cache (OPT-03)."""
+
+    def __init__(
+        self,
+        provider: EmbeddingProvider,
+        batch_size: int = _BATCH_SIZE,
+        max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
+        redis_client: Any = None,
+        ttl_seconds: int = 3600,
+        max_memory_entries: int = 512,
+    ) -> None:
+        super().__init__(provider=provider, batch_size=batch_size, max_concurrency=max_concurrency)
+        self._redis = redis_client
+        self._ttl_seconds = ttl_seconds
+        self._max_memory_entries = max(1, max_memory_entries)
+        self._memory_cache: OrderedDict[str, list[float]] = OrderedDict()
+
+    def _cache_key(self, text: str) -> str:
+        digest = hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+        return f"emb:v1:{self.model_name}:{self.dimensions}:{digest}"
+
+    async def embed(self, text: str) -> list[float]:
+        if text is None:
+            raise ValueError("text to embed cannot be None.")
+
+        key = self._cache_key(text)
+
+        # 1. Check L1 in-memory LRU cache
+        if key in self._memory_cache:
+            self._memory_cache.move_to_end(key)
+            return list(self._memory_cache[key])
+
+        # 2. Check optional L2 Redis cache
+        if self._redis is not None:
+            try:
+                raw = self._redis.get(key)
+                if asyncio.iscoroutine(raw):
+                    raw = await raw
+                if raw:
+                    vec = [float(x) for x in json.loads(raw)]
+                    self._validate_dimensions(vec)
+                    self._store_memory(key, vec)
+                    return vec
+            except Exception as exc:
+                logger.debug("embedding_cache_read_failed", extra={"error": str(exc)})
+
+        # 3. Compute via underlying provider
+        vec = await super().embed(text)
+        self._store_memory(key, vec)
+
+        if self._redis is not None:
+            try:
+                res = self._redis.setex(key, self._ttl_seconds, json.dumps(vec))
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as exc:
+                logger.debug("embedding_cache_write_failed", extra={"error": str(exc)})
+
+        return vec
+
+    def _store_memory(self, key: str, vector: list[float]) -> None:
+        self._memory_cache[key] = list(vector)
+        self._memory_cache.move_to_end(key)
+        while len(self._memory_cache) > self._max_memory_entries:
+            self._memory_cache.popitem(last=False)

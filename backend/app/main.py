@@ -50,13 +50,14 @@ app = FastAPI(
 
 # Middleware order: the LAST one added runs FIRST (outermost). Resulting order
 # for an incoming request:
-#   SecurityHeaders → CORS → JWT → RequestId → RateLimit → route
+#   SecurityHeaders → CORS → RequestId → JWT → RateLimit → route
 # - SecurityHeaders is outermost so every response (401, 429, 500, preflight) gets the headers.
-# - CORS sits outside JWT so browser OPTIONS preflights are answered without a token.
+# - CORS sits outside RequestId/JWT so browser OPTIONS preflights are answered without a token.
+# - RequestId sits outside JWT so 401 and 403 responses from JWTMiddleware carry X-Request-ID.
 # - RateLimit sits inside JWT so request.state.user_id is available for per-user limits.
 app.add_middleware(RateLimitMiddleware, api_prefix=settings.api_v1_prefix)
-app.add_middleware(RequestIdMiddleware)
 app.add_middleware(JWTMiddleware)
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

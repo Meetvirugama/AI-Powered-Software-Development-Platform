@@ -650,13 +650,28 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
             remote_url = f"https://github.com/{clean_owner}/{clean_repo}.git"
 
-            env = {
-                **os.environ,
-                "GIT_TERMINAL_PROMPT": "0",
-                "GIT_CONFIG_COUNT": "1",
-                "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-                "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
-            }
+            _SAFE_GIT_ENV_KEYS = (
+                "PATH",
+                "HOME",
+                "TMPDIR",
+                "TMP",
+                "TEMP",
+                "SYSTEMROOT",
+                "LANG",
+                "LC_ALL",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR",
+                "GIT_SSL_CAINFO",
+            )
+            env = {k: os.environ[k] for k in _SAFE_GIT_ENV_KEYS if k in os.environ}
+            env.update(
+                {
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "GIT_CONFIG_COUNT": "1",
+                    "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+                    "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
+                }
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 "git",

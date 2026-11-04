@@ -96,6 +96,7 @@ async def list_github_repositories(
                                     installation_id=clean_inst_id,
                                     account_login=acc_login or user.login,
                                     permissions=inst_data.get("permissions", {}),
+                                    allow_reassign=False,
                                 )
                             else:
                                 raise APIError(
@@ -151,6 +152,7 @@ async def list_github_repositories(
                                     installation_id=str(inst["id"]),
                                     account_login=acc_login or user.login,
                                     permissions=inst.get("permissions", {}),
+                                    allow_reassign=False,
                                 )
                         installations = installation_repo.list_by_user(user_id)
             except Exception as exc:
@@ -365,6 +367,7 @@ async def link_github_installation(
         installation_id=inst_id_clean,
         account_login=user.login,
         permissions={},
+        allow_reassign=False,
     )
     return {
         "status": "linked",
@@ -394,6 +397,7 @@ async def github_installation_callback(
                 installation_id=installation_id,
                 account_login=user.login,
                 permissions={},
+                allow_reassign=False,
             )
     except Exception as exc:
         logger.info("installation_callback_without_user", extra={"error": str(exc)})

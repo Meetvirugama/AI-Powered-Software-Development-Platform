@@ -44,7 +44,11 @@ from app.core.secret_redaction import (
 )
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "security" / "prompt_injection"
-INJECTION_FILES = sorted(p for p in FIXTURE_DIR.iterdir() if p.name != "README.md")
+INJECTION_FILES = sorted(
+    p
+    for p in FIXTURE_DIR.iterdir()
+    if p.is_file() and p.name != "README.md" and not p.name.startswith(".")
+)
 CANARY = re.compile(r"CANARY-PI-\d{3}")
 
 
