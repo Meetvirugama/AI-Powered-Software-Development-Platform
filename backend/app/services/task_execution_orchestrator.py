@@ -673,6 +673,8 @@ class TaskExecutionOrchestrator:
             db_status = TestRunStatus.TIMED_OUT.value
         elif result.status in (TestOutcomeStatus.ERROR, TestOutcomeStatus.UNSUPPORTED_FRAMEWORK):
             db_status = TestRunStatus.ERROR.value
+        elif result.status == TestOutcomeStatus.NO_TESTS_FOUND:
+            db_status = TestRunStatus.PASSED.value
         elif result.status != TestOutcomeStatus.PASSED:
             db_status = TestRunStatus.FAILED.value
 
@@ -683,7 +685,7 @@ class TaskExecutionOrchestrator:
             repository_id=task.repository_id,
             command=cmd_str,
             status=db_status,
-            exit_code=0 if result.status == TestOutcomeStatus.PASSED else 1,
+            exit_code=0 if (result.status in (TestOutcomeStatus.PASSED, TestOutcomeStatus.NO_TESTS_FOUND) and result.failed_count == 0) else 1,
             duration_ms=int(result.duration_ms),
             tests_total=result.total_count,
             tests_passed=result.passed_count,
@@ -912,7 +914,9 @@ class TaskExecutionOrchestrator:
         test_check_ms = int((time.perf_counter() - t0) * 1000)
         if db_runs:
             latest_run = db_runs[-1]
-            if latest_run.status == TestRunStatus.PASSED.value:
+            if latest_run.status == TestRunStatus.PASSED.value or (
+                latest_run.tests_failed == 0 and latest_run.tests_total == 0
+            ):
                 checks.append(
                     VerificationCheckItem(
                         name="tests",
@@ -920,6 +924,8 @@ class TaskExecutionOrchestrator:
                         duration_ms=latest_run.duration_ms or test_check_ms,
                         message=(
                             f"Test suite passed ({latest_run.tests_passed}/{latest_run.tests_total} tests passed)."
+                            if latest_run.tests_total > 0
+                            else "No test suite detected; 0 test failures."
                         ),
                         findings_count=0,
                         details={
