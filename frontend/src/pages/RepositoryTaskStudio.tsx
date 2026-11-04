@@ -10,7 +10,7 @@
  * - Comprehensive code diff inspector, test runner, quality gates, and GitHub PR integration
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -178,6 +178,16 @@ const STATUS_BADGE_MAP: Record<
 
 type StudioTab = 'plan' | 'workspace' | 'tests' | 'changes' | 'verification' | 'pr';
 
+function getRecommendedTabForStatus(status?: string): StudioTab {
+  if (!status) return 'plan';
+  if (status === 'CREATED' || status === 'PLANNING' || status === 'PENDING_APPROVAL') return 'plan';
+  if (status === 'APPROVED' || status === 'WORKSPACE_SETUP' || status === 'EXECUTING') return 'workspace';
+  if (status === 'TESTING' || status === 'REPAIRING') return 'tests';
+  if (status === 'VERIFYING') return 'verification';
+  if (status === 'READY_FOR_PUBLICATION' || status === 'PUBLISHING' || status === 'DRAFT_PR_CREATED') return 'pr';
+  return 'changes';
+}
+
 const STARTER_PROMPTS = [
   { label: '🎨 Change CSS Theme / Colors', text: 'Change page background color to white and refine dark mode theme' },
   { label: '🐛 Fix Negative Amount Bug', text: 'Fix negative amount validation in checkout and add unit test coverage' },
@@ -195,7 +205,7 @@ export function RepositoryTaskStudio() {
   const [actionBusy, setActionBusy] = useState<string | null>(null);
 
   // Active studio tab
-  const [activeTab, setActiveTab] = useState<StudioTab>('plan');
+  const [userSelectedTab, setUserSelectedTab] = useState<StudioTab | null>(null);
   const [taskSearchFilter, setTaskSearchFilter] = useState('');
 
   // New Task Modal State
@@ -237,6 +247,7 @@ export function RepositoryTaskStudio() {
 
   const handleSelectTask = useCallback(
     (taskId: string) => {
+      setUserSelectedTab(null);
       setSelectedTaskId(taskId);
       setSearchParams({ taskId });
       setErrorBanner(null);
@@ -285,22 +296,9 @@ export function RepositoryTaskStudio() {
   });
   const draftPR = (isTaskActive ? (draftPRData ?? null) : null) as TaskPullRequestResponse | null;
 
-  // Auto-switch tabs to the most relevant view when task status changes
-  useEffect(() => {
-    if (!taskDetail) return;
-    const st = taskDetail.status;
-    if (st === 'CREATED' || st === 'PLANNING' || st === 'PENDING_APPROVAL') {
-      setActiveTab('plan');
-    } else if (st === 'APPROVED' || st === 'WORKSPACE_SETUP' || st === 'EXECUTING') {
-      setActiveTab('workspace');
-    } else if (st === 'TESTING' || st === 'REPAIRING') {
-      setActiveTab('tests');
-    } else if (st === 'VERIFYING') {
-      setActiveTab('verification');
-    } else if (st === 'READY_FOR_PUBLICATION' || st === 'PUBLISHING' || st === 'DRAFT_PR_CREATED') {
-      setActiveTab('pr');
-    }
-  }, [taskDetail?.status, taskDetail?.task_id]);
+  // Active studio tab: defaults to recommended tab for current status, but preserves user click
+  const activeTab: StudioTab = userSelectedTab ?? getRecommendedTabForStatus(taskDetail?.status);
+  const setActiveTab = (tab: StudioTab) => setUserSelectedTab(tab);
 
   // Global Refresher
   const refreshTasksAndCurrentDetail = useCallback(
@@ -706,7 +704,7 @@ export function RepositoryTaskStudio() {
         description: 'Inspecting repository AST, symbol dependencies, and target files.',
         actionLabel: 'Regenerate Plan',
         actionIcon: Bot,
-        onAction: () => handleGenerateOrRevisePlan(),
+        actionType: 'generate_plan',
         color: 'blue',
       };
     }
@@ -717,7 +715,7 @@ export function RepositoryTaskStudio() {
         description: 'Review the planned steps below. One-click approval launches the isolated agent.',
         actionLabel: 'Approve & Start Execution',
         actionIcon: Play,
-        onAction: () => handleApproveAndExecute(),
+        actionType: 'approve_and_execute',
         color: 'emerald',
       };
     }
@@ -728,7 +726,7 @@ export function RepositoryTaskStudio() {
         description: 'Sandbox workspace will be provisioned on an isolated git branch.',
         actionLabel: 'Start Workspace Execution',
         actionIcon: Play,
-        onAction: () => handleExecuteTask(true),
+        actionType: 'execute',
         color: 'emerald',
       };
     }
@@ -739,7 +737,7 @@ export function RepositoryTaskStudio() {
         description: `Running implementation steps on branch '${workspaceMeta?.branch_name || 'agent/task'}'...`,
         actionLabel: 'View Active Sandbox',
         actionIcon: Terminal,
-        onAction: () => setActiveTab('workspace'),
+        actionType: 'tab_workspace',
         color: 'cyan',
         inProgress: true,
       };
@@ -751,7 +749,7 @@ export function RepositoryTaskStudio() {
         description: 'Running pytest verification to ensure zero regressions.',
         actionLabel: 'View Test Results',
         actionIcon: FlaskConical,
-        onAction: () => setActiveTab('tests'),
+        actionType: 'tab_tests',
         color: 'sky',
         inProgress: true,
       };
@@ -763,7 +761,7 @@ export function RepositoryTaskStudio() {
         description: 'Verifying diff boundaries, secrets scan, and static analysis.',
         actionLabel: 'Inspect Verification Gates',
         actionIcon: ShieldCheck,
-        onAction: () => setActiveTab('verification'),
+        actionType: 'tab_verification',
         color: 'teal',
         inProgress: true,
       };
@@ -775,7 +773,7 @@ export function RepositoryTaskStudio() {
         description: 'Code is verified, tests pass, and isolated git branch is ready to ship.',
         actionLabel: 'Review & Open GitHub PR',
         actionIcon: GitPullRequest,
-        onAction: () => setActiveTab('pr'),
+        actionType: 'tab_pr',
         color: 'purple',
       };
     }
@@ -786,9 +784,7 @@ export function RepositoryTaskStudio() {
         description: `Tracked under PR #${draftPR?.pr_number ?? 'draft'}. Ready for team code review.`,
         actionLabel: 'View Pull Request on GitHub',
         actionIcon: ExternalLink,
-        onAction: () => {
-          if (draftPR?.pr_url) window.open(draftPR.pr_url, '_blank');
-        },
+        actionType: 'open_pr',
         color: 'purple',
       };
     }
@@ -799,7 +795,7 @@ export function RepositoryTaskStudio() {
         description: 'Safely recover previous checkpoint or re-run planning.',
         actionLabel: 'Recover Task State',
         actionIcon: RotateCcw,
-        onAction: () => handleRecoverTask(),
+        actionType: 'recover',
         color: 'orange',
       };
     }
@@ -810,10 +806,51 @@ export function RepositoryTaskStudio() {
       description: 'Inspect workspace files, test results, or audit timeline.',
       actionLabel: 'Inspect Code Changes',
       actionIcon: FileDiff,
-      onAction: () => setActiveTab('changes'),
+      actionType: 'tab_changes',
       color: 'slate',
     };
-  }, [taskDetail, latestPlan, workspaceMeta, draftPR]);
+  }, [
+    taskDetail,
+    latestPlan?.plan_version,
+    workspaceMeta?.branch_name,
+    draftPR?.pr_number,
+  ]);
+
+  const handlePrimaryStepAction = () => {
+    if (!nextStepInfo) return;
+    switch (nextStepInfo.actionType) {
+      case 'generate_plan':
+        handleGenerateOrRevisePlan();
+        break;
+      case 'approve_and_execute':
+        handleApproveAndExecute();
+        break;
+      case 'execute':
+        handleExecuteTask(true);
+        break;
+      case 'tab_workspace':
+        setActiveTab('workspace');
+        break;
+      case 'tab_tests':
+        setActiveTab('tests');
+        break;
+      case 'tab_verification':
+        setActiveTab('verification');
+        break;
+      case 'tab_pr':
+        setActiveTab('pr');
+        break;
+      case 'open_pr':
+        if (draftPR?.pr_url) window.open(draftPR.pr_url, '_blank');
+        break;
+      case 'recover':
+        handleRecoverTask();
+        break;
+      default:
+        setActiveTab('changes');
+        break;
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden font-sans select-none">
@@ -1169,7 +1206,7 @@ export function RepositoryTaskStudio() {
                     <button
                       type="button"
                       disabled={actionBusy !== null}
-                      onClick={nextStepInfo.onAction}
+                      onClick={handlePrimaryStepAction}
                       className={cn(
                         'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50',
                         nextStepInfo.color === 'emerald' && 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20',
