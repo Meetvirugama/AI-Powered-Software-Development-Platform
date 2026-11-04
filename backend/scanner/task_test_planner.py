@@ -157,8 +157,16 @@ class TaskTestPlanner:
         directly_modified: Sequence[AffectedSymbol],
         existing_test_cases: Sequence[str],
         framework: str,
+        *,
+        symbol_edges: Sequence[SymbolEdge] | None = None,
+        file_test_mapper: FileTestMapper | None = None,
     ) -> tuple[list[str], list[ProposedTest]]:
         """Identify uncovered modified symbols and propose new test files/names.
+
+        Uses evidence hierarchy (task.md §8):
+        1. Test call edges linking test functions directly to the symbol.
+        2. File-to-test mapping associations.
+        3. Name-based case matching fallback.
 
         Returns:
             Tuple of (untested_symbols, proposed_tests).
@@ -168,10 +176,33 @@ class TaskTestPlanner:
         proposed_tests: list[ProposedTest] = []
         seen_proposals: set[str] = set()
 
+        edges = list(symbol_edges or [])
+        test_callers_for_symbol: dict[str, list[str]] = {}
+        for edge in edges:
+            caller = getattr(edge, "caller_symbol", "")
+            callee = getattr(edge, "callee_symbol", "")
+            if caller and callee and "test" in str(caller).lower():
+                test_callers_for_symbol.setdefault(callee, []).append(caller)
+
         for sym in directly_modified:
-            # Check if any existing test case mentions this symbol
             sym_clean = sym.name.lower().lstrip("_")
-            covered = bool(sym_clean) and any(sym_clean in tc for tc in existing_cases_lower)
+
+            # Evidence 1: Test call edge directly exercising symbol
+            has_test_edge = bool(test_callers_for_symbol.get(sym.name))
+
+            # Evidence 2: File test mapping
+            has_file_test = False
+            if file_test_mapper and sym.file_path:
+                try:
+                    mapped = file_test_mapper.find_tests_for_file(sym.file_path)
+                    has_file_test = bool(mapped)
+                except Exception:
+                    pass
+
+            # Evidence 3: Heuristic name matching
+            has_name_match = bool(sym_clean) and any(sym_clean in tc for tc in existing_cases_lower)
+
+            covered = has_test_edge or has_file_test or has_name_match
 
             if not covered:
                 untested_symbols.append(sym.name)
@@ -215,7 +246,7 @@ class TaskTestPlanner:
         return untested_symbols, proposed_tests
 
     # -----------------------------------------------------------------------
-    # 4. Command Line Generation
+    # 4. Command Line Generation & Batching
     # -----------------------------------------------------------------------
 
     def build_test_command(
@@ -223,31 +254,49 @@ class TaskTestPlanner:
         framework: str,
         existing_test_files: Sequence[str],
         proposed_new_test_files: Sequence[str] | None = None,
+        *,
+        max_files: int | None = None,
     ) -> str:
-        """Format the exact test CLI command for the Restricted Test Runner sandbox."""
+        """Format the exact test CLI command for the Restricted Test Runner sandbox.
+
+        Avoids arbitrary silent truncation unless max_files is explicitly requested.
+        """
         all_test_files = list(existing_test_files)
         if not all_test_files and proposed_new_test_files:
             all_test_files = list(proposed_new_test_files)
 
+        selected_files = all_test_files if max_files is None else all_test_files[:max_files]
+
         if framework == "pytest":
-            if all_test_files:
-                files_str = " ".join(all_test_files[:5])  # Cap at first 5 for concise command
+            if selected_files:
+                files_str = " ".join(selected_files)
                 return f"pytest {files_str} -v --tb=short"
             return "pytest tests/ -v --tb=short"
 
         elif framework == "unittest":
-            if all_test_files:
-                files_str = " ".join(all_test_files[:5])
+            if selected_files:
+                files_str = " ".join(selected_files)
                 return f"python -m unittest {files_str}"
             return "python -m unittest discover tests/"
 
         elif framework == "jest":
-            if all_test_files:
-                files_str = " ".join(all_test_files[:5])
+            if selected_files:
+                files_str = " ".join(selected_files)
                 return f"npm test -- {files_str} --verbose"
             return "npm test -- --verbose"
 
         return "pytest tests/ -v"
+
+    def build_test_manifest_batches(
+        self,
+        test_files: Sequence[str],
+        batch_size: int = 15,
+    ) -> list[list[str]]:
+        """Partition large test suites into bounded batches to avoid command line overflow."""
+        file_list = list(test_files)
+        if not file_list:
+            return []
+        return [file_list[i : i + batch_size] for i in range(0, len(file_list), batch_size)]
 
     # -----------------------------------------------------------------------
     # 5. End-to-End Test Plan Generation

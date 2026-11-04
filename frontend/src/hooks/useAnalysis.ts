@@ -2,11 +2,18 @@
  * React Query mutation and state hooks for Week 2 Developer Intelligence.
  */
 
-import { useMutation, type UseMutationOptions } from '@tanstack/react-query';
-import { explainCode, detectBugs, generateTests, reviewCode } from '../services/analysis';
+import { useMutation, useQuery, type UseMutationOptions } from '@tanstack/react-query';
+import {
+  explainCode,
+  detectBugs,
+  generateTests,
+  reviewCode,
+  getRelatedFiles,
+} from '../services/analysis';
 import type {
   ExplainCodeRequest,
   CodeExplanationResponse,
+  RelatedFilesDiscoveryResponse,
   BugDetectionRequest,
   BugDetectionResponse,
   TestGenerationRequest,
@@ -30,6 +37,22 @@ export function useExplainCode(
     mutationKey: ['explain-code', repositoryId],
     mutationFn: (payload: ExplainCodeRequest) => explainCode(repositoryId, payload),
     ...options,
+  });
+}
+
+/**
+ * Hook to discover related files from the persistent repository intelligence knowledge graph (task.md §6.1).
+ */
+export function useRelatedFiles(
+  repositoryId: string,
+  filePath: string | undefined,
+  symbol?: string | null
+) {
+  return useQuery<RelatedFilesDiscoveryResponse, ApiError>({
+    queryKey: ['related-files', repositoryId, filePath, symbol],
+    queryFn: () => getRelatedFiles(repositoryId, filePath!, symbol ?? undefined),
+    enabled: Boolean(repositoryId && filePath),
+    staleTime: 60_000,
   });
 }
 

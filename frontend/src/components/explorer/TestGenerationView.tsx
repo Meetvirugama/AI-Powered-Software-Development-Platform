@@ -15,6 +15,8 @@ import {
   ChevronUp,
   ShieldCheck,
   HelpCircle,
+  Activity,
+  ListChecks,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type {
@@ -23,6 +25,8 @@ import type {
   TestScenarioCategory,
   SupportedTestFramework,
   SourceReference,
+  TestRequirement,
+  TestQualityReport,
 } from '../../types/analysis';
 
 export interface TestGenerationViewProps {
@@ -94,11 +98,27 @@ export function TestGenerationView({
 
   const [activeCategoryFilter, setActiveCategoryFilter] = useState<TestScenarioCategory | 'ALL'>('ALL');
   const [showAssumptions, setShowAssumptions] = useState(true);
+  const [showRequirements, setShowRequirements] = useState(true);
+  const [showQualityReport, setShowQualityReport] = useState(true);
+  const [reqFilter, setReqFilter] = useState<'ALL' | 'MISSING' | 'COVERED' | 'CRITICAL'>('ALL');
   const [copied, setCopied] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
   const timeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  const requirements = useMemo<TestRequirement[]>(() => result.requirements || [], [result.requirements]);
+  const qualityReport: TestQualityReport | null = result.quality_report || null;
+
+  const filteredRequirements = useMemo(() => {
+    if (reqFilter === 'ALL') return requirements;
+    if (reqFilter === 'MISSING')
+      return requirements.filter((r) => r.status === 'MISSING' || r.status === 'PARTIAL');
+    if (reqFilter === 'COVERED') return requirements.filter((r) => r.status === 'COVERED');
+    if (reqFilter === 'CRITICAL')
+      return requirements.filter((r) => (r.priority || '').toUpperCase() === 'CRITICAL');
+    return requirements;
+  }, [requirements, reqFilter]);
 
   useEffect(() => {
     return () => {
@@ -421,6 +441,78 @@ export function TestGenerationView({
       </div>
 
       {/* -------------------------------------------------------------- */}
+      {/* 2.5. Quality Scorecard Dashboard (task.md §8)                  */}
+      {/* -------------------------------------------------------------- */}
+      {qualityReport && (
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 space-y-3 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+              <Activity className="h-3.5 w-3.5 text-primary" />
+              <span>Test Quality Scorecard</span>
+              {qualityReport.quality_score !== undefined && qualityReport.quality_score !== null && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-primary/15 text-primary border border-primary/30">
+                  {qualityReport.quality_score}/100
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowQualityReport(!showQualityReport)}
+              className="p-1 rounded hover:bg-muted/40 text-muted-foreground cursor-pointer"
+            >
+              {showQualityReport ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showQualityReport && (
+            <div className="space-y-3 pt-1 border-t border-border/40">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Req. Coverage</div>
+                  <div className="text-sm font-semibold text-emerald-400">
+                    {qualityReport.requirement_coverage_percent !== null && qualityReport.requirement_coverage_percent !== undefined
+                      ? `${qualityReport.requirement_coverage_percent}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Line Coverage</div>
+                  <div className="text-sm font-semibold text-blue-400">
+                    {qualityReport.line_coverage_percent !== null && qualityReport.line_coverage_percent !== undefined
+                      ? `${qualityReport.line_coverage_percent}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Mutation Score</div>
+                  <div className="text-sm font-semibold text-purple-400">
+                    {qualityReport.mutation_score_percent !== null && qualityReport.mutation_score_percent !== undefined
+                      ? `${qualityReport.mutation_score_percent}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Weak Assertions</div>
+                  <div className={`text-sm font-semibold ${qualityReport.weak_assertion_count > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                    {qualityReport.weak_assertion_count}
+                  </div>
+                </div>
+              </div>
+
+              {qualityReport.untested_critical_requirements && qualityReport.untested_critical_requirements.length > 0 && (
+                <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[11px] flex items-center gap-1.5">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Untested critical requirements remaining: {qualityReport.untested_critical_requirements.join(', ')}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------- */}
       {/* 3. Static Syntax Validation & Test Execution Disclaimer        */}
       {/* -------------------------------------------------------------- */}
       <div
@@ -577,6 +669,109 @@ export function TestGenerationView({
           </div>
         )}
       </div>
+
+      {/* -------------------------------------------------------------- */}
+      {/* 4.5. Test Requirement Matrix & Gap Tracker (task.md §2, §7)   */}
+      {/* -------------------------------------------------------------- */}
+      {requirements.length > 0 && (
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 space-y-2.5 shadow-xs">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+              <ListChecks className="h-3.5 w-3.5 text-primary" />
+              <span>Test Requirement Matrix ({requirements.length})</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setReqFilter('ALL')}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors cursor-pointer ${
+                  reqFilter === 'ALL'
+                    ? 'bg-primary/20 text-primary border-primary/40'
+                    : 'text-muted-foreground border-border/60 hover:text-foreground'
+                }`}
+              >
+                All ({requirements.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setReqFilter('MISSING')}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors cursor-pointer ${
+                  reqFilter === 'MISSING'
+                    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                    : 'text-muted-foreground border-border/60 hover:text-foreground'
+                }`}
+              >
+                Gaps ({requirements.filter((r) => r.status === 'MISSING' || r.status === 'PARTIAL').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setReqFilter('COVERED')}
+                className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors cursor-pointer ${
+                  reqFilter === 'COVERED'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'text-muted-foreground border-border/60 hover:text-foreground'
+                }`}
+              >
+                Covered ({requirements.filter((r) => r.status === 'COVERED').length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRequirements(!showRequirements)}
+                className="p-1 rounded hover:bg-muted/40 text-muted-foreground ml-1 cursor-pointer"
+              >
+                {showRequirements ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {showRequirements && (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 pt-1 border-t border-border/40">
+              {filteredRequirements.map((req, idx) => {
+                const isCovered = req.status === 'COVERED';
+                const isPartial = req.status === 'PARTIAL';
+                const statusBadge = isCovered
+                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                  : isPartial
+                  ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                  : 'bg-rose-500/15 text-rose-400 border-rose-500/30';
+
+                return (
+                  <div key={idx} className="p-2.5 rounded-lg border border-border/60 bg-muted/20 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-[10px] font-bold text-foreground">{req.requirement_id}</span>
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-muted/60 text-muted-foreground">
+                          {req.category}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[9px] font-mono uppercase ${
+                            req.priority === 'CRITICAL'
+                              ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30 font-semibold'
+                              : 'bg-muted/60 text-muted-foreground'
+                          }`}
+                        >
+                          {req.priority}
+                        </span>
+                      </div>
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono border ${statusBadge}`}>
+                        {req.status}
+                      </span>
+                    </div>
+                    <div className="text-[11px] font-medium text-foreground">{req.title}</div>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">{req.expected_behavior}</p>
+                    {req.evidence && req.evidence.length > 0 && (
+                      <div className="text-[10px] font-mono text-muted-foreground/80 flex items-center gap-1 truncate">
+                        <span className="text-primary">•</span>
+                        <span className="truncate">{req.evidence[0]}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* -------------------------------------------------------------- */}
       {/* 5. Assumptions and Warnings (Collapsible)                      */}

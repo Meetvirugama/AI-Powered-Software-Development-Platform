@@ -28,7 +28,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
-from app.schemas.plan import PlanStep, StructuredPlan
+from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
+from app.schemas.plan import PlanDependencyGraph, PlanStep, StructuredPlan
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceExecutionEventType,
@@ -86,6 +87,7 @@ class StepExecutionRecord:
     attempts: int = 1
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
+    verification_outcome: StepVerificationOutcome | None = None
 
 
 @dataclass
@@ -176,43 +178,69 @@ class AgentExecutionLoop:
         max_iterations: int = 25,
         max_cycle_repetitions: int = 2,
         tool_router: Any = None,
+        execution_verifier: ExecutionVerifier | None = None,
+        forbidden_files: Sequence[str] | None = None,
     ) -> None:
         self.workspace_manager = workspace_manager
         self.max_iterations = max_iterations
         self.loop_detector = LoopDetector(max_cycle_repetitions=max_cycle_repetitions)
         self.tool_router = tool_router
+        self.execution_verifier = execution_verifier or ExecutionVerifier()
+        self.forbidden_files = list(forbidden_files or [])
 
     def _resolve_step_dependencies(self, steps: Sequence[PlanStep]) -> list[PlanStep]:
-        """Sort steps topologically by dependencies; fallback to natural order if cyclic."""
-        step_map = {step.step_id: step for step in steps}
-        visited: set[str] = set()
-        visiting: set[str] = set()
-        ordered: list[PlanStep] = []
+        """Validate step dependency DAG strictly; rejects cycles, missing IDs, or self-dependencies."""
+        step_list = list(steps)
+        if not step_list:
+            return []
 
-        def dfs(step_id: str) -> None:
-            if step_id in visited or step_id not in step_map:
-                return
-            if step_id in visiting:
-                # Cycle in dependencies -> skip topological reordering
-                return
-            visiting.add(step_id)
-            current_step = step_map[step_id]
-            deps = getattr(current_step, "dependencies", []) or getattr(current_step, "depends_on", []) or []
+        # 1. Reject self-dependencies and dangling/missing dependency IDs (task.md §6 item 2)
+        known_ids = {s.step_id for s in step_list}
+        for s in step_list:
+            deps = getattr(s, "dependencies", []) or getattr(s, "depends_on", []) or []
+            if s.step_id in deps:
+                raise ValueError(f"Self-dependency detected: Step '{s.step_id}' cannot depend on itself.")
             for dep in deps:
-                dfs(dep)
-            visiting.remove(step_id)
-            visited.add(step_id)
-            ordered.append(current_step)
+                if dep not in known_ids:
+                    raise ValueError(f"Dangling dependency: Step '{s.step_id}' depends on unknown step '{dep}'.")
 
-        for step in steps:
-            dfs(step.step_id)
+        # 2. Strict Cycle Detection — Never fall back silently to natural order (task.md §6 item 2)
+        step_map: dict[str, list[PlanStep]] = {}
+        for s in step_list:
+            step_map.setdefault(s.step_id, []).append(s)
 
-        # Include any remaining steps that were not reached
-        for step in steps:
-            if step not in ordered:
-                ordered.append(step)
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        ordered_ids: list[str] = []
 
-        return ordered
+        def dfs(sid: str) -> None:
+            if sid in visited:
+                return
+            if sid in visiting:
+                raise ValueError(f"Dependency cycle detected in plan involving step '{sid}'.")
+            visiting.add(sid)
+            for s in step_map[sid]:
+                deps = getattr(s, "dependencies", []) or getattr(s, "depends_on", []) or []
+                for dep in deps:
+                    dfs(dep)
+            visiting.remove(sid)
+            visited.add(sid)
+            ordered_ids.append(sid)
+
+        for s in step_list:
+            dfs(s.step_id)
+
+        ordered_steps: list[PlanStep] = []
+        for sid in ordered_ids:
+            for s in step_map[sid]:
+                if s not in ordered_steps:
+                    ordered_steps.append(s)
+
+        for s in step_list:
+            if s not in ordered_steps:
+                ordered_steps.append(s)
+
+        return ordered_steps
 
     def execute_plan(
         self,
@@ -256,7 +284,7 @@ class AgentExecutionLoop:
                             description=item.get("description", ""),
                             action_type=item.get("action_type") or item.get("step_type", "edit"),
                             expected_files=item.get("expected_files", []),
-                            dependencies=item.get("dependencies", []),
+                            dependencies=item.get("dependencies", []) or item.get("depends_on", []),
                             verification=item.get("verification", []),
                         )
                     )
@@ -294,7 +322,12 @@ class AgentExecutionLoop:
             step_id = step.step_id
             action_type = str(getattr(step, "action_type", None) or getattr(step, "step_type", "edit")).lower()
             expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
-            step_input = payload_map.get(step_id, {})
+            step_input = dict(payload_map.get(step_id, {}) or {})
+            if "content" not in step_input and action_type in ("edit", "create", "write", "modify", "refactor"):
+                for other_pid, other_input in payload_map.items():
+                    if isinstance(other_input, dict) and "content" in other_input:
+                        step_input["content"] = other_input["content"]
+                        break
 
             # 1. Anti-Cyclic Loop Check
             fingerprint = self.loop_detector.fingerprint_action(
@@ -420,8 +453,10 @@ class AgentExecutionLoop:
             elif action_type in ("edit", "create", "write", "modify", "refactor"):
                 content = step_input.get("content")
                 if content is None:
-                    # Synthetic code edit if content not supplied directly
-                    content = f"# Generated change for step {step_id}: {step.description}\n"
+                    raise WorkspaceError(
+                        f"Modification step '{step_id}' ({action_type}) failed: No content payload provided. "
+                        "Placeholder synthetic writes are prohibited."
+                    )
                 for target_file in expected_files:
                     if hasattr(self.workspace_manager, "write_file"):
                         res = self.workspace_manager.write_file(
@@ -455,17 +490,28 @@ class AgentExecutionLoop:
                     try:
                         if hasattr(self.workspace_manager, "read_file"):
                             res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                            read_outputs[target_file] = getattr(res, "content", "") or ""
+                            if hasattr(res, "success") and not res.success:
+                                err = getattr(res, "error", None) or getattr(res, "error_message", None) or "read failed"
+                                if "not found" in str(err).lower() or "does not exist" in str(err).lower():
+                                    read_outputs[target_file] = f"[FILE_NOT_YET_CREATED: {target_file}]"
+                                else:
+                                    raise WorkspaceError(f"Inspection step '{step_id}' failed reading '{target_file}': {err}")
+                            else:
+                                read_outputs[target_file] = getattr(res, "content", "") or ""
                         else:
                             req = WorkspaceFileReadRequest(task_id=task_id, file_path=target_file)
                             res = self.workspace_manager.safe_read_file(req)
                             read_outputs[target_file] = getattr(res, "content", "") or ""
-                    except Exception:
-                        read_outputs[target_file] = ""
+                    except WorkspaceError:
+                        raise
+                    except Exception as exc:
+                        raise WorkspaceError(
+                            f"Inspection step '{step_id}' failed reading '{target_file}': {exc}"
+                        ) from exc
                 output = read_outputs
 
-            elif action_type in ("command", "test"):
-                if action_type == "test" and "command" not in step_input and expected_files:
+            elif action_type in ("command", "test", "execute_command", "run_command"):
+                if action_type == "test" and "command" not in step_input and not getattr(step, "command", None) and expected_files and not step_input.get("run_command", False):
                     written_tests: list[str] = []
                     for target_file in expected_files:
                         content = step_input.get("content")
@@ -477,35 +523,66 @@ class AgentExecutionLoop:
                                 create_parents=True,
                             )
                             written_tests.append(target_file)
-                    if not step_input.get("run_command", False):
-                        output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
-                    else:
-                        cmd = "pytest"
-                        args = list(step_input.get("args") or [])
-                        req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
-                        res = self.workspace_manager.execute_command(req)
-                        output = {"exit_code": res.exit_code, "stdout": res.stdout, "stderr": res.stderr}
-                        if res.exit_code not in (0, 5):
-                            raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
+                    output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
                 else:
-                    cmd = step_input.get("command") or "pytest"
-                    args = step_input.get("args") or []
+                    cmd = step_input.get("command") or getattr(step, "command", None) or ("pytest" if action_type == "test" else "pytest")
+                    args = list(step_input.get("args") or [])
                     req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
                     if hasattr(self.workspace_manager, "execute_command"):
                         res = self.workspace_manager.execute_command(req)
                     else:
                         res = self.workspace_manager.run_command_in_workspace(req)
-                    output = {"exit_code": res.exit_code, "stdout": res.stdout, "stderr": res.stderr}
-                    allowed_codes = (0, 5) if cmd == "pytest" and "command" not in step_input else (0,)
-                    if res.exit_code not in allowed_codes:
+                    output = {
+                        "exit_code": res.exit_code,
+                        "stdout": res.stdout,
+                        "stderr": res.stderr,
+                        "test_status": (
+                            "PASSED" if res.exit_code == 0
+                            else ("NO_TESTS_COLLECTED" if res.exit_code == 5 else "FAILED")
+                        ),
+                    }
+                    if res.exit_code == 5:
+                        raise WorkspaceError(
+                            f"Command '{cmd}' collected no tests (exit code 5). "
+                            "Empty test discovery (NO_TESTS_COLLECTED) does not constitute passing test validation."
+                        )
+                    if res.exit_code != 0:
                         raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
 
             else:
-                # Default inspect/noop step
-                output = {"status": "executed", "step_id": step_id}
+                raise WorkspaceError(
+                    f"Unknown or unsupported action_type '{action_type}' for step '{step_id}'. Failing closed."
+                )
+
+            # Post-Step Verification Engine (task.md §6 item 3)
+            file_contents: dict[str, str] = {}
+            for target_file in expected_files:
+                try:
+                    if hasattr(self.workspace_manager, "read_file"):
+                        r_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                        cnt = getattr(r_res, "content", None)
+                        if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
+                            file_contents[target_file] = str(cnt)
+                except Exception:
+                    pass
+
+            v_outcome = self.execution_verifier.verify_step_execution(
+                task_id=task_id,
+                step=step,
+                step_output=output,
+                modified_files=expected_files if action_type in ("edit", "create", "write", "modify", "patch", "refactor") else [],
+                file_contents=file_contents,
+                forbidden_files=self.forbidden_files,
+            )
+
+            if not v_outcome.is_verified:
+                raise WorkspaceError(
+                    f"Post-step verification failed for step '{step_id}': {v_outcome.failure_reason}"
+                )
 
             record.status = StepExecutionStatus.COMPLETED
             record.output = output
+            record.verification_outcome = v_outcome
             record.completed_at = datetime.now(timezone.utc).isoformat()
             record.duration_ms = (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
 

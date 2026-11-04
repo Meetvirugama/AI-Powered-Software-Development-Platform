@@ -199,6 +199,41 @@ class ValidationStrategy(BaseModel):
     )
 
 
+class StepVerification(BaseModel):
+    """Specific verification check with observable pass criteria (task.md §5 B)."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    criterion_id: str = Field(default="", description="Unique criterion ID, e.g. 'crit-1'.")
+    description: str = Field(default="", description="What this check proves.")
+    verification_type: str = Field(default="test", description="Verification type: test, syntax, diff, command, or static.")
+    command_or_check: str | None = Field(default=None, description="Executable command or assertion rule.")
+    expected_result: str = Field(default="", description="Expected outcome string or exit code.")
+    evidence_required: bool = Field(default=True, description="Whether output evidence must be captured.")
+
+
+class PlanTransition(BaseModel):
+    """Dynamic outcome routing transition for adaptive plan execution (task.md §3, §5 B)."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    outcome: str = Field(default="success", description="Outcome trigger: success, failure, blocked, or timeout.")
+    next_step_id: str | None = Field(default=None, description="Next step to execute upon this outcome.")
+    recovery_step_id: str | None = Field(default=None, description="Targeted recovery step if this step fails.")
+
+
+class ExecutionPolicy(BaseModel):
+    """Execution policy constraints for a plan step or entire plan (task.md §5 B)."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    max_attempts: int = Field(default=3, ge=1, le=10)
+    timeout_seconds: int = Field(default=300, ge=10, le=3600)
+    require_approval: bool = Field(default=False)
+    allowed_tools: list[str] = Field(default_factory=lambda: ["workspace:write", "test:execute", "read_file"])
+    rollback_on_failure: bool = Field(default=True)
+
+
 class PlanStep(BaseModel):
     """A single ordered implementation step in a structured task plan (Docs/week3.md §6 F32)."""
 
@@ -243,6 +278,22 @@ class PlanStep(BaseModel):
     dependencies: list[str] = Field(
         default_factory=list,
         description="List of step_ids that must complete successfully before this step can run.",
+    )
+    requirement_ids: list[str] = Field(
+        default_factory=list,
+        description="Requirement IDs satisfied or verified by this step.",
+    )
+    step_verifications: list[StepVerification] = Field(
+        default_factory=list,
+        description="Concrete verification checks with evidence requirements.",
+    )
+    transitions: list[PlanTransition] = Field(
+        default_factory=list,
+        description="Dynamic outcome routing transitions.",
+    )
+    execution_policy: ExecutionPolicy | None = Field(
+        default=None,
+        description="Step-specific execution policy and timeout constraints.",
     )
     tests_to_run: list[str] = Field(
         default_factory=list,
@@ -426,6 +477,20 @@ class PlanDependencyGraph:
                         f"(Step '{step_id}' depends on unknown step_id '{dep}')."
                     )
 
+        # Validate transition targets if defined (task.md §3, §5 B)
+        for step in self.steps:
+            for tr in getattr(step, "transitions", []) or []:
+                target_next = getattr(tr, "next_step_id", None)
+                if target_next and target_next not in self.step_map:
+                    raise ValueError(
+                        f"Dangling transition target: Step '{step.step_id}' references unknown next_step_id '{target_next}'."
+                    )
+                target_rec = getattr(tr, "recovery_step_id", None)
+                if target_rec and target_rec not in self.step_map:
+                    raise ValueError(
+                        f"Dangling transition recovery: Step '{step.step_id}' references unknown recovery_step_id '{target_rec}'."
+                    )
+
         visited: dict[str, int] = {s: 0 for s in self.step_map}
 
         def _dfs(node: str, path: list[str]) -> None:
@@ -474,6 +539,11 @@ class PlanDependencyGraph:
             raise ValueError("Could not resolve execution order: graph contains unresolved dependencies or cycles.")
 
         return execution_order
+
+    def topological_sort(self) -> list[PlanStep]:
+        """Compute topological sort returning ordered PlanStep instances."""
+        order = self.get_execution_order()
+        return [self.step_map[sid] for sid in order]
 
     def get_execution_stages(self) -> list[list[str]]:
         """Group steps into parallel execution waves (stages)."""
@@ -578,6 +648,30 @@ class StructuredPlan(BaseModel):
     required_permissions: list[str] = Field(
         default_factory=lambda: ["workspace:write", "test:execute"],
         description="Tool and execution capabilities needed by the agent.",
+    )
+    requirements: list[Any] = Field(
+        default_factory=list,
+        description="Discovered task requirements matrix (task.md §2, §5 B).",
+    )
+    requirement_coverage: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Summary of requirement coverage status and gaps.",
+    )
+    context_snapshot_id: str | None = Field(
+        default=None,
+        description="Repository Intelligence snapshot ID from which this plan was grounded.",
+    )
+    completeness_report: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Verification report certifying completeness against mandatory requirements.",
+    )
+    execution_policy: ExecutionPolicy = Field(
+        default_factory=ExecutionPolicy,
+        description="Execution limits, tool permissions, and timeout policies.",
+    )
+    final_validation_strategy: list[str] = Field(
+        default_factory=list,
+        description="Final acceptance and regression tests required before marking task complete.",
     )
     resource_budget: PlanResourceBudget = Field(
         default_factory=PlanResourceBudget,

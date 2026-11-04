@@ -87,6 +87,40 @@ async def generate_tests(
             token_budget=payload.options.max_context_tokens,
         )
 
+    req_result = None
+    with timer.measure("requirement_discovery"):
+        try:
+            from app.models.symbol import CodeSymbol
+            from app.models.symbol_edge import SymbolEdge as DbSymbolEdge
+            from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
+
+            repo_symbols = (
+                db.query(CodeSymbol).filter(CodeSymbol.repository_id == repository_id).all()
+                if hasattr(db, "query")
+                else []
+            )
+            repo_edges = (
+                db.query(DbSymbolEdge).filter(DbSymbolEdge.repository_id == repository_id).all()
+                if hasattr(db, "query")
+                else []
+            )
+            file_contents = dict(manifest_contents)
+            if resolved.target.path and resolved.code_content:
+                file_contents[resolved.target.path] = resolved.code_content
+
+            req_orchestrator = TestRequirementOrchestrator()
+            req_result = req_orchestrator.orchestrate_requirements(
+                repository_id=repository_id,
+                payload=payload,
+                db=db,
+                all_repo_files=all_repo_files,
+                repo_symbols=repo_symbols,
+                repo_edges=repo_edges,
+                file_contents=file_contents,
+            )
+        except Exception as req_exc:
+            logger.warning(f"Test requirement discovery encountered error: {req_exc}")
+
     service = _get_service(request, "test_generation_service", "Test generation")
     method = service.generate_tests if hasattr(service, "generate_tests") else service
 
@@ -107,6 +141,7 @@ async def generate_tests(
                     "proposed_test_path": proposed_test_path,
                     "fixtures": list(detection.fixtures),
                     "revision": resolved.revision,
+                    "requirements": req_result.prioritized_gaps if req_result else [],
                 },
             )
     except APIError as exc:
@@ -220,6 +255,18 @@ async def generate_tests(
             detection=detection,
             default_proposed_path=proposed_test_path,
         )
+        if req_result:
+            update_fields: dict[str, Any] = {}
+            if not sanitized_result.requirements:
+                update_fields["requirements"] = req_result.requirements
+            if not sanitized_result.quality_report:
+                update_fields["quality_report"] = req_result.quality_report
+            if not sanitized_result.missing_requirements:
+                update_fields["missing_requirements"] = [
+                    r.requirement_id for r in req_result.requirements if r.status in ("MISSING", "BLOCKED")
+                ]
+            if update_fields:
+                sanitized_result = sanitized_result.model_copy(update=update_fields)
 
     ctx_tokens = getattr(test_context, "total_tokens", None) if test_context else None
     prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)

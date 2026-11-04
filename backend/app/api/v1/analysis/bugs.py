@@ -35,6 +35,7 @@ from app.services.bug_detection_orchestrator import (
     filter_and_rank_findings,
     merge_and_deduplicate_findings,
     normalize_and_ground_findings,
+    resolve_bug_target_and_build_context,
 )
 from app.services.explanation_orchestrator import (
     record_analysis_run,
@@ -69,8 +70,7 @@ async def detect_bugs(
     repo = _owned_repository(repository_id, request, db)
 
     with timer.measure("target_resolution_and_context"):
-        explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
-        resolved = resolve_target_and_build_context(repository_id, repo, explain_compat_req, db)
+        resolved = resolve_bug_target_and_build_context(repository_id, repo, payload, db)
         payload.target = resolved.target
 
     service = _get_service(request, "bug_detection_service", "Bug detection")
@@ -179,6 +179,24 @@ async def detect_bugs(
                 extra_static_raw.extend(builtin_items)
                 parser_warnings.extend(builtin_warns)
 
+                # Phase 3 Hybrid Candidate Discovery (Taint, Config, Change-risk)
+                try:
+                    from app.services.bug_candidate_discovery import BugCandidateDiscoveryService
+                    discovery_svc = BugCandidateDiscoveryService()
+                    discovered_cands = await asyncio.to_thread(
+                        discovery_svc.discover_candidates,
+                        file_path=resolved.target.path,
+                        code_content=resolved.code_content,
+                        language=(resolved.file_record.language if resolved.file_record else "Python") or "Python",
+                        scan_mode=getattr(payload, "scan_mode", "standard"),
+                        changed_files=getattr(payload, "changed_files", []),
+                        repository_id=repository_id,
+                    )
+                    for cand in discovered_cands:
+                        extra_static_raw.append(cand.to_dict())
+                except Exception as cand_exc:
+                    logger.warning("candidate_discovery_error", extra={"error": str(cand_exc)})
+
     status_val = "COMPLETED"
     revision = resolved.revision
     service_missing_ctx: list[str] = []
@@ -241,8 +259,53 @@ async def detect_bugs(
                 default_source_type="STATIC",
             )
             merged_findings = merge_and_deduplicate_findings([*grounded_static, *grounded_service])
+
+            # Phase 2 & 4: Graph slice & Counterevidence Validation
+            from app.services.bug_graph_context_service import BugGraphContextService
+            from app.services.bug_validation_service import BugValidationService
+
+            graph_svc = BugGraphContextService(db=db)
+            val_svc = BugValidationService()
+
+            try:
+                prog_slice = await graph_svc.build_program_slice(
+                    repository_id=repository_id,
+                    target_file_path=resolved.target.path,
+                    target_symbol_id=getattr(resolved.target_symbol, "id", None) if hasattr(resolved, "target_symbol") and resolved.target_symbol else None,
+                    target_line=resolved.target.start_line,
+                    max_depth=2,
+                )
+            except Exception as slice_err:
+                logger.warning("graph_slice_build_error", extra={"error": str(slice_err)})
+                prog_slice = None
+
+            extracted_guards = getattr(resolved.intelligence_context, "project_rules", []) if resolved.intelligence_context else []
+            slice_trace = prog_slice.dependency_trace if prog_slice else []
+            slice_tests = prog_slice.associated_tests if prog_slice else []
+
+            enriched_findings: list[BugFinding] = []
+            for f in merged_findings:
+                val_res = val_svc.validate_candidate(
+                    title=f.title,
+                    category=str(f.category),
+                    evidence=f.evidence,
+                    source_type=str(f.source_type),
+                    guards=extracted_guards,
+                    associated_tests=slice_tests,
+                    missing_context=resolved.missing_context,
+                    has_dependency_trace=bool(slice_trace),
+                )
+                enriched = f.model_copy(
+                    update={
+                        "dependency_trace": f.dependency_trace or slice_trace,
+                        "counterevidence": f.counterevidence or val_res.counterevidence,
+                        "evidence_level": val_res.evidence_level,
+                    }
+                )
+                enriched_findings.append(enriched)
+
             ranked_findings = filter_and_rank_findings(
-                merged_findings,
+                enriched_findings,
                 min_severity=payload.min_severity,
                 include_static=payload.include_static,
                 include_ai=payload.include_ai,

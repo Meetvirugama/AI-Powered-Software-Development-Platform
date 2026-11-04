@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.orm import Session
 
+from ai.context.task_context import TaskContextBuilder, TaskContextManifest
 from ai.schemas.validator import OutputValidator
+from ai.services.task_completeness_checker import PlanCompletenessReport, TaskCompletenessChecker
+from ai.services.task_requirement_discovery import DiscoveredTaskRequirement, TaskRequirementDiscovery
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.models.analysis_finding import AnalysisFinding
@@ -26,10 +29,14 @@ from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.models.task import AgentTask
 from app.schemas.plan import (
+    ExecutionPolicy,
     PlanResourceBudget,
     PlanRisk,
     PlanStep,
+    PlanTransition,
     PlannerSchema,
+    StepVerification,
+    StructuredPlan,
 )
 from app.schemas.task import TaskAssumption
 
@@ -104,6 +111,9 @@ class TaskPlanner:
         self._gateway = llm_gateway
         self._model = model or get_settings().active_chat_model
         self._validator = OutputValidator(llm_gateway=llm_gateway)
+        self._context_builder = TaskContextBuilder()
+        self._requirement_discovery = TaskRequirementDiscovery()
+        self._completeness_checker = TaskCompletenessChecker()
 
     # ------------------------------------------------------------------
     # Context Gathering (Week 2 Integration Contract — Docs/week3.md §4)
@@ -239,14 +249,16 @@ class TaskPlanner:
                 fallback_candidate = "src/implementation.py"
             req_target_files = [fallback_candidate]
 
+        manifest = self._context_builder.build_task_context(task, db)
         return {
             "language": language,
             "test_command": test_command,
-            "target_files": req_target_files,
-            "repo_files": repo_files[:50],
-            "relevant_symbols": relevant_symbols,
+            "target_files": req_target_files or manifest.target_files,
+            "repo_files": repo_files[:50] or manifest.retrieved_files[:50],
+            "relevant_symbols": relevant_symbols or manifest.retrieved_symbols,
             "finding_summaries": finding_summaries,
             "forbidden_lower": forbidden_lower,
+            "manifest": manifest,
         }
 
     # ------------------------------------------------------------------
@@ -298,6 +310,16 @@ class TaskPlanner:
         summary_suffix = f" (Revised: {redact(revision_notes.strip())[:120]})" if revision_notes else ""
         summary = f"Implementation plan for: {redact(task.title)}{summary_suffix}"
 
+        # 1. Discover atomic requirements matrix (task.md §2, §5 A)
+        manifest = ctx.get("manifest")
+        if manifest is None:
+            manifest = self._context_builder.build_task_context(task, None)
+        discovered_reqs = self._requirement_discovery.discover_requirements(task, manifest)
+
+        impl_req_ids = [r.requirement_id for r in discovered_reqs if r.category not in ("verification", "testing")]
+        test_req_ids = [r.requirement_id for r in discovered_reqs if r.category == "testing"]
+        verif_req_ids = [r.requirement_id for r in discovered_reqs if r.category == "verification"]
+
         steps: list[PlanStep] = [
             PlanStep(
                 step_id="step_1",
@@ -310,8 +332,14 @@ class TaskPlanner:
                 expected_files=target_files,
                 target_symbols=relevant_symbols[:5],
                 depends_on=[],
+                dependencies=[],
+                requirement_ids=verif_req_ids[:2],
                 tests_to_run=[],
                 verification=["Target symbols and existing behavior confirmed against base revision."],
+                transitions=[
+                    PlanTransition(outcome="success", next_step_id="step_2"),
+                    PlanTransition(outcome="failure", recovery_step_id=None),
+                ],
             ),
             PlanStep(
                 step_id="step_2",
@@ -324,10 +352,25 @@ class TaskPlanner:
                 expected_files=target_files,
                 target_symbols=relevant_symbols[:5],
                 depends_on=["step_1"],
+                dependencies=["step_1"],
+                requirement_ids=impl_req_ids or ["REQ-1"],
                 tests_to_run=[test_command],
                 verification=[
                     "Modified files pass syntax/AST checks.",
                     "No forbidden files or unauthorized dependencies are touched.",
+                ],
+                step_verifications=[
+                    StepVerification(
+                        criterion_id="crit-step-2-syntax",
+                        description="AST syntax validity and zero forbidden file touches",
+                        verification_type="syntax",
+                        expected_result="Valid syntax",
+                        evidence_required=True,
+                    )
+                ],
+                transitions=[
+                    PlanTransition(outcome="success", next_step_id="step_3"),
+                    PlanTransition(outcome="failure", recovery_step_id=None),
                 ],
             ),
             PlanStep(
@@ -341,10 +384,26 @@ class TaskPlanner:
                 expected_files=[test_file],
                 target_symbols=relevant_symbols[:3],
                 depends_on=["step_2"],
+                dependencies=["step_2"],
+                requirement_ids=test_req_ids or ["REQ-TEST-1"],
                 tests_to_run=[test_command, test_file],
                 verification=[
                     f"`{test_command}` exits with code 0.",
                     "Independent static analysis and secret scan report 0 blocking findings.",
+                ],
+                step_verifications=[
+                    StepVerification(
+                        criterion_id="crit-step-3-test",
+                        description=f"`{test_command}` runs with exit code 0",
+                        verification_type="test",
+                        command_or_check=test_command,
+                        expected_result="Exit code 0",
+                        evidence_required=True,
+                    )
+                ],
+                transitions=[
+                    PlanTransition(outcome="success", next_step_id=None),
+                    PlanTransition(outcome="failure", recovery_step_id="step_2"),
                 ],
             ),
         ]
@@ -354,7 +413,7 @@ class TaskPlanner:
             if isinstance(cst, dict) and cst.get("max_budget_tokens"):
                 max_tokens = int(cst["max_budget_tokens"])
 
-        return PlannerSchema(
+        draft_plan = PlannerSchema(
             summary=summary[:1000],
             problem_statement=redact(task.description)[:2000],
             assumptions=assumptions,
@@ -385,7 +444,26 @@ class TaskPlanner:
                 max_execution_seconds=300,
                 max_files_modified=max(5, len(expected_files) + 2),
             ),
+            requirements=[r.to_dict() for r in discovered_reqs],
+            context_snapshot_id=manifest.snapshot_id if manifest else f"snap_{str(task.id)[:8]}",
+            final_validation_strategy=[
+                f"Execute allowed test command `{test_command}` inside isolated task workspace",
+                "Run deterministic static analysis and AST defect scanner on changed files",
+                "Run Week 2 Standalone AI Code Review on final diff",
+                "Scan diff for hardcoded secrets or credentials",
+            ],
         )
+
+        # 2. Check Plan Completeness against Discovered Requirements (task.md §2, §5 A)
+        completeness_report = self._completeness_checker.check_plan_completeness(draft_plan, discovered_reqs)
+        draft_plan.completeness_report = completeness_report.to_dict()
+        draft_plan.requirement_coverage = {
+            "total": len(discovered_reqs),
+            "covered": len(completeness_report.covered_requirement_ids),
+            "uncovered": len(completeness_report.uncovered_requirement_ids),
+            "is_complete": completeness_report.is_complete,
+        }
+        return draft_plan
 
     def _sanitize_llm_plan(
         self,
@@ -436,6 +514,9 @@ class TaskPlanner:
             if revision_notes:
                 intake_text += f"\nHuman Revision Notes:\n{revision_notes}\n"
 
+            manifest = ctx.get("manifest")
+            grounding_text = f"\nRepository Intelligence Grounding:\n{manifest.prompt_context_text}\n" if manifest and manifest.prompt_context_text else ""
+
             repo_ctx_text = (
                 f"Language: {ctx['language']}\n"
                 f"Test Command: {ctx['test_command']}\n"
@@ -443,6 +524,7 @@ class TaskPlanner:
                 f"Repository Files Sample: {ctx['repo_files'][:25]}\n"
                 f"Relevant Symbols: {ctx['relevant_symbols']}\n"
                 f"Week 2 Findings: {ctx['finding_summaries']}\n"
+                f"{grounding_text}"
             )
 
             user_prompt = (

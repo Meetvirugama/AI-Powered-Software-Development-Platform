@@ -26,6 +26,34 @@ from ai.services.requirement_verifier import (
     RequirementToCodeVerifier,
     RequirementVerificationResult,
 )
+from ai.services.execution_budget_manager import (
+    BudgetExceededError,
+    ExecutionBudget,
+    ExecutionBudgetManager,
+)
+from ai.services.execution_checkpoint_manager import (
+    ExecutionCheckpoint,
+    ExecutionCheckpointManager,
+)
+from ai.services.execution_recovery import (
+    ExecutionRecoveryService,
+    RecoveryOutcome,
+)
+from ai.services.execution_verifier import (
+    ExecutionVerifier,
+    StepVerificationEvidence,
+    StepVerificationOutcome,
+)
+from ai.services.plan_replanner import PlanReplanner
+from ai.services.task_completeness_checker import (
+    CompletenessIssue,
+    PlanCompletenessReport,
+    TaskCompletenessChecker,
+)
+from ai.services.task_requirement_discovery import (
+    DiscoveredTaskRequirement,
+    TaskRequirementDiscovery,
+)
 from ai.services.retrieval_optimizer import (
     AgentTokenBudgetManager,
     LatencyPercentiles,
@@ -43,19 +71,35 @@ __all__ = [
     "AgentTokenBudgetManager",
     "BoundedRepairLoop",
     "BoundedRepairOutcome",
+    "BudgetExceededError",
     "BugDetectionEngine",
     "CodeExplanationService",
+    "CompletenessIssue",
+    "DiscoveredTaskRequirement",
+    "ExecutionBudget",
+    "ExecutionBudgetManager",
+    "ExecutionCheckpoint",
+    "ExecutionCheckpointManager",
+    "ExecutionRecoveryService",
+    "ExecutionVerifier",
     "IssueToTaskAdapter",
     "LatencyPercentiles",
     "LoopDetectedError",
+    "PlanCompletenessReport",
+    "PlanReplanner",
     "PlanningOutcome",
+    "RecoveryOutcome",
     "RequirementComplianceItem",
     "RequirementToCodeVerifier",
     "RequirementVerificationResult",
     "RetrievalLatencyOptimizer",
     "StepExecutionRecord",
     "StepExecutionStatus",
+    "StepVerificationEvidence",
+    "StepVerificationOutcome",
+    "TaskCompletenessChecker",
     "TaskPlanner",
+    "TaskRequirementDiscovery",
     "TestGenerationService",
     "TokenBudgetExhaustedError",
     "extract_safe_repo_paths",

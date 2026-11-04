@@ -287,8 +287,22 @@ def _normalize_code_target_payload(data: Any) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Feature 1: Code Explanation Schemas (Day 2 Contract)
+# Feature 1: Code Explanation Schemas (Day 2 Contract & Repository Intelligence)
 # ---------------------------------------------------------------------------
+
+class ExplainContextOptions(BaseModel):
+    """Context selection options for Repository Intelligence Explain Studio (task.md §6.3)."""
+
+    include_graph_context: bool = True
+    include_callers: bool = True
+    include_dependencies: bool = True
+    include_tests: bool = True
+    include_semantic_search: bool = True
+    selected_files: list[str] = Field(
+        default_factory=list,
+        description="User-selected related files explicitly added to context.",
+    )
+
 
 class ExplainCodeRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/explain`."""
@@ -297,6 +311,8 @@ class ExplainCodeRequest(BaseModel):
     options: AnalysisOptions = Field(
         default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_EXPLAIN_CONTEXT_TOKENS)
     )
+    context: ExplainContextOptions = Field(default_factory=ExplainContextOptions)
+    explanation_level: str = "detailed"
 
     @model_validator(mode="before")
     @classmethod
@@ -383,6 +399,14 @@ class CodeExplanation(BaseModel):
     missing_context: list[str] = Field(
         default_factory=list,
         description="Explicit list of unavailable files, callers, or context items.",
+    )
+    execution_flow: list[str] = Field(
+        default_factory=list,
+        description="Runtime execution flow across repository components.",
+    )
+    related_files: list[str] = Field(
+        default_factory=list,
+        description="Related repository files utilized in context assembly.",
     )
 
     @model_validator(mode="before")
@@ -499,6 +523,14 @@ class BugDetectionRequest(BaseModel):
         default="LOW",
         description="Minimum finding severity threshold to include.",
     )
+    scan_mode: str = Field(
+        default="standard",
+        description="Scan mode: 'quick', 'standard', 'deep', or 'change'.",
+    )
+    changed_files: list[str] = Field(
+        default_factory=list,
+        description="Optional list of changed files for change/regression scan scope.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -579,6 +611,28 @@ class BugFinding(BaseModel):
         max_length=64,
         description="Cryptographic SHA-256 hash of the evidence snippet.",
     )
+    priority_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Calculated 0-100 bug priority based on severity, reachability, exploitability, blast radius, confidence.",
+    )
+    evidence_level: str = Field(
+        default="SUSPECTED",
+        description="Validation evidence level: PROVEN, STRONG, SUSPECTED, or NEEDS_CONTEXT.",
+    )
+    dependency_trace: list[str] = Field(
+        default_factory=list,
+        description="Cross-file caller/callee trace connecting source to sink.",
+    )
+    counterevidence: list[str] = Field(
+        default_factory=list,
+        description="Guards, tests, or sanitizers inspected during counterevidence validation.",
+    )
+    reproduction_status: str = Field(
+        default="NOT_TESTED",
+        description="Reproduction status: NOT_TESTED, REPRODUCED, or REPRODUCTION_FAILED.",
+    )
 
 
 class BugDetectionResponse(BaseModel):
@@ -602,6 +656,77 @@ class BugDetectionResponse(BaseModel):
 # Feature 3: Framework-Aware Test Generation Schemas (Day 4 Contract)
 # ---------------------------------------------------------------------------
 
+TestRequirementCategory = Literal[
+    "functional",
+    "boundary",
+    "negative",
+    "exception_handling",
+    "integration",
+    "api_contract",
+    "security",
+    "state_lifecycle",
+    "concurrency",
+    "regression",
+    "performance",
+    "configuration",
+    "frontend",
+    "end_to_end",
+]
+
+TestRequirementStatus = Literal[
+    "COVERED",
+    "PARTIAL",
+    "MISSING",
+    "BLOCKED",
+    "NOT_APPLICABLE",
+]
+
+TestRequirementPriority = Literal[
+    "CRITICAL",
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+]
+
+
+class TestRequirement(BaseModel):
+    """Repository-wide discovered test requirement (task.md §2, §3)."""
+
+    __test__ = False
+
+    requirement_id: str = Field(..., description="Unique requirement ID, e.g. REQ-AUTH-001")
+    title: str = Field(..., min_length=1, max_length=256)
+    category: TestRequirementCategory | str = Field(default="functional")
+    priority: TestRequirementPriority | str = Field(default="MEDIUM")
+    source_files: list[str] = Field(default_factory=list)
+    source_symbols: list[str] = Field(default_factory=list)
+    expected_behavior: str = Field(..., description="Expected normal or failure behavior")
+    evidence: list[str] = Field(default_factory=list, description="Evidence supporting discovery or coverage")
+    status: TestRequirementStatus | str = Field(
+        default="MISSING",
+        description="Requirement coverage status (COVERED, PARTIAL, MISSING, BLOCKED, NOT_APPLICABLE)",
+    )
+    target_line: int | None = Field(default=None, description="Relevant source line number if applicable")
+    reason: str | None = Field(default=None, description="Explanation for status or exclusion")
+
+
+class TestQualityReport(BaseModel):
+    """Quality scorecard for generated and existing repository tests (task.md §8)."""
+
+    __test__ = False
+
+    requirement_coverage_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    line_coverage_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    branch_coverage_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    mutation_score_percent: float | None = Field(default=None, ge=0.0, le=100.0)
+    duplicate_test_count: int = Field(default=0, ge=0)
+    flaky_test_count: int = Field(default=0, ge=0)
+    weak_assertion_count: int = Field(default=0, ge=0)
+    untested_critical_requirements: list[str] = Field(default_factory=list)
+    quality_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    summary_notes: list[str] = Field(default_factory=list)
+
+
 class TestGenerationRequest(BaseModel):
     """Request body for `POST /api/v1/repositories/{repository_id}/generate-tests`."""
 
@@ -614,6 +739,26 @@ class TestGenerationRequest(BaseModel):
     framework: SupportedTestFramework | None = Field(
         default=None,
         description="Optional explicit test framework override ('pytest', 'unittest', 'jest').",
+    )
+    generation_mode: Literal["full_repository", "targeted", "change_based"] = Field(
+        default="targeted",
+        description="Test generation scope: 'full_repository', 'targeted', or 'change_based'.",
+    )
+    changed_files: list[str] = Field(
+        default_factory=list,
+        description="Changed files to evaluate for 'change_based' mode.",
+    )
+    focus_categories: list[str] = Field(
+        default_factory=list,
+        description="Optional filter for specific requirement categories (e.g. security, boundary).",
+    )
+    commit_sha: str | None = Field(
+        default=None,
+        description="Specific commit SHA to pin analysis context.",
+    )
+    run_isolated_execution: bool = Field(
+        default=True,
+        description="Whether to execute generated tests in isolated sandbox runner.",
     )
 
     @model_validator(mode="before")
@@ -695,6 +840,30 @@ class TestGenerationResult(BaseModel):
     sources: list[AnalysisSourceReference] = Field(
         default_factory=list,
         description="Source references used to construct the test suite.",
+    )
+    requirements: list[TestRequirement] = Field(
+        default_factory=list,
+        description="Discovered test requirements and coverage traceability (task.md §2, §6).",
+    )
+    quality_report: TestQualityReport | None = Field(
+        default=None,
+        description="Quality scorecard evaluating requirement, assertion, and execution coverage (task.md §8).",
+    )
+    generated_test_files: list[str] = Field(
+        default_factory=list,
+        description="All generated test file paths.",
+    )
+    missing_requirements: list[str] = Field(
+        default_factory=list,
+        description="Requirements remaining uncovered after generation.",
+    )
+    unsupported_requirements: list[str] = Field(
+        default_factory=list,
+        description="Requirements unsupported by current framework or runtime.",
+    )
+    execution_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Detailed execution statistics from restricted test runner.",
     )
 
     @field_validator("proposed_test_path")
@@ -886,6 +1055,28 @@ class ReviewFinding(BaseModel):
         default=None,
         max_length=64,
         description="Cryptographic SHA-256 hash of the evidence snippet.",
+    )
+    priority_score: int | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="Calculated 0-100 bug priority based on severity, reachability, exploitability, blast radius, confidence.",
+    )
+    evidence_level: str = Field(
+        default="SUSPECTED",
+        description="Validation evidence level: PROVEN, STRONG, SUSPECTED, or NEEDS_CONTEXT.",
+    )
+    dependency_trace: list[str] = Field(
+        default_factory=list,
+        description="Cross-file caller/callee trace connecting source to sink.",
+    )
+    counterevidence: list[str] = Field(
+        default_factory=list,
+        description="Guards, tests, or sanitizers inspected during counterevidence validation.",
+    )
+    reproduction_status: str = Field(
+        default="NOT_TESTED",
+        description="Reproduction status: NOT_TESTED, REPRODUCED, or REPRODUCTION_FAILED.",
     )
 
 

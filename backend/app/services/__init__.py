@@ -27,6 +27,8 @@ from app.services.task_orchestrator import (
 from app.services.task_recovery import TaskRecoveryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 from app.services.test_generation_orchestrator import LLMTestGenerationService
+from app.services.test_generation_report import format_test_suite_report_markdown
+from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
 from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
 
 __all__ = [
@@ -53,5 +55,7 @@ __all__ = [
     "TaskHistoryService",
     "TaskRecoveryService",
     "TestGenerationHistoryService",
+    "TestRequirementOrchestrator",
+    "format_test_suite_report_markdown",
     "format_agent_branch_name",
 ]

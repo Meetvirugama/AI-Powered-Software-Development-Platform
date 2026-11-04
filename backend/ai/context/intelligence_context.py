@@ -168,3 +168,53 @@ def build_intelligence_context(
         revision=revision,
     )
 
+
+def build_test_intelligence_context(
+    target: TargetSnippet,
+    callers: Sequence[SymbolContext] | None = None,
+    callees: Sequence[SymbolContext] | None = None,
+    constructors: Sequence[SymbolContext] | None = None,
+    data_types: Sequence[SymbolContext] | None = None,
+    fixtures: Sequence[str] | None = None,
+    existing_test_files: Sequence[RepositoryFile] | None = None,
+    repository_files: Sequence[RepositoryFile] | None = None,
+    project_rules: Sequence[str] | None = None,
+    token_budget: int = 10_000,
+    limits: ContextLimits | None = None,
+    revision: str | None = None,
+) -> IntelligenceContext:
+    """Build enriched test generation context with callers, callees, constructors, data types, and fixtures (task.md §6)."""
+    related: list[SymbolContext] = []
+    if callers:
+        related.extend(callers)
+    if callees:
+        related.extend(callees)
+    if constructors:
+        related.extend(constructors)
+    if data_types:
+        related.extend(data_types)
+
+    rules = list(project_rules or [])
+    if fixtures:
+        for f in fixtures[:5]:
+            rules.append(f"Repository Fixture: {f}")
+
+    combined_files: list[RepositoryFile] = []
+    if existing_test_files:
+        combined_files.extend(existing_test_files)
+    if repository_files:
+        for rf in repository_files:
+            if rf not in combined_files:
+                combined_files.append(rf)
+
+    return build_intelligence_context(
+        target=target,
+        related_symbols=related,
+        repository_files=combined_files,
+        project_rules=rules,
+        token_budget=token_budget,
+        limits=limits,
+        revision=revision,
+    )
+
+

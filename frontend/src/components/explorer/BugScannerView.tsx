@@ -17,6 +17,9 @@ import {
   Check,
   HelpCircle,
   FileCode,
+  ArrowRight,
+  Copy,
+  GitBranch,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type {
@@ -115,6 +118,41 @@ const SOURCE_TYPE_CONFIG: Record<
   },
 };
 
+const EVIDENCE_LEVEL_CONFIG: Record<
+  string,
+  {
+    label: string;
+    icon: typeof ShieldCheck;
+    className: string;
+    description: string;
+  }
+> = {
+  PROVEN: {
+    label: 'PROVEN',
+    icon: ShieldCheck,
+    className: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    description: 'Deterministic static analysis rule or reproducible test confirmation',
+  },
+  STRONG: {
+    label: 'STRONG',
+    icon: CheckCircle2,
+    className: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+    description: 'Multi-hop code dependency trace corroborates finding without mitigating guard',
+  },
+  SUSPECTED: {
+    label: 'SUSPECTED',
+    icon: HelpCircle,
+    className: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+    description: 'Plausible AI logic defect hypothesis; further runtime context needed',
+  },
+  NEEDS_CONTEXT: {
+    label: 'NEEDS CONTEXT',
+    icon: AlertTriangle,
+    className: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
+    description: 'External package or unindexed repository symbols prevent deterministic confirmation',
+  },
+};
+
 function formatCategory(category: string): string {
   const map: Record<string, string> = {
     off_by_one: 'Off-by-One',
@@ -140,6 +178,33 @@ export function BugScannerView({
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedFile, setSelectedFile] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [copiedFindingId, setCopiedFindingId] = useState<string | null>(null);
+
+  const handleCopyIssueMarkdown = (f: any) => {
+    const lines = [
+      `## Bug: ${f.title}`,
+      `**Severity:** ${f.severity} | **Priority Score:** ${f.priority_score ?? 'N/A'}/100`,
+      `**Evidence Level:** ${f.evidence_level ?? 'SUSPECTED'}`,
+      `**Location:** \`${f.source_reference?.file_path || 'snippet'}\` (Lines ${f.source_reference?.start_line || 1}-${f.source_reference?.end_line || 1})`,
+      '',
+      '### Description',
+      f.description,
+      '',
+      '### Supporting Evidence',
+      '```',
+      f.evidence || '',
+      '```',
+    ];
+    if (f.dependency_trace && f.dependency_trace.length > 0) {
+      lines.push('', '### Dependency Trace', f.dependency_trace.map((s: string) => `- ${s}`).join('\n'));
+    }
+    if (f.suggested_fix) {
+      lines.push('', '### Suggested Fix', '```', f.suggested_fix, '```');
+    }
+    navigator.clipboard.writeText(lines.join('\n'));
+    setCopiedFindingId(f.id);
+    setTimeout(() => setCopiedFindingId(null), 2500);
+  };
   const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>(() => {
     // Default open first 3 findings
     const initial: Record<string, boolean> = {};
@@ -556,6 +621,40 @@ export function BugScannerView({
                           </span>
                         )}
 
+                        {/* Priority Score Badge */}
+                        {typeof finding.priority_score === 'number' && (
+                          <span
+                            className={cn(
+                              'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-bold font-mono tracking-tight',
+                              finding.priority_score >= 80
+                                ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                                : finding.priority_score >= 60
+                                ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                                : 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+                            )}
+                            title={`Calculated Priority Score: ${finding.priority_score}/100 (Formula: 0.35S + 0.25R + 0.20E + 0.10B + 0.10C)`}
+                          >
+                            <span>P:{finding.priority_score}</span>
+                          </span>
+                        )}
+
+                        {/* Evidence Level Badge */}
+                        {finding.evidence_level && EVIDENCE_LEVEL_CONFIG[finding.evidence_level] && (
+                          <span
+                            className={cn(
+                              'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[10px] font-mono font-medium',
+                              EVIDENCE_LEVEL_CONFIG[finding.evidence_level].className
+                            )}
+                            title={EVIDENCE_LEVEL_CONFIG[finding.evidence_level].description}
+                          >
+                            {(() => {
+                              const EvIcon = EVIDENCE_LEVEL_CONFIG[finding.evidence_level].icon;
+                              return <EvIcon className="h-3 w-3" />;
+                            })()}
+                            <span>{EVIDENCE_LEVEL_CONFIG[finding.evidence_level].label}</span>
+                          </span>
+                        )}
+
                         {/* Category */}
                         <span className="text-[10px] text-muted-foreground font-mono bg-muted/20 px-1.5 py-0.5 rounded border border-border/40">
                           {formatCategory(finding.category)}
@@ -687,6 +786,74 @@ export function BugScannerView({
                           </span>
                         </div>
                       )}
+
+                      {/* Cross-File Dependency & Data Flow Trace */}
+                      {finding.dependency_trace && finding.dependency_trace.length > 0 && (
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider font-mono flex items-center gap-1">
+                            <GitBranch className="h-3 w-3 text-cyan-400" />
+                            Cross-File Dependency & Data Flow Trace:
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5 p-2 rounded-lg bg-black/30 border border-border/60 text-[11px] font-mono">
+                            {finding.dependency_trace.map((step, idx) => (
+                              <span key={idx} className="inline-flex items-center gap-1.5">
+                                <span className="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-300 border border-cyan-500/30">
+                                  {step}
+                                </span>
+                                {idx < (finding.dependency_trace?.length ?? 0) - 1 && (
+                                  <ArrowRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Counterevidence & Protective Guards Inspected */}
+                      {finding.counterevidence && finding.counterevidence.length > 0 && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider font-mono flex items-center gap-1">
+                            <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                            Counterevidence & Protective Guards Inspected:
+                          </span>
+                          <div className="rounded-lg bg-muted/20 border border-border/60 p-2 space-y-1 text-[11px] font-mono">
+                            {finding.counterevidence.map((ce, idx) => (
+                              <div key={idx} className="flex items-start gap-1.5 text-muted-foreground">
+                                <Check className="h-3 w-3 text-emerald-400 shrink-0 mt-0.5" />
+                                <span>{ce}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Footer Action: Copy GitHub Issue Markdown */}
+                      <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                        <span className="text-[10px] text-muted-foreground font-mono">
+                          Reproduction: <span className="text-foreground">{finding.reproduction_status || 'NOT_TESTED'}</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyIssueMarkdown(finding);
+                          }}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded bg-muted/40 hover:bg-muted text-[11px] font-mono text-foreground/80 hover:text-foreground transition-colors border border-border/50"
+                          title="Copy formatted markdown for GitHub Issue"
+                        >
+                          {copiedFindingId === finding.id ? (
+                            <>
+                              <Check className="h-3 w-3 text-emerald-400" />
+                              <span className="text-emerald-400">Copied to clipboard</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-3 w-3 text-muted-foreground" />
+                              <span>Copy as GitHub Issue</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>

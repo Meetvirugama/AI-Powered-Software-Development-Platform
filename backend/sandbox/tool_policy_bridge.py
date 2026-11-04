@@ -15,7 +15,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from agent.tools.router import ToolDefinition, ToolRequest, ToolResult, ToolRouter
 from app.core.secret_redaction import redact
@@ -43,7 +43,9 @@ from sandbox.exceptions import (
     WorkspaceStateError,
 )
 from sandbox.path_guard import WorkspacePathGuard
-from sandbox.workspace_manager import WorkspaceManager
+
+if TYPE_CHECKING:
+    from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 

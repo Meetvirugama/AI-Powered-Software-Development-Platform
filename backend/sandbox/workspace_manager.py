@@ -30,7 +30,6 @@ from uuid import UUID, uuid4
 
 from app.core.config import PROJECT_ROOT
 from app.core.secret_redaction import redact
-from app.services.git_branch import format_agent_branch_name
 from app.schemas.workspace import (
     DiffImmutabilityCheckRequest,
     DiffImmutabilityCheckResult,
@@ -207,6 +206,7 @@ class WorkspaceManager:
         WorkspacePathGuard.validate_workspace_root(self._base_dir)
 
         # Formulate safe workspace path
+        from app.services.git_branch import format_agent_branch_name
         raw_slug = task_id[5:] if task_id.lower().startswith("task-") else task_id
         cleaned_short = format_agent_branch_name(raw_slug).replace("agent/task-", "")
         task_hash = hashlib.sha256(task_id.encode("utf-8")).hexdigest()[:8]

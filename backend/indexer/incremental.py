@@ -193,6 +193,7 @@ class IncrementalIndexer:
         skipped_count = 0
         all_extracted_symbols: list[Any] = []
         file_contents_by_id: dict[UUID, str] = {}
+        file_id_to_path: dict[UUID, str] = {}
 
         for file_info in scanned_files:
             raw_rel_path = getattr(file_info, "path", str(file_info))
@@ -340,6 +341,7 @@ class IncrementalIndexer:
                         persisted_symbol_ids.add(sym_uuid)
                         all_extracted_symbols.append(sym)
                         file_contents_by_id[file_id] = content
+                        file_id_to_path[file_id] = file_rel_path
                     except Exception as sym_exc:
                         logger.debug("Symbol persistence skipped for %s in %s: %s", sym.name, file_rel_path, sym_exc)
 
@@ -471,9 +473,11 @@ class IncrementalIndexer:
                     )
                     reconciled_removed_count += 1
 
+        persisted_edges_count = 0
+        built_edges: list[Any] = []
         if all_extracted_symbols:
             try:
-                graph_edges = DependencyGraphBuilder(
+                built_edges = DependencyGraphBuilder(
                     all_extracted_symbols,
                     file_contents=file_contents_by_id,
                 ).build()
@@ -483,7 +487,7 @@ class IncrementalIndexer:
                     VALUES (:id, :repo_id, :source_id, :target_id, :edge_type)
                     """
                 )
-                for edge in graph_edges:
+                for edge in built_edges:
                     await self._execute(
                         edge_insert_query,
                         {
@@ -495,15 +499,63 @@ class IncrementalIndexer:
                         },
                         sess=session,
                     )
+                    persisted_edges_count += 1
+                logger.info(
+                    "Explicitly persisted %d knowledge graph edges for repo %s",
+                    persisted_edges_count,
+                    repository_id,
+                )
             except Exception as edge_exc:
-                logger.debug("Symbol edge persistence skipped for repo %s: %s", repository_id, edge_exc)
+                logger.warning("Symbol edge persistence error for repo %s: %s", repository_id, edge_exc)
+
+        # Build and persist the Repository Intelligence Snapshot (task.md §3, §4, §10)
+        try:
+            from ai.intelligence.builder import RepositoryIntelligenceBuilder
+            from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
+
+            files_res = await self._execute(
+                text("SELECT id, path, language, content_hash, line_count, size_bytes FROM repository_files WHERE repository_id = :repo_id"),
+                {"repo_id": repository_id},
+                sess=session,
+            )
+            raw_files = files_res.fetchall() if hasattr(files_res, "fetchall") else []
+            file_objs = [
+                type("FileRecord", (), {
+                    "id": str(r[0]),
+                    "path": str(r[1]),
+                    "language": str(r[2] or "text"),
+                    "content_hash": str(r[3] or ""),
+                    "line_count": int(r[4] or 0),
+                    "size_bytes": int(r[5] or 0),
+                })()
+                for r in raw_files
+            ]
+
+            builder = RepositoryIntelligenceBuilder(repository_id=repository_id, commit_sha="HEAD")
+            snapshot = builder.build_snapshot(
+                files=file_objs,
+                symbols=all_extracted_symbols,
+                edges=built_edges,
+                file_contents={file_id_to_path.get(fid, ""): c for fid, c in file_contents_by_id.items()},
+            )
+            snapshot_mgr = RepositoryIntelligenceSnapshotManager()
+            manifest = snapshot_mgr.publish_snapshot(snapshot)
+            logger.info("Published persistent intelligence snapshot for repo %s (valid: %s)", repository_id, manifest.is_valid)
+        except Exception as snap_exc:
+            logger.warning("Repository intelligence snapshot generation skipped: %s", snap_exc)
 
         await self._commit(sess=session)
         logger.info(
-            "Incremental sync finished for repo %s: indexed=%d, skipped=%d, reconciled_removed=%d",
+            "Incremental sync finished for repo %s: indexed=%d, skipped=%d, reconciled_removed=%d, edges=%d",
             repository_id,
             indexed_count,
             skipped_count,
             reconciled_removed_count,
+            persisted_edges_count,
         )
-        return {"indexed": indexed_count, "skipped": skipped_count, "reconciled_removed": reconciled_removed_count}
+        return {
+            "indexed": indexed_count,
+            "skipped": skipped_count,
+            "reconciled_removed": reconciled_removed_count,
+            "graph_edges": persisted_edges_count,
+        }

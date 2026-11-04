@@ -21,6 +21,8 @@ import {
   Info,
   ExternalLink,
   ListOrdered,
+  GitFork,
+  Network,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { CodeExplanation, SourceReference, SymbolSummary } from '../../types/analysis';
@@ -162,6 +164,51 @@ export function ExplanationResultView({
           </p>
         )}
       </section>
+
+      {/* -------------------------------------------------------------- */}
+      {/* Execution Flow (task.md §8.B)                                  */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.execution_flow && explanation.execution_flow.length > 0 && (
+        <section className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-3.5 space-y-2 shadow-xs">
+          <div className="flex items-center gap-1.5 text-blue-400 font-semibold text-xs uppercase tracking-wide font-mono">
+            <GitFork className="h-3.5 w-3.5" />
+            <span>Execution Flow & Runtime Sequence</span>
+          </div>
+          <ol className="space-y-1.5 pt-1">
+            {explanation.execution_flow.map((flowStep, idx) => (
+              <li key={idx} className="flex items-start gap-2 text-xs">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-mono font-bold mt-0.5">
+                  {idx + 1}
+                </span>
+                <span className="text-foreground/90 leading-relaxed font-mono text-[11px]">{flowStep}</span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* Connected Architecture Context (task.md §6, §8)                */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.related_files && explanation.related_files.length > 0 && (
+        <section className="rounded-xl border border-border/80 bg-background/50 p-3 space-y-2 shadow-xs">
+          <div className="flex items-center gap-1.5 text-muted-foreground font-semibold text-xs uppercase tracking-wide font-mono">
+            <Network className="h-3.5 w-3.5 text-primary" />
+            <span>Connected Repository Architecture ({explanation.related_files.length})</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 pt-0.5">
+            {explanation.related_files.map((rf, idx) => (
+              <span
+                key={idx}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-muted/40 border border-border/60 text-muted-foreground"
+              >
+                <FileCode className="h-3 w-3 text-primary/70 shrink-0" />
+                <span className="truncate max-w-[200px]">{rf}</span>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* -------------------------------------------------------------- */}
       {/* Section 3: Key Symbols                                         */}

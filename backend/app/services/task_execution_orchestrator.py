@@ -32,7 +32,11 @@ from ai.services.agent_execution_loop import (
     StepExecutionStatus,
 )
 from ai.services.bounded_repair_loop import BoundedRepairLoop, BoundedRepairOutcome
+from ai.services.execution_budget_manager import ExecutionBudgetManager
+from ai.services.execution_checkpoint_manager import ExecutionCheckpointManager
+from ai.services.execution_recovery import ExecutionRecoveryService
 from ai.services.requirement_verifier import RequirementToCodeVerifier
+from app.services.task_execution_report import TaskExecutionReportGenerator
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.models.task import (
@@ -193,6 +197,10 @@ class TaskExecutionOrchestrator:
         )
         self.requirement_verifier = RequirementToCodeVerifier()
         self.static_scanner = BuiltinStaticBugScanner()
+        self.checkpoint_manager = ExecutionCheckpointManager()
+        self.budget_manager = ExecutionBudgetManager()
+        self.recovery_service = ExecutionRecoveryService()
+        self.report_generator = TaskExecutionReportGenerator()
 
     @staticmethod
     def _ensure_tools_registered(
@@ -420,6 +428,7 @@ class TaskExecutionOrchestrator:
                 step_payloads=step_payloads,
             )
 
+            completed_step_ids: list[str] = []
             for step_rec in exec_result.steps_executed:
                 task_repo.record_tool_invocation(
                     task_id=task.id,
@@ -434,6 +443,22 @@ class TaskExecutionOrchestrator:
                     duration_ms=int(step_rec.duration_ms),
                     output_summary=redact(str(step_rec.output or step_rec.error_message or "")),
                 )
+                if step_rec.status == StepExecutionStatus.COMPLETED:
+                    completed_step_ids.append(step_rec.step_id)
+                    try:
+                        self.checkpoint_manager.save_checkpoint(
+                            task_id=task_id_str,
+                            step_id=step_rec.step_id,
+                            workspace_revision=meta.base_revision or "main",
+                            completed_step_ids=completed_step_ids,
+                            completed_requirement_ids=[step_rec.step_id],
+                            verified_files=step_rec.target_files,
+                        )
+                        self.budget_manager.record_step_attempt(step_rec.step_id)
+                        for f in step_rec.target_files:
+                            self.budget_manager.record_file_modification(f)
+                    except Exception as err:
+                        logger.debug("Non-fatal checkpoint/budget recording: %s", err)
 
             if exec_result.status in (StepExecutionStatus.FAILED, StepExecutionStatus.LOOP_DETECTED):
                 exec_attempt.status = ExecutionStatus.FAILED.value
@@ -1236,12 +1261,32 @@ class TaskExecutionOrchestrator:
         reqs = [TaskRequirement.model_validate(r) for r in (task.requirements or [])]
         csts = [TaskConstraint.model_validate(c) for c in (task.constraints or [])]
 
+        test_info: dict[str, Any] | None = None
+        if db_runs:
+            latest_run = db_runs[-1]
+            test_info = {
+                "status": latest_run.status,
+                "total": latest_run.tests_total,
+                "failed": latest_run.tests_failed,
+                "passed": latest_run.tests_passed,
+            }
+        elif mem_runs:
+            latest_mem = mem_runs[-1]
+            mem_passed = latest_mem.status == TestRunStatus.PASSED
+            test_info = {
+                "status": latest_mem.status.value,
+                "total": 1,
+                "failed": 0 if mem_passed else 1,
+                "passed": 1 if mem_passed else 0,
+            }
+
         req_ver = self.requirement_verifier.verify_requirements_against_diff(
             task_id=task_id_str,
             requirements=reqs,
             constraints=csts,
             original_plan=verified_plan,
             final_diff=diff_res,
+            test_results=test_info,
         )
         review_ms = int((time.perf_counter() - t3) * 1000)
 

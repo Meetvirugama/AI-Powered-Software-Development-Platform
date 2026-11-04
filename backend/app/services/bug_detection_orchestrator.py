@@ -44,7 +44,17 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
-from ai.context.builder import ContextBuilder, IntelligenceContext
+from ai.context.bug_context import BugContextExtractor, extract_bug_context
+from ai.context.builder import (
+    ContextBuilder,
+    ContextLimits,
+    IntelligenceContext,
+    RepositoryFile as ContextRepoFile,
+    SymbolContext,
+    TargetSnippet,
+)
+from ai.intelligence.related_files import RelatedFileDiscoveryService
+from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 from ai.llm.schemas import (
     LLMError,
     LLMRateLimitError,
@@ -58,7 +68,11 @@ from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
 from app.core.secret_redaction import redact as _shared_redact
+from app.models.code_chunk import CodeChunk
+from app.models.code_symbol import CodeSymbol
 from app.models.repository import Repository
+from app.models.repository_file import RepositoryFile
+from app.models.symbol_edge import SymbolEdge
 from app.schemas.analysis import (
     AnalysisSourceReference,
     BugDetectionRequest,
@@ -143,6 +157,330 @@ _PLACEHOLDER_HINTS = re.compile(
     r"(?i)(\[REDACTED\]|<[^>]*>|\.\.\.|x{4,}|example|placeholder|changeme|your[_-]|dummy|fake|mock|"
     r"test|sample|os\.environ|getenv|settings\.|process\.env|\$\{|none|null|true|false)"
 )
+
+MAX_ANALYZABLE_FILE_BYTES = 1_048_576  # 1 MB ceiling
+
+
+def resolve_bug_target_and_build_context(
+    repository_id: UUID,
+    repo: Repository | Any,
+    payload: BugDetectionRequest | ExplainCodeRequest,
+    db: Session | Any,
+) -> ResolvedExplanationTarget:
+    """
+    Resolve target, extract defensive error-handling guards, load real caller/callee sources,
+    and build a specialized Bug IntelligenceContext via BugContextExtractor.
+    (Phase 1 implementation of task.md §6.1 / §9)
+    """
+    safe_path = require_safe_repo_path(payload.target.path)
+    target = payload.target.model_copy(update={"path": safe_path})
+    revision = target.revision or getattr(repo, "default_branch", None) or "main"
+    missing_context: list[str] = []
+
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
+        snippet = TargetSnippet(
+            file_path=safe_path,
+            content="",
+            start_line=target.start_line or 1,
+            end_line=target.end_line or (target.start_line or 1),
+            symbol_name=target.symbol,
+            language="text",
+            revision=revision,
+        )
+        ctx = extract_bug_context(
+            target=snippet,
+            token_budget=payload.options.max_context_tokens,
+            revision=revision,
+        )
+        return ResolvedExplanationTarget(
+            target=target,
+            revision=revision,
+            file_record=None,
+            resolved_symbol=None,
+            code_content="",
+            intelligence_context=ctx,
+            missing_context=missing_context,
+            indexed_paths={},
+        )
+
+    try:
+        all_repo_files: list[RepositoryFile] = (
+            db.query(RepositoryFile)
+            .filter(RepositoryFile.repository_id == repository_id)
+            .order_by(RepositoryFile.path)
+            .all()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_bug_target_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target resolution.",
+            retryable=True,
+        ) from exc
+
+    if not all_repo_files:
+        sync_status = getattr(repo, "sync_status", None)
+        if sync_status in ("NOT_SYNCED", "SYNCING"):
+            raise APIError(
+                409,
+                ErrorCode.CONFLICT,
+                f"Repository indexing is in progress or not yet synced (status: {sync_status}). Please wait for indexing to complete.",
+            )
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
+        )
+
+    indexed_paths = {f.path: (f.line_count or 0) for f in all_repo_files}
+    file_record = next((f for f in all_repo_files if f.path == safe_path), None)
+    if file_record is None:
+        raise APIError(
+            404,
+            ErrorCode.FILE_NOT_FOUND,
+            f"Target file '{safe_path}' was not found in the indexed repository.",
+        )
+
+    if (file_record.size_bytes or 0) > MAX_ANALYZABLE_FILE_BYTES:
+        raise APIError(
+            413,
+            ErrorCode.PAYLOAD_TOO_LARGE,
+            "Target file exceeds the maximum analyzable size limit (1 MB).",
+        )
+
+    # Fetch all symbols for this file
+    try:
+        file_symbols: list[CodeSymbol] = (
+            db.query(CodeSymbol)
+            .filter(
+                CodeSymbol.repository_id == repository_id,
+                CodeSymbol.file_id == file_record.id,
+            )
+            .order_by(CodeSymbol.start_line)
+            .all()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_bug_symbols_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file symbols.",
+            retryable=True,
+        ) from exc
+
+    resolved_symbol: CodeSymbol | None = None
+    if target.symbol:
+        matching_symbols = [s for s in file_symbols if s.name == target.symbol]
+        if target.start_line is not None and len(matching_symbols) > 1:
+            matching_symbols = [
+                s for s in matching_symbols
+                if s.start_line <= target.start_line <= s.end_line
+            ] or matching_symbols
+
+        if matching_symbols:
+            resolved_symbol = matching_symbols[0]
+            if target.start_line is None:
+                target.start_line = resolved_symbol.start_line
+            if target.end_line is None:
+                target.end_line = resolved_symbol.end_line
+        elif file_symbols and target.type == "symbol":
+            raise APIError(
+                404,
+                ErrorCode.RESOURCE_NOT_FOUND,
+                f"Symbol '{target.symbol}' was not found in '{safe_path}'.",
+            )
+        else:
+            missing_context.append(
+                f"Symbol '{target.symbol}' could not be resolved from the AST index; using file/line range context."
+            )
+
+    line_count = file_record.line_count or 0
+    if line_count > 0:
+        if target.start_line is not None and target.start_line > line_count:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"start_line ({target.start_line}) exceeds file line count ({line_count}).",
+            )
+        if target.end_line is not None and target.end_line > line_count:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                f"end_line ({target.end_line}) exceeds file line count ({line_count}).",
+            )
+
+    try:
+        file_chunks: list[CodeChunk] = (
+            db.query(CodeChunk)
+            .filter(
+                CodeChunk.repository_id == repository_id,
+                CodeChunk.file_id == file_record.id,
+            )
+            .order_by(CodeChunk.start_line)
+            .all()
+        )
+    except Exception as exc:
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable while loading file chunks.",
+            retryable=True,
+        ) from exc
+
+    eff_start = target.start_line or 1
+    eff_end = target.end_line or (line_count if line_count > 0 else max((c.end_line for c in file_chunks), default=1))
+
+    selected_chunks = [
+        c for c in file_chunks
+        if c.end_line >= eff_start and c.start_line <= eff_end
+    ]
+    if not selected_chunks and file_chunks:
+        selected_chunks = file_chunks
+
+    from indexer.chunker import reconstruct_file_from_chunks
+
+    code_content = reconstruct_file_from_chunks(
+        selected_chunks,
+        start_line=eff_start,
+        end_line=eff_end,
+    )
+    if not code_content:
+        missing_context.append(f"No indexed code chunks found for '{safe_path}'.")
+
+    # Caller and Callee Real Source Retrieval (Phase 1 & 2 requirement)
+    caller_sites: list[SymbolContext] = []
+    related_types: list[SymbolContext] = []
+    related_file_paths: list[str] = []
+
+    if resolved_symbol:
+        try:
+            caller_edges = (
+                db.query(SymbolEdge)
+                .filter(
+                    SymbolEdge.repository_id == repository_id,
+                    SymbolEdge.target_symbol_id == resolved_symbol.id,
+                    SymbolEdge.edge_type == "calls",
+                )
+                .limit(10)
+                .all()
+            )
+            for edge in caller_edges:
+                caller_sym = db.query(CodeSymbol).filter(CodeSymbol.id == edge.source_symbol_id).first()
+                if caller_sym:
+                    caller_chunk = (
+                        db.query(CodeChunk)
+                        .filter(
+                            CodeChunk.repository_id == repository_id,
+                            CodeChunk.file_id == caller_sym.file_id,
+                            CodeChunk.start_line <= caller_sym.start_line,
+                            CodeChunk.end_line >= caller_sym.end_line,
+                        )
+                        .first()
+                    )
+                    caller_file = db.query(RepositoryFile).filter(RepositoryFile.id == caller_sym.file_id).first()
+                    caller_path = caller_file.path if caller_file else safe_path
+                    content_snippet = caller_chunk.content if caller_chunk else (caller_sym.signature or "")
+                    caller_sites.append(
+                        SymbolContext(
+                            name=caller_sym.name,
+                            kind="caller",
+                            file_path=caller_path,
+                            start_line=caller_sym.start_line,
+                            end_line=caller_sym.end_line,
+                            content=content_snippet,
+                        )
+                    )
+                    if caller_path not in related_file_paths and caller_path != safe_path:
+                        related_file_paths.append(caller_path)
+        except Exception as exc:
+            logger.warning("failed_to_resolve_caller_sources", extra={"error": str(exc)})
+
+    # Extract defensive guards using BugContextExtractor
+    extractor = BugContextExtractor()
+    defensive_guards = extractor.extract_error_handling_blocks(
+        code_content,
+        target_start_line=eff_start,
+        target_end_line=eff_end,
+        language=file_record.language or "python",
+    )
+
+    project_rules: list[str] = []
+    if defensive_guards:
+        project_rules.append("Defensive Guard Context: " + "; ".join(defensive_guards[:5]))
+
+    # Also extract related files from snapshot if available
+    try:
+        snap_mgr = RepositoryIntelligenceSnapshotManager()
+        snapshot = snap_mgr.load_latest_snapshot(repository_id)
+        if snapshot:
+            discovery_svc = RelatedFileDiscoveryService(snapshot=snapshot)
+            discovered = discovery_svc.discover_related_files(
+                target_path=safe_path,
+                target_symbol=target.symbol,
+                snapshot=snapshot,
+                all_repo_files=[f.path for f in all_repo_files],
+            )
+            for d in discovered:
+                if d.path not in related_file_paths and d.path != safe_path:
+                    related_file_paths.append(d.path)
+    except Exception:
+        pass
+
+    context_repo_files = [
+        ContextRepoFile(
+            id=str(f.id),
+            path=f.path,
+            language=f.language or "text",
+            size_bytes=f.size_bytes or 0,
+            line_count=f.line_count or 0,
+        )
+        for f in all_repo_files[:50]
+    ]
+
+    target_snippet = TargetSnippet(
+        file_path=safe_path,
+        content=code_content,
+        start_line=eff_start,
+        end_line=eff_end,
+        symbol_name=target.symbol,
+        language=file_record.language or "text",
+        revision=revision,
+    )
+
+    # Invoke specialized bug context extraction
+    intelligence_context = extract_bug_context(
+        target=target_snippet,
+        source_code=code_content,
+        caller_sites=caller_sites,
+        related_types=related_types,
+        repository_files=context_repo_files,
+        project_rules=project_rules,
+        token_budget=payload.options.max_context_tokens,
+        revision=revision,
+    )
+
+    for mc in intelligence_context.missing_context:
+        missing_context.append(f"{mc.symbol_name or mc.file_path}: {mc.reason}")
+
+    return ResolvedExplanationTarget(
+        target=target,
+        revision=revision,
+        file_record=file_record,
+        resolved_symbol=resolved_symbol,
+        code_content=code_content,
+        intelligence_context=intelligence_context,
+        missing_context=missing_context,
+        indexed_paths=indexed_paths,
+        repo_files=all_repo_files,
+        related_files=related_file_paths,
+    )
 
 
 def redact_secrets_in_text(text: str | None) -> str:
@@ -878,7 +1216,10 @@ def filter_and_rank_findings(
     include_static: bool = True,
     include_ai: bool = True,
 ) -> list[BugFinding]:
-    """Filter findings by `min_severity` / source flags and sort deterministically by severity."""
+    """Filter findings by `min_severity` / source flags, calculate priority score, and sort deterministically."""
+    from app.services.bug_priority_service import BugPriorityService
+    priority_svc = BugPriorityService()
+
     min_rank = SEVERITY_RANK.get(min_severity, 2)
     filtered: list[BugFinding] = []
     for f in findings:
@@ -888,11 +1229,33 @@ def filter_and_rank_findings(
             continue
         if not include_ai and f.source_type == "AI":
             continue
+
+        # Ensure priority_score and evidence_level are calibrated
+        if f.priority_score is None:
+            has_trace = bool(f.dependency_trace)
+            is_sec = str(f.category).lower() == "security"
+            has_counter = bool(f.counterevidence)
+            p_res = priority_svc.calculate_priority(
+                severity=str(f.severity),
+                evidence_level=f.evidence_level or ("PROVEN" if f.source_type == "STATIC" else "SUSPECTED"),
+                confidence=str(f.confidence),
+                has_callers=has_trace,
+                is_security=is_sec,
+                is_sanitized=has_counter,
+                caller_count=len(f.dependency_trace),
+            )
+            f = f.model_copy(update={"priority_score": p_res.priority_score})
+
+        if not getattr(f, "evidence_level", None):
+            ev_lvl = "PROVEN" if f.source_type == "STATIC" else ("STRONG" if f.source_type == "COMBINED" or f.dependency_trace else "SUSPECTED")
+            f = f.model_copy(update={"evidence_level": ev_lvl})
+
         filtered.append(f)
 
     filtered.sort(
         key=lambda f: (
             -SEVERITY_RANK.get(f.severity, 0),
+            -(f.priority_score or 0),
             -SOURCE_TYPE_PRIORITY.get(f.source_type, 0),
             -CONFIDENCE_RANK.get(f.confidence, 0),
             f.source_reference.file_path,

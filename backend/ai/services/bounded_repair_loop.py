@@ -37,10 +37,11 @@ from app.schemas.workspace import (
     WorkspaceExecutionEventType,
     WorkspaceFileWriteRequest,
 )
-from app.services.repair_service import (
-    FailureTracebackAnalyzer,
-    RepairPatchValidator,
-)
+if TYPE_CHECKING:
+    from app.services.repair_service import (
+        FailureTracebackAnalyzer,
+        RepairPatchValidator,
+    )
 from sandbox.exceptions import WorkspaceError
 from sandbox.test_runner import WorkspaceTestRunner
 
@@ -87,8 +88,16 @@ class BoundedRepairLoop:
     ) -> None:
         self.workspace_manager = workspace_manager
         self.test_runner = test_runner or WorkspaceTestRunner()
-        self.traceback_analyzer = traceback_analyzer or FailureTracebackAnalyzer()
-        self.patch_validator = patch_validator or RepairPatchValidator()
+        if traceback_analyzer is None or patch_validator is None:
+            from app.services.repair_service import (
+                FailureTracebackAnalyzer as DefaultAnalyzer,
+                RepairPatchValidator as DefaultValidator,
+            )
+            self.traceback_analyzer = traceback_analyzer or DefaultAnalyzer()
+            self.patch_validator = patch_validator or DefaultValidator()
+        else:
+            self.traceback_analyzer = traceback_analyzer
+            self.patch_validator = patch_validator
         self.max_repair_attempts = max_repair_attempts
 
     def run_repair_cycle(
