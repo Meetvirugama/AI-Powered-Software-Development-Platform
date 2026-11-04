@@ -906,54 +906,60 @@ export function RepositoryTaskStudio() {
             <>
               {/* Task Header Card */}
               <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-                <div className="flex items-start justify-between gap-4 flex-wrap">
-                  <div className="space-y-1.5 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={cn(
-                          'px-2 py-0.5 rounded border text-[10px] font-mono font-bold',
-                          (STATUS_BADGE_MAP[taskDetail.status] || STATUS_BADGE_MAP.CREATED).className
-                        )}
+                {/* Row 1: Badges & Metadata */}
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className={cn(
+                        'px-2 py-0.5 rounded border text-[10px] font-mono font-bold',
+                        (STATUS_BADGE_MAP[taskDetail.status] || STATUS_BADGE_MAP.CREATED).className
+                      )}
+                    >
+                      {taskDetail.status}
+                    </span>
+                    <span className="text-[11px] font-mono text-muted-foreground">
+                      Source: <strong className="text-foreground">{taskDetail.source_type}</strong>
+                    </span>
+                    {taskDetail.base_revision && (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
+                        <GitBranch className="h-3 w-3" />
+                        <span>{taskDetail.base_revision.slice(0, 12)}</span>
+                      </span>
+                    )}
+                    {taskDetail.source.issue_url && (
+                      <a
+                        href={taskDetail.source.issue_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-mono text-primary hover:underline"
                       >
-                        {taskDetail.status}
-                      </span>
-                      <span className="text-[11px] font-mono text-muted-foreground">
-                        Source: <strong className="text-foreground">{taskDetail.source_type}</strong>
-                      </span>
-                      {taskDetail.base_revision && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground">
-                          <GitBranch className="h-3 w-3" />
-                          <span>{taskDetail.base_revision.slice(0, 12)}</span>
-                        </span>
-                      )}
-                      {taskDetail.source.issue_url && (
-                        <a
-                          href={taskDetail.source.issue_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-[11px] font-mono text-primary hover:underline"
-                        >
-                          <span>Issue #{taskDetail.source.issue_number}</span>
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
-                      {draftPR && (
-                        <a
-                          href={draftPR.pr_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/40 text-[11px] font-mono text-purple-300 hover:underline"
-                        >
-                          <GitPullRequestDraft className="h-3 w-3" />
-                          <span>Draft PR #{draftPR.pr_number}</span>
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      )}
-                    </div>
-                    <h2 className="text-base font-bold text-foreground break-words leading-snug">{taskDetail.title}</h2>
+                        <span>Issue #{taskDetail.source.issue_number}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                    {draftPR && (
+                      <a
+                        href={draftPR.pr_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-purple-500/15 border border-purple-500/40 text-[11px] font-mono text-purple-300 hover:underline"
+                      >
+                        <GitPullRequestDraft className="h-3 w-3" />
+                        <span>Draft PR #{draftPR.pr_number}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
                   </div>
+                </div>
 
-                  <div className="flex items-center gap-2 flex-wrap shrink-0">
+                {/* Row 2: Full-Width Task Title */}
+                <h2 className="text-base sm:text-lg font-bold text-foreground break-words leading-relaxed w-full">
+                  {taskDetail.title}
+                </h2>
+
+                {/* Row 3: Action Buttons Bar */}
+                <div className="flex items-center justify-between gap-2 flex-wrap pt-1 border-t border-border/40">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <button
                       type="button"
                       disabled={actionBusy !== null}
@@ -981,7 +987,7 @@ export function RepositoryTaskStudio() {
                           ? 'Execute approved plan in isolated workspace'
                           : 'Execution is blocked until the current plan version is approved'
                       }
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 disabled:opacity-40"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 disabled:opacity-40"
                     >
                       <Play className="h-3.5 w-3.5" />
                       <span>Start Workspace Execution</span>
@@ -998,26 +1004,26 @@ export function RepositoryTaskStudio() {
                         <span>Recover Task</span>
                       </button>
                     )}
-
-                    {taskDetail.status !== 'CANCELLED' &&
-                      taskDetail.status !== 'FAILED' &&
-                      taskDetail.status !== 'DRAFT_PR_CREATED' && (
-                        <button
-                          type="button"
-                          disabled={actionBusy !== null}
-                          onClick={handleCancelTask}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 disabled:opacity-40"
-                        >
-                          <Slash className="h-3.5 w-3.5" />
-                          <span>Cancel</span>
-                        </button>
-                      )}
                   </div>
+
+                  {taskDetail.status !== 'CANCELLED' &&
+                    taskDetail.status !== 'FAILED' &&
+                    taskDetail.status !== 'DRAFT_PR_CREATED' && (
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleCancelTask}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 disabled:opacity-40"
+                      >
+                        <Slash className="h-3.5 w-3.5" />
+                        <span>Cancel</span>
+                      </button>
+                    )}
                 </div>
 
                 {/* Segregated Intake Summary: Requirements, Assumptions, Constraints */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-border/60 text-xs">
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0">
                     <div className="text-[10px] font-mono uppercase text-primary font-bold">
                       Requirements ({taskDetail.requirements.length})
                     </div>
@@ -1025,7 +1031,7 @@ export function RepositoryTaskStudio() {
                       <div key={r.id} className="text-[11px] text-foreground/90 break-words">
                         • {r.description}
                         {r.target_files.length > 0 && (
-                          <div className="text-[10px] font-mono text-muted-foreground mt-0.5 break-all">
+                          <div className="text-[10px] font-mono text-muted-foreground mt-0.5 break-words">
                             Files: {r.target_files.join(', ')}
                           </div>
                         )}
@@ -1033,7 +1039,7 @@ export function RepositoryTaskStudio() {
                     ))}
                   </div>
 
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0">
                     <div className="text-[10px] font-mono uppercase text-amber-400 font-bold">
                       Assumptions ({taskDetail.assumptions.length})
                     </div>
@@ -1044,7 +1050,7 @@ export function RepositoryTaskStudio() {
                     ))}
                   </div>
 
-                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0 overflow-hidden">
+                  <div className="rounded-lg bg-muted/20 border border-border/50 p-2.5 space-y-1 min-w-0">
                     <div className="text-[10px] font-mono uppercase text-rose-400 font-bold">
                       Protected Constraints ({taskDetail.constraints.length})
                     </div>
@@ -1052,7 +1058,7 @@ export function RepositoryTaskStudio() {
                       <div key={c.id} className="text-[11px] text-foreground/90 break-words">
                         • {c.description}
                         {c.forbidden_files.length > 0 && (
-                          <div className="text-[10px] font-mono text-rose-300 mt-0.5 break-all">
+                          <div className="text-[10px] font-mono text-rose-300 mt-0.5 break-words">
                             Forbidden: {c.forbidden_files.join(', ')}
                           </div>
                         )}
