@@ -24,14 +24,15 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.core.config import get_settings
-from app.core.database import Base
+from app.core.database import Base, normalize_sync_database_url
 # ensure models are imported
 import app.models
 
 custom_url = config.get_main_option("sqlalchemy.url")
 if not custom_url or "driver://user:pass" in custom_url:
     settings = get_settings()
-    config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
+    norm_url = normalize_sync_database_url(settings.database_url)
+    config.set_main_option("sqlalchemy.url", norm_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
@@ -75,6 +76,10 @@ def run_migrations_online() -> None:
     connect_args = {}
     if version_table_schema:
         connect_args["options"] = f"-c search_path={version_table_schema},public"
+
+    target_db_url = config.get_main_option("sqlalchemy.url") or ""
+    if ":6543" in target_db_url:
+        connect_args["prepare_threshold"] = None
 
     connectable = config.attributes.get("connection", None)
     if connectable is None:

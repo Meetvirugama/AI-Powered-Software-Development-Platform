@@ -153,6 +153,8 @@ class Settings(BaseSettings):
     # cookies. Never use "*" here: browsers reject "*" with credentials, and it
     # would let any website read API responses on a logged-in user's behalf.
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_origin_regex: str | None = None
+    frontend_url: str | None = None
     rate_limit_enabled: bool = True
     # Only true when running behind a trusted reverse proxy / load balancer that
     # sets X-Forwarded-For and X-Forwarded-Proto. Otherwise clients could spoof
@@ -168,6 +170,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         origins = [o.strip().rstrip("/") for o in self.cors_allowed_origins.split(",") if o.strip()]
+        if self.frontend_url:
+            clean_front = self.frontend_url.strip().rstrip("/")
+            if clean_front and clean_front not in origins:
+                origins.append(clean_front)
         return [o for o in origins if o != "*"]
 
     @property

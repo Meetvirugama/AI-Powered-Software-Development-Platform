@@ -176,7 +176,10 @@ async def github_callback(
         github_user.get("avatar_url") if isinstance(github_user.get("avatar_url"), str) else None,
     )
     token, expires_in = create_access_token(str(user.id))
-    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+    frontend_base = (
+        get_settings().frontend_url
+        or (get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173")
+    )
     redirect = RedirectResponse(
         url=f"{frontend_base}/auth/callback",
         status_code=status.HTTP_302_FOUND,
