@@ -32,9 +32,45 @@ export interface AnalysisOptions {
   persist_run?: boolean;
 }
 
+export interface ExplainContextOptions {
+  include_graph_context?: boolean;
+  include_callers?: boolean;
+  include_dependencies?: boolean;
+  include_tests?: boolean;
+  include_semantic_search?: boolean;
+  selected_files?: string[];
+}
+
 export interface ExplainCodeRequest {
   target: AnalysisTarget;
   options?: AnalysisOptions;
+  context?: ExplainContextOptions;
+  explanation_level?: string;
+}
+
+export interface DiscoveredRelatedFile {
+  path: string;
+  relation:
+    | 'imported_dependency'
+    | 'called_dependency'
+    | 'caller'
+    | 'type_definition'
+    | 'database_model'
+    | 'associated_test'
+    | 'indirect_dependency'
+    | 'semantic_match';
+  relation_label: string;
+  weight: number;
+  reason: string;
+  symbols: string[];
+  is_preselected: boolean;
+}
+
+export interface RelatedFilesDiscoveryResponse {
+  target_path: string;
+  target_symbol?: string | null;
+  related_files: DiscoveredRelatedFile[];
+  total_discovered: number;
 }
 
 export type AnalysisStatus =
@@ -107,6 +143,11 @@ export interface BugFinding {
   is_uncertain?: boolean;
   source_type: FindingSourceType;
   rule_id?: string | null;
+  priority_score?: number | null;
+  evidence_level?: "PROVEN" | "STRONG" | "SUSPECTED" | "NEEDS_CONTEXT" | string;
+  dependency_trace?: string[];
+  counterevidence?: string[];
+  reproduction_status?: "NOT_TESTED" | "REPRODUCED" | "REPRODUCTION_FAILED" | string;
 }
 
 /** Backward-compatible alias for AnalysisFinding */
@@ -118,6 +159,8 @@ export interface BugDetectionRequest {
   include_static?: boolean;
   include_ai?: boolean;
   min_severity?: FindingSeverity;
+  scan_mode?: "quick" | "standard" | "deep" | "change" | string;
+  changed_files?: string[];
 }
 
 export interface BugDetectionResponse {
@@ -150,6 +193,8 @@ export interface CodeExplanation {
   sources: SourceReference[];
   confidence: ConfidenceLevel;
   missing_context: string[];
+  execution_flow?: string[];
+  related_files?: string[];
 }
 
 /** Backward-compatible alias for CodeExplanation */
@@ -170,6 +215,53 @@ export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
 
 export type TestScenarioCategory = 'normal' | 'edge_case' | 'failure_path';
 
+export type TestRequirementCategory =
+  | 'functional'
+  | 'boundary'
+  | 'negative'
+  | 'exception_handling'
+  | 'integration'
+  | 'api_contract'
+  | 'security'
+  | 'state_lifecycle'
+  | 'concurrency'
+  | 'regression'
+  | 'performance'
+  | 'configuration'
+  | 'frontend'
+  | 'end_to_end';
+
+export type TestRequirementStatus = 'COVERED' | 'PARTIAL' | 'MISSING' | 'BLOCKED' | 'NOT_APPLICABLE';
+
+export type TestRequirementPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface TestRequirement {
+  requirement_id: string;
+  title: string;
+  category: TestRequirementCategory | string;
+  priority: TestRequirementPriority | string;
+  source_files: string[];
+  source_symbols: string[];
+  expected_behavior: string;
+  evidence: string[];
+  status: TestRequirementStatus | string;
+  target_line?: number | null;
+  reason?: string | null;
+}
+
+export interface TestQualityReport {
+  requirement_coverage_percent?: number | null;
+  line_coverage_percent?: number | null;
+  branch_coverage_percent?: number | null;
+  mutation_score_percent?: number | null;
+  duplicate_test_count: number;
+  flaky_test_count: number;
+  weak_assertion_count: number;
+  untested_critical_requirements: string[];
+  quality_score?: number | null;
+  summary_notes: string[];
+}
+
 export interface TestScenario {
   name: string;
   category: TestScenarioCategory;
@@ -180,6 +272,11 @@ export interface TestGenerationRequest {
   target: AnalysisTarget;
   options?: AnalysisOptions;
   framework?: SupportedTestFramework | null;
+  generation_mode?: 'full_repository' | 'targeted' | 'change_based';
+  changed_files?: string[];
+  focus_categories?: string[];
+  commit_sha?: string | null;
+  run_isolated_execution?: boolean;
 }
 
 export interface TestGenerationResult {
@@ -197,6 +294,14 @@ export interface TestGenerationResult {
   validation_errors: string[];
   validation_warnings?: string[];
   sources?: SourceReference[];
+  requirements?: TestRequirement[];
+  quality_report?: TestQualityReport | null;
+  generated_test_files?: string[];
+  missing_requirements?: string[];
+  unsupported_requirements?: string[];
+  execution_summary?: Record<string, any>;
+  execution_status?: string;
+  execution_attempted?: boolean;
 }
 
 export interface TestGenerationResponse {

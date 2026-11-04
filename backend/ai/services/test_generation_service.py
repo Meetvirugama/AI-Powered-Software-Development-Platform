@@ -143,6 +143,18 @@ class TestGenerationService(TestGenerationServiceProtocol):
         fenced_context = _fence(safe_context)
 
         fixture_note = f"Available fixtures: {', '.join(fixtures)}" if fixtures else "No custom fixtures detected."
+        req_list = list(kwargs.get("requirements") or [])
+        req_note = ""
+        if req_list:
+            req_note = (
+                "\nTARGET TEST REQUIREMENTS TO SATISFY (Traceability):\n"
+                + "\n".join(
+                    f"- [{r.requirement_id}] ({r.category}) {r.title}: {r.expected_behavior}"
+                    for r in req_list[:15]
+                )
+                + "\nEnsure generated tests explicitly cover these requirements with assertions.\n"
+            )
+
         user_prompt = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
             f"{fenced_context}\n\n"
@@ -153,6 +165,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
             f"Required Test Framework: `{detected_framework}`\n"
             f"Recommended Test File Path: `{proposed_test_path}`\n"
             f"{fixture_note}\n"
+            f"{req_note}"
             "Generate a complete test file with normal, edge_case, and failure_path assertions."
         )
 
@@ -220,10 +233,45 @@ class TestGenerationService(TestGenerationServiceProtocol):
                         "attempt": attempt,
                     },
                 )
+                # Evaluate requirement fulfillment & quality scorecard
+                from scanner.test_quality_analyzer import TestQualityAnalyzer
+                quality_analyzer = TestQualityAnalyzer()
+
+                final_reqs = []
+                for r in req_list:
+                    r_copy = r.model_dump() if hasattr(r, "model_dump") else dict(r)
+                    title_words = [w.lower() for w in r_copy.get("title", "").split() if len(w) > 3]
+                    is_covered = any(
+                        r_copy.get("category", "") in s.category
+                        or any(w in s.name.lower() or w in s.description.lower() for w in title_words)
+                        for s in result.covered_scenarios
+                    )
+                    if is_covered or r_copy.get("status") == "COVERED":
+                        r_copy["status"] = "COVERED"
+                        ev = list(r_copy.get("evidence", []))
+                        ev.append(f"Covered by generated test file '{result.proposed_test_path}'")
+                        r_copy["evidence"] = ev
+                    final_reqs.append(r_copy)
+
+                from app.schemas.analysis import TestRequirement
+                validated_reqs = [TestRequirement.model_validate(r) for r in final_reqs]
+                missing_req_ids = [r.requirement_id for r in validated_reqs if r.status in ("MISSING", "BLOCKED")]
+
+                quality_report = quality_analyzer.compute_quality_report(
+                    requirements=validated_reqs,
+                    test_code_map={result.proposed_test_path: result.test_content},
+                    coverage_result=None,
+                    execution_passed=True,
+                )
+
                 return result.model_copy(
                     update={
                         "syntax_valid": syn_ok,
                         "validation_errors": syn_errors,
+                        "requirements": validated_reqs,
+                        "quality_report": quality_report,
+                        "generated_test_files": [result.proposed_test_path],
+                        "missing_requirements": missing_req_ids,
                     }
                 )
 

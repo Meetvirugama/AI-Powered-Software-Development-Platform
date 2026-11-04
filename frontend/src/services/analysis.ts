@@ -14,6 +14,7 @@ import { apiClient } from './api';
 import type {
   ExplainCodeRequest,
   CodeExplanationResponse,
+  RelatedFilesDiscoveryResponse,
   BugDetectionRequest,
   BugDetectionResponse,
   TestGenerationRequest,
@@ -47,6 +48,22 @@ export async function explainCode(
     `/repositories/${repositoryId}/explain`,
     payload,
     { signal: options?.signal, timeout: options?.timeout }
+  );
+  return response.data;
+}
+
+/**
+ * Discover related files and graph neighbors for a code explanation target (RIE).
+ */
+export async function getRelatedFiles(
+  repositoryId: string,
+  path: string,
+  symbol?: string
+): Promise<RelatedFilesDiscoveryResponse> {
+  const params = new URLSearchParams({ path });
+  if (symbol) params.set('symbol', symbol);
+  const response = await apiClient.get<RelatedFilesDiscoveryResponse>(
+    `/repositories/${repositoryId}/explain/related-files?${params.toString()}`
   );
   return response.data;
 }

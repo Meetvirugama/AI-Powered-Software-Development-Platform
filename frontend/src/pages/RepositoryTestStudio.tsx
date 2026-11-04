@@ -31,6 +31,7 @@ export function RepositoryTestStudio() {
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
   const [testResult, setTestResult] = useState<TestGenerationResponse | null>(null);
   const [frameworkOverride, setFrameworkOverride] = useState<SupportedTestFramework | null>(null);
+  const [generationMode, setGenerationMode] = useState<'targeted' | 'full_repository' | 'change_based'>('targeted');
   const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
 
   const {
@@ -59,8 +60,9 @@ export function RepositoryTestStudio() {
     testMutation.mutate({
       target: activeTarget,
       framework: frameworkOverride ?? undefined,
+      generation_mode: generationMode,
     });
-  }, [selectedFile, activeTarget, frameworkOverride, testMutation]);
+  }, [selectedFile, activeTarget, frameworkOverride, generationMode, testMutation]);
 
   // Compute proposed test path status
   const proposedPathStatus = useMemo(() => {
@@ -88,12 +90,54 @@ export function RepositoryTestStudio() {
       onOpenHistory={() => setHistoryOpen(true)}
       historyTitle="View test generation history"
       extraControls={
-        testResult?.result?.framework ? (
-          <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[11px] font-mono">
-            <Terminal className="h-3 w-3" />
-            <span>{testResult.result.framework}</span>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center rounded-lg border border-border bg-muted/40 p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setGenerationMode('targeted')}
+              className={`px-2 py-1 rounded-md transition-colors ${
+                generationMode === 'targeted'
+                  ? 'bg-background text-foreground shadow-xs font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Targeted
+            </button>
+            <button
+              type="button"
+              onClick={() => setGenerationMode('full_repository')}
+              className={`px-2 py-1 rounded-md transition-colors ${
+                generationMode === 'full_repository'
+                  ? 'bg-background text-foreground shadow-xs font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Full Repo
+            </button>
+            <button
+              type="button"
+              onClick={() => setGenerationMode('change_based')}
+              className={`px-2 py-1 rounded-md transition-colors ${
+                generationMode === 'change_based'
+                  ? 'bg-background text-foreground shadow-xs font-medium'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Changes
+            </button>
           </div>
-        ) : undefined
+          {testResult?.result?.quality_report?.quality_score !== undefined && (
+            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-mono">
+              <span>Score: {testResult.result.quality_report.quality_score}/100</span>
+            </div>
+          )}
+          {testResult?.result?.framework && (
+            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[11px] font-mono">
+              <Terminal className="h-3 w-3" />
+              <span>{testResult.result.framework}</span>
+            </div>
+          )}
+        </div>
       }
       actionButton={
         <button

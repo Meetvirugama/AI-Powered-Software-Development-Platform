@@ -88,6 +88,8 @@ class ResolvedExplanationTarget:
     missing_context: list[str] = field(default_factory=list)
     indexed_paths: dict[str, int] = field(default_factory=dict)
     repo_files: list[RepositoryFile] = field(default_factory=list)
+    related_files: list[str] = field(default_factory=list)
+    execution_flow: list[str] = field(default_factory=list)
 
 
 def resolve_target_and_build_context(
@@ -352,6 +354,77 @@ def resolve_target_and_build_context(
     else:
         missing_context.append("Repository context enrichment was disabled by request options (include_context=False).")
 
+    # User-selected related files (task.md §6, §6.3)
+    user_selected_files: list[str] = []
+    context_opts = getattr(payload, "context", None)
+    if context_opts and getattr(context_opts, "selected_files", None):
+        user_selected_files = list(context_opts.selected_files)
+    elif getattr(payload.options, "selected_files", None):
+        user_selected_files = list(getattr(payload.options, "selected_files"))
+
+    for sel_path in user_selected_files:
+        try:
+            clean_sel = validate_repo_relative_path(sel_path)
+            sel_file = next((f for f in all_repo_files if f.path == clean_sel), None)
+            if sel_file:
+                sel_chunks: list[CodeChunk] = (
+                    db.query(CodeChunk)
+                    .filter(CodeChunk.repository_id == repository_id, CodeChunk.file_id == sel_file.id)
+                    .order_by(CodeChunk.start_line)
+                    .limit(5)
+                    .all()
+                )
+                sel_code = reconstruct_file_from_chunks(sel_chunks, start_line=1, end_line=min(200, sel_file.line_count or 100))
+                if sel_code:
+                    related_symbol_contexts.append(
+                        SymbolContext(
+                            name=clean_sel.split("/")[-1],
+                            kind="user_selected_file",
+                            file_path=clean_sel,
+                            start_line=1,
+                            end_line=min(200, sel_file.line_count or 100),
+                            content=sel_code[:2500],
+                        )
+                    )
+        except Exception as sel_exc:
+            logger.debug("Failed adding user-selected file %s: %s", sel_path, sel_exc)
+
+    # Discover related files & execution flow from persistent Repository Intelligence Snapshot (task.md §3, §6.1, §8.B)
+    execution_flow: list[str] = []
+    resolved_related_files: list[str] = list(user_selected_files)
+
+    try:
+        from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
+        from ai.intelligence.related_files import RelatedFileDiscoveryService
+
+        snap_mgr = RepositoryIntelligenceSnapshotManager()
+        snapshot = snap_mgr.load_latest_snapshot(repository_id)
+        if snapshot:
+            discovery_svc = RelatedFileDiscoveryService(snapshot=snapshot)
+            discovered = discovery_svc.discover_related_files(
+                target_path=safe_path,
+                target_symbol=target.symbol,
+                snapshot=snapshot,
+            )
+            for d in discovered:
+                if d.path not in resolved_related_files:
+                    resolved_related_files.append(d.path)
+
+            target_name = target.symbol or safe_path.split("/")[-1]
+            callers = [d.symbols[0] for d in discovered if d.relation == "caller" and d.symbols]
+            dependencies = [d.symbols[0] for d in discovered if d.relation in ("imported_dependency", "called_dependency") and d.symbols]
+            db_models = [d.symbols[0] for d in discovered if d.relation == "database_model" and d.symbols]
+
+            if callers:
+                execution_flow.append(f"Inbound trigger: Called by {', '.join(callers[:3])}")
+            execution_flow.append(f"Execution: Core logic handled in {target_name} ({safe_path})")
+            if dependencies:
+                execution_flow.append(f"Downstream logic: Invokes {', '.join(dependencies[:3])}")
+            if db_models:
+                execution_flow.append(f"Persistence layer: Interacts with data model {', '.join(db_models[:2])}")
+    except Exception as flow_exc:
+        logger.debug("Execution flow derivation skipped: %s", flow_exc)
+
     # Project rules from MemoryEntry
     project_rules: list[str] = []
     if payload.options.include_context:
@@ -406,6 +479,8 @@ def resolve_target_and_build_context(
         missing_context=missing_context,
         indexed_paths=indexed_paths,
         repo_files=all_repo_files,
+        related_files=resolved_related_files,
+        execution_flow=execution_flow,
     )
 
 
@@ -485,6 +560,8 @@ def ground_explanation_sources(
             "sources": grounded_sources,
             "confidence": confidence,
             "missing_context": merged_missing,
+            "related_files": explanation.related_files or list(resolved.related_files),
+            "execution_flow": explanation.execution_flow or list(resolved.execution_flow),
         }
     )
 

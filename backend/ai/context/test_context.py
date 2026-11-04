@@ -116,6 +116,11 @@ class TestContextBuilder:
         token_budget: int = 8000,
         limits: ContextLimits | None = None,
         revision: str | None = None,
+        callers: Sequence[SymbolContext] | None = None,
+        callees: Sequence[SymbolContext] | None = None,
+        constructors: Sequence[SymbolContext] | None = None,
+        data_types: Sequence[SymbolContext] | None = None,
+        requirements: Sequence[Any] | None = None,
     ) -> IntelligenceContext:
         """
         Assemble comprehensive test generation context.
@@ -124,15 +129,28 @@ class TestContextBuilder:
             2. Mockable dependencies & interfaces
             3. Project test framework conventions & fixtures
             4. Sample existing test code (conventions & assertions)
-            5. Repository file inventory
+            5. Related callers, callees, constructors, data types, and test requirements
+            6. Repository file inventory
         """
         active_limits = limits or ContextLimits(max_tokens=token_budget)
         combined_symbols: list[SymbolContext] = []
 
-        # 1. Mockable dependencies
+        # 1. Mockable dependencies & constructors & types
         if mockable_dependencies:
             for m in mockable_dependencies:
                 combined_symbols.append(m)
+        if constructors:
+            for c in constructors:
+                combined_symbols.append(c)
+        if data_types:
+            for dt in data_types:
+                combined_symbols.append(dt)
+        if callers:
+            for clr in callers:
+                combined_symbols.append(clr)
+        if callees:
+            for cle in callees:
+                combined_symbols.append(cle)
 
         # 2. Automatically detected mockable calls in target
         detected_mocks = self.detect_mockable_calls(target.content)
@@ -147,6 +165,13 @@ class TestContextBuilder:
         if fixture_definitions:
             for f in fixture_definitions[:5]:
                 rules.append(f"Available Fixture: {f}")
+
+        if requirements:
+            rules.append("Discovered Test Requirements to Cover:")
+            for req in list(requirements)[:10]:
+                title = getattr(req, "title", str(req))
+                cat = getattr(req, "category", "")
+                rules.append(f"- [{cat}] {title}")
 
         # 4. Check for existing test files
         missing_records: list[MissingContextInfo] = []
@@ -214,6 +239,11 @@ def build_test_generation_context(
     token_budget: int = 8000,
     limits: ContextLimits | None = None,
     revision: str | None = None,
+    callers: Sequence[SymbolContext] | None = None,
+    callees: Sequence[SymbolContext] | None = None,
+    constructors: Sequence[SymbolContext] | None = None,
+    data_types: Sequence[SymbolContext] | None = None,
+    requirements: Sequence[Any] | None = None,
 ) -> IntelligenceContext:
     """Convenience functional interface for building test generation context."""
     builder = TestContextBuilder()
@@ -229,4 +259,9 @@ def build_test_generation_context(
         token_budget=token_budget,
         limits=limits,
         revision=revision,
+        callers=callers,
+        callees=callees,
+        constructors=constructors,
+        data_types=data_types,
+        requirements=requirements,
     )

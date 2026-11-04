@@ -20,8 +20,14 @@ from app.api.v1.analysis.common import (
 )
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
+from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
 from app.core.telemetry import StageExecutionTimer
+from ai.intelligence.related_files import (
+    RelatedFileDiscoveryService,
+    RelatedFilesDiscoveryResponse,
+)
+from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 from app.schemas.analysis import (
     CodeExplanation,
     CodeExplanationResponse,
@@ -36,6 +42,58 @@ from app.services.explanation_orchestrator import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["analysis"])
+
+
+@router.get(
+    "/repositories/{repository_id}/explain/related-files",
+    response_model=RelatedFilesDiscoveryResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
+    summary="Discover automatically related files for a code explanation target",
+    description="Traverses the repository knowledge graph to discover direct dependencies, callers, database models, schemas, and tests for a selected file/symbol.",
+)
+@router.get(
+    "/repositories/{repository_id}/related-files",
+    response_model=RelatedFilesDiscoveryResponse,
+    include_in_schema=False,
+)
+def get_related_files(
+    repository_id: UUID,
+    path: str,
+    symbol: str | None = None,
+    request: Request = None,  # type: ignore[assignment]
+    db: Session = Depends(get_db),
+) -> RelatedFilesDiscoveryResponse:
+    """Discover related files and graph neighbors for a selected target file or symbol."""
+    _owned_repository(repository_id, request, db)
+    safe_path = require_safe_repo_path(path)
+
+    snap_mgr = RepositoryIntelligenceSnapshotManager()
+    snapshot = snap_mgr.load_latest_snapshot(repository_id)
+
+    all_files: list[str] = []
+    if not snapshot:
+        from app.models.repository_file import RepositoryFile
+
+        file_rows = (
+            db.query(RepositoryFile.path)
+            .filter(RepositoryFile.repository_id == repository_id)
+            .all()
+        )
+        all_files = [r[0] for r in file_rows]
+
+    discovery_svc = RelatedFileDiscoveryService(snapshot=snapshot)
+    discovered = discovery_svc.discover_related_files(
+        target_path=safe_path,
+        target_symbol=symbol,
+        snapshot=snapshot,
+        all_repo_files=all_files,
+    )
+    return RelatedFilesDiscoveryResponse(
+        target_path=safe_path,
+        target_symbol=symbol,
+        related_files=discovered,
+        total_discovered=len(discovered),
+    )
 
 
 @router.post(

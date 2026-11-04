@@ -1,6 +1,4 @@
-"""
-History services package.
-"""
+"""History services package."""
 
 from app.services.history.base import BaseHistoryService
 
