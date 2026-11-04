@@ -278,10 +278,6 @@ class WorkspaceCommandRunner:
         if command == "pytest":
             cmd_list = [sys.executable, "-m", "pytest", *args]
 
-        popen_kwargs: dict[str, object] = {}
-        if os.name == "posix":
-            popen_kwargs["start_new_session"] = True
-
         try:
             popen_kwargs: dict[str, Any] = {
                 "cwd": str(workspace_root.resolve()),
