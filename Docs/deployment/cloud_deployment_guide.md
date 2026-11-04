@@ -123,3 +123,4 @@ After deploying all 4 services:
 - [ ] Open frontend on Vercel: `https://your-platform.vercel.app/login`.
 - [ ] Click **Sign in with GitHub**: Completes OAuth flow, sets cookie, and redirects to `/app/dashboard`.
 - [ ] Run an AI Code Analysis: Verify response is returned without CORS or timeout errors.
+

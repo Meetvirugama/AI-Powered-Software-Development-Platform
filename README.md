@@ -63,51 +63,60 @@ AI & Retrieval Engine         Repository Scanner & Indexer
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Local Development)
 
 ### 1. Prerequisites
-- Python 3.11+
-- Node.js 18+ and npm
-- Docker and Docker Compose
+- Python 3.11+ (with virtual environment in `.venv`)
+- Node.js 20+ and npm
+- (Optional) Docker for local PostgreSQL/Redis, or free cloud accounts at [Supabase](https://supabase.com) and [Upstash](https://upstash.com)
 
 ### 2. Configure Environment
 ```bash
 cp .env.example .env
-# Edit .env with your Google Gemini / Groq API keys and GitHub App credentials
+# Edit .env with your credentials (API keys, GitHub App, Database & Redis)
+```
+> [!TIP]
+> If you are using Supabase and Upstash (already configured in `.env`), you do **not** need Docker to run locally!
+
+### 3. Run Locally (One Command)
+```bash
+./run_local.sh
+# Or using Make:
+make run
+```
+This automatically applies any pending database migrations and launches:
+- **Frontend UI**: [http://localhost:5173](http://localhost:5173)
+- **Backend API**: [http://localhost:8000](http://localhost:8000)
+- **API Swagger Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Readiness Health Check**: [http://localhost:8000/api/v1/health/ready](http://localhost:8000/api/v1/health/ready)
+
+### Alternative: Run Services in Separate Terminals
+```bash
+# Terminal 1: Backend
+.venv/bin/uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2: Frontend
+cd frontend && npm run dev
 ```
 
-### 3. Start Infrastructure Services
+### (Optional) 100% Offline Local Mode with Docker
+If you prefer running a local database instead of cloud Supabase/Upstash:
 ```bash
 docker compose up -d
 ```
-This spins up PostgreSQL 15 (with `pgvector`) and Redis 7.
-
-### 4. Run Backend
-```bash
-# Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install -r backend/requirements.txt
-
-# Run database migrations
-cd backend
-alembic upgrade head
-
-# Start API server
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+Then set in your `.env`:
+```env
+DATABASE_URL=postgresql+psycopg://platform:platform@localhost:5433/agent_platform
+REDIS_URL=redis://localhost:6379/0
 ```
-- API Health check: `http://127.0.0.1:8000/api/v1/health`
-- Interactive OpenAPI docs: `http://127.0.0.1:8000/docs`
 
-### 5. Run Frontend
-```bash
-cd frontend
-npm install
-npm run dev
-```
-Open `http://localhost:5173` in your browser.
+---
+
+## ☁️ Cloud Deployment (Vercel + Azure + Upstash + Supabase)
+
+See the detailed end-to-end cloud production deployment guide in:
+👉 **[`Docs/deployment/cloud_deployment_guide.md`](./Docs/deployment/cloud_deployment_guide.md)**
+and template variables in **[`.env.production.example`](./.env.production.example)**.
 
 ---
 
