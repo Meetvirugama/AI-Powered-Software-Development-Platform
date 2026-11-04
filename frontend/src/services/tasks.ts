@@ -160,7 +160,13 @@ export async function executeTask(
     auto_repair?: boolean;
   }
 ): Promise<TaskDetailResponse> {
-  const response = await apiClient.post<TaskDetailResponse>(`/tasks/${taskId}/execute`, payload || {});
+  const response = await apiClient.post<TaskDetailResponse>(
+    `/tasks/${taskId}/execute`,
+    payload || {},
+    {
+      timeout: AI_ANALYSIS_TIMEOUT_MS,
+    }
+  );
   return response.data;
 }
 

@@ -361,6 +361,44 @@ class TaskIntakePayload(BaseModel):
         description="Git commit SHA or branch ref to branch from. If omitted, uses default branch HEAD.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _default_omitted_intake_fields(cls, data: Any) -> Any:
+        """Autonomously default requirements, constraints, and title when omitted."""
+        if isinstance(data, dict):
+            d = dict(data)
+            # If requirements is omitted entirely (None or key not present), synthesize default requirement
+            if "requirements" not in d or d["requirements"] is None:
+                desc = d.get("description") or d.get("title") or "Autonomous development task"
+                d["requirements"] = [
+                    {
+                        "id": "req-1",
+                        "description": str(desc).strip() or "Autonomous task execution",
+                        "category": "functional",
+                        "target_files": [],
+                        "acceptance_criteria": [
+                            "Task requirements implemented cleanly.",
+                            "Automated tests verify changes with zero regressions.",
+                        ],
+                    }
+                ]
+            if "constraints" not in d or d["constraints"] is None:
+                d["constraints"] = [
+                    {
+                        "id": "cst-default",
+                        "description": "Standard protected configuration shield",
+                        "constraint_type": "protected_file",
+                        "forbidden_files": [".env", ".github/workflows/deploy.yml"],
+                        "forbidden_packages": [],
+                        "max_budget_tokens": 20000,
+                    }
+                ]
+            if not d.get("title") and d.get("description"):
+                first_line = str(d["description"]).strip().split("\n")[0].strip()
+                d["title"] = first_line[:120] if len(first_line) >= 3 else "Autonomous Development Task"
+            return d
+        return data
+
     @field_validator("title")
     @classmethod
     def _validate_title_not_blank(cls, value: str) -> str:

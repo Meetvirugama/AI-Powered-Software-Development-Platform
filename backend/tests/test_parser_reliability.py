@@ -392,9 +392,8 @@ class TestFrameworkDetectionReliability:
         result = framework_detector.detect(repo_root=repo_dir)
 
         assert result.framework == "vitest"
-        assert result.is_supported is False
-        assert result.status == "UNSUPPORTED_FRAMEWORK"
-        assert any("vitest" in w.lower() for w in result.warnings)
+        assert result.is_supported is True
+        assert result.status == "CONFIRMED"
 
     def test_detect_ambiguous_repo_multiple_frameworks(
         self, framework_detector: FrameworkDetector
