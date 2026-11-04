@@ -58,14 +58,20 @@ app = FastAPI(
 app.add_middleware(RateLimitMiddleware, api_prefix=settings.api_v1_prefix)
 app.add_middleware(JWTMiddleware)
 app.add_middleware(RequestIdMiddleware)
+cors_middleware_kwargs: dict[str, Any] = {
+    "allow_origins": settings.cors_origins,
+    "allow_credentials": True,  # the auth JWT travels in an httpOnly cookie
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization", "X-Request-ID"],
+    "expose_headers": ["X-Request-ID", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    "max_age": 600,
+}
+if settings.cors_origin_regex:
+    cors_middleware_kwargs["allow_origin_regex"] = settings.cors_origin_regex
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_credentials=True,  # the auth JWT travels in an httpOnly cookie
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Request-ID"],
-    expose_headers=["X-Request-ID", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
-    max_age=600,
+    **cors_middleware_kwargs,
 )
 app.add_middleware(SecurityHeadersMiddleware, trust_proxy_headers=settings.trust_proxy_headers)
 app.add_exception_handler(APIError, cast(Any, api_error_handler))

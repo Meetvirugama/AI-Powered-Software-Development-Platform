@@ -10,14 +10,26 @@ from app.core.config import get_settings
 _async_redis_client: AsyncRedis | None = None
 
 
+def _get_redis_options() -> dict:
+    """Return tuned Redis options with Upstash serverless resilience and idle pinging."""
+    settings = get_settings()
+    url_lower = (settings.redis_url or "").lower()
+    is_upstash = "upstash.io" in url_lower or url_lower.startswith("rediss://")
+    return {
+        "decode_responses": True,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": 10.0,
+        "retry_on_timeout": True,
+        "health_check_interval": 30 if is_upstash else 0,
+    }
+
+
 @lru_cache
 def get_redis() -> Redis:
     """Create one synchronous Redis client per process without connecting at import time."""
     return Redis.from_url(
         get_settings().redis_url,
-        decode_responses=True,
-        socket_connect_timeout=5.0,
-        socket_timeout=10.0,
+        **_get_redis_options(),
     )
 
 
@@ -27,9 +39,7 @@ async def get_redis_async() -> AsyncRedis:
     if _async_redis_client is None:
         _async_redis_client = AsyncRedis.from_url(
             get_settings().redis_url,
-            decode_responses=True,
-            socket_connect_timeout=5.0,
-            socket_timeout=10.0,
+            **_get_redis_options(),
         )
     return _async_redis_client
 
