@@ -99,7 +99,7 @@ class FakeRedis:
 def test_engine():
     """Create a single database engine for the test session."""
     is_sqlite = TEST_DATABASE_URL.startswith("sqlite")
-    connect_args = {"check_same_thread": False} if is_sqlite else {}
+    connect_args = {"check_same_thread": False, "timeout": 60} if is_sqlite else {}
 
     engine = create_engine(
         TEST_DATABASE_URL,

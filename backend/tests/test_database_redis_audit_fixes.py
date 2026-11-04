@@ -40,10 +40,11 @@ from indexer.models import Chunk
 # ---------------------------------------------------------------------------
 
 def test_github_installation_upsert_updates_user_id():
-    """Verify upsert updates existing record's user_id when linking to a new user account."""
+    """Verify upsert updates existing record's metadata and blocks cross-tenant hijacking."""
     mock_session = MagicMock()
+    user_id = uuid.uuid4()
     existing_inst = GitHubInstallation(
-        user_id=uuid.uuid4(),
+        user_id=user_id,
         installation_id="171308854",
         account_login="OldLogin",
         permissions={},
@@ -51,17 +52,26 @@ def test_github_installation_upsert_updates_user_id():
     mock_session.execute.return_value.scalar_one_or_none.return_value = existing_inst
 
     repo = GitHubInstallationRepository(mock_session)
-    new_user_id = uuid.uuid4()
     updated = repo.upsert(
-        user_id=new_user_id,
+        user_id=user_id,
         installation_id="171308854",
         account_login="Meetvirugama",
         permissions={"metadata": "read"},
     )
 
-    assert updated.user_id == new_user_id
+    assert updated.user_id == user_id
     assert updated.account_login == "Meetvirugama"
     mock_session.commit.assert_called()
+
+    # Verify cross-tenant hijacking attempt raises ValueError per P0 tenancy security
+    other_user_id = uuid.uuid4()
+    with pytest.raises(ValueError, match="already linked to user"):
+        repo.upsert(
+            user_id=other_user_id,
+            installation_id="171308854",
+            account_login="Attacker",
+            permissions={},
+        )
 
 
 # ---------------------------------------------------------------------------

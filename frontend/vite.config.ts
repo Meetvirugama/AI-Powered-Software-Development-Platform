@@ -8,9 +8,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: [
-      { find: 'msw/node', replacement: path.resolve(__dirname, 'src/lib/msw/node.ts') },
-      { find: 'msw/browser', replacement: path.resolve(__dirname, 'src/lib/msw/browser.ts') },
-      { find: 'msw', replacement: path.resolve(__dirname, 'src/lib/msw/index.ts') },
+      { find: 'msw/node', replacement: path.resolve(import.meta.dirname, 'src/lib/msw/node.ts') },
+      { find: 'msw/browser', replacement: path.resolve(import.meta.dirname, 'src/lib/msw/browser.ts') },
+      { find: 'msw', replacement: path.resolve(import.meta.dirname, 'src/lib/msw/index.ts') },
     ],
   },
   build: {

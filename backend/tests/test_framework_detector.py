@@ -104,10 +104,9 @@ class TestAmbiguousAndUnsupportedFrameworks:
         result = detector.detect(repo_root=repo_dir)
 
         assert result.framework == "vitest"
-        assert result.is_supported is False
-        assert result.status == "UNSUPPORTED_FRAMEWORK"
-        assert len(result.warnings) > 0
-        assert "vitest" in result.warnings[0].lower()
+        assert result.is_supported is True
+        assert result.status == "CONFIRMED"
+        assert result.test_command == "npm test -- --run"
 
     def test_ambiguous_runners_flagged(self, detector: FrameworkDetector):
         repo_dir = FIXTURES_DIR / "ambiguous_repo"

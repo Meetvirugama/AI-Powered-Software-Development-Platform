@@ -12,7 +12,7 @@ import type { ApiError } from '../types/api';
 export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '');
 
 export const DEFAULT_TIMEOUT_MS = 30000;
-export const AI_ANALYSIS_TIMEOUT_MS = 120000;
+export const AI_ANALYSIS_TIMEOUT_MS = 180000;
 
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -44,7 +44,12 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     url.includes('/generate-tests') ||
     url.includes('/review') ||
     url.includes('/plan') ||
-    url.includes('/chat');
+    url.includes('/chat') ||
+    url.includes('/execute') ||
+    url.includes('/repair') ||
+    url.includes('/verify') ||
+    url.includes('/tests') ||
+    url.includes('/run-workflow');
 
   if (isAiEndpoint && (reqConfig.timeout === undefined || reqConfig.timeout === DEFAULT_TIMEOUT_MS)) {
     reqConfig.timeout = AI_ANALYSIS_TIMEOUT_MS;

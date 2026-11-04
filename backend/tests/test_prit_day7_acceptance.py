@@ -285,9 +285,8 @@ class TestFinalFrameworkAndConventionDetection:
         result = framework_detector.detect(repo_root=vitest_root)
 
         assert result.framework == "vitest"
-        assert result.is_supported is False
-        assert result.status == "UNSUPPORTED_FRAMEWORK"
-        assert any("Vitest" in w or "vitest" in w for w in result.warnings)
+        assert result.is_supported is True
+        assert result.status == "CONFIRMED"
 
     def test_ambiguous_runners_manifest_detection(
         self, framework_detector: FrameworkDetector

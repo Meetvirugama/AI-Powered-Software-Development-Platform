@@ -17,6 +17,8 @@ Provides production-hardened query and lifecycle methods for:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -2215,34 +2217,59 @@ class TaskRepository:
                 "Tampering detected: plan hash does not match approval record hash. Renewed approval required.",
             )
 
-        # Tampering check: recompute plan hash if schema can be constructed
+        # Tampering check: recompute plan hash directly from persisted material fields
         if latest_plan.plan_hash:
-            try:
-                reconstructed_schema = PlannerSchema(
-                    summary=latest_plan.summary,
-                    problem_statement=latest_plan.problem_statement or "",
-                    assumptions=latest_plan.assumptions or [],
-                    relevant_files=latest_plan.relevant_files or [],
-                    relevant_symbols=latest_plan.relevant_symbols or [],
-                    steps=latest_plan.steps or [],
-                    expected_files=latest_plan.expected_files or [],
-                    tests_to_run=latest_plan.tests_to_run or [],
-                    validation_strategy=latest_plan.validation_strategy if isinstance(latest_plan.validation_strategy, list) else ([latest_plan.validation_strategy] if latest_plan.validation_strategy else []),
-                    risks=latest_plan.risks or [],
-                    required_permissions=latest_plan.required_permissions or [],
-                    resource_budget=latest_plan.resource_budget or {},
-                )
-                computed_hash = reconstructed_schema.compute_plan_hash(latest_plan.base_revision)
-                if computed_hash != latest_plan.plan_hash:
+            material = {
+                "base_revision": latest_plan.base_revision or "",
+                "summary": latest_plan.summary or "",
+                "expected_files": sorted(latest_plan.expected_files or []),
+                "steps": [
+                    {
+                        "step_id": s.get("step_id") if isinstance(s, dict) else getattr(s, "step_id", ""),
+                        "action_type": (s.get("action_type") or s.get("step_type") or "modify") if isinstance(s, dict) else (getattr(s, "action_type", None) or getattr(s, "step_type", None) or "modify"),
+                        "description": s.get("description", "") if isinstance(s, dict) else getattr(s, "description", ""),
+                        "expected_files": sorted(s.get("expected_files", [])) if isinstance(s, dict) else sorted(getattr(s, "expected_files", []) or []),
+                        "depends_on": sorted(s.get("depends_on") or s.get("dependencies") or []) if isinstance(s, dict) else sorted(getattr(s, "depends_on", None) or getattr(s, "dependencies", None) or []),
+                        "verification": list(s.get("verification") or []) if isinstance(s, dict) else list(getattr(s, "verification", []) or []),
+                    }
+                    for s in (latest_plan.steps or [])
+                ],
+            }
+            canonical = json.dumps(material, sort_keys=True, separators=(",", ":"))
+            direct_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+            if direct_hash != latest_plan.plan_hash:
+                # Secondary check via reconstructed schema
+                try:
+                    reconstructed_schema = PlannerSchema(
+                        summary=latest_plan.summary,
+                        problem_statement=latest_plan.problem_statement or "",
+                        assumptions=latest_plan.assumptions or [],
+                        relevant_files=latest_plan.relevant_files or [],
+                        relevant_symbols=latest_plan.relevant_symbols or [],
+                        steps=latest_plan.steps or [],
+                        expected_files=latest_plan.expected_files or [],
+                        tests_to_run=latest_plan.tests_to_run or [],
+                        validation_strategy=latest_plan.validation_strategy if isinstance(latest_plan.validation_strategy, list) else ([latest_plan.validation_strategy] if latest_plan.validation_strategy else []),
+                        risks=latest_plan.risks or [],
+                        required_permissions=latest_plan.required_permissions or [],
+                        resource_budget=latest_plan.resource_budget or {},
+                    )
+                    schema_hash = reconstructed_schema.compute_plan_hash(latest_plan.base_revision)
+                    if schema_hash != latest_plan.plan_hash:
+                        raise APIError(
+                            409,
+                            ErrorCode.PLAN_VERSION_MISMATCH,
+                            "Plan tampering detected: recomputed plan hash does not match stored hash. Execution halted.",
+                        )
+                except APIError:
+                    raise
+                except Exception:
                     raise APIError(
                         409,
                         ErrorCode.PLAN_VERSION_MISMATCH,
                         "Plan tampering detected: recomputed plan hash does not match stored hash. Execution halted.",
                     )
-            except APIError:
-                raise
-            except Exception:
-                pass
 
         return latest_plan
 
