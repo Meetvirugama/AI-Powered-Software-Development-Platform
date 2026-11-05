@@ -9,6 +9,7 @@
  * Plus Missing-Context warnings, Confidence badge, and navigable Source References.
  */
 
+import { useState } from 'react';
 import {
   BookOpen,
   Layers,
@@ -23,6 +24,12 @@ import {
   ListOrdered,
   GitFork,
   Network,
+  Cpu,
+  Terminal,
+  Wrench,
+  Code2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { CodeExplanation, SourceReference, SymbolSummary } from '../../types/analysis';
@@ -42,6 +49,7 @@ export function ExplanationResultView({
   onSelectSymbol,
   className,
 }: ExplanationResultViewProps) {
+  const [copied, setCopied] = useState(false);
   const {
     purpose,
     logic_flow,
@@ -137,6 +145,21 @@ export function ExplanationResultView({
       </section>
 
       {/* -------------------------------------------------------------- */}
+      {/* Deep Technical Explanation                                     */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.detailed_explanation && (
+        <section className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3.5 space-y-2 shadow-xs">
+          <div className="flex items-center gap-1.5 text-indigo-400 font-semibold text-xs uppercase tracking-wide font-mono">
+            <Cpu className="h-3.5 w-3.5" />
+            <span>Deep Technical & Architecture Breakdown</span>
+          </div>
+          <div className="text-foreground leading-relaxed font-sans text-xs pt-0.5 whitespace-pre-line space-y-2">
+            {explanation.detailed_explanation}
+          </div>
+        </section>
+      )}
+
+      {/* -------------------------------------------------------------- */}
       {/* Section 2: Logic Flow                                          */}
       {/* -------------------------------------------------------------- */}
       <section className="rounded-xl border border-border/80 bg-background/50 p-3.5 space-y-2 shadow-xs">
@@ -207,6 +230,83 @@ export function ExplanationResultView({
               </span>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* Code Output Explanation & Analysis                             */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.code_output_explanation && (
+        <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3.5 space-y-2 shadow-xs">
+          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold text-xs uppercase tracking-wide font-mono">
+            <Terminal className="h-3.5 w-3.5" />
+            <span>Code Output Explanation & Return Values</span>
+          </div>
+          <div className="text-foreground leading-relaxed font-sans text-xs pt-0.5 whitespace-pre-line bg-background/50 p-3 rounded-lg border border-border/60">
+            {explanation.code_output_explanation}
+          </div>
+        </section>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* Code Issues & Solved Solutions                                 */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.code_issues_and_solutions && explanation.code_issues_and_solutions.length > 0 && (
+        <section className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2 shadow-xs">
+          <div className="flex items-center gap-1.5 text-amber-400 font-semibold text-xs uppercase tracking-wide font-mono">
+            <Wrench className="h-3.5 w-3.5" />
+            <span>Code Quality, Flaws & Solved Solutions ({explanation.code_issues_and_solutions.length})</span>
+          </div>
+          <ul className="space-y-2 pt-1">
+            {explanation.code_issues_and_solutions.map((item, idx) => (
+              <li key={idx} className="flex items-start gap-2 bg-background/60 p-2.5 rounded-lg border border-border/60">
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-mono font-bold mt-0.5">
+                  !
+                </span>
+                <span className="text-foreground leading-relaxed text-xs">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* Corrected & Production-Ready Code                              */}
+      {/* -------------------------------------------------------------- */}
+      {explanation.corrected_code && (
+        <section className="rounded-xl border border-primary/30 bg-primary/5 p-3.5 space-y-2 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-primary font-semibold text-xs uppercase tracking-wide font-mono">
+              <Code2 className="h-3.5 w-3.5" />
+              <span>Corrected & Production-Ready Code Solution</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (explanation.corrected_code) {
+                  navigator.clipboard.writeText(explanation.corrected_code);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-background/80 hover:bg-background border border-border/60 text-[11px] font-mono text-foreground transition-colors cursor-pointer"
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3 w-3 text-emerald-400" />
+                  <span className="text-emerald-400">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3 text-muted-foreground" />
+                  <span>Copy Code</span>
+                </>
+              )}
+            </button>
+          </div>
+          <pre className="p-3 rounded-lg bg-zinc-950 text-zinc-100 font-mono text-[11px] overflow-x-auto leading-relaxed border border-border/70 max-h-96">
+            <code>{explanation.corrected_code}</code>
+          </pre>
         </section>
       )}
 

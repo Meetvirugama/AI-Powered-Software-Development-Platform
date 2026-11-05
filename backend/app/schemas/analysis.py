@@ -408,6 +408,22 @@ class CodeExplanation(BaseModel):
         default_factory=list,
         description="Related repository files utilized in context assembly.",
     )
+    detailed_explanation: str | None = Field(
+        default=None,
+        description="In-depth technical and algorithmic explanation of how the code operates.",
+    )
+    code_output_explanation: str | None = Field(
+        default=None,
+        description="Detailed breakdown of code outputs, calculation formulas, field meanings, and concrete examples.",
+    )
+    code_issues_and_solutions: list[str] = Field(
+        default_factory=list,
+        description="Identified flaws, bugs, vulnerabilities, or edge cases and proposed solutions.",
+    )
+    corrected_code: str | None = Field(
+        default=None,
+        description="Corrected, production-grade refactoring of the code solving identified issues.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -475,6 +491,36 @@ class CodeExplanation(BaseModel):
         if conf not in ("high", "medium", "low"):
             conf = "medium"
         d["confidence"] = conf
+
+        # 8. detailed_explanation
+        de = d.get("detailed_explanation")
+        if isinstance(de, list):
+            d["detailed_explanation"] = "\n\n".join(str(x) for x in de if str(x).strip())
+        elif isinstance(de, str):
+            d["detailed_explanation"] = de.strip()
+
+        # 9. code_output_explanation
+        coe = d.get("code_output_explanation")
+        if isinstance(coe, list):
+            d["code_output_explanation"] = "\n\n".join(str(x) for x in coe if str(x).strip())
+        elif isinstance(coe, dict):
+            d["code_output_explanation"] = "\n".join(f"{k}: {v}" for k, v in coe.items())
+        elif isinstance(coe, str):
+            d["code_output_explanation"] = coe.strip()
+
+        # 10. code_issues_and_solutions
+        cis = d.get("code_issues_and_solutions")
+        if isinstance(cis, str):
+            d["code_issues_and_solutions"] = [part.strip() for part in cis.split("\n") if part.strip()]
+        elif isinstance(cis, dict):
+            d["code_issues_and_solutions"] = [f"{k}: {v}" for k, v in cis.items()]
+        elif not isinstance(cis, list):
+            d["code_issues_and_solutions"] = []
+
+        # 11. corrected_code
+        cc = d.get("corrected_code")
+        if isinstance(cc, str):
+            d["corrected_code"] = cc.strip()
 
         return d
 
