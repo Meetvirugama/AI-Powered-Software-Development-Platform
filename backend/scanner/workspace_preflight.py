@@ -14,15 +14,13 @@ Responsibilities:
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
-from uuid import UUID
-
-from pydantic import BaseModel, Field
 
 from app.schemas.workspace import WorkspaceStatus
+from pydantic import BaseModel, Field
 from sandbox.path_guard import WorkspacePathGuard
-from sandbox.resource_monitor import WorkspaceResourceMonitor
+
 from scanner.detector import LanguageDetector
 from scanner.framework_detector import FrameworkDetector
 

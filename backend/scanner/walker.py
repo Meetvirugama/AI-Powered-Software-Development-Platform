@@ -1,10 +1,8 @@
 import logging
 import os
 from pathlib import Path
-from typing import List
 
 import pathspec
-
 from app.core.input_security import UnsafePathError, is_within, validate_repo_relative_path
 
 from .symbols import FileInfo
@@ -59,7 +57,7 @@ class FileWalker:
             return True
         return False
 
-    def walk(self, root_path: str) -> List[FileInfo]:
+    def walk(self, root_path: str) -> list[FileInfo]:
         gitignore_path = os.path.join(root_path, ".gitignore")
         spec = None
         if os.path.exists(gitignore_path):

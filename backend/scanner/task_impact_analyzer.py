@@ -8,10 +8,10 @@ database models, and determines the 3-tiered test execution scope (step, impact,
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
-from app.schemas.planner_context import AffectedSymbol, RiskLevel
 from scanner.symbol_blast_radius import SymbolBlastRadiusEngine
 from scanner.symbols import Symbol, SymbolEdge
 

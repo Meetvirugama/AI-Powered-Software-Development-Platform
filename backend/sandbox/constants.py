@@ -6,7 +6,6 @@ Owner: Prit Zania — Week 3 Day 1 Deliverable (Docs/week3.md §6 F33, §8 Day 1
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 # Base directory for task sandboxes
 DEFAULT_WORKSPACE_SUBDIR = ".workspaces"

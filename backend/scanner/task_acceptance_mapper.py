@@ -8,8 +8,9 @@ test scenarios across positive, negative, boundary, security, and regression cat
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 from ai.services.task_requirement_discovery import DiscoveredTaskRequirement
 
@@ -98,7 +99,7 @@ class TaskAcceptanceMapper:
                 requirement_id=rid,
                 scenario_type="negative",
                 title=f"Rejection of invalid input for {req.description[:60]}",
-                description=f"Asserts clean error handling and rejection of malformed requests.",
+                description="Asserts clean error handling and rejection of malformed requests.",
                 expected_assertions=[
                     "Invalid input raises validation error / 400 Bad Request",
                     "No partial or corrupted state is persisted",
@@ -114,7 +115,7 @@ class TaskAcceptanceMapper:
                 requirement_id=rid,
                 scenario_type="boundary",
                 title=f"Boundary limits for {req.description[:60]}",
-                description=f"Tests upper, lower, empty, and zero boundaries.",
+                description="Tests upper, lower, empty, and zero boundaries.",
                 expected_assertions=[
                     "Boundary conditions handled gracefully without unhandled exceptions",
                 ],
@@ -130,7 +131,7 @@ class TaskAcceptanceMapper:
                     requirement_id=rid,
                     scenario_type="security",
                     title=f"Access control & privilege boundary for {req.description[:60]}",
-                    description=f"Asserts unauthenticated or unauthorized access is denied.",
+                    description="Asserts unauthenticated or unauthorized access is denied.",
                     expected_assertions=[
                         "Unauthorized request blocked with 401/403 status code",
                         "No sensitive details leaked in error payload",

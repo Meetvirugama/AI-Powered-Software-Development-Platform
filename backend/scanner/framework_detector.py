@@ -15,9 +15,10 @@ import json
 import logging
 import os
 import re
-from dataclasses import asdict, dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,22 +29,22 @@ SUPPORTED_FRAMEWORKS = {"pytest", "unittest", "jest", "vitest"}
 class FrameworkDetectionResult:
     """The structured result of detecting repository test frameworks and conventions."""
 
-    framework: Optional[str]  # "pytest" | "unittest" | "jest" | None
+    framework: str | None  # "pytest" | "unittest" | "jest" | None
     language: str  # "Python" | "TypeScript" | "JavaScript" | "Go" | "Java" | "unknown"
     is_supported: bool  # True if framework is in SUPPORTED_FRAMEWORKS
     status: str  # "CONFIRMED" | "AMBIGUOUS" | "UNSUPPORTED_FRAMEWORK" | "NO_CONFIG_FOUND"
-    test_command: Optional[str] = None  # "pytest", "python -m unittest", "npm test"
-    test_directory: Optional[str] = None  # "tests", "backend/tests", "__tests__"
+    test_command: str | None = None  # "pytest", "python -m unittest", "npm test"
+    test_directory: str | None = None  # "tests", "backend/tests", "__tests__"
     naming_pattern: str = "prefix:test_"  # "prefix:test_" | "suffix:_test" | "suffix:.test.ts"
-    config_file: Optional[str] = None  # "pytest.ini", "package.json", "jest.config.js"
-    config_details: Dict[str, Any] = field(default_factory=dict)
-    fixtures: List[str] = field(default_factory=list)
-    fixture_details: List[Dict[str, Any]] = field(default_factory=list)
-    setup_files: List[str] = field(default_factory=list)
-    candidate_frameworks: List[str] = field(default_factory=list)
+    config_file: str | None = None  # "pytest.ini", "package.json", "jest.config.js"
+    config_details: dict[str, Any] = field(default_factory=dict)
+    fixtures: list[str] = field(default_factory=list)
+    fixture_details: list[dict[str, Any]] = field(default_factory=list)
+    setup_files: list[str] = field(default_factory=list)
+    candidate_frameworks: list[str] = field(default_factory=list)
     is_ambiguous: bool = False
-    ambiguity_reason: Optional[str] = None
-    warnings: List[str] = field(default_factory=list)
+    ambiguity_reason: str | None = None
+    warnings: list[str] = field(default_factory=list)
 
     def propose_test_path(self, source_file: str) -> str:
         """Compute the idiomatic test path matching detected directory layout and naming pattern."""
@@ -121,7 +122,7 @@ class FrameworkDetectionResult:
 
         return f"{base_test_dir}/{test_filename}"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert detection result to standard dictionary representation."""
         return {
             "framework": self.framework,
@@ -160,15 +161,15 @@ class FrameworkDetector:
         "spec",
     ]
 
-    def __init__(self, repo_root: Optional[str | Path] = None):
+    def __init__(self, repo_root: str | Path | None = None):
         self.repo_root = Path(repo_root).resolve() if repo_root else None
 
     def detect(
         self,
-        repo_root: Optional[str | Path] = None,
-        target_file: Optional[str] = None,
-        file_list: Optional[Sequence[str]] = None,
-        preferred_framework: Optional[str] = None,
+        repo_root: str | Path | None = None,
+        target_file: str | None = None,
+        file_list: Sequence[str] | None = None,
+        preferred_framework: str | None = None,
     ) -> FrameworkDetectionResult:
         """Detect the active test framework and conventions for the target repository or file."""
         root = Path(repo_root).resolve() if repo_root else self.repo_root
@@ -176,7 +177,7 @@ class FrameworkDetector:
             root = Path.cwd().resolve()
 
         # Build list of available files
-        files: List[str] = []
+        files: list[str] = []
         if file_list is not None:
             files = [f.replace("\\", "/").lstrip("/") for f in file_list]
         elif root and root.exists():
@@ -202,9 +203,9 @@ class FrameworkDetector:
                 warnings=["Could not determine target language or test configuration from repository"],
             )
 
-    def _collect_repo_files(self, root: Path) -> List[str]:
+    def _collect_repo_files(self, root: Path) -> list[str]:
         """Collect repo-relative file paths while ignoring skip directories."""
-        collected: List[str] = []
+        collected: list[str] = []
         skip_dirs = {
             ".git",
             "node_modules",
@@ -231,7 +232,7 @@ class FrameworkDetector:
 
     def _resolve_target_language(
         self,
-        target_file: Optional[str],
+        target_file: str | None,
         files: Sequence[str],
     ) -> str:
         """Identify language from target file extension or file inventory."""
@@ -275,18 +276,18 @@ class FrameworkDetector:
 
     def _detect_python_framework(
         self,
-        root: Optional[Path],
+        root: Path | None,
         files: Sequence[str],
-        target_file: Optional[str],
-        preferred_framework: Optional[str],
+        target_file: str | None,
+        preferred_framework: str | None,
     ) -> FrameworkDetectionResult:
         """Detect pytest vs unittest configuration in Python repositories."""
-        pytest_signals: List[str] = []
-        unittest_signals: List[str] = []
-        config_file: Optional[str] = None
-        config_details: Dict[str, Any] = {}
-        test_dir: Optional[str] = None
-        test_command: Optional[str] = None
+        pytest_signals: list[str] = []
+        unittest_signals: list[str] = []
+        config_file: str | None = None
+        config_details: dict[str, Any] = {}
+        test_dir: str | None = None
+        test_command: str | None = None
 
         # 1. Inspect pytest.ini
         for fname in ("pytest.ini", "backend/pytest.ini"):
@@ -401,9 +402,9 @@ class FrameworkDetector:
             ambiguity_reason=ambiguity_reason,
         )
 
-    def _parse_pytest_ini(self, root: Optional[Path], filename: str) -> Dict[str, Any]:
+    def _parse_pytest_ini(self, root: Path | None, filename: str) -> dict[str, Any]:
         """Parse pytest.ini file options safely."""
-        details: Dict[str, Any] = {}
+        details: dict[str, Any] = {}
         content = self._read_file(root, filename)
         if not content:
             return details
@@ -423,9 +424,9 @@ class FrameworkDetector:
                     details[k.strip()] = v.strip()
         return details
 
-    def _discover_python_test_conventions(self, files: Sequence[str]) -> Tuple[Optional[str], str]:
+    def _discover_python_test_conventions(self, files: Sequence[str]) -> tuple[str | None, str]:
         """Find existing test directory and file naming pattern for Python."""
-        test_dir: Optional[str] = None
+        test_dir: str | None = None
         prefix_count = 0
         suffix_count = 0
 
@@ -455,13 +456,13 @@ class FrameworkDetector:
 
     def _extract_pytest_fixtures(
         self,
-        root: Optional[Path],
+        root: Path | None,
         files: Sequence[str],
-    ) -> Tuple[List[str], List[Dict[str, Any]], List[str]]:
+    ) -> tuple[list[str], list[dict[str, Any]], list[str]]:
         """Extract pytest fixtures from conftest.py files using AST parsing."""
-        fixtures: List[str] = []
-        fixture_details: List[Dict[str, Any]] = []
-        setup_files: List[str] = []
+        fixtures: list[str] = []
+        fixture_details: list[dict[str, Any]] = []
+        setup_files: list[str] = []
 
         conftest_files = [f for f in files if os.path.basename(f) == "conftest.py"]
         for cf in conftest_files:
@@ -525,11 +526,11 @@ class FrameworkDetector:
 
     def _detect_javascript_framework(
         self,
-        root: Optional[Path],
+        root: Path | None,
         files: Sequence[str],
-        target_file: Optional[str],
+        target_file: str | None,
         language: str,
-        preferred_framework: Optional[str],
+        preferred_framework: str | None,
     ) -> FrameworkDetectionResult:
         """Detect Jest vs Vitest vs Mocha in JS/TS repositories."""
         pkg_json_file = next(
@@ -538,17 +539,17 @@ class FrameworkDetector:
         )
         test_dir, naming_pattern = self._discover_js_test_conventions(files, language)
 
-        detected_framework: Optional[str] = None
-        test_command: Optional[str] = "npm test"
+        detected_framework: str | None = None
+        test_command: str | None = "npm test"
         is_supported = False
         status = "NO_CONFIG_FOUND"
-        candidate_frameworks: List[str] = []
-        warnings: List[str] = []
+        candidate_frameworks: list[str] = []
+        warnings: list[str] = []
         is_ambiguous = False
-        ambiguity_reason: Optional[str] = None
-        config_file: Optional[str] = None
-        config_details: Dict[str, Any] = {}
-        setup_files: List[str] = []
+        ambiguity_reason: str | None = None
+        config_file: str | None = None
+        config_details: dict[str, Any] = {}
+        setup_files: list[str] = []
 
         # Find jest config files
         for jc in (
@@ -668,9 +669,9 @@ class FrameworkDetector:
         self,
         files: Sequence[str],
         language: str,
-    ) -> Tuple[Optional[str], str]:
+    ) -> tuple[str | None, str]:
         """Find existing test directory and naming convention for JS/TS."""
-        test_dir: Optional[str] = None
+        test_dir: str | None = None
         spec_count = 0
         test_count = 0
 
@@ -697,7 +698,7 @@ class FrameworkDetector:
     # Other Languages (Go, Java)
     # -----------------------------------------------------------------------
 
-    def _detect_go_framework(self, root: Optional[Path], files: Sequence[str]) -> FrameworkDetectionResult:
+    def _detect_go_framework(self, root: Path | None, files: Sequence[str]) -> FrameworkDetectionResult:
         """Detect Go test runner conventions."""
         return FrameworkDetectionResult(
             framework="go test",
@@ -709,7 +710,7 @@ class FrameworkDetector:
             warnings=["'go test' detected. Initial TestGenerationService supports pytest, unittest, and jest."],
         )
 
-    def _detect_java_framework(self, root: Optional[Path], files: Sequence[str]) -> FrameworkDetectionResult:
+    def _detect_java_framework(self, root: Path | None, files: Sequence[str]) -> FrameworkDetectionResult:
         """Detect Java JUnit / Maven conventions."""
         return FrameworkDetectionResult(
             framework="junit",
@@ -725,7 +726,7 @@ class FrameworkDetector:
     # Safe Helper Methods
     # -----------------------------------------------------------------------
 
-    def _read_file(self, root: Optional[Path], rel_path: str) -> str:
+    def _read_file(self, root: Path | None, rel_path: str) -> str:
         """Safely read text file from repository root."""
         if not root:
             return ""

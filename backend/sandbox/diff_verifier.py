@@ -19,10 +19,9 @@ import fnmatch
 import logging
 import re
 import subprocess
-import time
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
@@ -34,6 +33,7 @@ from app.schemas.workspace import (
     SecretScanFinding,
     WorkspaceDiffResult,
 )
+
 from sandbox.constants import (
     CRITICAL_PROJECT_FILES,
     FORBIDDEN_FILE_PATTERNS,
@@ -41,9 +41,7 @@ from sandbox.constants import (
 )
 from sandbox.exceptions import (
     WorkspaceDiffError,
-    WorkspaceDiffValidationError,
     WorkspacePathEscapeError,
-    WorkspaceSecretLeakDetectedError,
     WorkspaceStaleApprovalError,
 )
 from sandbox.path_guard import WorkspacePathGuard
@@ -122,7 +120,7 @@ class WorkspaceDiffVerifier:
             is_empty=is_empty,
             files=file_summaries,
             raw_diff=raw_diff,
-            extracted_at=datetime.now(timezone.utc).isoformat(),
+            extracted_at=datetime.now(UTC).isoformat(),
         )
 
     def parse_unified_diff(
@@ -327,7 +325,7 @@ class WorkspaceDiffVerifier:
             secret_findings=secret_findings,
             blocking_findings=blocking_findings,
             warnings=warnings,
-            validated_at=datetime.now(timezone.utc).isoformat(),
+            validated_at=datetime.now(UTC).isoformat(),
         )
 
     def assert_revision_integrity(

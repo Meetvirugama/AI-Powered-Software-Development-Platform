@@ -10,13 +10,14 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
 
 from app.schemas.analysis import (
     TestQualityReport,
     TestRequirement,
 )
+
 from scanner.test_coverage_analyzer import TestCoverageResult
 
 logger = logging.getLogger(__name__)

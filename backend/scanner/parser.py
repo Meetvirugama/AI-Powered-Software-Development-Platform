@@ -1,7 +1,7 @@
 import ast
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 try:
     import tree_sitter
@@ -149,7 +149,7 @@ class Parser:
             error_message=f"Could not load parser grammar for {ts_lang_name}",
         )
 
-    def parse(self, file_info: FileInfo, content: str) -> Optional[Any]:
+    def parse(self, file_info: FileInfo, content: str) -> Any | None:
         """Parse source content into a concrete syntax tree, returning None on failure."""
         result = self.parse_with_status(file_info, content)
         if not result.success:

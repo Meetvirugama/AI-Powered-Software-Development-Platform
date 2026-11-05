@@ -14,7 +14,7 @@ Responsibilities:
 from __future__ import annotations
 
 from collections import deque
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.schemas.planner_context import (
@@ -26,6 +26,7 @@ from app.schemas.planner_context import (
     SymbolImpactType,
     TaskDiffRanges,
 )
+
 from scanner.symbols import Symbol, SymbolEdge
 
 

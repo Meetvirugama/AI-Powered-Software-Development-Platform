@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from uuid import UUID
-from typing import List, Optional
+
 
 @dataclass
 class Symbol:
@@ -11,7 +11,7 @@ class Symbol:
     start_line: int
     end_line: int
     signature: str
-    parent_id: Optional[UUID] = None
+    parent_id: UUID | None = None
 
 @dataclass
 class SymbolEdge:
@@ -24,7 +24,7 @@ class ScanResult:
     file_count: int
     symbol_count: int
     edge_count: int
-    errors: List[str]
+    errors: list[str]
 
 @dataclass
 class FileInfo:
@@ -41,14 +41,14 @@ class SourceRange:
     start_column: int = 0
     end_column: int = 0
     content: str = ""
-    symbol_name: Optional[str] = None
-    symbol_kind: Optional[str] = None
+    symbol_name: str | None = None
+    symbol_kind: str | None = None
 
 @dataclass
 class ParseResult:
     success: bool
-    tree: Optional[object] = None
+    tree: object | None = None
     language: str = "unknown"
     is_supported: bool = True
-    error_message: Optional[str] = None
+    error_message: str | None = None
     has_syntax_errors: bool = False

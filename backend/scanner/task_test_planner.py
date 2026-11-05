@@ -14,8 +14,8 @@ Responsibilities:
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 from uuid import UUID
 
 from app.schemas.planner_context import (
@@ -23,6 +23,7 @@ from app.schemas.planner_context import (
     ProposedTest,
     TestExecutionPlan,
 )
+
 from scanner.framework_detector import FrameworkDetector
 from scanner.symbols import Symbol, SymbolEdge
 from scanner.test_mapper import FileTestMapper

@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, List, Mapping, Optional, Sequence
-from uuid import UUID
+from typing import Any
 
 from .detector import LanguageDetector
 from .extractor import SymbolExtractor
 from .parser import Parser
 from .source_location import SourceLocationResolver
-from .symbols import FileInfo, SourceRange, Symbol
+from .symbols import FileInfo, Symbol
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +32,18 @@ class TargetSelectionResult:
     start_line: int  # 1-indexed inclusive
     end_line: int  # 1-indexed inclusive
     content: str  # Verified source snippet
-    symbol_name: Optional[str] = None
-    symbol_kind: Optional[str] = None  # "class" | "function" | "method" | "interface" | None
-    enclosing_symbol: Optional[Symbol] = None
-    child_symbols: List[Symbol] = field(default_factory=list)
+    symbol_name: str | None = None
+    symbol_kind: str | None = None  # "class" | "function" | "method" | "interface" | None
+    enclosing_symbol: Symbol | None = None
+    child_symbols: list[Symbol] = field(default_factory=list)
     is_ambiguous: bool = False
-    candidates: List[Symbol] = field(default_factory=list)
-    ambiguity_note: Optional[str] = None
+    candidates: list[Symbol] = field(default_factory=list)
+    ambiguity_note: str | None = None
     parse_status: str = "OK"  # "OK" | "SYNTAX_WARNING" | "PARSE_ERROR" | "FALLBACK"
     has_syntax_errors: bool = False
     is_supported: bool = True
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
     total_file_lines: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -128,10 +127,10 @@ class TargetSelector:
 
     def __init__(
         self,
-        parser: Optional[Parser] = None,
-        extractor: Optional[SymbolExtractor] = None,
-        resolver: Optional[SourceLocationResolver] = None,
-        detector: Optional[LanguageDetector] = None,
+        parser: Parser | None = None,
+        extractor: SymbolExtractor | None = None,
+        resolver: SourceLocationResolver | None = None,
+        detector: LanguageDetector | None = None,
     ):
         self.parser = parser or Parser()
         self.extractor = extractor or SymbolExtractor(parser=self.parser)
@@ -145,12 +144,12 @@ class TargetSelector:
         file_path: str,
         content: str,
         target_type: str = "file",
-        symbol_name: Optional[str] = None,
-        start_line: Optional[int] = None,
-        end_line: Optional[int] = None,
-        cursor_line: Optional[int] = None,
-        language: Optional[str] = None,
-        revision: Optional[str] = None,
+        symbol_name: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        cursor_line: int | None = None,
+        language: str | None = None,
+        revision: str | None = None,
     ) -> TargetSelectionResult:
         """Resolve an incoming target selection into a verified TargetSelectionResult.
 
@@ -199,7 +198,7 @@ class TargetSelector:
         # Perform AST parse
         parse_status = "OK"
         has_syntax_errors = False
-        symbols: List[Symbol] = []
+        symbols: list[Symbol] = []
 
         if is_supported:
             file_info = FileInfo(norm_path, len(normalized_content), detected_lang, False)
@@ -305,9 +304,9 @@ class TargetSelector:
         self,
         norm_path: str,
         content: str,
-        symbols: List[Symbol],
+        symbols: list[Symbol],
         symbol_name: str,
-        cursor_line: Optional[int],
+        cursor_line: int | None,
         has_syntax_errors: bool,
         parse_status: str,
         total_lines: int,
@@ -375,7 +374,7 @@ class TargetSelector:
         # 3. Handle Single Match vs Ambiguous Matches
         is_ambiguous = len(candidates) > 1
         selected_sym: Symbol
-        ambiguity_note: Optional[str] = None
+        ambiguity_note: str | None = None
 
         if is_ambiguous:
             # Ambiguity Resolution Strategy:
@@ -413,7 +412,7 @@ class TargetSelector:
             selected_sym = candidates[0]
 
         # 4. Resolve enclosing parent and child symbols
-        enclosing: Optional[Symbol] = None
+        enclosing: Symbol | None = None
         if selected_sym.parent_id is not None:
             parents = [s for s in symbols if s.id == selected_sym.parent_id]
             enclosing = parents[0] if parents else None
@@ -446,7 +445,7 @@ class TargetSelector:
         self,
         norm_path: str,
         content: str,
-        symbols: List[Symbol],
+        symbols: list[Symbol],
         start_line: int,
         end_line: int,
         is_supported: bool,
@@ -482,8 +481,8 @@ class TargetSelector:
         snippet = self.resolver.extract_snippet(content, clamped_start, clamped_end)
 
         # Identify enclosing symbol or exact symbol matching the range
-        enclosing: Optional[Symbol] = None
-        exact_match: Optional[Symbol] = None
+        enclosing: Symbol | None = None
+        exact_match: Symbol | None = None
 
         if symbols:
             # Check for exact boundary match (e.g. user selected exact function boundaries)

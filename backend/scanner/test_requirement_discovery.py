@@ -13,16 +13,14 @@ import ast
 import logging
 import os
 import re
-from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from app.schemas.analysis import (
     TestRequirement,
     TestRequirementCategory,
-    TestRequirementPriority,
-    TestRequirementStatus,
 )
+
 from scanner.symbols import Symbol, SymbolEdge
 
 logger = logging.getLogger(__name__)
@@ -296,7 +294,7 @@ class TestRequirementDiscovery:
                     priority="MEDIUM",
                     source_files=[fpath],
                     source_symbols=[sym_name],
-                    expected_behavior=f"Reject invalid argument types and None/null values gracefully with validation error",
+                    expected_behavior="Reject invalid argument types and None/null values gracefully with validation error",
                     evidence=[f"Input contract for {sym_name} at {fpath}:{node.lineno}"],
                     status="MISSING",
                     target_line=node.lineno,
@@ -387,7 +385,7 @@ class TestRequirementDiscovery:
                     priority="CRITICAL",
                     source_files=[fpath],
                     source_symbols=[sym_name],
-                    expected_behavior=f"Verify unauthorized or tampered credentials are rejected and secrets are never leaked",
+                    expected_behavior="Verify unauthorized or tampered credentials are rejected and secrets are never leaked",
                     evidence=[f"Security/auth token patterns found in {sym_name} at {fpath}:{node.lineno}"],
                     status="MISSING",
                     target_line=node.lineno,

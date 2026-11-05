@@ -9,16 +9,15 @@ from __future__ import annotations
 import logging
 import os
 import re
-import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Sequence, Set
 
 from .symbols import FileInfo
 
 logger = logging.getLogger(__name__)
 
 # Known Python standard library modules (for fast categorization)
-PYTHON_STDLIB: Set[str] = {
+PYTHON_STDLIB: set[str] = {
     "abc", "argparse", "array", "ast", "asyncio", "base64", "collections",
     "concurrent", "contextlib", "copy", "csv", "dataclasses", "datetime",
     "decimal", "difflib", "dis", "doctest", "email", "enum", "errno",
@@ -34,7 +33,7 @@ PYTHON_STDLIB: Set[str] = {
 }
 
 # Known Node.js standard library modules
-NODE_STDLIB: Set[str] = {
+NODE_STDLIB: set[str] = {
     "assert", "async_hooks", "buffer", "child_process", "cluster", "console",
     "constants", "crypto", "dgram", "dns", "domain", "events", "fs", "http",
     "http2", "https", "inspector", "module", "net", "os", "path", "perf_hooks",
@@ -50,14 +49,14 @@ class ImportedSymbol:
 
     name: str  # Identifier imported into namespace (e.g. "User", "FastAPI", "*")
     module: str  # Declared origin module (e.g. ".models", "fastapi", "./types")
-    alias: Optional[str] = None  # Local alias if imported as e.g. "as UserModel"
+    alias: str | None = None  # Local alias if imported as e.g. "as UserModel"
     is_relative: bool = False  # True if relative import (e.g. starts with . or ./)
     level: int = 0  # Relative level in Python (1 for '.', 2 for '..', etc.)
     line: int = 1  # 1-indexed line number in source
     raw_statement: str = ""  # Full text of import statement
     is_standard_library: bool = False
     is_third_party: bool = False
-    resolved_path: Optional[str] = None  # Local repository path if successfully resolved
+    resolved_path: str | None = None  # Local repository path if successfully resolved
 
     @property
     def local_name(self) -> str:
@@ -86,10 +85,10 @@ class FileImportMap:
 
     file_path: str
     language: str
-    imports: List[ImportedSymbol] = field(default_factory=list)
-    by_name: Dict[str, ImportedSymbol] = field(default_factory=dict)
-    local_dependencies: List[str] = field(default_factory=list)
-    external_dependencies: List[str] = field(default_factory=list)
+    imports: list[ImportedSymbol] = field(default_factory=list)
+    by_name: dict[str, ImportedSymbol] = field(default_factory=dict)
+    local_dependencies: list[str] = field(default_factory=list)
+    external_dependencies: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -112,10 +111,10 @@ class ImportTracker:
         self,
         file_info: FileInfo,
         content: str,
-        known_files: Optional[Sequence[str]] = None,
+        known_files: Sequence[str] | None = None,
     ) -> FileImportMap:
         """Parse all import statements in a file and resolve local file dependencies."""
-        imports: List[ImportedSymbol] = []
+        imports: list[ImportedSymbol] = []
         lang = file_info.language
 
         if lang == "Python":
@@ -126,16 +125,16 @@ class ImportTracker:
             imports = self._parse_generic_imports(content)
 
         # Normalize known files for fast matching
-        norm_known: Set[str] = set()
+        norm_known: set[str] = set()
         if known_files:
             norm_known = {f.replace("\\", "/") for f in known_files}
 
         current_dir = os.path.dirname(file_info.path.replace("\\", "/"))
 
         # Resolve local paths & categorize
-        by_name: Dict[str, ImportedSymbol] = {}
-        local_deps: Set[str] = set()
-        external_deps: Set[str] = set()
+        by_name: dict[str, ImportedSymbol] = {}
+        local_deps: set[str] = set()
+        external_deps: set[str] = set()
 
         for imp in imports:
             by_name[imp.local_name] = imp
@@ -184,11 +183,11 @@ class ImportTracker:
             external_dependencies=sorted(list(external_deps)),
         )
 
-    def _parse_python_imports(self, content: str) -> List[ImportedSymbol]:
+    def _parse_python_imports(self, content: str) -> list[ImportedSymbol]:
         """Extract Python imports using standard library AST with line numbers."""
         import ast
 
-        imports: List[ImportedSymbol] = []
+        imports: list[ImportedSymbol] = []
         lines = content.splitlines()
 
         try:
@@ -235,9 +234,9 @@ class ImportTracker:
 
         return imports
 
-    def _regex_parse_python(self, content: str) -> List[ImportedSymbol]:
+    def _regex_parse_python(self, content: str) -> list[ImportedSymbol]:
         """Regex fallback for Python files with syntax errors."""
-        imports: List[ImportedSymbol] = []
+        imports: list[ImportedSymbol] = []
         lines = content.splitlines()
 
         for idx, line in enumerate(lines, start=1):
@@ -294,9 +293,9 @@ class ImportTracker:
 
         return imports
 
-    def _parse_js_ts_imports(self, content: str) -> List[ImportedSymbol]:
+    def _parse_js_ts_imports(self, content: str) -> list[ImportedSymbol]:
         """Parse JavaScript and TypeScript ES6 import and CommonJS require statements."""
-        imports: List[ImportedSymbol] = []
+        imports: list[ImportedSymbol] = []
         lines = content.splitlines()
 
         for idx, line in enumerate(lines, start=1):
@@ -403,9 +402,9 @@ class ImportTracker:
 
         return imports
 
-    def _parse_generic_imports(self, content: str) -> List[ImportedSymbol]:
+    def _parse_generic_imports(self, content: str) -> list[ImportedSymbol]:
         """Generic fallback extractor for Java / Go / Rust imports."""
-        imports: List[ImportedSymbol] = []
+        imports: list[ImportedSymbol] = []
         for idx, line in enumerate(content.splitlines(), start=1):
             s = line.strip()
             # Java: import java.util.List;
@@ -426,13 +425,13 @@ class ImportTracker:
         imp: ImportedSymbol,
         current_file: str,
         language: str,
-        known_files: Set[str],
-    ) -> Optional[str]:
+        known_files: set[str],
+    ) -> str | None:
         """Resolve an import statement to a relative file path in the known workspace."""
         current_norm = current_file.replace("\\", "/")
         file_dir = os.path.dirname(current_norm)
 
-        candidates: List[str] = []
+        candidates: list[str] = []
 
         if language == "Python":
             # Relative import: .models -> same dir/models.py
@@ -487,10 +486,10 @@ class ImportTracker:
         self,
         files: Sequence[FileInfo],
         file_contents: Mapping[str, str],
-    ) -> Dict[str, FileImportMap]:
+    ) -> dict[str, FileImportMap]:
         """Index imports and build an import map across all repository files."""
         known_paths = [f.path.replace("\\", "/") for f in files]
-        maps: Dict[str, FileImportMap] = {}
+        maps: dict[str, FileImportMap] = {}
 
         for f in files:
             content = file_contents.get(f.path, "")
