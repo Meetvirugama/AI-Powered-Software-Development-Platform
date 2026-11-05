@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import Any, Sequence
+from typing import Any
 from uuid import UUID
 
 from ai.intelligence.models import (
@@ -50,7 +51,7 @@ class RepositoryIntelligenceBuilder:
     ) -> RepositoryIntelligenceSnapshot:
         """Construct the complete intelligence snapshot from database records and parsed AST data."""
         contents = file_contents or {}
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
 
         # 1. Process files
         file_id_to_record: dict[str, Any] = {}
@@ -73,10 +74,7 @@ class RepositoryIntelligenceBuilder:
             is_test = bool(
                 "test" in f_path.lower()
                 or f_path.startswith("tests/")
-                or f_path.endswith("_test.py")
-                or f_path.endswith(".test.ts")
-                or f_path.endswith(".test.tsx")
-                or f_path.endswith(".spec.ts")
+                or f_path.endswith(("_test.py", ".test.ts", ".test.tsx", ".spec.ts"))
             )
 
             file_intels.append(
@@ -226,7 +224,6 @@ class RepositoryIntelligenceBuilder:
         content: str,
     ) -> EntryPointMetadata | None:
         """Detect API routes, worker entrypoints, and main runners."""
-        sig = signature.lower()
         node_name = node.name.lower()
 
         # FastAPI / Flask decorator
@@ -243,7 +240,7 @@ class RepositoryIntelligenceBuilder:
                 framework="fastapi",
             )
 
-        if node_name in ("main", "run", "start") or path.endswith("main.py") or path.endswith("index.ts"):
+        if node_name in ("main", "run", "start") or path.endswith(("main.py", "index.ts")):
             return EntryPointMetadata(
                 id=f"entry_{node.id}",
                 path=path,
@@ -308,7 +305,7 @@ class RepositoryIntelligenceBuilder:
             p = f.path.lower()
             if "fastapi" in p or "app/main.py" in p:
                 frameworks.add("FastAPI")
-            if "react" in p or p.endswith(".tsx") or p.endswith(".jsx"):
+            if "react" in p or p.endswith((".tsx", ".jsx")):
                 frameworks.add("React")
             if "vite.config" in p:
                 frameworks.add("Vite")

@@ -23,7 +23,6 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any
 from uuid import UUID
 
 from ai.intelligence.models import (
@@ -64,7 +63,6 @@ class RepositoryIntelligenceSnapshotManager:
         repo_dir = self.get_repo_dir(snapshot.repository_id)
         commit_sha = snapshot.commit_sha or "latest"
         version_dir = repo_dir / "versions" / f"commit_{commit_sha}"
-        file_summaries_dir = version_dir / "file_summaries"
 
         manifest = IntelligenceManifest(
             schema_version=snapshot.schema_version,
@@ -166,7 +164,7 @@ class RepositoryIntelligenceSnapshotManager:
             with open(intel_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             return RepositoryIntelligenceSnapshot.model_validate(data)
-        except Exception as exc:
+        except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
             logger.warning("Failed to load intelligence snapshot for repo %s: %s", repository_id, exc)
             return None
 
@@ -183,7 +181,7 @@ class RepositoryIntelligenceSnapshotManager:
                 with open(version_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 return RepositoryIntelligenceSnapshot.model_validate(data)
-            except Exception as exc:
+            except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
                 logger.warning("Failed to load pinned snapshot %s: %s", commit_sha, exc)
 
         return self.load_latest_snapshot(repository_id)

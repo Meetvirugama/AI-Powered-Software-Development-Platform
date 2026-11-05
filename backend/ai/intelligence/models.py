@@ -12,9 +12,8 @@ Provides Pydantic models for persistent repository intelligence:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -101,7 +100,7 @@ class IntelligenceManifest(BaseModel):
     schema_version: str = "1.0"
     repository_id: str
     commit_sha: str
-    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     file_count: int = 0
     symbol_count: int = 0
     edge_count: int = 0
@@ -117,7 +116,7 @@ class RepositoryIntelligenceSnapshot(BaseModel):
     schema_version: str = "1.0"
     repository_id: str
     commit_sha: str
-    generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    generated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     overview: OverviewMetadata = Field(default_factory=OverviewMetadata)
     modules: list[ModuleMetadata] = Field(default_factory=list)
     files: list[FileIntelligenceMetadata] = Field(default_factory=list)

@@ -15,8 +15,7 @@ Discovers and ranks related repository files for a selected file/symbol:
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
-from uuid import UUID
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -155,8 +154,14 @@ class RelatedFileDiscoveryService:
         # 3. Associate Tests
         base_name = target_path.split("/")[-1].split(".")[0]
         for f in snap.files:
-            if f.is_test and f.path != target_path:
-                if base_name in f.path or f.path.endswith(f"test_{base_name}.py") or f.path.endswith(f"{base_name}.test.ts"):
+            if (
+                f.is_test
+                and f.path != target_path
+                and (
+                    base_name in f.path
+                    or f.path.endswith((f"test_{base_name}.py", f"{base_name}.test.ts"))
+                )
+            ):
                     self._add_or_update(
                         discovered,
                         f.path,

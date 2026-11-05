@@ -12,8 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
-from uuid import UUID
+from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
