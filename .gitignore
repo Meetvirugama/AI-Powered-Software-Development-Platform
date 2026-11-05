@@ -19,6 +19,7 @@ venv/
 .coveragerc
 htmlcov/
 .pytest_cache/
+.ruff_cache/
 
 # ── Alembic ───────────────────────────────────────────────────────────────────
 alembic.ini.local
