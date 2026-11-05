@@ -484,13 +484,31 @@ def resolve_target_and_build_context(
     )
 
 
+def calculate_grounding_confidence(
+    *,
+    target_found: bool,
+    source_references_valid: bool,
+    related_symbols_verified: bool,
+    critical_context_missing: bool,
+    ungrounded_ratio: float = 0.0,
+) -> str:
+    """Calculates multi-signal deterministic grounding confidence (task.md §5 Problem 3 & §6.B)."""
+    if not target_found or not source_references_valid or ungrounded_ratio > 0.5:
+        return "low"
+    if critical_context_missing or ungrounded_ratio > 0.2:
+        return "low"
+    if not related_symbols_verified:
+        return "medium"
+    return "high"
+
+
 def ground_explanation_sources(
     explanation: CodeExplanation,
     *,
     repository_id: UUID,
     resolved: ResolvedExplanationTarget,
 ) -> CodeExplanation:
-    """Step 7b: Remove hallucinated or unsafe citations and ensure target source reference is grounded."""
+    """Step 7b: Remove hallucinated or unsafe citations and calibrate confidence using multi-signal grounding."""
     merged_missing = list(dict.fromkeys([*explanation.missing_context, *resolved.missing_context]))
 
     raw_sources = list(explanation.sources)
@@ -534,13 +552,23 @@ def ground_explanation_sources(
             )
         )
 
-    confidence = explanation.confidence
-    if raw_sources:
-        ungrounded_ratio = ungrounded_count / len(raw_sources)
-        if len(grounded_sources) == 0 or ungrounded_ratio > 0.5:
-            confidence = "low"
-        elif ungrounded_count > 0 and confidence == "high":
-            confidence = "medium"
+    # Multi-signal confidence calibration (task.md §6.B)
+    ungrounded_ratio = ungrounded_count / len(raw_sources) if raw_sources else 0.0
+    target_found = resolved.file_record is not None
+    source_references_valid = len(grounded_sources) > 0 or not raw_sources
+    critical_context_missing = any(
+        "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
+        for m in merged_missing
+    )
+    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files)
+
+    confidence = calculate_grounding_confidence(
+        target_found=target_found,
+        source_references_valid=source_references_valid,
+        related_symbols_verified=related_symbols_verified,
+        critical_context_missing=critical_context_missing,
+        ungrounded_ratio=ungrounded_ratio,
+    )
 
     # Guarantee that when a real target file was resolved, its grounded citation is attached
     if not grounded_sources and resolved.file_record is not None:

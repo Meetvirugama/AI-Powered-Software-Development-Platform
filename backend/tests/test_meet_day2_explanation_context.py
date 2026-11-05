@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import pytest
 from ai.context import (
+    CallerResolution,
     ContextBuilder,
     ContextLimits,
     ContextStatus,
@@ -127,6 +128,43 @@ class TestDay2ExplanationContext:
         assert ctx.status == ContextStatus.PARTIAL
         assert len(ctx.missing_context) == 1
         assert "No callers found" in ctx.missing_context[0].reason
+
+    def test_caller_resolution_none_found_avoids_false_warning(self):
+        enricher = ExplanationContextEnricher()
+        target = TargetSnippet(
+            file_path="Backend/ml/predict.py",
+            content="def predict_student(student_data: dict): pass",
+            start_line=13,
+            end_line=30,
+            symbol_name="predict_student",
+            language="python",
+        )
+        ctx = enricher.enrich_context(
+            target=target,
+            callers=[],
+            caller_resolution=CallerResolution.NONE_FOUND,
+        )
+        assert ctx.status == ContextStatus.COMPLETE
+        assert len(ctx.missing_context) == 0
+
+    def test_caller_resolution_unavailable_records_warning(self):
+        enricher = ExplanationContextEnricher()
+        target = TargetSnippet(
+            file_path="Backend/ml/predict.py",
+            content="def predict_student(student_data: dict): pass",
+            start_line=13,
+            end_line=30,
+            symbol_name="predict_student",
+            language="python",
+        )
+        ctx = enricher.enrich_context(
+            target=target,
+            callers=[],
+            caller_resolution=CallerResolution.UNAVAILABLE,
+        )
+        assert ctx.status == ContextStatus.PARTIAL
+        assert len(ctx.missing_context) == 1
+        assert "unavailable" in ctx.missing_context[0].reason.lower()
 
     def test_token_budget_bounds_explanation_context(self):
         enricher = ExplanationContextEnricher()

@@ -25,8 +25,10 @@ from ai.context.bug_context import (
     extract_bug_context,
 )
 from ai.context.explanation import (
+    CallerResolution,
     ExplanationContextEnricher,
     enrich_explanation_context,
+    resolve_caller_status,
 )
 from ai.context.review_context import (
     ModifiedFile,
@@ -89,5 +91,6 @@ __all__ = [
     "dedup_memory",
     "enrich_explanation_context",
     "extract_bug_context",
+    "resolve_caller_status",
     "shared_context_service",
 ]

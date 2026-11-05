@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from enum import Enum
 from typing import Any
 
 from ai.context.builder import (
@@ -32,6 +33,29 @@ from ai.context.builder import (
 logger = logging.getLogger(__name__)
 
 
+class CallerResolution(str, Enum):
+    """Explicit status for caller resolution to avoid false missing-context warnings (task.md §6.A)."""
+    FOUND = "found"
+    NONE_FOUND = "none_found"
+    UNAVAILABLE = "unavailable"
+    NOT_REQUESTED = "not_requested"
+
+
+def resolve_caller_status(
+    callers: Sequence[Any] | None,
+    search_completed: bool = True,
+    search_requested: bool = True,
+) -> CallerResolution:
+    """Distinguishes legitimate leaf/public functions from incomplete symbol graph searches."""
+    if not search_requested:
+        return CallerResolution.NOT_REQUESTED
+    if not search_completed:
+        return CallerResolution.UNAVAILABLE
+    if callers:
+        return CallerResolution.FOUND
+    return CallerResolution.NONE_FOUND
+
+
 class ExplanationContextEnricher:
     """Enriches target code snippets with AST symbol relationships, callers, imports, and repository overview."""
 
@@ -42,6 +66,7 @@ class ExplanationContextEnricher:
     def extract_imports(source_code: str, language: str = "python") -> list[str]:
         """
         Extract import statements from file source code.
+        Uses Python AST parser where available (task.md §5 Problem 4), falling back to regex.
         Supports Python and TypeScript/JavaScript conventions.
         """
         if not source_code:
@@ -51,11 +76,27 @@ class ExplanationContextEnricher:
         lang = (language or "").lower()
 
         if lang in ("python", "py"):
-            py_pattern = re.compile(r"^(?:from\s+[\w\.]+\s+import\s+[^#\n]+|import\s+[^#\n]+)", re.MULTILINE)
-            for match in py_pattern.finditer(source_code):
-                stmt = match.group(0).strip()
-                if stmt and stmt not in imports:
-                    imports.append(stmt)
+            try:
+                import ast
+                tree = ast.parse(source_code)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            stmt = f"import {alias.name}" + (f" as {alias.asname}" if alias.asname else "")
+                            if stmt not in imports:
+                                imports.append(stmt)
+                    elif isinstance(node, ast.ImportFrom):
+                        mod = node.module or ""
+                        names = ", ".join(a.name + (f" as {a.asname}" if a.asname else "") for a in node.names)
+                        stmt = f"from {mod} import {names}"
+                        if stmt not in imports:
+                            imports.append(stmt)
+            except SyntaxError:
+                py_pattern = re.compile(r"^(?:from\s+[\w\.]+\s+import\s+[^#\n]+|import\s+[^#\n]+)", re.MULTILINE)
+                for match in py_pattern.finditer(source_code):
+                    stmt = match.group(0).strip()
+                    if stmt and stmt not in imports:
+                        imports.append(stmt)
         elif lang in ("typescript", "javascript", "ts", "tsx", "js", "jsx"):
             js_pattern = re.compile(
                 r"^(?:import\s+(?:(?:[\w*\s{},]*)\s+from\s+)?['\"][^'\"]+['\"]|const\s+[\w{}\s,]+\s*=\s*require\([^)]+\));?",
@@ -89,6 +130,7 @@ class ExplanationContextEnricher:
         token_budget: int = 8000,
         limits: ContextLimits | None = None,
         revision: str | None = None,
+        caller_resolution: CallerResolution | None = None,
     ) -> IntelligenceContext:
         """
         Enrich a target snippet into a comprehensive IntelligenceContext for Code Explanation.
@@ -140,13 +182,23 @@ class ExplanationContextEnricher:
             revision=revision,
         )
 
-        # Handle incomplete caller or type retrieval explicitly
-        if not callers and target.symbol_name:
+        # Handle caller retrieval status explicitly (task.md §5 Problem 2 & §6.A)
+        # Note: NONE_FOUND is a valid result (leaf function, public API, script), NOT an error.
+        is_missing_callers = False
+        reason = ""
+        if caller_resolution == CallerResolution.UNAVAILABLE:
+            is_missing_callers = True
+            reason = f"Caller search unavailable or symbol graph incomplete for '{target.symbol_name}'"
+        elif caller_resolution is None and not callers and target.symbol_name:
+            is_missing_callers = True
+            reason = f"No callers found in symbol graph for '{target.symbol_name}' (leaf function or unindexed caller sites)"
+
+        if is_missing_callers and target.symbol_name:
             ctx.missing_context.append(
                 MissingContextInfo(
                     file_path=target.file_path,
                     symbol_name=target.symbol_name,
-                    reason=f"No callers found in symbol graph for '{target.symbol_name}' (leaf function or unindexed caller sites)",
+                    reason=reason,
                     suggested_action="Verify if function is an entry point, API route, or top-level handler",
                 )
             )
@@ -168,6 +220,7 @@ def enrich_explanation_context(
     token_budget: int = 8000,
     limits: ContextLimits | None = None,
     revision: str | None = None,
+    caller_resolution: CallerResolution | None = None,
 ) -> IntelligenceContext:
     """Convenience functional interface for enriching code explanation context."""
     enricher = ExplanationContextEnricher()
@@ -183,4 +236,5 @@ def enrich_explanation_context(
         token_budget=token_budget,
         limits=limits,
         revision=revision,
+        caller_resolution=caller_resolution,
     )

@@ -312,7 +312,7 @@ class ExplainCodeRequest(BaseModel):
         default_factory=lambda: AnalysisOptions(max_context_tokens=DEFAULT_EXPLAIN_CONTEXT_TOKENS)
     )
     context: ExplainContextOptions = Field(default_factory=ExplainContextOptions)
-    explanation_level: str = "detailed"
+    explanation_level: Literal["concise", "detailed", "deep_technical"] = "detailed"
 
     @model_validator(mode="before")
     @classmethod
@@ -521,6 +521,19 @@ class CodeExplanation(BaseModel):
         cc = d.get("corrected_code")
         if isinstance(cc, str):
             d["corrected_code"] = cc.strip()
+
+        # 12. execution_flow & related_files
+        ef = d.get("execution_flow")
+        if isinstance(ef, str):
+            d["execution_flow"] = [part.strip() for part in ef.split("\n") if part.strip()]
+        elif not isinstance(ef, list):
+            d["execution_flow"] = []
+
+        rf = d.get("related_files")
+        if isinstance(rf, str):
+            d["related_files"] = [part.strip() for part in rf.split("\n") if part.strip()]
+        elif not isinstance(rf, list):
+            d["related_files"] = []
 
         return d
 

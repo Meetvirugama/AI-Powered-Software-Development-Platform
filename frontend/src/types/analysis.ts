@@ -41,11 +41,13 @@ export interface ExplainContextOptions {
   selected_files?: string[];
 }
 
+export type ExplanationLevel = 'concise' | 'detailed' | 'deep_technical';
+
 export interface ExplainCodeRequest {
   target: AnalysisTarget;
   options?: AnalysisOptions;
   context?: ExplainContextOptions;
-  explanation_level?: string;
+  explanation_level?: ExplanationLevel;
 }
 
 export interface DiscoveredRelatedFile {

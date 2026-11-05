@@ -18,8 +18,12 @@ You must respond with ONLY a valid JSON object matching the following CodeExplan
   "purpose": "<Clear, concise high-level summary of what the selected code is intended to do>",
   "detailed_explanation": "<Deep, comprehensive technical walkthrough explaining how the code works under the hood, key mechanisms, algorithms, data transformations, and architectural considerations>",
   "logic_flow": [
-    "<Major execution step 1: Specific operation performed>",
-    "<Major execution step 2: Specific operation performed>"
+    "<Major execution step 1: Specific operation performed (include 1-indexed line references like L1-L5 or L13 if visible in source)>",
+    "<Major execution step 2: Specific operation performed (include 1-indexed line references like L6-L10 or L14-L16 if visible in source)>"
+  ],
+  "execution_flow": [
+    "<Cross-component execution call 1: e.g. API Route -> Service / Model>",
+    "<Cross-component execution call 2: e.g. Preprocessor -> Model Inference -> Output>"
   ],
   "code_output_explanation": "<Thorough, clear explanation of the code output: what values or structures are returned/emitted, what each output field represents, how calculations (e.g. transformations, formulas, probabilities) are derived, return values across different branches/conditions, and concrete example output data>",
   "code_issues_and_solutions": [
