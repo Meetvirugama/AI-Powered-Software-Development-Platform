@@ -31,3 +31,16 @@ export async function getCurrentUser(): Promise<User> {
 export async function logout(): Promise<void> {
   await apiClient.post('/auth/logout');
 }
+
+/**
+ * Developer quick login for local development mode.
+ * Calls POST /api/v1/auth/dev-login.
+ */
+export async function devLogin(login?: string): Promise<User> {
+  const response = await apiClient.post<{ access_token: string; expires_in: number; user: User }>(
+    '/auth/dev-login',
+    null,
+    { params: login ? { login } : undefined }
+  );
+  return response.data.user;
+}

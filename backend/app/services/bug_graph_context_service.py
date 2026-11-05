@@ -8,6 +8,7 @@ and associating relevant test files with suspected defect targets.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -105,8 +106,14 @@ class BugGraphSlice:
 class BugGraphContextService:
     """Traverses repository dependency graph to build bounded program slices for bug investigation."""
 
-    def __init__(self, db: AsyncSession | None = None) -> None:
+    def __init__(self, db: Any = None) -> None:
         self.db = db
+
+    async def _execute(self, query: Any) -> Any:
+        res = self.db.execute(query)
+        if inspect.isawaitable(res):
+            return await res
+        return res
 
     async def build_program_slice(
         self,
@@ -129,7 +136,7 @@ class BugGraphContextService:
         # 1. Resolve target symbol if not provided
         target_symbol = None
         if target_symbol_id:
-            res = await self.db.execute(
+            res = await self._execute(
                 select(CodeSymbol).where(
                     CodeSymbol.id == target_symbol_id,
                     CodeSymbol.repository_id == repository_id,
@@ -138,7 +145,7 @@ class BugGraphContextService:
             target_symbol = res.scalar_one_or_none()
         elif target_line:
             # Query by file path and line
-            file_res = await self.db.execute(
+            file_res = await self._execute(
                 select(RepositoryFile).where(
                     RepositoryFile.repository_id == repository_id,
                     RepositoryFile.path == target_file_path,
@@ -146,7 +153,7 @@ class BugGraphContextService:
             )
             file_record = file_res.scalar_one_or_none()
             if file_record:
-                sym_res = await self.db.execute(
+                sym_res = await self._execute(
                     select(CodeSymbol).where(
                         CodeSymbol.file_id == file_record.id,
                         CodeSymbol.start_line <= target_line,
@@ -251,7 +258,7 @@ class BugGraphContextService:
                     SymbolEdge.source_symbol_id.in_(current_layer),
                 )
 
-            edge_res = await self.db.execute(edge_query)
+            edge_res = await self._execute(edge_query)
             edges = edge_res.scalars().all()
 
             for edge in edges:
@@ -261,7 +268,7 @@ class BugGraphContextService:
                     next_layer.append(neighbor_id)
 
                     # Fetch symbol and file info
-                    sym_res = await self.db.execute(
+                    sym_res = await self._execute(
                         select(CodeSymbol, RepositoryFile.path)
                         .join(RepositoryFile, CodeSymbol.file_id == RepositoryFile.id)
                         .where(CodeSymbol.id == neighbor_id)
@@ -292,7 +299,7 @@ class BugGraphContextService:
 
     async def _get_symbol_chunk_snippet(self, symbol_id: UUID, repository_id: UUID) -> str:
         """Retrieve real source code chunk for symbol."""
-        res = await self.db.execute(
+        res = await self._execute(
             select(CodeChunk.content)
             .where(
                 CodeChunk.symbol_id == symbol_id,
@@ -313,7 +320,7 @@ class BugGraphContextService:
         tests: list[AssociatedTestContext] = []
 
         # 1. Tests calling the target symbol directly
-        caller_test_res = await self.db.execute(
+        caller_test_res = await self._execute(
             select(CodeSymbol, RepositoryFile.path)
             .join(SymbolEdge, SymbolEdge.source_symbol_id == CodeSymbol.id)
             .join(RepositoryFile, CodeSymbol.file_id == RepositoryFile.id)
@@ -364,7 +371,7 @@ class BugGraphContextService:
 
         tests: list[AssociatedTestContext] = []
         for cand in candidates:
-            res = await self.db.execute(
+            res = await self._execute(
                 select(RepositoryFile).where(
                     RepositoryFile.repository_id == repository_id,
                     RepositoryFile.path.ilike(f"%{cand}"),
@@ -373,7 +380,7 @@ class BugGraphContextService:
             test_file = res.scalars().first()
             if test_file:
                 # Get first test function or top symbol
-                sym_res = await self.db.execute(
+                sym_res = await self._execute(
                     select(CodeSymbol).where(
                         CodeSymbol.file_id == test_file.id,
                         CodeSymbol.repository_id == repository_id,

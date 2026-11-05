@@ -110,25 +110,32 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
         retriever = None
         gemini_keys = settings.all_gemini_keys
+        lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
+        vector_retriever = None
+        reranker = None
+
         if gemini_keys:
-            embedding_provider = GeminiEmbeddingProvider(
-                api_keys=gemini_keys,
-                dimensions=settings.embedding_dimensions,
-            )
-            embedding_service = EmbeddingService(provider=embedding_provider)
-            app.state.embedding_service = embedding_service
-            vector_retriever = VectorRetriever(
-                db=AsyncSessionLocal,
-                embedding_service=embedding_service,
-            )
-            lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
-            from ai.retrieval.reranker import CrossEncoderReranker
-            reranker = CrossEncoderReranker()
-            retriever = HybridRetriever(
-                vector_retriever=vector_retriever,
-                lexical_retriever=lexical_retriever,
-                reranker=reranker,
-            )
+            try:
+                embedding_provider = GeminiEmbeddingProvider(
+                    api_keys=gemini_keys,
+                    dimensions=settings.embedding_dimensions,
+                )
+                embedding_service = EmbeddingService(provider=embedding_provider)
+                app.state.embedding_service = embedding_service
+                vector_retriever = VectorRetriever(
+                    db=AsyncSessionLocal,
+                    embedding_service=embedding_service,
+                )
+                from ai.retrieval.reranker import CrossEncoderReranker
+                reranker = CrossEncoderReranker()
+            except Exception as emb_exc:
+                logger.warning("vector_retriever_init_failed_falling_back_to_lexical", extra={"error": str(emb_exc)})
+
+        retriever = HybridRetriever(
+            vector_retriever=vector_retriever,
+            lexical_retriever=lexical_retriever,
+            reranker=reranker,
+        )
 
         grounding_validator = GroundingValidator(db_session=AsyncSessionLocal)
 

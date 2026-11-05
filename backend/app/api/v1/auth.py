@@ -217,6 +217,53 @@ async def github_callback(
     return redirect
 
 
+@router.post("/dev-login", response_model=TokenResponse, summary="Quick local developer authentication")
+def dev_login(
+    response: Response,
+    request: Request,
+    login: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    """Authenticate immediately for local development without external GitHub OAuth.
+
+    Guarded: Only permitted when settings.is_production is False.
+    """
+    settings = get_settings()
+    if settings.is_production:
+        raise APIError(403, ErrorCode.FORBIDDEN, "Dev login is not permitted in production.")
+
+    user_repo = UserRepository(db)
+    target_login = (login or "Meetvirugama").strip()
+    user = user_repo.get_by_login(target_login)
+    if not user:
+        from app.models.user import User
+        all_users = db.query(User).all()
+        if all_users:
+            user = all_users[0]
+        else:
+            user = user_repo.create_user(
+                github_id="dev-user-001",
+                login=target_login,
+                email=f"{target_login.lower()}@example.com",
+            )
+
+    token, expires_in = create_access_token(user.id)
+    response.set_cookie(
+        settings.auth_cookie_name,
+        token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.effective_cookie_samesite,
+        max_age=expires_in,
+        path="/",
+    )
+    return TokenResponse(
+        access_token=token,
+        expires_in=expires_in,
+        user=_user_response(user),
+    )
+
+
 @router.get("/me", response_model=AuthenticatedUser, summary="Get the current authenticated user")
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> AuthenticatedUser:
     user = UserRepository(db).get_by_id(_request_user_id(request))

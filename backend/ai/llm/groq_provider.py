@@ -184,6 +184,29 @@ class GroqProvider(LLMProvider):
                                 err_body = err_data.get("error", {}).get("message", err_body)
                         except (json.JSONDecodeError, ValueError, TypeError):
                             logger.debug("groq_400_raw_body_fallback")
+
+                        # If Groq constrained JSON decoding/validation fails, retry without response_format constraint
+                        if ("JSON" in str(err_body) or "json" in str(err_body).lower()) and "response_format" in payload:
+                            logger.info("groq_retrying_without_response_format_json_object")
+                            payload_copy = dict(payload)
+                            payload_copy.pop("response_format", None)
+                            retry_resp = await client.post(
+                                _GROQ_CHAT_URL,
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload_copy,
+                            )
+                            if retry_resp.status_code == 200:
+                                latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+                                return self._parse_response(
+                                    retry_resp.json(),
+                                    latency_ms=latency_ms,
+                                    model=resolved_model,
+                                    schema=request.response_schema,
+                                )
+
                         raise LLMUnavailableError(
                             f"Groq 400 Bad Request: {err_body}",
                             status_code=400,
@@ -269,6 +292,10 @@ class GroqProvider(LLMProvider):
             raise LLMUnavailableError("Groq response contained no choices.", provider=self.provider_name)
 
         content = choices[0].get("message", {}).get("content", "")
+        if not content:
+            reasoning = choices[0].get("message", {}).get("reasoning", "")
+            if reasoning:
+                content = reasoning
         usage = data.get("usage", {})
 
         if schema is not None:

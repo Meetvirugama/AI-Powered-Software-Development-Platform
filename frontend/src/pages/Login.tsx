@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Cpu, ShieldCheck, Terminal, Layers, AlertCircle } from 'lucide-react';
+import { Cpu, ShieldCheck, Terminal, Layers, AlertCircle, Wrench } from 'lucide-react';
 import { API_BASE_URL } from '../services/api';
+import { devLogin } from '../services/auth';
+import { useAuthStore } from '../stores/useAuthStore';
 
 export function Login() {
   const [isRedirecting, setIsRedirecting] = useState(false);
@@ -16,6 +18,19 @@ export function Login() {
     }
     // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
     window.location.href = `${API_BASE_URL}/auth/github/login`;
+  }
+
+  async function handleDevLogin() {
+    setIsRedirecting(true);
+    try {
+      const user = await devLogin('Meetvirugama');
+      useAuthStore.getState().setUser(user);
+      const dest = redirectParam || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('auth_redirect') : null) || '/app/dashboard';
+      window.location.href = dest;
+    } catch (err) {
+      setIsRedirecting(false);
+      console.error('Dev login failed:', err);
+    }
   }
 
   return (
@@ -68,6 +83,17 @@ export function Login() {
             <GitHubIcon />
             {isRedirecting ? 'Connecting to GitHub…' : 'Continue with GitHub'}
           </button>
+
+          {import.meta.env.DEV && (
+            <button
+              onClick={handleDevLogin}
+              disabled={isRedirecting}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium rounded-lg border border-dashed border-primary/40 bg-primary/5 text-primary hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 transition-all"
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              Quick Dev Sign-In (Local Workspace)
+            </button>
+          )}
 
           <div className="pt-2 border-t border-border/60 space-y-2.5">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">

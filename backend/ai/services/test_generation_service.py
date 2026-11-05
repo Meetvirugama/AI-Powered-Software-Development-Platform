@@ -166,7 +166,8 @@ class TestGenerationService(TestGenerationServiceProtocol):
             f"Recommended Test File Path: `{proposed_test_path}`\n"
             f"{fixture_note}\n"
             f"{req_note}"
-            "Generate a complete test file with normal, edge_case, and failure_path assertions."
+            "Generate a complete test file with normal, edge_case, and failure_path assertions. "
+            "Respond strictly with a valid JSON object matching the required schema."
         )
 
         messages = [
@@ -178,7 +179,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
             model=self._model,
             messages=messages,
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=4096,
             response_schema=TestGenerationResult,
         )
 

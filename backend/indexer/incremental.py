@@ -400,8 +400,11 @@ class IncrementalIndexer:
 
             for i, chunk in enumerate(chunks):
                 chunk_id = uuid.uuid4()
-                vec = vectors[i] if i < len(vectors) else None
-                vec_literal = _vec_to_pg_literal(vec) if vec is not None else None
+                vec = vectors[i] if (vectors and i < len(vectors)) else None
+                if vec is None or len(vec) == 0:
+                    dim = getattr(self.embedding_service, "dimensions", 768)
+                    vec = [0.0] * dim
+                vec_literal = _vec_to_pg_literal(vec)
                 safe_symbol_id = chunk.symbol_id if chunk.symbol_id in persisted_symbol_ids else None
 
                 metadata = {

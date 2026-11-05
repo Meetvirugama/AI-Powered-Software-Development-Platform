@@ -90,7 +90,7 @@ async def generate_tests(
     req_result = None
     with timer.measure("requirement_discovery"):
         try:
-            from app.models.symbol import CodeSymbol
+            from app.models.code_symbol import CodeSymbol
             from app.models.symbol_edge import SymbolEdge as DbSymbolEdge
             from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
 

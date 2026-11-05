@@ -88,46 +88,57 @@ class HybridRetriever(Retriever):
         )
 
         # Step 1: Run vector and lexical retrieval concurrently
-        vector_task = self._vector_retriever.retrieve(
-            query=query,
-            repository_id=repo_uuid,
-            top_k=self._vector_top_k,
-        )
-        lexical_task = self._lexical_retriever.retrieve(
-            query=query,
-            repository_id=repo_uuid,
-            top_k=self._lexical_top_k,
-        )
-
-        vector_res, lexical_res = await asyncio.gather(
-            vector_task, lexical_task, return_exceptions=True
-        )
-
         vector_chunks: list[CodeChunk] = []
-        vector_failed = False
-        vector_err_str: str | None = None
-        if isinstance(vector_res, Exception):
-            vector_failed = True
-            vector_err_str = str(vector_res)
-            logger.error(
-                "hybrid_retrieval_vector_failed",
-                extra={"error": vector_err_str, "repo_id": str(repo_uuid)},
-            )
-        else:
-            vector_chunks = vector_res or []
-
         lexical_chunks: list[CodeChunk] = []
+        vector_failed = False
         lexical_failed = False
+        vector_err_str: str | None = None
         lexical_err_str: str | None = None
-        if isinstance(lexical_res, Exception):
-            lexical_failed = True
-            lexical_err_str = str(lexical_res)
-            logger.error(
-                "hybrid_retrieval_lexical_failed",
-                extra={"error": lexical_err_str, "repo_id": str(repo_uuid)},
-            )
+
+        tasks = []
+        if self._vector_retriever is not None:
+            tasks.append(("vector", self._vector_retriever.retrieve(
+                query=query,
+                repository_id=repo_uuid,
+                top_k=self._vector_top_k,
+            )))
         else:
-            lexical_chunks = lexical_res or []
+            vector_failed = True
+            vector_err_str = "Vector retriever not configured."
+
+        if self._lexical_retriever is not None:
+            tasks.append(("lexical", self._lexical_retriever.retrieve(
+                query=query,
+                repository_id=repo_uuid,
+                top_k=self._lexical_top_k,
+            )))
+        else:
+            lexical_failed = True
+            lexical_err_str = "Lexical retriever not configured."
+
+        if tasks:
+            results = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
+            for (kind, _), res in zip(tasks, results):
+                if kind == "vector":
+                    if isinstance(res, Exception):
+                        vector_failed = True
+                        vector_err_str = str(res)
+                        logger.error(
+                            "hybrid_retrieval_vector_failed",
+                            extra={"error": vector_err_str, "repo_id": str(repo_uuid)},
+                        )
+                    else:
+                        vector_chunks = res or []
+                elif kind == "lexical":
+                    if isinstance(res, Exception):
+                        lexical_failed = True
+                        lexical_err_str = str(res)
+                        logger.error(
+                            "hybrid_retrieval_lexical_failed",
+                            extra={"error": lexical_err_str, "repo_id": str(repo_uuid)},
+                        )
+                    else:
+                        lexical_chunks = res or []
 
         # If both retrievers failed, this is an infrastructure outage, NOT zero matching code.
         if vector_failed and lexical_failed:

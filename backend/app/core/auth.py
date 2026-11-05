@@ -29,6 +29,7 @@ PUBLIC_PATHS = {
     "/api/v1/health/live",
     "/api/v1/health/ready",
     "/api/v1/events",
+    "/api/v1/auth/dev-login",
     "/api/v1/github/webhook",
     "/api/v1/github/installation/callback",
 }
