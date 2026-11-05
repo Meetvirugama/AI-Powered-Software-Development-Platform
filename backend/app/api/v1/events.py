@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["events"])
 
 
-def _resolve_optional_user_id(request: Request) -> UUID | None:
+async def _resolve_optional_user_id(request: Request) -> UUID | None:
     """Resolve authenticated user_id from request.state or JWT token/cookie if present."""
     state_uid = getattr(request.state, "user_id", None)
     if state_uid:
@@ -37,8 +38,21 @@ def _resolve_optional_user_id(request: Request) -> UUID | None:
     try:
         claims = decode_access_token(token)
         jti = str(claims.get("jti", ""))
-        if jti and get_redis().exists(f"auth:blocklist:{jti}"):
-            return None
+        if jti:
+            try:
+                r = await get_redis_async()
+                exists_fn = getattr(r, "exists", None)
+                if inspect.iscoroutinefunction(exists_fn):
+                    if await r.exists(f"auth:blocklist:{jti}"):
+                        return None
+                elif exists_fn and r.exists(f"auth:blocklist:{jti}"):
+                    return None
+            except Exception:
+                try:
+                    if get_redis().exists(f"auth:blocklist:{jti}"):
+                        return None
+                except Exception:
+                    pass
         return UUID(str(claims["sub"]))
     except Exception:
         return None
@@ -105,7 +119,7 @@ async def stream_events(
     """
     from app.core.database import SessionLocal
 
-    user_uuid = _resolve_optional_user_id(request)
+    user_uuid = await _resolve_optional_user_id(request)
     caller_user_id = str(user_uuid) if user_uuid is not None else getattr(request.state, "user_id", None)
     owned_repo_ids: set[str] | None = None
     if user_uuid is not None:

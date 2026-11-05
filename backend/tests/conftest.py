@@ -82,6 +82,40 @@ class FakeRedis:
     def exists(self, key: str) -> int:
         return int(key in self.store or key in self.blocklisted)
 
+    def incr(self, key: str, amount: int = 1) -> int:
+        val = int(self.store.get(key, 0)) + amount
+        self.store[key] = str(val)
+        return val
+
+    def expire(self, key: str, time: int, *args, **kwargs) -> bool:
+        return True
+
+    def pipeline(self):
+        fake = self
+
+        class _FakePipeline:
+            def __init__(self):
+                self.cmds = []
+
+            def incr(self, k, amount=1):
+                self.cmds.append(("incr", k, amount))
+                return self
+
+            def expire(self, k, t, **kwargs):
+                self.cmds.append(("expire", k, t))
+                return self
+
+            def execute(self):
+                res = []
+                for op, *args in self.cmds:
+                    if op == "incr":
+                        res.append(fake.incr(args[0], args[1]))
+                    elif op == "expire":
+                        res.append(True)
+                return res
+
+        return _FakePipeline()
+
     def rpush(self, *_: object) -> int:
         return 1
 
