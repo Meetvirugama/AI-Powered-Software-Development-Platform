@@ -1,5 +1,6 @@
 """Business-service package. Route handlers delegate business logic here."""
 
+from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS
 from app.services.analysis_run_history_service import AnalysisRunHistoryService
 from app.services.bug_detection_orchestrator import LLMBugDetectionService
 from app.services.bug_scan_history_service import BugScanHistoryService
@@ -13,30 +14,22 @@ from app.services.git_branch import (
     format_agent_branch_name,
 )
 from app.services.independent_verifier import IndependentVerifier
-from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
 from app.services.review_history_service import ReviewHistoryService
 from app.services.task_execution_orchestrator import (
+    TaskExecutionOrchestrator,
     TaskExecutionOrchestrator as StatefulTaskExecutionOrchestrator,
 )
 from app.services.task_history_service import TaskHistoryService
-from app.services.task_orchestrator import (
-    PipelineExecutionResult,
-    PipelineStepRecord,
-    TaskExecutionOrchestrator,
-)
 from app.services.task_recovery import TaskRecoveryService
 from app.services.test_generation_history_service import TestGenerationHistoryService
 from app.services.test_generation_orchestrator import LLMTestGenerationService
 from app.services.test_generation_report import format_test_suite_report_markdown
 from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
-from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
 
 __all__ = [
     "AgentBranchInfo",
     "AnalysisRunHistoryService",
-    "BoundedRepairManager",
     "BugScanHistoryService",
-    "CommandPolicyValidator",
     "CommitResult",
     "ExplanationHistoryService",
     "GitBranchService",
@@ -46,9 +39,6 @@ __all__ = [
     "LLMCodeReviewService",
     "LLMTestGenerationService",
     "MAX_TASK_REPAIR_ATTEMPTS",
-    "PipelineExecutionResult",
-    "PipelineStepRecord",
-    "RestrictedTestRunner",
     "ReviewHistoryService",
     "StatefulTaskExecutionOrchestrator",
     "TaskExecutionOrchestrator",

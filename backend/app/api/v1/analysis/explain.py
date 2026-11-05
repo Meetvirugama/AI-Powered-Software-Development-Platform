@@ -51,11 +51,6 @@ router = APIRouter(tags=["analysis"])
     summary="Discover automatically related files for a code explanation target",
     description="Traverses the repository knowledge graph to discover direct dependencies, callers, database models, schemas, and tests for a selected file/symbol.",
 )
-@router.get(
-    "/repositories/{repository_id}/related-files",
-    response_model=RelatedFilesDiscoveryResponse,
-    include_in_schema=False,
-)
 def get_related_files(
     repository_id: UUID,
     path: str,

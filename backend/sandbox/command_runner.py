@@ -37,6 +37,7 @@ from sandbox.constants import (
 )
 from sandbox.exceptions import (
     WorkspaceCommandError,
+    WorkspaceCommandTimeoutError,
     WorkspacePolicyViolationError,
 )
 
@@ -427,3 +428,17 @@ class RawCommandResult:
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode or exit_code
+
+
+__all__ = [
+    "ALLOWED_COMMAND_TEMPLATES",
+    "DEFAULT_COMMAND_TIMEOUT_SECONDS",
+    "MAX_COMMAND_OUTPUT_BYTES",
+    "MAX_TIMEOUT_SECONDS",
+    "RawCommandResult",
+    "WorkspaceCommandError",
+    "WorkspaceCommandResult",
+    "WorkspaceCommandRunner",
+    "WorkspaceCommandTimeoutError",
+    "WorkspacePolicyViolationError",
+]

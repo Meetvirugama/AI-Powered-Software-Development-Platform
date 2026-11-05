@@ -30,8 +30,8 @@ from app.schemas.verification import (
     VerificationOverallStatus,
     VerificationResult,
 )
+from app.schemas.task import RestrictedExecutionResult
 from app.services.repair_service import extract_modified_files_from_diff
-from app.services.test_runner import RestrictedExecutionResult
 
 logger = logging.getLogger(__name__)
 

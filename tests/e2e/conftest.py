@@ -9,6 +9,7 @@ Provides completely isolated, non-mocked test execution:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path

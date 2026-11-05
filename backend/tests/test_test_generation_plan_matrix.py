@@ -48,7 +48,8 @@ from app.schemas.analysis import (
 from app.services.test_generation_orchestrator import check_generated_test_path
 from app.services.test_generation_report import format_test_suite_report_markdown
 from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
-from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
+from sandbox.command_runner import WorkspaceCommandRunner
+from sandbox.exceptions import WorkspacePolicyViolationError
 from scanner.symbols import Symbol, SymbolEdge
 from scanner.test_coverage_analyzer import TestCoverageAnalyzer
 from scanner.test_gap_analyzer import TestGapAnalyzer
@@ -445,11 +446,11 @@ def test_tg_mut_score_reporting():
 
 def test_tg_run_restricted_sandbox_blocks_escapes():
     """TG-RUN-001 - TG-RUN-025: Restricted runner forbids dangerous commands and validates test commands."""
-    with pytest.raises(APIError):
-        CommandPolicyValidator.validate_command("rm -rf /")
+    runner = WorkspaceCommandRunner()
+    with pytest.raises(WorkspacePolicyViolationError):
+        runner.validate_command("rm -rf /")
 
-    valid_cmd = CommandPolicyValidator.validate_command("pytest tests/test_auth.py")
-    assert "pytest" in valid_cmd[0]
+    runner.validate_command("pytest", ["tests/test_auth.py"])
 
 
 # ==============================================================================

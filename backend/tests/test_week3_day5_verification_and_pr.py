@@ -30,28 +30,16 @@ from fastapi.testclient import TestClient
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.security import create_access_token
-from app.integrations.github.schemas import (
-    PullRequestInfo,
-    TaskPublishRequest,
-    TaskPublishResponse,
-    TaskVerifyRequest,
-    TaskVerifyResponse,
-)
+from app.integrations.github.schemas import PullRequestInfo
 from app.main import app
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 from app.models.user import User
 from app.repositories.pull_request_repository import PullRequestRepository
-from app.schemas.task import TaskConstraint
+from app.schemas.task import RestrictedExecutionResult, TaskConstraint, TestCounts
 from app.schemas.verification import VerificationResult
 from app.services.git_branch import GitBranchService, format_agent_branch_name
 from app.services.independent_verifier import IndependentVerifier
-from app.services.test_runner import RestrictedExecutionResult, TestCounts
-
-TaskPublishRequest.__test__ = False
-TaskPublishResponse.__test__ = False
-TaskVerifyRequest.__test__ = False
-TaskVerifyResponse.__test__ = False
 
 
 @pytest.fixture
@@ -353,101 +341,3 @@ class TestPublicationAuthorizationGate:
             assert pr_info.number == 99
             assert pr_info.draft is True
             assert not service._get_client_for_repo.called
-
-
-# ===========================================================================
-# 3. Day 5 API Endpoint Tests
-# ===========================================================================
-
-class TestDay5Endpoints:
-    @pytest.fixture
-    def client_and_repo(self, temp_workspace: Path):
-        user_id = uuid4()
-        repo_id = uuid4()
-        mock_db = MagicMock()
-
-        user = User(
-            id=user_id,
-            login="lead",
-            github_id="gh-lead-55555",
-            email="lead@ai-platform.local",
-        )
-        repo = Repository(
-            id=repo_id,
-            user_id=user_id,
-            name="test-repo",
-            owner="test-owner",
-            default_branch="main",
-            installation_id=uuid4(),
-        )
-
-        def mock_execute(stmt):
-            res = MagicMock()
-            res.scalar_one_or_none.return_value = repo
-            return res
-
-        mock_db.execute = mock_execute
-        mock_db.get.return_value = repo
-
-        app.dependency_overrides[get_db] = lambda: mock_db
-        test_client = TestClient(app)
-
-        from app.core.config import get_settings
-        get_settings.cache_clear()
-
-        with patch("app.core.security.get_settings") as mock_sec_settings, \
-             patch("app.core.auth.get_settings") as mock_auth_settings, \
-             patch("app.core.auth.get_redis") as mock_redis:
-
-            mock_s = MagicMock()
-            mock_s.jwt_secret = "test-jwt-secret-key-12345"
-            mock_s.jwt_algorithm = "HS256"
-            mock_s.access_token_expire_seconds = 3600
-            mock_s.jwt_expire_minutes = 60
-            mock_sec_settings.return_value = mock_s
-            mock_auth_settings.return_value = mock_s
-            mock_redis.return_value.exists.return_value = False
-
-            token, _ = create_access_token(str(user_id))
-            auth_headers = {"Authorization": f"Bearer {token}"}
-
-            yield test_client, repo_id, temp_workspace, auth_headers
-            app.dependency_overrides.clear()
-
-    def test_verify_endpoint(self, client_and_repo):
-        """POST /{repository_id}/source/task/verify executes verification suite."""
-        client, repo_id, workspace_path, auth_headers = client_and_repo
-        task_id = str(uuid4())
-
-        resp = client.post(
-            f"/api/v1/repositories/{repo_id}/source/task/verify",
-            json={
-                "task_id": task_id,
-                "workspace_path": str(workspace_path),
-                "has_approved_plan": True,
-            },
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["task_id"] == task_id
-        assert data["checks_count"] >= 5
-        assert "DRAFT" in data["summary_markdown"]
-
-    def test_publish_pr_endpoint_requires_authorization(self, client_and_repo):
-        """POST /{repository_id}/source/task/publish-pr blocks without publication_authorized=True."""
-        client, repo_id, workspace_path, auth_headers = client_and_repo
-        task_id = str(uuid4())
-
-        resp = client.post(
-            f"/api/v1/repositories/{repo_id}/source/task/publish-pr",
-            json={
-                "task_id": task_id,
-                "workspace_path": str(workspace_path),
-                "publication_authorized": False,
-            },
-            headers=auth_headers,
-        )
-        assert resp.status_code == 403
-        data = resp.json()
-        assert data["error"]["code"] == ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED

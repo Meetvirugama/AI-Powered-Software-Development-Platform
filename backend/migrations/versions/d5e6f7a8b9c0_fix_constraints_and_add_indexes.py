@@ -159,3 +159,4 @@ def downgrade() -> None:
         op.drop_constraint("uq_repository_files_repo_path", "repository_files", type_="unique")
     except Exception:
         pass
+

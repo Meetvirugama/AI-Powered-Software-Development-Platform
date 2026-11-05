@@ -30,12 +30,11 @@ from app.core.config import get_settings
 from app.core.errors import APIError
 from app.models.task import AgentTask, TaskPlan, TaskStatus
 from app.schemas.repair import RepairPatchPayload
-from app.schemas.task import TaskConstraint, can_transition
+from app.schemas.task import RestrictedExecutionResult, TaskConstraint, TestCounts, can_transition
 from app.services.git_branch import format_agent_branch_name
 from app.services.independent_verifier import IndependentVerifier
 from app.services.repair_service import RepairPatchValidator
 from app.services.task_recovery import TaskRecoveryService
-from app.services.test_runner import RestrictedExecutionResult, TestCounts
 
 
 # ===========================================================================
