@@ -56,7 +56,6 @@ from app.schemas.analysis import (
 )
 from app.services.explanation_orchestrator import (
     MAX_ANALYZABLE_FILE_BYTES,
-    record_analysis_run,
 )
 
 logger = logging.getLogger(__name__)

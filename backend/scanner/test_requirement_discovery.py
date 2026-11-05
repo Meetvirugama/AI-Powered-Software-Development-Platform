@@ -248,7 +248,6 @@ class TestRequirementDiscovery:
         c = counter
         sym_name = f"{class_name}.{node.name}" if class_name else node.name
         is_async = isinstance(node, ast.AsyncFunctionDef)
-        has_doc = ast.get_docstring(node) is not None
 
         # 1. Functional Requirement
         reqs.append(

@@ -32,8 +32,6 @@ Implements the complete Day 4 & Scenario C / E requirements from `Docs/week2.md`
 from __future__ import annotations
 
 import ast
-import configparser
-import json
 import logging
 import os
 from pathlib import Path
@@ -41,23 +39,14 @@ import re
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.builder import (
-    ContextBuilder,
     IntelligenceContext,
     RepositoryFile as ContextRepoFile,
-    SymbolContext,
     TargetSnippet,
 )
 from ai.context.test_context import TestContextBuilder
-from ai.llm.schemas import (
-    LLMRequest,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.models.code_chunk import CodeChunk
@@ -65,7 +54,6 @@ from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.schemas.analysis import (
     AnalysisSourceReference,
-    ExplainCodeRequest,
     SupportedTestFramework,
     TestGenerationRequest,
     TestGenerationResult,
@@ -74,7 +62,6 @@ from app.schemas.analysis import (
 from app.services.bug_detection_orchestrator import redact_secrets_in_text
 from app.services.explanation_orchestrator import (
     ResolvedExplanationTarget,
-    resolve_target_and_build_context,
 )
 from scanner.framework_detector import FrameworkDetectionResult, FrameworkDetector
 
@@ -135,7 +122,6 @@ def detect_repository_test_framework(
             all_repo_files = []
 
     file_list = [f.path for f in all_repo_files]
-    path_to_record = {f.path: f for f in all_repo_files}
 
     # Load key manifest and conftest/test files from DB chunks so FrameworkDetector can inspect them
     manifest_contents: dict[str, str] = {}

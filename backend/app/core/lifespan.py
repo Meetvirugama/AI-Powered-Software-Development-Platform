@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 

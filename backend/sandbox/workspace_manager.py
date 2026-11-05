@@ -779,7 +779,6 @@ class WorkspaceManager:
         """Safely read a file within the task's isolated workspace."""
         try:
             root = self.get_workspace_path(task_id)
-            meta = self._workspaces[task_id]
             resolved = WorkspacePathGuard.resolve_within_workspace(root, file_path)
 
             if not resolved.exists() or not resolved.is_file():
@@ -817,7 +816,6 @@ class WorkspaceManager:
         """Safely write or overwrite a file within the task's isolated workspace."""
         try:
             root = self.get_workspace_path(task_id)
-            meta = self._workspaces[task_id]
             resolved = WorkspacePathGuard.resolve_within_workspace(root, file_path)
 
             encoded = content.encode("utf-8")

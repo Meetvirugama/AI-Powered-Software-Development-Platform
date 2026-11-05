@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
@@ -31,13 +30,11 @@ from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact
 from app.integrations.github.client import GitHubAPIError, GitHubClient
 from app.integrations.github.schemas import (
-    BaseRevisionValidationResponse,
     BranchIsolationCheck,
     DiffStatus,
     FileDiffRange,
     LineRange,
     PRMetadata,
-    TaskBranchIsolationRequest,
     TaskBranchIsolationResponse,
     TaskDiffRanges,
     PullRequestInfo,
@@ -1402,7 +1399,6 @@ def parse_unified_diff(diff_text: str) -> list[FileDiffRange]:
 
         m = hunk_regex.match(line)
         if m:
-            old_start = int(m.group(1))
             old_count = int(m.group(2)) if m.group(2) is not None else 1
             new_start = int(m.group(3))
             new_count = int(m.group(4)) if m.group(4) is not None else 1

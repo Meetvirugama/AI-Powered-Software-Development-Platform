@@ -84,21 +84,12 @@ from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
 from app.services.git_branch import GitBranchService, format_agent_branch_name
 from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
-    WorkspaceAuthorizationError,
-    WorkspaceCommandTimeoutError,
     WorkspaceCommitError,
-    WorkspaceDiffValidationError,
     WorkspaceDuplicateRepairPatchError,
-    WorkspaceError,
-    WorkspacePathEscapeError,
-    WorkspacePolicyViolationError,
     WorkspaceProtectedBranchError,
-    WorkspacePublicationUnauthorizedError,
     WorkspacePushError,
     WorkspaceRecoveryError,
     WorkspaceRepairBudgetExhaustedError,
-    WorkspaceStaleApprovalError,
-    WorkspaceStaleRevisionError,
     WorkspaceStateError,
 )
 from sandbox.tool_policy_bridge import WorkspaceToolPolicyBridge, register_workspace_tools

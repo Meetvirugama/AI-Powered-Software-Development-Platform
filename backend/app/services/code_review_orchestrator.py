@@ -44,28 +44,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import inspect
-import json
 import logging
 import re
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.builder import (
-    ContextBuilder,
     IntelligenceContext,
     RepositoryFile as ContextRepoFile,
     SymbolContext,
 )
 from ai.context.review_context import ModifiedFile, ReviewContextBuilder
-from ai.llm.schemas import (
-    LLMRequest,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
 from app.models.code_chunk import CodeChunk
@@ -77,7 +68,6 @@ from app.models.symbol_edge import SymbolEdge
 from app.schemas.analysis import (
     AnalysisSourceReference,
     CodeReviewRequest,
-    FindingSeverity,
     ReviewCategory,
     ReviewFinding,
     ReviewReport,

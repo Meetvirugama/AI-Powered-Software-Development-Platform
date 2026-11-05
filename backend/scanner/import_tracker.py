@@ -129,8 +129,6 @@ class ImportTracker:
         if known_files:
             norm_known = {f.replace("\\", "/") for f in known_files}
 
-        current_dir = os.path.dirname(file_info.path.replace("\\", "/"))
-
         # Resolve local paths & categorize
         by_name: dict[str, ImportedSymbol] = {}
         local_deps: set[str] = set()

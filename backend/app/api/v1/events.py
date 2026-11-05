@@ -8,9 +8,8 @@ import logging
 import time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
 from app.core.auth import _get_token
 from app.core.database import get_db

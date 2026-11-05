@@ -62,6 +62,7 @@ __all__ = [
     "ALLOWED_AI_PROVIDERS",
     "AgentContext",
     "BugContextExtractor",
+    "CallerResolution",
     "ChatMessage",
     "ContextBuilder",
     "ContextLimits",

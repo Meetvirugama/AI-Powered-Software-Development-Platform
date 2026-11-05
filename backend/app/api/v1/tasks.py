@@ -20,9 +20,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import (
-    get_owned_repository,
     get_owned_task,
-    get_request_user_id,
 )
 from ai.services.task_planner import TaskPlanner
 from app.core.database import get_db

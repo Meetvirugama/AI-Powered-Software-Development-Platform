@@ -7,13 +7,9 @@ discovered requirements, generated suites, execution outcomes, and quality metri
 
 from __future__ import annotations
 
-import json
-from typing import Any
 
 from app.schemas.analysis import (
     TestGenerationResult,
-    TestQualityReport,
-    TestRequirement,
 )
 
 

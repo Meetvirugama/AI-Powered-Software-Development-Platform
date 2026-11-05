@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from scripts.benchmark_quality_suite import (
     RAG_BENCHMARK_DATASET,
-    build_fixture_chunks,
     run_rag_retrieval_benchmark,
 )
 

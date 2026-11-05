@@ -148,7 +148,6 @@ class TestQualityAnalyzer:
                 notes.extend(inspection.flaky_indicators[:2])
 
         # Requirement Coverage
-        total_reqs = len(requirements)
         applicable_reqs = [r for r in requirements if r.status != "NOT_APPLICABLE"]
         covered_reqs = [r for r in applicable_reqs if r.status == "COVERED"]
         partial_reqs = [r for r in applicable_reqs if r.status == "PARTIAL"]

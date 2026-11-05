@@ -14,7 +14,6 @@ from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
 from app.api.v1.dependencies import (
     get_owned_repository,
-    get_request_user_id as _request_user_id,
 )
 from app.models.repository import Repository
 from app.repositories.repository_repository import RepositoryRepository

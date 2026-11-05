@@ -11,7 +11,6 @@ Implements independent counterevidence validation and assigns calibrated evidenc
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
@@ -67,7 +66,6 @@ class BugValidationService:
         counterevidence: list[str] = []
         cat_lower = (category or "").lower()
         title_lower = (title or "").lower()
-        ev_lower = (evidence or "").lower()
 
         # 1. Check for protective defensive guards (try/except, None checks, early returns)
         for g in guards:

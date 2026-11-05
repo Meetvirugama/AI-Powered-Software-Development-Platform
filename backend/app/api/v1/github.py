@@ -26,7 +26,6 @@ from app.schemas.repository import (
     AvailableRepository,
     ConnectRepositoryResponse,
     PaginatedAvailableRepositoryResponse,
-    SyncJobResponse,
 )
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 

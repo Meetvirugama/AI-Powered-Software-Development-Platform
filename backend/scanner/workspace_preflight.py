@@ -116,7 +116,7 @@ class WorkspaceBaseValidator:
             for t_file in target_files:
                 try:
                     # Confinement check via path guard
-                    resolved = self._path_guard.resolve_within_workspace(w_path, t_file)
+                    self._path_guard.resolve_within_workspace(w_path, t_file)
                     verified_files.append(t_file.replace("\\", "/").lstrip("/"))
                 except Exception as exc:
                     errors.append(f"Target file validation failed for '{t_file}': {exc}")

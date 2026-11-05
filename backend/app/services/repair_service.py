@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Any
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact, redact_secrets

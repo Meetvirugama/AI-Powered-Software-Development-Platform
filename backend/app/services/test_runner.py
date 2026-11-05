@@ -19,13 +19,11 @@ import shlex
 import signal
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-from uuid import UUID
 
 from app.core.errors import APIError, ErrorCode
-from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 
 logger = logging.getLogger(__name__)

@@ -19,24 +19,20 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Generator, List, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Generator, List, Optional, Tuple
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models.task import (
-    ApprovalDecision,
     ExecutionStatus,
     RepairAttempt,
-    RepairResult,
     Task,
     TaskApproval,
     TaskCheckpoint,
     TaskEvent,
-    TaskEventType,
     TaskExecution,
     TaskPlan,
-    TaskPlanStatus,
     TaskPullRequest,
     TaskSourceType,
     TaskStatus,
@@ -50,9 +46,6 @@ from app.models.task import (
     WorkspaceStatus,
 )
 from app.repositories.task_repository import (
-    InvalidStateTransitionError,
-    PlanNotFoundError,
-    TaskNotFoundError,
     TaskRepository,
 )
 

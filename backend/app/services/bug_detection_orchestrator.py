@@ -34,37 +34,21 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import inspect
-import json
 import logging
 import re
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.bug_context import BugContextExtractor, extract_bug_context
 from ai.context.builder import (
-    ContextBuilder,
-    ContextLimits,
-    IntelligenceContext,
     RepositoryFile as ContextRepoFile,
     SymbolContext,
     TargetSnippet,
 )
 from ai.intelligence.related_files import RelatedFileDiscoveryService
 from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
-from ai.llm.schemas import (
-    LLMError,
-    LLMRateLimitError,
-    LLMRequest,
-    LLMTimeoutError,
-    LLMUnavailableError,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
 from app.core.secret_redaction import redact as _shared_redact
@@ -76,15 +60,12 @@ from app.models.symbol_edge import SymbolEdge
 from app.schemas.analysis import (
     AnalysisSourceReference,
     BugDetectionRequest,
-    BugDetectionResponse,
     BugFinding,
     ExplainCodeRequest,
     FindingSeverity,
 )
 from app.services.explanation_orchestrator import (
     ResolvedExplanationTarget,
-    record_analysis_run,
-    resolve_target_and_build_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -1269,7 +1250,7 @@ def filter_and_rank_findings(
 # Default LLMBugDetectionService (Day 3 Service Adapter)
 # ---------------------------------------------------------------------------
 
-from ai.services.bug_detection_engine import BugDetectionEngine, _LLMBugFindingsEnvelope
+from ai.services.bug_detection_engine import BugDetectionEngine
 
 # Maintain backward compatibility with existing tests and routes
 LLMBugDetectionService = BugDetectionEngine

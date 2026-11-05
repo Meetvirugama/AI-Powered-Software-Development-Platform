@@ -24,14 +24,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import APIError, ErrorCode
-from app.core.secret_redaction import redact, redact_obj
 from app.models.analysis_finding import AnalysisFinding
 from app.models.task import (
-    AgentTask,
     ApprovalDecision,
     ExecutionStatus,
     GitHubIssue,
@@ -39,14 +37,11 @@ from app.models.task import (
     RepairResult,
     Task,
     TaskApproval,
-    TaskApprovalRecord,
     TaskCheckpoint,
     TaskEvent,
-    TaskEventRecord,
     TaskEventType,
     TaskExecution,
     TaskPlan,
-    TaskPlanRecord,
     TaskPlanStatus,
     TaskPullRequest,
     TaskSourceType,

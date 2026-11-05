@@ -24,7 +24,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Generator
 
 from app.core.logging import request_id_context

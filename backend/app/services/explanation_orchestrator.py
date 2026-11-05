@@ -16,22 +16,18 @@ Implements the 9-step explanation pipeline required by `Docs/week2.md` §6:
 
 from __future__ import annotations
 
-import inspect
-import json
 import logging
 import os
 from pathlib import Path
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 _DEFAULT_TIKTOKEN_CACHE = Path(__file__).resolve().parents[3] / ".venv" / "data-gym-cache"
 if _DEFAULT_TIKTOKEN_CACHE.exists():
     os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(_DEFAULT_TIKTOKEN_CACHE))
 
-from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.builder import (
@@ -41,16 +37,6 @@ from ai.context.builder import (
     SymbolContext,
     TargetSnippet,
 )
-from ai.llm.schemas import (
-    LLMError,
-    LLMRateLimitError,
-    LLMRequest,
-    LLMTimeoutError,
-    LLMUnavailableError,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
 from app.core.secret_redaction import redact, redact_obj
@@ -64,9 +50,7 @@ from app.schemas.analysis import (
     AnalysisSourceReference,
     AnalysisTarget,
     CodeExplanation,
-    CodeExplanationResponse,
     ExplainCodeRequest,
-    SymbolSummary,
 )
 
 logger = logging.getLogger(__name__)

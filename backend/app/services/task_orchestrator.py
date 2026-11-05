@@ -39,9 +39,9 @@ from app.services.git_branch import (
     format_agent_branch_name,
 )
 from app.services.independent_verifier import IndependentVerifier
-from app.services.repair_loop import BoundedRepairManager, MAX_TASK_REPAIR_ATTEMPTS
+from app.services.repair_loop import BoundedRepairManager
 from app.services.task_recovery import TaskRecoveryService
-from app.services.test_runner import RestrictedTestRunner, RestrictedExecutionResult
+from app.services.test_runner import RestrictedTestRunner
 
 logger = logging.getLogger(__name__)
 

@@ -818,7 +818,7 @@ class DeadCodeRule(BaseASTRule):
                     terminal_found = True
 
         for node in ast.walk(tree):
-            for field_name, value in ast.iter_fields(node):
+            for _field_name, value in ast.iter_fields(node):
                 if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
                     check_block(value)
 

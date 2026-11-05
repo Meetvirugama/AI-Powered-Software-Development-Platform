@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import logging
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 from uuid import UUID
 
-from scanner.ast_rules import ASTBugAnalyzer
-from scanner.rule_registry import DefectRule, RuleRegistry
+from scanner.rule_registry import RuleRegistry
 from scanner.static_bug_scanner import StaticBugScanner
 from scanner.taint_analyzer import TaintAnalyzer
 

@@ -29,7 +29,6 @@ from app.schemas.analysis import (
     BugDetectionRequest,
     BugDetectionResponse,
     BugFinding,
-    ExplainCodeRequest,
 )
 from app.services.bug_detection_orchestrator import (
     BuiltinStaticBugScanner,
@@ -40,7 +39,6 @@ from app.services.bug_detection_orchestrator import (
 )
 from app.services.explanation_orchestrator import (
     record_analysis_run,
-    resolve_target_and_build_context,
 )
 
 logger = logging.getLogger(__name__)

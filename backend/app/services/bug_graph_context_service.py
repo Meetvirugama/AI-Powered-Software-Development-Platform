@@ -10,13 +10,11 @@ from __future__ import annotations
 
 import inspect
 import logging
-import uuid
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
