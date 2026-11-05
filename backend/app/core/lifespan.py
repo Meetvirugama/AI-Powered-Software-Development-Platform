@@ -259,6 +259,25 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.service_readiness["code_review_service"] = False
         success = False
 
+    # Static Reviewer & Static Bug Scanner (Audit A1.3)
+    try:
+        if getattr(app.state, "static_reviewer", None) is None:
+            from review.static_reviewer import StaticReviewer
+            app.state.static_reviewer = StaticReviewer()
+            logger.info("static_reviewer_ready")
+    except Exception as exc:
+        logger.warning("static_reviewer_init_failed", extra={"error": str(exc)})
+        app.state.static_reviewer = None
+
+    try:
+        if getattr(app.state, "static_bug_scanner", None) is None:
+            from scanner.static_bug_scanner import StaticBugScanner
+            app.state.static_bug_scanner = StaticBugScanner()
+            logger.info("static_bug_scanner_ready")
+    except Exception as exc:
+        logger.warning("static_bug_scanner_init_failed", extra={"error": str(exc)})
+        app.state.static_bug_scanner = None
+
     # Task Planner (Week 3 F32)
     try:
         if getattr(app.state, "task_planner", None) is None:

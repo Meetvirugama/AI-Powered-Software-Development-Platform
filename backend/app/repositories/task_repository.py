@@ -353,8 +353,13 @@ class TaskRepository:
         task_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
     ) -> Optional[Task]:
-        """Fetch a task verifying user ownership."""
-        return self.get_task(task_id, user_id=user_id)
+        """Fetch a task verifying user ownership without eager loads."""
+        t_uuid = _ensure_uuid(task_id)
+        u_uuid = _ensure_uuid(user_id)
+        if not t_uuid or not u_uuid:
+            return None
+        stmt = select(Task).where(Task.id == t_uuid, Task.user_id == u_uuid)
+        return self.session.execute(stmt).scalar_one_or_none()
 
     def list_tasks(
         self,
@@ -2061,12 +2066,12 @@ class TaskRepository:
     # 2. Tasks & Intake (F31, F32, F39)
     # ------------------------------------------------------------------
 
-    def get_task_for_user(
+    def get_task_detail_for_user(
         self,
         task_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
     ) -> Optional[Task]:
-        """Fetch a task verifying user ownership."""
+        """Fetch a task with eager-loaded collections verifying user ownership."""
         t_uuid = _ensure_uuid(task_id)
         u_uuid = _ensure_uuid(user_id)
         if not t_uuid or not u_uuid:

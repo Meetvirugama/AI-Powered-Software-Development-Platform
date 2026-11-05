@@ -28,6 +28,7 @@ from app.core.telemetry import StageExecutionTimer
 from app.schemas.analysis import (
     BugDetectionRequest,
     BugDetectionResponse,
+    BugFinding,
     ExplainCodeRequest,
 )
 from app.services.bug_detection_orchestrator import (

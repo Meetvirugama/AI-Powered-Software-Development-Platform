@@ -16,6 +16,7 @@ Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import subprocess
@@ -286,7 +287,7 @@ class TaskExecutionOrchestrator:
                 try:
                     m_data = json.loads(m_path.read_text(encoding="utf-8"))
                     saved_diff_hash = m_data.get("verification_diff_hash")
-                except Exception:
+                except (OSError, json.JSONDecodeError):
                     pass
             if not saved_diff_hash:
                 ver_rec = task_repo.get_latest_verification_result(task.id)

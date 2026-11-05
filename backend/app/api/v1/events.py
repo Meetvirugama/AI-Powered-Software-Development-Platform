@@ -77,13 +77,13 @@ def _should_deliver_event(
 
     # If the event is scoped to a repository, verify caller ownership
     if isinstance(data_obj, dict) and "repository_id" in data_obj:
-        if caller_user_id is None and owned_repo_ids is None:
+        if owned_repo_ids is None:
+            # Cannot verify repository ownership; fail closed (Audit A1.4)
             return False
-        if owned_repo_ids is not None:
-            if str(data_obj["repository_id"]) not in owned_repo_ids:
-                if event_user_id is not None and str(event_user_id) == str(caller_user_id):
-                    return True
-                return False
+        if str(data_obj["repository_id"]) not in owned_repo_ids:
+            if event_user_id is not None and str(event_user_id) == str(caller_user_id):
+                return True
+            return False
 
     # For general events with no repository or user scope, require authenticated user
     # unless it is explicitly a public system notice
@@ -93,17 +93,6 @@ def _should_deliver_event(
             return False
 
     return True
-
-
-def _is_event_authorized_for_user(
-    raw_data: str,
-    owned_repo_ids: set[str] | None,
-    caller_user_id: str | None = None,
-) -> bool:
-    """Ensure repository-scoped and user-scoped events are only delivered to the authorized owner."""
-    if owned_repo_ids is None and caller_user_id is None:
-        return False
-    return _should_deliver_event(raw_data, caller_user_id, owned_repo_ids)
 
 
 @router.get("/events", summary="Subscribe to real-time platform events (SSE)")
