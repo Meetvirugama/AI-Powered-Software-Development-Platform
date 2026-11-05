@@ -16,10 +16,10 @@ from ai.llm.schemas import (
 )
 
 __all__ = [
-    "LLMError",
-    "LLMTimeoutError",
-    "LLMValidationError",
-    "LLMUnavailableError",
-    "LLMRateLimitError",
     "LLMAuthenticationError",
+    "LLMError",
+    "LLMRateLimitError",
+    "LLMTimeoutError",
+    "LLMUnavailableError",
+    "LLMValidationError",
 ]

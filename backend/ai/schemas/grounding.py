@@ -32,6 +32,7 @@ Checks performed on every RepositoryAnswer before it reaches the user:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -233,9 +234,10 @@ class GroundingValidator:
             return True
 
         try:
+            import inspect
+
             from app.models.repository import Repository
             from sqlalchemy import select
-            import inspect
 
             session = self._db
             session_factory = None
@@ -262,7 +264,7 @@ class GroundingValidator:
                     return scalars().first() is not None
                 return getattr(res, "scalar_one_or_none", lambda: None)() is not None
             return False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("grounding_repository_check_error", extra={"error": str(exc), "repo_id": str(repository_id)})
             return False
 
@@ -326,17 +328,18 @@ class GroundingValidator:
             session = None
 
         try:
-            from app.repositories.repository_files import get_file_by_path
-            from sqlalchemy import select
-            from app.models.repository_file import RepositoryFile
             import inspect
             from unittest.mock import Mock
+
+            from app.models.repository_file import RepositoryFile
+            from app.repositories.repository_files import get_file_by_path
+            from sqlalchemy import select
 
             file_row = None
             if session is not None and not inspect.iscoroutinefunction(getattr(session, "execute", None)):
                 try:
                     file_row = get_file_by_path(db=session, repository_id=repository_id, path=source.file)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001
                     logger.error("grounding_db_query_failed", extra={"error": str(exc), "file": source.file})
                     return GroundingResult(source=source, grounded=False, reason="db_error")
 
@@ -377,9 +380,7 @@ class GroundingValidator:
                     # Suffix match fallback at a strict path-segment boundary ('/' + suffix_p):
                     # e.g. model cites "css/style.css" for "SchoolWeb/css/style.css",
                     # but "init.py" must NOT match "src/__init__.py".
-                    suffix_p = clean_file.lstrip("/")
-                    if suffix_p.startswith("./"):
-                        suffix_p = suffix_p[2:]
+                    suffix_p = clean_file.lstrip("/").removeprefix("./")
                     if suffix_p:
                         suffix_stmt = select(RepositoryFile).where(
                             RepositoryFile.repository_id == repository_id,
@@ -401,7 +402,7 @@ class GroundingValidator:
 
             return GroundingResult(source=source, grounded=True, reason="ok")
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # FAIL-CLOSED: Database query errors MUST NOT pass unverified citations
             logger.error("grounding_check_error_failing_closed", extra={"file": source.file, "error": str(exc)})
             return GroundingResult(source=source, grounded=False, reason="db_error")
