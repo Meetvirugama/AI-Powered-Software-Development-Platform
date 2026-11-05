@@ -30,7 +30,6 @@ from .schemas import (
     LLMResponse,
     LLMTimeoutError,
     LLMUnavailableError,
-    LLMValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -226,7 +225,6 @@ class LLMGateway:
         """
         assert self._fallback_provider is not None
         fb_name = (self._fallback_provider.provider_name or "").lower()
-        primary_name = (self._provider.provider_name or "").lower()
         req_model = (request.model or "").strip()
         primary_default = getattr(self._provider, "default_model", None)
 
@@ -277,14 +275,14 @@ class LLMGateway:
         err: Exception | None = None
         try:
             await self._provider.aclose()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             err = exc
             logger.error("llm_gateway_primary_close_error: %s", exc)
 
         if self._fallback_provider is not None:
             try:
                 await self._fallback_provider.aclose()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.error("llm_gateway_fallback_close_error: %s", exc)
                 if err is None:
                     err = exc

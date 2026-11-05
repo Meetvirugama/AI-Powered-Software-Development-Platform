@@ -16,8 +16,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Sequence
 from itertools import cycle
-from typing import Any, Sequence
+from typing import Any
 
 import httpx
 
@@ -31,7 +32,6 @@ from .schemas import (
     LLMTimeoutError,
     LLMUnavailableError,
     LLMValidationError,
-    Message,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,15 +112,13 @@ class GeminiProvider(LLMProvider):
         if (
             not requested_model
             or requested_model == "default"
-            or requested_model.startswith("gpt-")
-            or requested_model.startswith("openai/")
+            or requested_model.startswith(("gpt-", "openai/"))
         ):
             model_name = self._default_model
         else:
             model_name = requested_model
         # Strip models/ prefix if present
-        if model_name.startswith("models/"):
-            model_name = model_name[len("models/"):]
+        model_name = model_name.removeprefix("models/")
         if model_name in ("gemini-flash-lite-latest", "gemini-1.5-flash", "gemini-2.0-flash"):
             model_name = "gemini-flash-latest"
 
