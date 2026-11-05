@@ -40,8 +40,12 @@ class Message(BaseModel):
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> Message:
         """Construct Message from dictionary or mapping."""
+        role = data.get("role", "user")
+        safe_role: Literal["system", "user", "assistant"] = (
+            role if role in ("system", "user", "assistant") else "user"
+        )
         return cls(
-            role=data.get("role", "user"),  # type: ignore[arg-type]
+            role=safe_role,
             content=str(data.get("content", "")),
         )
 
@@ -86,8 +90,16 @@ class LLMRequest(BaseModel):
         description="Optional Pydantic schema to enforce and validate JSON output.",
         exclude=True,
     )
+    response_format: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional provider response format dictionary, e.g. {'type': 'json_object'}.",
+    )
+    request_id: str | None = Field(
+        default=None,
+        description="Optional correlation identifier for tracing.",
+    )
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     @classmethod
     def create(
@@ -97,6 +109,9 @@ class LLMRequest(BaseModel):
         temperature: float = 0.0,
         max_tokens: int = 2048,
         response_schema: type[BaseModel] | None = None,
+        response_format: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        **kwargs: Any,
     ) -> LLMRequest:
         """Convenience constructor that normalizes heterogeneous message sequences."""
         norm_messages = [Message.from_any(m) for m in messages]
@@ -106,6 +121,9 @@ class LLMRequest(BaseModel):
             temperature=temperature,
             max_tokens=max_tokens,
             response_schema=response_schema,
+            response_format=response_format,
+            request_id=request_id,
+            **kwargs,
         )
 
 
@@ -139,18 +157,14 @@ class LLMResponse(BaseModel):
         """Total tokens (input + output) consumed by this request."""
         return self.input_tokens + self.output_tokens
 
-    def parse_json(self) -> dict[str, Any]:
+    def parse_json(self) -> Any:
         """
-        Parse response content as a JSON dictionary, stripping code fences if present.
+        Parse response content as a JSON dictionary or list, stripping code fences if present.
 
         Raises:
             json.JSONDecodeError: If content is not valid JSON.
         """
-        raw = self.content.strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if len(lines) >= 2 and lines[0].startswith("```"):
-                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        raw = extract_json_payload(self.content)
         return json.loads(raw)
 
     def parse_schema(self, schema_cls: type[T]) -> T:
@@ -160,11 +174,66 @@ class LLMResponse(BaseModel):
         Raises:
             LLMValidationError: If parsing or schema validation fails.
         """
-        try:
-            data = self.parse_json()
-            return schema_cls.model_validate(data)
-        except Exception as exc:
-            raise LLMValidationError(f"Failed to validate response against {schema_cls.__name__}: {exc}") from exc
+        return validate_structured_payload(self.content, schema_cls, provider=None)
+
+
+# ---------------------------------------------------------------------------
+# Structured Output & JSON Utilities
+# ---------------------------------------------------------------------------
+
+
+def extract_json_payload(content: str) -> str:
+    """Extract raw JSON substring from content, stripping markdown fences and commentary."""
+    raw = content.strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```"):
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+
+    first_brace = raw.find("{")
+    first_bracket = raw.find("[")
+    if (
+        first_bracket != -1
+        and (first_brace == -1 or first_bracket < first_brace)
+        and "]" in raw
+    ):
+        return raw[first_bracket : raw.rfind("]") + 1]
+    if first_brace != -1 and "}" in raw:
+        return raw[first_brace : raw.rfind("}") + 1]
+    return raw
+
+
+def validate_structured_payload(
+    content: str,
+    schema: type[BaseModel],
+    provider: str | None = None,
+) -> Any:
+    """Validate and deserialize raw text against a Pydantic schema."""
+    raw = extract_json_payload(content)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LLMValidationError(
+            f"Response is not valid JSON: {exc}",
+            provider=provider,
+            raw_response=content,
+        ) from exc
+
+    if (
+        isinstance(parsed, list)
+        and hasattr(schema, "model_fields")
+        and "findings" in getattr(schema, "model_fields", {})
+    ):
+        parsed = {"findings": parsed}
+
+    try:
+        return schema.model_validate(parsed)
+    except Exception as exc:
+        raise LLMValidationError(
+            f"Schema validation failed: {exc}",
+            provider=provider,
+            raw_response=content,
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -274,3 +343,18 @@ class LLMValidationError(LLMError):
             else "LLM response failed schema validation."
         )
         super().__init__(msg, retryable=False, provider=provider, status_code=422)
+
+
+__all__ = [
+    "LLMAuthenticationError",
+    "LLMError",
+    "LLMRateLimitError",
+    "LLMRequest",
+    "LLMResponse",
+    "LLMTimeoutError",
+    "LLMUnavailableError",
+    "LLMValidationError",
+    "Message",
+    "extract_json_payload",
+    "validate_structured_payload",
+]

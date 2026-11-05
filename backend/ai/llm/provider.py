@@ -10,9 +10,12 @@ output validation are governed by LLMGateway.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 from .schemas import LLMRequest, LLMResponse
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 
 class LLMProvider(ABC):
@@ -56,6 +59,12 @@ class LLMProvider(ABC):
         """Recommended or default model name for this provider."""
         return "default"
 
+    def _validate_structured_output(self, content: str, schema: type[BaseModel]) -> None:
+        """Validate response JSON content against expected schema."""
+        from .schemas import validate_structured_payload
+
+        validate_structured_payload(content, schema, provider=self.provider_name)
+
     async def aclose(self) -> None:
         """Release underlying HTTP client sessions and connection pools."""
 
@@ -69,3 +78,6 @@ class LLMProvider(ABC):
         exc_tb: object,
     ) -> None:
         await self.aclose()
+
+
+__all__ = ["LLMProvider"]

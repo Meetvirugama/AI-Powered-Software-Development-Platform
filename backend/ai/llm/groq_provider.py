@@ -31,7 +31,7 @@ from .schemas import (
     LLMResponse,
     LLMTimeoutError,
     LLMUnavailableError,
-    LLMValidationError,
+    validate_structured_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -275,8 +275,8 @@ class GroqProvider(LLMProvider):
             "max_tokens": request.max_tokens,
         }
 
-        if request.response_schema is not None:
-            payload["response_format"] = {"type": "json_object"}
+        if request.response_schema is not None or getattr(request, "response_format", None):
+            payload["response_format"] = getattr(request, "response_format", None) or {"type": "json_object"}
 
         return payload
 
@@ -311,44 +311,7 @@ class GroqProvider(LLMProvider):
 
     @staticmethod
     def _validate_structured_output(content: str, schema: type[BaseModel]) -> None:
-        raw = content.strip()
-        if raw.startswith("```"):
-            lines = raw.splitlines()
-            if len(lines) >= 2 and lines[0].startswith("```"):
-                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        validate_structured_payload(content, schema, provider="groq")
 
-        first_brace = raw.find("{")
-        first_bracket = raw.find("[")
-        if (
-            first_bracket != -1
-            and (first_brace == -1 or first_bracket < first_brace)
-            and "]" in raw
-        ):
-            raw = raw[first_bracket : raw.rfind("]") + 1]
-        elif first_brace != -1 and "}" in raw:
-            raw = raw[first_brace : raw.rfind("}") + 1]
 
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise LLMValidationError(
-                f"Response is not valid JSON: {exc}",
-                provider="groq",
-                raw_response=content,
-            ) from exc
-
-        if (
-            isinstance(parsed, list)
-            and hasattr(schema, "model_fields")
-            and "findings" in getattr(schema, "model_fields", {})
-        ):
-            parsed = {"findings": parsed}
-
-        try:
-            schema.model_validate(parsed)
-        except Exception as exc:
-            raise LLMValidationError(
-                f"Schema validation failed: {exc}",
-                provider="groq",
-                raw_response=content,
-            ) from exc
+__all__ = ["GroqProvider"]

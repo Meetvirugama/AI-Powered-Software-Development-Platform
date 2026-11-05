@@ -261,10 +261,12 @@ class LLMGateway:
 
         return LLMRequest(
             messages=request.messages,
-            model=target_model,
+            model=target_model or self._fallback_provider.default_model,
             temperature=request.temperature,
             max_tokens=request.max_tokens,
             response_schema=request.response_schema,
+            response_format=getattr(request, "response_format", None),
+            request_id=getattr(request, "request_id", None),
         )
 
     async def aclose(self) -> None:
@@ -300,3 +302,10 @@ class LLMGateway:
         exc_tb: object,
     ) -> None:
         await self.aclose()
+
+
+__all__ = [
+    "CROSS_PROVIDER_DEFAULT_MODELS",
+    "EXPLICIT_MODEL_TRANSLATION_MAP",
+    "LLMGateway",
+]

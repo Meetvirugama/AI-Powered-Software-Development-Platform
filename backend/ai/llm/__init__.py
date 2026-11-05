@@ -18,6 +18,8 @@ from .schemas import (
     LLMUnavailableError,
     LLMValidationError,
     Message,
+    extract_json_payload,
+    validate_structured_payload,
 )
 
 __all__ = [
@@ -34,4 +36,6 @@ __all__ = [
     "LLMUnavailableError",
     "LLMValidationError",
     "Message",
+    "extract_json_payload",
+    "validate_structured_payload",
 ]
