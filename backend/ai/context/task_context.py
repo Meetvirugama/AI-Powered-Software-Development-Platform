@@ -9,17 +9,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence
-from uuid import UUID
+from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ai.context.models import ContextLimits, ContextStatus, SymbolContext, TargetSnippet
 from ai.context.token_budget import count_tokens
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.core.secret_redaction import redact
 from app.models.analysis_finding import AnalysisFinding
-from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile

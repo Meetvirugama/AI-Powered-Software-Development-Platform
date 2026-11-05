@@ -15,7 +15,6 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from typing import Any
 
 from ai.context.builder import (
     ContextBuilder,
@@ -26,7 +25,6 @@ from ai.context.builder import (
     RepositoryFile,
     SymbolContext,
     TargetSnippet,
-    count_tokens,
 )
 
 logger = logging.getLogger(__name__)
