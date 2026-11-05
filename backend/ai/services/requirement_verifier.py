@@ -219,19 +219,21 @@ class RequirementToCodeVerifier:
         out_of_scope_files: list[str] = []
         for mod_file in modified_files:
             # Allow new test files or documentation files
-            if mod_file not in all_allowed_targets:
-                if not (mod_file.startswith("tests/") or mod_file.startswith("test/") or mod_file.endswith(".md")):
-                    out_of_scope_files.append(mod_file)
-                    findings.append(
-                        VerificationFinding(
-                            id=f"scope-warn-{len(findings)+1}",
-                            severity="MEDIUM",
-                            category="policy",
-                            message=f"File '{mod_file}' was modified but was not listed in plan expected files.",
-                            file_path=mod_file,
-                            blocking=False,
-                        )
+            if (
+                mod_file not in all_allowed_targets
+                and not (mod_file.startswith(("tests/", "test/")) or mod_file.endswith(".md"))
+            ):
+                out_of_scope_files.append(mod_file)
+                findings.append(
+                    VerificationFinding(
+                        id=f"scope-warn-{len(findings)+1}",
+                        severity="MEDIUM",
+                        category="policy",
+                        message=f"File '{mod_file}' was modified but was not listed in plan expected files.",
+                        file_path=mod_file,
+                        blocking=False,
                     )
+                )
 
         # 7. Requirement Alignment & Criterion-Level Verification
         compliance_items: list[RequirementComplianceItem] = []

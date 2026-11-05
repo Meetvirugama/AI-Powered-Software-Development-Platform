@@ -57,7 +57,7 @@ def _resolve_engine_model(model: str | None, llm: Any) -> str:
             return prov_model
         from app.core.config import settings
         return settings.active_chat_model
-    except Exception:
+    except Exception:  # noqa: BLE001
         return model or _DEFAULT_MODEL
 
 
@@ -81,7 +81,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
     def _load_system_prompt() -> str:
         try:
             return load_prompt("test_generation_system")
-        except Exception:
+        except Exception:  # noqa: BLE001
             return (
                 "You are a senior software test engineering engine. "
                 "Generate a complete, idiomatic, runnable test file for the target repository code "
@@ -195,7 +195,7 @@ class TestGenerationService(TestGenerationServiceProtocol):
                     if val_exc.raw_response:
                         raw_text = val_exc.raw_response.strip()
                     else:
-                        raise val_exc
+                        raise
 
                 cleaned = self._validator.clean_json_text(raw_text)
                 parsed = json.loads(cleaned)

@@ -192,7 +192,7 @@ class TaskPlanner:
                                 req_target_files.insert(0, norm_fp)
                         except UnsafePathError:
                             pass
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("planner_context_query_warning", extra={"error": str(exc)})
 
         # Match candidate files from repo_files if req_target_files is empty (autonomous agent discovery)
@@ -295,8 +295,8 @@ class TaskPlanner:
             if isinstance(raw_asm, dict) and raw_asm.get("id") and raw_asm.get("description"):
                 try:
                     assumptions.append(TaskAssumption.model_validate(raw_asm))
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("ignoring_malformed_assumption", extra={"error": str(exc)})
         if not assumptions:
             assumptions.append(
                 TaskAssumption(
@@ -558,7 +558,7 @@ class TaskPlanner:
                     )
                 if isinstance(instance, PlannerSchema):
                     return self._sanitize_llm_plan(instance, ctx)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "task_planner_llm_fallback",
                     extra={"task_id": str(task.id), "error": redact(str(exc))},

@@ -420,7 +420,7 @@ class BoundedRepairLoop:
             for raw_line in diff_text.splitlines():
                 if raw_line.startswith(("---", "+++", "@@", "-")):
                     continue
-                if raw_line.startswith("+") or raw_line.startswith(" "):
+                if raw_line.startswith(("+", " ")):
                     reconstructed.append(raw_line[1:])
             if reconstructed:
                 return "\n".join(reconstructed) + "\n"
@@ -448,7 +448,8 @@ class BoundedRepairLoop:
                     read_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
                     if getattr(read_res, "success", False):
                         existing_content = getattr(read_res, "content", "") or ""
-                except Exception:
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("workspace_read_for_patch_error", extra={"error": str(exc), "file": target_file})
                     existing_content = ""
 
             content = self._extract_patched_content(

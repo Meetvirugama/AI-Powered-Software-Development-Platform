@@ -1,5 +1,7 @@
 """Standalone AI services for Developer Intelligence & Week 3 Workflow Automation."""
 
+from __future__ import annotations
+
 from ai.services.agent_execution_loop import (
     AgentExecutionLoop,
     AgentExecutionResult,
@@ -13,6 +15,8 @@ from ai.services.bounded_repair_loop import (
     BoundedRepairOutcome,
 )
 from ai.services.bug_detection_engine import BugDetectionEngine
+from ai.services.bug_finding_validator import BugFindingValidator
+from ai.services.bug_investigator import BugInvestigator
 from ai.services.code_review_engine import AICodeReviewEngine
 from ai.services.execution_budget_manager import (
     BudgetExceededError,
@@ -62,6 +66,11 @@ from ai.services.task_requirement_discovery import (
     TaskRequirementDiscovery,
 )
 from ai.services.test_generation_service import TestGenerationService
+from ai.services.test_requirement_service import (
+    PlannedTestScenario,
+    TestPlan,
+    TestRequirementService,
+)
 
 __all__ = [
     "AICodeReviewEngine",
@@ -73,6 +82,8 @@ __all__ = [
     "BoundedRepairOutcome",
     "BudgetExceededError",
     "BugDetectionEngine",
+    "BugFindingValidator",
+    "BugInvestigator",
     "CodeExplanationService",
     "CompletenessIssue",
     "DiscoveredTaskRequirement",
@@ -87,6 +98,7 @@ __all__ = [
     "LoopDetectedError",
     "PlanCompletenessReport",
     "PlanReplanner",
+    "PlannedTestScenario",
     "PlanningOutcome",
     "RecoveryOutcome",
     "RequirementComplianceItem",
@@ -101,6 +113,8 @@ __all__ = [
     "TaskPlanner",
     "TaskRequirementDiscovery",
     "TestGenerationService",
+    "TestPlan",
+    "TestRequirementService",
     "TokenBudgetExhaustedError",
     "extract_safe_repo_paths",
     "fence_untrusted_issue_data",

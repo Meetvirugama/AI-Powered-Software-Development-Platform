@@ -36,10 +36,9 @@ class BugFindingValidator:
         """Validate line boundaries, ground paths, and redact secrets."""
         # 1. Ground source file path
         source_ref = finding.source_reference
-        if source_ref.file_path != target_file_path:
+        if source_ref.file_path != target_file_path and known_files and source_ref.file_path not in known_files:
             # If AI reported relative or variant path, ground it to known target
-            if known_files and source_ref.file_path not in known_files:
-                source_ref.file_path = target_file_path
+            source_ref.file_path = target_file_path
 
         # 2. Check line range sanity
         if total_lines and total_lines > 0:

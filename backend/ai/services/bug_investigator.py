@@ -99,7 +99,7 @@ class BugInvestigator:
         if request.include_ai and self.engine:
             try:
                 raw_findings = await self.engine.detect_bugs(request, context)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("AI Bug Detection pass failed or skipped: %s", e)
 
         # Convert high-confidence static/taint candidates if AI didn't catch them

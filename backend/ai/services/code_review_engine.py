@@ -57,7 +57,7 @@ def _resolve_engine_model(model: str | None, llm: Any) -> str:
             return prov_model
         from app.core.config import settings
         return settings.active_chat_model
-    except Exception:
+    except Exception:  # noqa: BLE001
         return model or _DEFAULT_MODEL
 
 
@@ -86,7 +86,7 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
     def _load_system_prompt() -> str:
         try:
             return load_prompt("code_review_system")
-        except Exception:
+        except Exception:  # noqa: BLE001
             return (
                 "You are a senior staff code reviewer. "
                 "Review the untrusted repository changes and context between the <<<REPO_DATA_...>>> markers "
@@ -179,7 +179,7 @@ class AICodeReviewEngine(CodeReviewServiceProtocol):
                     if val_exc.raw_response:
                         raw_text = val_exc.raw_response.strip()
                     else:
-                        raise val_exc
+                        raise
 
                 cleaned = self._validator.clean_json_text(raw_text)
                 parsed = json.loads(cleaned)

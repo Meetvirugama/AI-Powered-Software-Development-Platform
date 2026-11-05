@@ -116,7 +116,7 @@ class TestRequirementService:
 
         try:
             sys_prompt = load_prompt("test_planning_system")
-        except Exception:
+        except Exception:  # noqa: BLE001
             return det_plan
 
         user_content = (
@@ -166,7 +166,7 @@ class TestRequirementService:
                 det_plan.scenarios = ai_scenarios
                 det_plan.unsupported_scenarios = parsed.get("unsupported_scenarios", [])
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(f"AI test planning encountered error; using deterministic plan: {exc}")
 
         return det_plan

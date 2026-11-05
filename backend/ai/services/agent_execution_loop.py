@@ -126,7 +126,7 @@ class LoopDetector:
         normalized_files = tuple(sorted(str(f).strip() for f in target_files))
         try:
             serialized = json.dumps(content_or_args, sort_keys=True, default=str)
-        except Exception:
+        except Exception:  # noqa: BLE001
             serialized = str(content_or_args)
         payload_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
         return ActionFingerprint(
@@ -142,9 +142,8 @@ class LoopDetector:
         n = len(self._history)
 
         # Check for immediate identical repeat
-        if n >= 2 and self._history[-1] == self._history[-2]:
-            if self.max_cycle_repetitions <= 1:
-                return True, 1
+        if n >= 2 and self._history[-1] == self._history[-2] and self.max_cycle_repetitions <= 1:
+            return True, 1
 
         # Check for repeating cycles of length k from 1 up to max_cycle_window
         for k in range(1, min(self.max_cycle_window + 1, n // self.max_cycle_repetitions + 1)):
@@ -326,7 +325,7 @@ class AgentExecutionLoop:
             expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
             step_input = dict(payload_map.get(step_id, {}) or {})
             if "content" not in step_input and action_type in ("edit", "create", "write", "modify", "refactor"):
-                for other_pid, other_input in payload_map.items():
+                for other_input in payload_map.values():
                     if isinstance(other_input, dict) and "content" in other_input:
                         step_input["content"] = other_input["content"]
                         break
@@ -527,7 +526,7 @@ class AgentExecutionLoop:
                             written_tests.append(target_file)
                     output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
                 else:
-                    cmd = step_input.get("command") or getattr(step, "command", None) or ("pytest" if action_type == "test" else "pytest")
+                    cmd = step_input.get("command") or getattr(step, "command", None) or "pytest"
                     args = list(step_input.get("args") or [])
                     req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
                     if hasattr(self.workspace_manager, "execute_command"):
@@ -565,8 +564,8 @@ class AgentExecutionLoop:
                         cnt = getattr(r_res, "content", None)
                         if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
                             file_contents[target_file] = str(cnt)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("verifier_file_read_error", extra={"error": str(exc), "file": target_file})
 
             v_outcome = self.execution_verifier.verify_step_execution(
                 task_id=task_id,
@@ -595,7 +594,7 @@ class AgentExecutionLoop:
                 payload={"step_id": step_id, "duration_ms": record.duration_ms},
             )
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             err_msg = redact(str(exc))
             record.status = StepExecutionStatus.FAILED
             record.error_message = err_msg

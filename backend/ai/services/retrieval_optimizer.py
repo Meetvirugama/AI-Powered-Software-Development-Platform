@@ -282,7 +282,7 @@ class RetrievalLatencyOptimizer:
         n = len(sorted_vals)
 
         def percentile(p: float) -> float:
-            idx = int(math.ceil(p * n)) - 1
+            idx = math.ceil(p * n) - 1
             idx = max(0, min(idx, n - 1))
             return sorted_vals[idx]
 
