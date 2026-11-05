@@ -165,26 +165,6 @@ export async function getAnalysisRuns(
 }
 
 /**
- * List historical bug detection scans for an authorized repository.
- */
-export async function getBugScanHistory(
-  repositoryId: string,
-  params?: {
-    status?: string;
-    target_path?: string;
-    source_revision?: string;
-    user_id?: string;
-    page?: number;
-    page_size?: number;
-  }
-): Promise<PaginatedAnalysisRunResponse> {
-  return getAnalysisRuns(repositoryId, {
-    ...params,
-    feature_type: 'detect_bugs',
-  });
-}
-
-/**
  * Reopen a specific analysis run from persistent history.
  */
 export async function getAnalysisRun(
@@ -194,44 +174,6 @@ export async function getAnalysisRun(
     `/analysis-runs/${runId}`
   );
   return response.data;
-}
-
-/**
- * Reopen a specific bug detection scan run from persistent history.
- */
-export async function reopenBugScan(
-  runId: string
-): Promise<AnalysisRunDetailResponse> {
-  return getAnalysisRun(runId);
-}
-
-/**
- * List historical test generation runs for an authorized repository.
- */
-export async function getTestGenerationHistory(
-  repositoryId: string,
-  params?: {
-    status?: string;
-    target_path?: string;
-    source_revision?: string;
-    user_id?: string;
-    page?: number;
-    page_size?: number;
-  }
-): Promise<PaginatedAnalysisRunResponse> {
-  return getAnalysisRuns(repositoryId, {
-    ...params,
-    feature_type: 'generate_tests',
-  });
-}
-
-/**
- * Reopen a specific test generation run from persistent history (Scenario C Step 7).
- */
-export async function reopenTestGeneration(
-  runId: string
-): Promise<AnalysisRunDetailResponse> {
-  return getAnalysisRun(runId);
 }
 
 /**
