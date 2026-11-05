@@ -40,8 +40,8 @@ class HybridRetriever(Retriever):
 
     def __init__(
         self,
-        vector_retriever: Retriever,
-        lexical_retriever: Retriever,
+        vector_retriever: Retriever | None = None,
+        lexical_retriever: Retriever | None = None,
         fusion: RRFFusion | None = None,
         reranker: CrossEncoderReranker | None = None,
         vector_top_k: int = _DEFAULT_CANDIDATE_TOP_K,
@@ -55,12 +55,12 @@ class HybridRetriever(Retriever):
         self._lexical_top_k = lexical_top_k
 
     @property
-    def vector_retriever(self) -> Retriever:
+    def vector_retriever(self) -> Retriever | None:
         """Configured vector search retriever."""
         return self._vector_retriever
 
     @property
-    def lexical_retriever(self) -> Retriever:
+    def lexical_retriever(self) -> Retriever | None:
         """Configured lexical search retriever."""
         return self._lexical_retriever
 
@@ -212,9 +212,18 @@ class HybridRetriever(Retriever):
         return fused[:top_k]
 
     async def aclose(self) -> None:
-        """Close child retriever resources."""
-        await self._vector_retriever.aclose()
-        await self._lexical_retriever.aclose()
+        """Close child retriever resources safely."""
+        first_err: Exception | None = None
+        for retriever in (self._vector_retriever, self._lexical_retriever):
+            if retriever is not None and hasattr(retriever, "aclose") and callable(retriever.aclose):
+                try:
+                    await retriever.aclose()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("hybrid_retriever_child_close_error", extra={"error": str(exc)})
+                    if first_err is None:
+                        first_err = exc
+        if first_err is not None:
+            raise first_err
 
     async def __aenter__(self: Self) -> Self:
         return self

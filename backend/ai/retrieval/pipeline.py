@@ -11,7 +11,7 @@ Architecture Notice:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 from ai.schemas.grounding import GroundingValidator
@@ -25,6 +25,8 @@ from .reranker import CrossEncoderReranker
 from .vector import VectorRetriever
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["RAGPipeline"]
 
 
 class RAGPipeline:
@@ -50,13 +52,38 @@ class RAGPipeline:
         self.llm_gateway = llm_gateway
 
         self._hybrid_retriever: HybridRetriever | None = None
-        if self.vector_retriever is not None and self.lexical_retriever is not None:
+        if self.vector_retriever is not None or self.lexical_retriever is not None:
             self._hybrid_retriever = HybridRetriever(
                 vector_retriever=self.vector_retriever,
                 lexical_retriever=self.lexical_retriever,
                 fusion=self.fusion,
                 reranker=self.reranker,
             )
+
+    @property
+    def hybrid_retriever(self) -> HybridRetriever | None:
+        """Configured or dynamically aligned HybridRetriever instance."""
+        if self._hybrid_retriever is not None:
+            if (
+                self._hybrid_retriever.vector_retriever is not self.vector_retriever
+                or self._hybrid_retriever.lexical_retriever is not self.lexical_retriever
+            ):
+                self._hybrid_retriever = HybridRetriever(
+                    vector_retriever=self.vector_retriever,
+                    lexical_retriever=self.lexical_retriever,
+                    fusion=self.fusion,
+                    reranker=self.reranker,
+                )
+            return self._hybrid_retriever
+
+        if self.vector_retriever is not None or self.lexical_retriever is not None:
+            self._hybrid_retriever = HybridRetriever(
+                vector_retriever=self.vector_retriever,
+                lexical_retriever=self.lexical_retriever,
+                fusion=self.fusion,
+                reranker=self.reranker,
+            )
+        return self._hybrid_retriever
 
     async def retrieve(
         self,
@@ -69,59 +96,15 @@ class RAGPipeline:
         if not clean_query:
             return []
 
-        # If both retrievers are present, use canonical HybridRetriever
-        if self._hybrid_retriever is not None:
-            try:
-                return await self._hybrid_retriever.retrieve(
-                    query=clean_query,
-                    repository_id=repository_id,
-                    top_k=top_k,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("HybridRetriever failed, falling back: %s", exc)
+        retriever = self.hybrid_retriever
+        if retriever is not None:
+            return await retriever.retrieve(
+                query=clean_query,
+                repository_id=repository_id,
+                top_k=top_k,
+            )
 
-        candidate_lists: list[list[CodeChunk]] = []
-
-        if self.vector_retriever is not None:
-            try:
-                vec_results = await self.vector_retriever.retrieve(
-                    query=clean_query,
-                    repository_id=repository_id,
-                    top_k=30,
-                )
-                if vec_results:
-                    candidate_lists.append(vec_results)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Vector retrieval error: %s", exc)
-
-        if self.lexical_retriever is not None:
-            try:
-                lex_results = await self.lexical_retriever.retrieve(
-                    query=clean_query,
-                    repository_id=repository_id,
-                    top_k=30,
-                )
-                if lex_results:
-                    candidate_lists.append(lex_results)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Lexical retrieval error: %s", exc)
-
-        if not candidate_lists:
-            return []
-
-        if len(candidate_lists) == 1:
-            fused = candidate_lists[0]
-        else:
-            fused = self.fusion.fuse(*candidate_lists, top_n=30)
-
-        if not fused:
-            return []
-
-        try:
-            return self.reranker.rerank(query=clean_query, candidates=fused, top_n=top_k)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Cross-encoder reranking error: %s", exc)
-            return fused[:top_k]
+        return []
 
     async def chat(
         self,
@@ -175,3 +158,20 @@ class RAGPipeline:
             answer = await self.grounding_validator.validate_sources(answer, repository_id)
 
         return answer
+
+    async def aclose(self) -> None:
+        """Close child retrieval resources."""
+        if self._hybrid_retriever is not None:
+            await self._hybrid_retriever.aclose()
+
+    async def __aenter__(self: Self) -> Self:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        await self.aclose()
+

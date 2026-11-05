@@ -24,6 +24,8 @@ from uuid import UUID
 
 from .base import CodeChunk
 
+__all__ = ["RRFFusion"]
+
 logger = logging.getLogger(__name__)
 
 _RRF_K = 60          # Standard constant — do not change without benchmarking
