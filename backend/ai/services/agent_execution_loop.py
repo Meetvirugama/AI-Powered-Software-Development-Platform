@@ -33,8 +33,6 @@ from app.schemas.plan import PlanStep, StructuredPlan
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceExecutionEventType,
-    WorkspaceFileReadRequest,
-    WorkspaceFileWriteRequest,
     WorkspaceStatus,
 )
 from sandbox.exceptions import (
@@ -441,14 +439,13 @@ class AgentExecutionLoop:
                 replacement_content = str(step_input.get("replacement_content", ""))
                 patched_files: dict[str, int] = {}
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "patch_file"):
-                        res = self.workspace_manager.patch_file(
-                            task_id=task_id,
-                            file_path=target_file,
-                            target_content=target_content,
-                            replacement_content=replacement_content,
-                        )
-                        patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
+                    res = self.workspace_manager.patch_file(
+                        task_id=task_id,
+                        file_path=target_file,
+                        target_content=target_content,
+                        replacement_content=replacement_content,
+                    )
+                    patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
                 output = {"patched_files": patched_files}
 
             elif action_type in ("edit", "create", "write", "modify", "refactor"):
@@ -459,49 +456,33 @@ class AgentExecutionLoop:
                         "Placeholder synthetic writes are prohibited."
                     )
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "write_file"):
-                        res = self.workspace_manager.write_file(
-                            task_id=task_id,
-                            file_path=target_file,
-                            content=content,
-                            create_parents=True,
-                        )
-                        output = {"written_bytes": getattr(res, "bytes_written", len(content))}
-                    else:
-                        req = WorkspaceFileWriteRequest(
-                            task_id=task_id,
-                            file_path=target_file,
-                            content=content,
-                            create_directories=True,
-                        )
-                        res = self.workspace_manager.safe_write_file(req)
-                        output = {"written_bytes": getattr(res, "bytes_written", len(content))}
+                    res = self.workspace_manager.write_file(
+                        task_id=task_id,
+                        file_path=target_file,
+                        content=content,
+                        create_parents=True,
+                    )
+                    output = {"written_bytes": getattr(res, "bytes_written", len(content))}
 
             elif action_type == "delete":
                 deleted_files: list[str] = []
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "delete_file"):
-                        self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
-                        deleted_files.append(target_file)
+                    self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
+                    deleted_files.append(target_file)
                 output = {"deleted_files": deleted_files}
 
             elif action_type in ("inspect", "read"):
                 read_outputs: dict[str, str] = {}
                 for target_file in expected_files:
                     try:
-                        if hasattr(self.workspace_manager, "read_file"):
-                            res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                            if hasattr(res, "success") and not res.success:
-                                err = getattr(res, "error", None) or getattr(res, "error_message", None) or "read failed"
-                                if "not found" in str(err).lower() or "does not exist" in str(err).lower():
-                                    read_outputs[target_file] = f"[FILE_NOT_YET_CREATED: {target_file}]"
-                                else:
-                                    raise WorkspaceError(f"Inspection step '{step_id}' failed reading '{target_file}': {err}")
+                        res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                        if hasattr(res, "success") and not res.success:
+                            err = getattr(res, "error", None) or getattr(res, "error_message", None) or "read failed"
+                            if "not found" in str(err).lower() or "does not exist" in str(err).lower():
+                                read_outputs[target_file] = f"[FILE_NOT_YET_CREATED: {target_file}]"
                             else:
-                                read_outputs[target_file] = getattr(res, "content", "") or ""
+                                raise WorkspaceError(f"Inspection step '{step_id}' failed reading '{target_file}': {err}")
                         else:
-                            req = WorkspaceFileReadRequest(task_id=task_id, file_path=target_file)
-                            res = self.workspace_manager.safe_read_file(req)
                             read_outputs[target_file] = getattr(res, "content", "") or ""
                     except WorkspaceError:
                         raise
@@ -516,7 +497,7 @@ class AgentExecutionLoop:
                     written_tests: list[str] = []
                     for target_file in expected_files:
                         content = step_input.get("content")
-                        if content is not None and hasattr(self.workspace_manager, "write_file"):
+                        if content is not None:
                             self.workspace_manager.write_file(
                                 task_id=task_id,
                                 file_path=target_file,
@@ -529,10 +510,7 @@ class AgentExecutionLoop:
                     cmd = step_input.get("command") or getattr(step, "command", None) or "pytest"
                     args = list(step_input.get("args") or [])
                     req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
-                    if hasattr(self.workspace_manager, "execute_command"):
-                        res = self.workspace_manager.execute_command(req)
-                    else:
-                        res = self.workspace_manager.run_command_in_workspace(req)
+                    res = self.workspace_manager.execute_command(req)
                     output = {
                         "exit_code": res.exit_code,
                         "stdout": res.stdout,
@@ -559,11 +537,10 @@ class AgentExecutionLoop:
             file_contents: dict[str, str] = {}
             for target_file in expected_files:
                 try:
-                    if hasattr(self.workspace_manager, "read_file"):
-                        r_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                        cnt = getattr(r_res, "content", None)
-                        if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
-                            file_contents[target_file] = str(cnt)
+                    r_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                    cnt = getattr(r_res, "content", None)
+                    if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
+                        file_contents[target_file] = str(cnt)
                 except Exception as exc:  # noqa: BLE001
                     logger.debug("verifier_file_read_error", extra={"error": str(exc), "file": target_file})
 

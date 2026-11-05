@@ -93,6 +93,9 @@ def _create_safe_async_engine(
         return None, None
     async_url = _resolve_async_database_url(norm_sync)
     async_kwargs = dict(kwargs)
+    if "pool_size" in async_kwargs:
+        async_kwargs["pool_size"] = max(5, settings.db_pool_size // 2)
+        async_kwargs["max_overflow"] = max(2, settings.db_max_overflow // 2)
     if ":6543" in async_url:
         c_args = dict(async_kwargs.get("connect_args", {}))
         c_args["prepare_threshold"] = None

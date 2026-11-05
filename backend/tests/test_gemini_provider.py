@@ -26,9 +26,9 @@ class TestGeminiProvider:
     def test_model_alias_resolution(self):
         provider = GeminiProvider(api_keys=["test-key"])
         payload, model = provider._build_payload(
-            LLMRequest(model="gemini-flash-lite-latest", messages=[Message(role="user", content="Hi")])
+            LLMRequest(model="models/gemini-2.0-flash", messages=[Message(role="user", content="Hi")])
         )
-        assert model == "gemini-flash-latest"
+        assert model == "gemini-2.0-flash"
 
     @pytest.mark.asyncio
     async def test_generate_success(self):

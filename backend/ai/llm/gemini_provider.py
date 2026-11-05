@@ -120,8 +120,6 @@ class GeminiProvider(LLMProvider):
             model_name = requested_model
         # Strip models/ prefix if present
         model_name = model_name.removeprefix("models/")
-        if model_name in ("gemini-flash-lite-latest", "gemini-1.5-flash", "gemini-2.0-flash"):
-            model_name = "gemini-flash-latest"
 
         payload: dict[str, Any] = {"contents": contents}
 

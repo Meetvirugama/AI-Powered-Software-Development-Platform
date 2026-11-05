@@ -660,70 +660,16 @@ def record_analysis_run(
         "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
     }
 
-    # 1. Try feature-specific history service or general analysis_run_service
-    candidate_services = []
-    if feature_type in ("generate_tests", "tests"):
-        svc = getattr(app_state, "test_generation_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type in ("detect_bugs", "bugs"):
-        svc = getattr(app_state, "bug_scan_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type == "explain":
-        svc = getattr(app_state, "explanation_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type in ("review", "code_review"):
-        svc = getattr(app_state, "review_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-
-    general_run_svc = getattr(app_state, "analysis_run_service", None)
-    if general_run_svc is not None and general_run_svc not in candidate_services:
-        candidate_services.append(general_run_svc)
-
-    saved = False
-    for target_service in candidate_services:
-        if saved:
-            break
-        for method_name in ("record_run", "save_run", "create_run"):
-            fn = getattr(target_service, method_name, None)
-            if callable(fn):
-                try:
-                    import inspect
-                    sig = inspect.signature(fn)
-                    if "db" in sig.parameters and db is not None:
-                        fn(record, db=db)
-                    else:
-                        fn(record)
-                except (TypeError, ValueError):
-                    try:
-                        fn(record)
-                    except Exception as inner_exc:
-                        logger.debug("analysis_run_service_save_fallback_failed", extra={"error": str(inner_exc)})
-                        continue
-                except Exception as exc:
-                    logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
-                    continue
-                saved = True
-                break
-
-    # 2. Try Om's AnalysisRunRepository if available in app.repositories
-    if not saved and hasattr(db, "query"):
+    # 1. Direct persistence to AnalysisRunRepository when database session is available
+    if db is not None:
         try:
-            from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
+            from app.repositories.analysis_run_repository import AnalysisRunRepository
 
-            repo_layer = AnalysisRunRepository(db)
-            for method_name in ("create_run", "create", "save"):
-                fn = getattr(repo_layer, method_name, None)
-                if callable(fn):
-                    fn(**record)
-                    break
-        except Exception:
-            pass
+            AnalysisRunRepository(db).create_run(**record)
+        except Exception as exc:
+            logger.debug("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
-    # 3. Always maintain an in-memory bounded history store on app.state for immediate retrieval
+    # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(
         app_state, "_analysis_run_history", None
     )
