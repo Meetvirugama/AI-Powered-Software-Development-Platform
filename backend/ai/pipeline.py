@@ -36,7 +36,6 @@ from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact
 
 from ai.context.builder import AgentContext, ChatMessage, ContextBuilder, MemoryEntry
-from ai.retrieval.base import RetrievalUnavailableError
 from ai.llm.schemas import (
     LLMError,
     LLMRateLimitError,
@@ -47,6 +46,7 @@ from ai.llm.schemas import (
     LLMValidationError,
     Message,
 )
+from ai.retrieval.base import RetrievalUnavailableError
 from ai.schemas.grounding import GroundingValidator
 from ai.schemas.output import RepositoryAnswer
 from ai.schemas.prompt_builder import PromptBuilder
@@ -147,7 +147,7 @@ class RAGPipeline:
                 try:
                     from app.core.config import settings
                     self._model = settings.active_chat_model
-                except Exception:
+                except Exception:  # noqa: BLE001
                     self._model = model or self._DEFAULT_MODEL
         else:
             self._model = model or self._DEFAULT_MODEL
@@ -407,7 +407,7 @@ class RAGPipeline:
             )
         except (RetrievalUnavailableError, APIError):
             raise
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.error(
                 "rag_pipeline_retrieval_error",
                 extra={"error": str(exc), "repo_id": str(repo_uuid)},
@@ -433,9 +433,10 @@ class RAGPipeline:
         if db is None:
             return []
         try:
+            import inspect
+
             from app.models.repository_file import RepositoryFile as DBRepoFile
             from sqlalchemy import select
-            import inspect
 
             session_factory = None
             session = db
@@ -454,11 +455,10 @@ class RAGPipeline:
                         sc: Any = scalars_fn()
                         rows = list(sc.all())
                     elif hasattr(res, "all"):
-                        all_fn: Any = getattr(res, "all")
-                        rows = list(all_fn())
+                        rows = list(res.all())
             elif session is not None and hasattr(session, "execute"):
                 sess: Any = session
-                execute_fn: Any = getattr(sess, "execute")
+                execute_fn: Any = sess.execute
                 if inspect.iscoroutinefunction(execute_fn):
                     res: Any = await execute_fn(stmt)
                 else:
@@ -468,8 +468,7 @@ class RAGPipeline:
                     sc: Any = scalars_fn()
                     rows = list(sc.all())
                 elif hasattr(res, "all"):
-                    all_fn: Any = getattr(res, "all")
-                    rows = list(all_fn())
+                    rows = list(res.all())
 
             from ai.context.builder import RepositoryFile
             return [
@@ -655,12 +654,12 @@ class RAGPipeline:
     async def aclose(self) -> None:
         """Gracefully close any resources held by retriever or LLM gateway."""
         llm: Any = self.llm
-        if hasattr(llm, "aclose") and callable(getattr(llm, "aclose")):
+        if hasattr(llm, "aclose") and callable(llm.aclose):
             res = llm.aclose()
             if inspect.isawaitable(res):
                 await res
         retriever: Any = self.retriever
-        if hasattr(retriever, "aclose") and callable(getattr(retriever, "aclose")):
+        if hasattr(retriever, "aclose") and callable(retriever.aclose):
             res = retriever.aclose()
             if inspect.isawaitable(res):
                 await res
