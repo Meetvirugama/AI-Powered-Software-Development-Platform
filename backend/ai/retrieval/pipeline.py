@@ -11,11 +11,12 @@ Architecture Notice:
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional
+from typing import Any
 from uuid import UUID
 
 from ai.schemas.grounding import GroundingValidator
 from ai.schemas.output import RepositoryAnswer, SourceReference
+
 from .base import CodeChunk
 from .fusion import RRFFusion
 from .hybrid import HybridRetriever
@@ -34,11 +35,11 @@ class RAGPipeline:
 
     def __init__(
         self,
-        vector_retriever: Optional[VectorRetriever] = None,
-        lexical_retriever: Optional[LexicalRetriever] = None,
-        fusion: Optional[RRFFusion] = None,
-        reranker: Optional[CrossEncoderReranker] = None,
-        grounding_validator: Optional[GroundingValidator] = None,
+        vector_retriever: VectorRetriever | None = None,
+        lexical_retriever: LexicalRetriever | None = None,
+        fusion: RRFFusion | None = None,
+        reranker: CrossEncoderReranker | None = None,
+        grounding_validator: GroundingValidator | None = None,
         llm_gateway: Any = None,
     ) -> None:
         self.vector_retriever = vector_retriever
@@ -48,7 +49,7 @@ class RAGPipeline:
         self.grounding_validator = grounding_validator
         self.llm_gateway = llm_gateway
 
-        self._hybrid_retriever: Optional[HybridRetriever] = None
+        self._hybrid_retriever: HybridRetriever | None = None
         if self.vector_retriever is not None and self.lexical_retriever is not None:
             self._hybrid_retriever = HybridRetriever(
                 vector_retriever=self.vector_retriever,
@@ -62,7 +63,7 @@ class RAGPipeline:
         query: str,
         repository_id: UUID,
         top_k: int = 5,
-    ) -> List[CodeChunk]:
+    ) -> list[CodeChunk]:
         """Hybrid retrieve top-k code chunks for a query string."""
         clean_query = query.strip()
         if not clean_query:
@@ -76,10 +77,10 @@ class RAGPipeline:
                     repository_id=repository_id,
                     top_k=top_k,
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("HybridRetriever failed, falling back: %s", exc)
 
-        candidate_lists: List[List[CodeChunk]] = []
+        candidate_lists: list[list[CodeChunk]] = []
 
         if self.vector_retriever is not None:
             try:
@@ -90,7 +91,7 @@ class RAGPipeline:
                 )
                 if vec_results:
                     candidate_lists.append(vec_results)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Vector retrieval error: %s", exc)
 
         if self.lexical_retriever is not None:
@@ -102,7 +103,7 @@ class RAGPipeline:
                 )
                 if lex_results:
                     candidate_lists.append(lex_results)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Lexical retrieval error: %s", exc)
 
         if not candidate_lists:
@@ -118,7 +119,7 @@ class RAGPipeline:
 
         try:
             return self.reranker.rerank(query=clean_query, candidates=fused, top_n=top_k)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Cross-encoder reranking error: %s", exc)
             return fused[:top_k]
 
@@ -126,7 +127,7 @@ class RAGPipeline:
         self,
         question: str,
         repository_id: UUID,
-        history: Optional[list] = None,
+        history: list | None = None,
     ) -> RepositoryAnswer:
         """Answer repository question grounded in retrieved code chunks."""
         # If an LLM gateway is configured, delegate to canonical RAGPipeline

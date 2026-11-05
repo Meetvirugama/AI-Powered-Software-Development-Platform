@@ -92,6 +92,8 @@ class HybridRetriever(Retriever):
         lexical_chunks: list[CodeChunk] = []
         vector_failed = False
         lexical_failed = False
+        vector_exc: Exception | None = None
+        lexical_exc: Exception | None = None
         vector_err_str: str | None = None
         lexical_err_str: str | None = None
 
@@ -122,6 +124,7 @@ class HybridRetriever(Retriever):
                 if kind == "vector":
                     if isinstance(res, Exception):
                         vector_failed = True
+                        vector_exc = res
                         vector_err_str = str(res)
                         logger.error(
                             "hybrid_retrieval_vector_failed",
@@ -132,6 +135,7 @@ class HybridRetriever(Retriever):
                 elif kind == "lexical":
                     if isinstance(res, Exception):
                         lexical_failed = True
+                        lexical_exc = res
                         lexical_err_str = str(res)
                         logger.error(
                             "hybrid_retrieval_lexical_failed",
@@ -152,8 +156,8 @@ class HybridRetriever(Retriever):
             )
             raise RetrievalUnavailableError(
                 message=f"Hybrid retrieval failed for repo {repo_uuid}: both vector and lexical search failed.",
-                vector_error=vector_res if isinstance(vector_res, Exception) else None,
-                lexical_error=lexical_res if isinstance(lexical_res, Exception) else None,
+                vector_error=vector_exc,
+                lexical_error=lexical_exc,
                 repo_id=str(repo_uuid),
             )
 
