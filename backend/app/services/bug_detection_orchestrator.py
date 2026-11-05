@@ -39,18 +39,24 @@ import re
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy.orm import Session
-
 from ai.context.bug_context import BugContextExtractor, extract_bug_context
 from ai.context.builder import (
     RepositoryFile as ContextRepoFile,
+)
+from ai.context.builder import (
     SymbolContext,
     TargetSnippet,
 )
 from ai.intelligence.related_files import RelatedFileDiscoveryService
 from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
+from sqlalchemy.orm import Session
+
 from app.core.errors import APIError, ErrorCode
-from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
+from app.core.input_security import (
+    UnsafePathError,
+    require_safe_repo_path,
+    validate_repo_relative_path,
+)
 from app.core.secret_redaction import redact as _shared_redact
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
@@ -941,27 +947,35 @@ def normalize_and_ground_findings(
             finding = item
         elif isinstance(item, dict):
             data = dict(item)
+            meta = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
             if not data.get("id"):
                 data["id"] = f"finding-{idx + 1}"
             if default_source_type and not data.get("source_type"):
                 data["source_type"] = default_source_type
+            if "category" not in data or not data["category"]:
+                data["category"] = meta.get("category") or data.get("rule_id") or data.get("issue_type") or "security"
+            if "severity" in data and isinstance(data["severity"], str):
+                data["severity"] = data["severity"].upper()
+            elif "severity" not in data or not data["severity"]:
+                sev = data.get("level") or meta.get("severity") or "MEDIUM"
+                data["severity"] = str(sev).upper()
             if "title" not in data:
                 data["title"] = data.get("message") or data.get("rule_id") or data.get("category") or "Potential defect"
             if "description" not in data:
                 data["description"] = data.get("message") or data.get("explanation") or data["title"]
             if "evidence" not in data:
-                data["evidence"] = data.get("snippet") or data.get("code") or data.get("line_content") or data["description"]
-            if "suggested_fix" not in data and ("remediation" in data or "fix" in data):
-                data["suggested_fix"] = data.get("remediation") or data.get("fix")
+                data["evidence"] = data.get("snippet") or data.get("code") or data.get("line_content") or meta.get("evidence") or data["description"]
+            if "suggested_fix" not in data and ("remediation" in data or "fix" in data or "remediation" in meta):
+                data["suggested_fix"] = data.get("remediation") or data.get("fix") or meta.get("remediation")
             if "source_reference" not in data:
                 fp = data.get("file_path") or data.get("file") or data.get("path") or resolved.target.path
                 s_ln = data.get("start_line") or data.get("line") or data.get("line_number")
-                e_ln = data.get("end_line") or s_ln
+                e_ln = data.get("end_line") or meta.get("end_line") or s_ln
                 data["source_reference"] = {
                     "file_path": fp,
                     "start_line": s_ln,
                     "end_line": e_ln,
-                    "symbol_name": data.get("symbol_name") or data.get("symbol"),
+                    "symbol_name": data.get("symbol_name") or data.get("symbol") or meta.get("enclosing_symbol"),
                     "revision": data.get("revision") or resolved.revision,
                 }
             finding = BugFinding.model_validate(data)
