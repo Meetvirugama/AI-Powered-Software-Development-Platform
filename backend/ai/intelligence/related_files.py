@@ -162,14 +162,14 @@ class RelatedFileDiscoveryService:
                     or f.path.endswith((f"test_{base_name}.py", f"{base_name}.test.ts"))
                 )
             ):
-                    self._add_or_update(
-                        discovered,
-                        f.path,
-                        "associated_test",
-                        f"Associated test suite verifying '{base_name}'",
-                        f.path,
-                        is_preselected=False,  # Unchecked by default as shown in task.md §6
-                    )
+                self._add_or_update(
+                    discovered,
+                    f.path,
+                    "associated_test",
+                    f"Associated test suite verifying '{base_name}'",
+                    f.path,
+                    is_preselected=False,  # Unchecked by default as shown in task.md §6
+                )
 
         # 4. Check for related models or schemas in the same subsystem
         module_id = next((f.module_id for f in snap.files if f.path == target_path), None)

@@ -12,6 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
@@ -82,12 +83,12 @@ class DependencyImpactAnalyzer:
 
         # BFS traverse callers and importers up to depth 2
         visited_nodes: set[str] = set()
-        queue = list(changed_node_ids)
+        queue = deque(changed_node_ids)
         affected_symbols: set[str] = set()
         affected_files: set[str] = set(changed_set)
 
         while queue:
-            curr = queue.pop(0)
+            curr = queue.popleft()
             if curr in visited_nodes:
                 continue
             visited_nodes.add(curr)

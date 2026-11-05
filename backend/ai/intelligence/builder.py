@@ -54,9 +54,7 @@ class RepositoryIntelligenceBuilder:
         now_iso = datetime.now(UTC).isoformat()
 
         # 1. Process files
-        file_id_to_record: dict[str, Any] = {}
         file_id_to_path: dict[str, str] = {}
-        file_path_to_id: dict[str, str] = {}
         file_intels: list[FileIntelligenceMetadata] = []
         languages_count: dict[str, int] = defaultdict(int)
 
@@ -64,9 +62,7 @@ class RepositoryIntelligenceBuilder:
             f_id = str(getattr(f, "id", ""))
             f_path = str(getattr(f, "path", ""))
             f_lang = str(getattr(f, "language", "") or "text").lower()
-            file_id_to_record[f_id] = f
             file_id_to_path[f_id] = f_path
-            file_path_to_id[f_path] = f_id
 
             if f_lang and f_lang != "text":
                 languages_count[f_lang] += 1
@@ -96,7 +92,6 @@ class RepositoryIntelligenceBuilder:
 
         # 2. Process Symbols & Graph Nodes
         symbol_nodes: list[GraphNode] = []
-        symbol_id_to_node: dict[str, GraphNode] = {}
         entry_points: list[EntryPointMetadata] = []
 
         for s in symbols:
@@ -119,7 +114,6 @@ class RepositoryIntelligenceBuilder:
                 signature=s_sig,
             )
             symbol_nodes.append(node)
-            symbol_id_to_node[s_id] = node
 
             # Attach symbol name to file metadata
             if s_path in file_intel_map and s_name not in file_intel_map[s_path].symbols:
@@ -227,7 +221,8 @@ class RepositoryIntelligenceBuilder:
         node_name = node.name.lower()
 
         # FastAPI / Flask decorator
-        route_match = re.search(r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', content)
+        search_body = f"{signature}\n{content}" if signature else content
+        route_match = re.search(r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', search_body)
         if route_match:
             method, route = route_match.groups()
             return EntryPointMetadata(
