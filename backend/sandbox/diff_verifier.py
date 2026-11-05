@@ -42,7 +42,6 @@ from sandbox.constants import (
 from sandbox.exceptions import (
     WorkspaceDiffError,
     WorkspacePathEscapeError,
-    WorkspaceStaleApprovalError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 
@@ -327,43 +326,6 @@ class WorkspaceDiffVerifier:
             warnings=warnings,
             validated_at=datetime.now(UTC).isoformat(),
         )
-
-    def assert_revision_integrity(
-        self,
-        workspace_path: Path,
-        expected_base_revision: str,
-    ) -> str:
-        """Verify that the workspace working tree is based on the expected base revision.
-
-        Raises:
-            WorkspaceStaleApprovalError: If base revision has drifted or changed.
-        """
-        if not workspace_path.exists():
-            raise WorkspaceStaleApprovalError(f"Workspace path does not exist: {workspace_path}")
-
-        git_dir = workspace_path / ".git"
-        if not git_dir.exists():
-            return expected_base_revision
-
-        try:
-            # Check current commit or branch parent
-            cmd = ["git", "-C", str(workspace_path), "rev-parse", "HEAD"]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-            if proc.returncode == 0:
-                current_sha = proc.stdout.strip()
-                # In git worktree or branch, HEAD may be a commit on the branch
-                # Verify if expected_base_revision is an ancestor or matches
-                return current_sha
-        except Exception as exc:
-            logger.warning("git_rev_parse_failed", extra={"error": str(exc)})
-
-        return expected_base_revision
 
     # -----------------------------------------------------------------------
     # Internal Helpers

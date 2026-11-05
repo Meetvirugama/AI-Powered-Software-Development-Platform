@@ -44,10 +44,6 @@ class Parser:
         """Return True if language is in the recognized grammar mapping."""
         return language in self.language_map
 
-    def get_supported_languages(self) -> list[str]:
-        """Return the list of all supported language names."""
-        return list(self.language_map.keys())
-
     def parse_with_status(self, file_info: FileInfo, content: str) -> ParseResult:
         """Parse source content and return a structured ParseResult with explicit status."""
         safe_content = _sanitize_source_text(content or "")

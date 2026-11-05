@@ -35,7 +35,6 @@ from scanner.test_gap_analyzer import TestGapAnalyzer
 from scanner.test_mapper import FileTestMapper, TestEvidenceLevel
 from scanner.test_quality_analyzer import TestQualityAnalyzer
 from scanner.test_requirement_discovery import TestRequirementDiscovery
-from ai.services.test_requirement_service import TestRequirementService
 from app.services.test_generation_report import format_test_suite_report_markdown
 from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
 
@@ -311,36 +310,6 @@ def test_flaky_timing():
     assert report.flaky_test_count >= 2
     assert report.quality_score is not None
     assert report.quality_score < 100.0
-
-
-# ---------------------------------------------------------------------------
-# 6. Test Requirement Service & Planning Tests
-# ---------------------------------------------------------------------------
-
-def test_requirement_service_planning():
-    """Verify test requirement service creates deterministic plan from gaps."""
-    service = TestRequirementService()
-
-    gap_result = TestGapAnalyzer().analyze_gaps([
-        TestRequirement(
-            requirement_id="REQ-AUTH-001",
-            title="Authenticate Token",
-            category="api_contract",
-            priority="CRITICAL",
-            source_symbols=["authenticate_token"],
-            expected_behavior="Valid token returns payload",
-            status="MISSING",
-        )
-    ])
-
-    plan = service.create_deterministic_plan("backend/app/services/auth.py", gap_result, framework="pytest")
-
-    assert plan.target_file == "backend/app/services/auth.py"
-    assert len(plan.scenarios) == 1
-    scenario = plan.scenarios[0]
-    assert scenario.category == "api_contract"
-    assert scenario.priority == "CRITICAL"
-    assert "authenticate_token" in scenario.name
 
 
 # ---------------------------------------------------------------------------

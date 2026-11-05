@@ -1123,52 +1123,6 @@ def parse_unified_diff_changed_lines(diff_text: str) -> dict[str, set[int]]:
     return changed_by_file
 
 
-def run_static_review_checks(
-    *,
-    file_path: str,
-    content: str,
-    changed_lines: set[int] | None = None,
-    revision: str | None = None,
-    repository_id: str | None = None,
-) -> list[ReviewFinding]:
-    """Run deterministic static review checks on a single file and map findings to ReviewFinding."""
-    if not content or not content.strip():
-        return []
-    scanner = BuiltinStaticBugScanner()
-    bug_items, _ = scanner.scan(
-        file_path=file_path,
-        code_content=content,
-        base_start_line=1,
-        revision=revision,
-        repository_id=repository_id,
-    )
-    review_findings: list[ReviewFinding] = []
-    for bf in bug_items:
-        s_ln = bf.source_reference.start_line
-        e_ln = bf.source_reference.end_line or s_ln
-        is_new = True
-        if changed_lines is not None and s_ln is not None and e_ln is not None:
-            is_new = any(ln in changed_lines for ln in range(s_ln, e_ln + 1))
-        review_findings.append(
-            ReviewFinding(
-                id=bf.id.replace("static-", "rev-static-"),
-                category=map_to_review_category(bf.category, bf.rule_id),
-                severity=bf.severity,
-                title=bf.title,
-                description=bf.description,
-                source_reference=bf.source_reference,
-                evidence=bf.evidence,
-                suggested_fix=bf.suggested_fix,
-                confidence=bf.confidence,
-                is_uncertain=bf.is_uncertain,
-                is_new_in_change=is_new,
-                source_type="STATIC",
-                rule_id=bf.rule_id,
-            )
-        )
-    return review_findings
-
-
 def compute_category_counts(findings: list[ReviewFinding]) -> dict[str, int]:
     """Compute per-category finding counts across the 5 ReviewCategory dimensions."""
     counts: dict[str, int] = {}

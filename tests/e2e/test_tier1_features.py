@@ -61,7 +61,7 @@ from ai.retrieval.base import CodeChunk
 from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.reranker import CrossEncoderReranker
 from ai.services.retrieval_optimizer import AgentTokenBudgetManager, TokenBudgetExhaustedError
-from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop, RepairBudgetExhaustedError
+from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop
 from scanner.framework_detector import FrameworkDetector
 
 

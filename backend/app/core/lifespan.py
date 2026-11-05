@@ -91,7 +91,6 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
     try:
         from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
-        from ai.embeddings.service import EmbeddingService
         from ai.pipeline import RAGPipeline
         from ai.retrieval.hybrid import HybridRetriever
         from ai.retrieval.lexical import LexicalRetriever
@@ -119,7 +118,17 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     api_keys=gemini_keys,
                     dimensions=settings.embedding_dimensions,
                 )
-                embedding_service = EmbeddingService(provider=embedding_provider)
+                from ai.embeddings.service import CachedEmbeddingService
+                from app.core.redis import get_redis
+                redis_client = None
+                try:
+                    redis_client = get_redis()
+                except Exception:
+                    pass
+                embedding_service = CachedEmbeddingService(
+                    provider=embedding_provider,
+                    redis_client=redis_client,
+                )
                 app.state.embedding_service = embedding_service
                 vector_retriever = VectorRetriever(
                     db=AsyncSessionLocal,

@@ -22,7 +22,6 @@ from .source_mapper import (
     ReviewSourceMapResult,
     SymbolSummary,
 )
-from .symbol_blast_radius import SymbolBlastRadiusEngine
 from .symbols import FileInfo, ParseResult, ScanResult, SourceRange, Symbol, SymbolEdge
 from .target_selector import TargetSelectionResult, TargetSelector
 from .task_test_planner import TaskTestPlanner
@@ -59,7 +58,6 @@ __all__ = [
     "SourceLocationResolver",
     "SourceRange",
     "Symbol",
-    "SymbolBlastRadiusEngine",
     "SymbolEdge",
     "SymbolExtractor",
     "SymbolSummary",

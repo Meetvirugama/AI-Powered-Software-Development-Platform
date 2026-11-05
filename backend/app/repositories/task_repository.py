@@ -2344,40 +2344,6 @@ class TaskRepository:
         )
         return list(self.session.scalars(stmt).all())
 
-    def list_tool_invocations(self, task_id: uuid.UUID | str) -> list[ToolInvocation]:
-        """List all persisted ToolInvocation records for a task ordered by created_at asc."""
-        t_uuid = _ensure_uuid(task_id)
-        if t_uuid is None:
-            return []
-        stmt = (
-            select(ToolInvocation)
-            .where(ToolInvocation.task_id == t_uuid)
-            .order_by(ToolInvocation.created_at.asc())
-        )
-        return list(self.session.scalars(stmt).all())
-
-    def _append_event(
-        self,
-        *,
-        task_id: uuid.UUID | str,
-        event_type: str,
-        actor_id: uuid.UUID | str | None = None,
-        from_status: str | None = None,
-        to_status: str | None = None,
-        summary: str = "",
-        payload: dict[str, Any] | None = None,
-    ) -> TaskEvent:
-        """Internal helper alias for appending timeline events."""
-        return self.record_event(
-            task_id=task_id,
-            event_type=event_type,
-            event_data=payload,
-            user_id=actor_id,
-            from_status=from_status,
-            to_status=to_status,
-            summary=summary,
-        )
-
     def list_events(self, task_id: uuid.UUID | str) -> list[TaskEvent]:
         """List all events for a task, ordered by created_at asc."""
         t_uuid = _ensure_uuid(task_id)

@@ -33,7 +33,6 @@ import pytest
 
 from ai.context.models import SymbolContext, TargetSnippet
 from ai.context.intelligence_context import build_test_intelligence_context
-from ai.services.test_requirement_service import TestRequirementService
 from app.core.errors import APIError
 from app.models.repository_file import RepositoryFile
 from app.schemas.analysis import (
@@ -212,30 +211,6 @@ def test_tg_req_matrix_all_categories_covered():
 
 
 # ==============================================================================
-# SECTION 8: Scenario-Category Coverage Tests (TG-CAT-001 to TG-CAT-030)
-# ==============================================================================
-
-def test_tg_cat_scenario_diversity():
-    """TG-CAT-001 - TG-CAT-030: Ensure planned scenarios cover boundary, null, exception, and normal paths."""
-    service = TestRequirementService()
-    req = TestRequirement(
-        requirement_id="REQ-TEST-CAT-1",
-        title="Valid charge processing",
-        category="functional",
-        priority="CRITICAL",
-        source_files=["app/payment.py"],
-        source_symbols=["process_charge"],
-        expected_behavior="Charges card and returns 200 JSON",
-        status="MISSING",
-    )
-    gap_res = TestGapAnalyzer().analyze_gaps([req])
-    plan = service.create_deterministic_plan("app/payment.py", gap_res, framework="pytest")
-    assert len(plan.scenarios) > 0
-    categories = {s.category for s in plan.scenarios}
-    assert "functional" in categories
-
-
-# ==============================================================================
 # SECTION 9: Existing Test Inventory & Mapping (TG-MAP-001 to TG-MAP-020)
 # ==============================================================================
 
@@ -352,30 +327,6 @@ def test_tg_pri_critical_security_over_formatting():
     )
     priority_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
     assert priority_order.index(req_sec.priority) < priority_order.index(req_low.priority)
-
-
-# ==============================================================================
-# SECTION 12: Test Planning & Generation (TG-PLAN-001 to TG-PLAN-018)
-# ==============================================================================
-
-def test_tg_plan_traceability():
-    """TG-PLAN-001 - TG-PLAN-018: Every planned scenario must trace directly to requirement IDs."""
-    service = TestRequirementService()
-    req = TestRequirement(
-        requirement_id="REQ-PLAN-01",
-        title="Boundary check on age limit",
-        category="boundary",
-        priority="HIGH",
-        source_files=["app/user.py"],
-        source_symbols=["validate_age"],
-        expected_behavior="Reject age < 18",
-        status="MISSING",
-    )
-    gap_res = TestGapAnalyzer().analyze_gaps([req])
-    plan = service.create_deterministic_plan("app/user.py", gap_res, framework="pytest")
-    assert len(plan.scenarios) > 0
-    for sc in plan.scenarios:
-        assert sc.requirement_id == req.requirement_id
 
 
 # ==============================================================================

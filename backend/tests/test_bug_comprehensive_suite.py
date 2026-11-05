@@ -34,8 +34,6 @@ import pytest
 from ai.context.builder import ContextLimits, ContextStatus, IntelligenceContext, TargetSnippet
 from ai.context.bug_context import BugContextExtractor
 from ai.services.bug_detection_engine import BugDetectionEngine
-from ai.services.bug_finding_validator import BugFindingValidator
-from ai.services.bug_investigator import BugInvestigator
 from app.core.errors import APIError
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
@@ -97,23 +95,6 @@ def test_bd_aud_004_to_006_bug_context_and_rule_registry():
     sec_rules = reg.list_rules(category="security")
     assert len(sec_rules) >= 4
     assert any(r.rule_id == "TAINT-SQL-001" for r in sec_rules)
-
-
-def test_bd_aud_007_to_012_validation_and_commit_pinning():
-    """BD-AUD-007 to BD-AUD-012: Verify validator schema, grounding, and commit pinning."""
-    validator = BugFindingValidator()
-    finding = BugFinding(
-        id="f-1",
-        category="security",
-        severity="HIGH",
-        title="SQL leak",
-        description="db query",
-        evidence="execute(sql)",
-        source_reference=AnalysisSourceReference(file_path="app.py", start_line=1, end_line=5),
-    )
-    grounded = validator.validate_and_sanitize(finding, target_file_path="app.py", total_lines=50)
-    assert grounded is not None
-    assert grounded.source_reference.file_path == "app.py"
 
 
 # ===========================================================================
@@ -255,25 +236,6 @@ def read_doc():
     path_cands = [c for c in cands if c.vulnerability_type == "path_traversal"]
     assert len(path_cands) >= 1
     assert not path_cands[0].is_sanitized
-
-
-def test_bd_sec_014_to_015_secret_redaction():
-    """BD-SEC-014 to BD-SEC-015: Secret redaction on dummy credentials."""
-    validator = BugFindingValidator()
-    raw_token = "ghp_" + "A" * 36
-    finding = BugFinding(
-        id="f-sec",
-        category="security",
-        severity="CRITICAL",
-        title="Token exposed",
-        description=f"Found key {raw_token} in source",
-        evidence=f"api_key = '{raw_token}'",
-        source_reference=AnalysisSourceReference(file_path="keys.py", start_line=1, end_line=1),
-    )
-    sanitized = validator.validate_and_sanitize(finding, target_file_path="keys.py", total_lines=10)
-    assert sanitized is not None
-    assert "ghp_" not in sanitized.description
-    assert "ghp_" not in sanitized.evidence
 
 
 # ===========================================================================
@@ -475,23 +437,6 @@ def test_bd_api_005_to_010_path_traversal_and_range_validation():
 # ===========================================================================
 # GROUP 12: LLM Quality, Grounding & Fencing (BD-LLM-001 to BD-LLM-024)
 # ===========================================================================
-
-def test_bd_llm_004_to_013_hallucinated_file_rejection():
-    """BD-LLM-004 to BD-LLM-013: Grounding rejects hallucinated/phantom file paths."""
-    validator = BugFindingValidator()
-    f_phantom = BugFinding(
-        id="f-phantom",
-        category="security",
-        severity="HIGH",
-        title="Phantom bug",
-        description="desc",
-        evidence="ev",
-        source_reference=AnalysisSourceReference(file_path="nonexistent_phantom.py", start_line=10, end_line=15),
-        source_type="AI",
-    )
-    filtered = validator.filter_hallucinated_findings([f_phantom], known_files=["main.py", "auth.py"])
-    assert len(filtered) == 0
-
 
 # ===========================================================================
 # GROUP 13: Frontend & UX Contracts (BD-UI-001 to BD-UI-022)

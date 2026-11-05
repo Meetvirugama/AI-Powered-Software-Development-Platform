@@ -54,10 +54,6 @@ logger = logging.getLogger(__name__)
 MAX_TASK_REPAIR_ATTEMPTS: int = 3
 
 
-class RepairBudgetExhaustedError(WorkspaceError):
-    """Raised when task repair budget of 3 attempts is exhausted."""
-
-
 @dataclass
 class BoundedRepairOutcome:
     """Telemetry outcome of a bounded self-repair session."""

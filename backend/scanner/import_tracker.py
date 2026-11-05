@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from .symbols import FileInfo
@@ -480,18 +480,3 @@ class ImportTracker:
 
         return None
 
-    def track_repository_imports(
-        self,
-        files: Sequence[FileInfo],
-        file_contents: Mapping[str, str],
-    ) -> dict[str, FileImportMap]:
-        """Index imports and build an import map across all repository files."""
-        known_paths = [f.path.replace("\\", "/") for f in files]
-        maps: dict[str, FileImportMap] = {}
-
-        for f in files:
-            content = file_contents.get(f.path, "")
-            im_map = self.parse_imports(f, content, known_files=known_paths)
-            maps[f.path.replace("\\", "/")] = im_map
-
-        return maps

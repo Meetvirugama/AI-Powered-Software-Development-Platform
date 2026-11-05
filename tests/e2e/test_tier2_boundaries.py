@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop, RepairBudgetExhaustedError
+from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop
 from ai.services.retrieval_optimizer import AgentTokenBudgetManager, TokenBudgetExhaustedError
 from app.core.errors import APIError, ErrorCode
 from app.models.task import AgentTask, TaskStatus

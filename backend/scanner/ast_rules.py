@@ -19,7 +19,7 @@ from .detector import LanguageDetector
 from .parser import Parser
 from .source_location import SourceLocationResolver
 from .symbols import FileInfo, ParseResult, SourceRange
-from .target_selector import TargetSelectionResult, TargetSelector
+from .target_selector import TargetSelector
 
 logger = logging.getLogger(__name__)
 
@@ -1099,10 +1099,6 @@ class ASTBugAnalyzer:
         self.source_resolver = source_resolver or SourceLocationResolver(parser=self.parser)
         self.detector = detector or LanguageDetector()
 
-    def register_rule(self, rule: BaseASTRule) -> None:
-        """Register a new custom AST rule into the analysis engine."""
-        self.rules.append(rule)
-
     def analyze_code(
         self,
         content: str,
@@ -1332,36 +1328,6 @@ class ASTBugAnalyzer:
             file_path=file_path,
             target_range=target_range,
             target_symbol=target_symbol,
-        )
-
-    def analyze_target_selection(
-        self,
-        target_result: TargetSelectionResult,
-        content: str,
-    ) -> ASTRuleAnalysisResult:
-        """Directly analyze a verified target selection from TargetSelector."""
-        if not target_result.success:
-            return ASTRuleAnalysisResult(
-                success=False,
-                file_path=target_result.file_path,
-                findings=[],
-                parse_status="PARSE_ERROR",
-                error_message=target_result.error_message,
-            )
-
-        target_range = SourceRange(
-            file_path=target_result.file_path,
-            start_line=target_result.start_line,
-            end_line=target_result.end_line,
-            symbol_name=target_result.symbol_name,
-            symbol_kind=target_result.symbol_kind,
-        )
-
-        return self.analyze_code(
-            content=content,
-            file_path=target_result.file_path,
-            target_range=target_range,
-            target_symbol=target_result.symbol_name,
         )
 
     def to_static_findings(

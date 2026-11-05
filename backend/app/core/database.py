@@ -121,15 +121,6 @@ def _create_safe_async_engine(
             return None, None
 
 
-def init_async_db(
-    url: str | None = None, kwargs: dict[str, Any] | None = None
-) -> tuple[AsyncEngine | None, async_sessionmaker[AsyncSession] | None]:
-    """Explicit initializer allowing runtime or test injection without relying only on module load globals."""
-    target_url = normalize_sync_database_url(url or settings.database_url)
-    target_kwargs = kwargs if kwargs is not None else _build_db_kwargs(target_url)
-    return _create_safe_async_engine(target_url, target_kwargs)
-
-
 _async_database_url = _resolve_async_database_url(_normalized_database_url)
 async_engine, AsyncSessionLocal = _create_safe_async_engine(_normalized_database_url, db_kwargs)
 async_session_factory = AsyncSessionLocal

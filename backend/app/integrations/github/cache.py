@@ -27,18 +27,6 @@ from uuid import UUID
 logger = logging.getLogger(__name__)
 
 
-class RevisionMismatchError(Exception):
-    """Raised when a cached entry does not match the requested revision."""
-
-    def __init__(self, requested: str, found: str, path: str) -> None:
-        super().__init__(
-            f"Cache revision mismatch for '{path}': requested '{requested}', found '{found}'."
-        )
-        self.requested = requested
-        self.found = found
-        self.path = path
-
-
 class SourceRevisionCache:
     """Revision-safe cache for repository source code with bounded memory TTL and capacity.
 
