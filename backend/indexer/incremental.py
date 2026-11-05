@@ -25,13 +25,13 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
-
 from app.core.secret_redaction import redact
-from indexer.chunker import SymbolChunker
 from scanner.detector import LanguageDetector
 from scanner.extractor import SymbolExtractor
 from scanner.graph import DependencyGraphBuilder
+from sqlalchemy import text
+
+from indexer.chunker import SymbolChunker
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,15 @@ logger = logging.getLogger(__name__)
 def compute_content_hash(content: str) -> str:
     """Return the SHA-256 hash of file content."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _read_file_safe(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception as e:
+        logger.error("Could not read %s: %s", path, e)
+        return None
 
 
 def should_reindex(
@@ -204,14 +213,8 @@ class IncrementalIndexer:
                 else file_rel_path
             )
 
-            try:
-                with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read()
-            except Exception as e:
-                logger.error("Could not read %s: %s", full_path, e)
-                continue
-
-            if not content.strip():
+            content = await asyncio.to_thread(_read_file_safe, full_path)
+            if not content or not content.strip():
                 continue
 
             new_hash = compute_content_hash(content)

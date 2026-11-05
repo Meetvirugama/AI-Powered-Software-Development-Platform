@@ -23,6 +23,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 from uuid import UUID
 
 from ai.intelligence.models import (
@@ -41,6 +42,8 @@ DEFAULT_SNAPSHOT_BASE_DIR = Path(
 
 class RepositoryIntelligenceSnapshotManager:
     """Manages versioned physical intelligence artifacts on disk."""
+
+    _cache: ClassVar[dict[str, tuple[float, RepositoryIntelligenceSnapshot]]] = {}
 
     def __init__(self, base_directory: Path | str | None = None) -> None:
         self.base_dir = Path(base_directory or DEFAULT_SNAPSHOT_BASE_DIR)
@@ -160,10 +163,17 @@ class RepositoryIntelligenceSnapshotManager:
             else:
                 return None
 
+        cache_key = f"{repository_id}:latest"
         try:
+            mtime = intel_file.stat().st_mtime
+            cached = self._cache.get(cache_key)
+            if cached and cached[0] == mtime:
+                return cached[1]
             with open(intel_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return RepositoryIntelligenceSnapshot.model_validate(data)
+            snapshot = RepositoryIntelligenceSnapshot.model_validate(data)
+            self._cache[cache_key] = (mtime, snapshot)
+            return snapshot
         except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
             logger.warning("Failed to load intelligence snapshot for repo %s: %s", repository_id, exc)
             return None
@@ -177,10 +187,17 @@ class RepositoryIntelligenceSnapshotManager:
         repo_dir = self.get_repo_dir(repository_id)
         version_file = repo_dir / "versions" / f"commit_{commit_sha}" / "repository_intelligence.json"
         if version_file.exists():
+            cache_key = f"{repository_id}:commit_{commit_sha}"
             try:
+                mtime = version_file.stat().st_mtime
+                cached = self._cache.get(cache_key)
+                if cached and cached[0] == mtime:
+                    return cached[1]
                 with open(version_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                return RepositoryIntelligenceSnapshot.model_validate(data)
+                snapshot = RepositoryIntelligenceSnapshot.model_validate(data)
+                self._cache[cache_key] = (mtime, snapshot)
+                return snapshot
             except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
                 logger.warning("Failed to load pinned snapshot %s: %s", commit_sha, exc)
 

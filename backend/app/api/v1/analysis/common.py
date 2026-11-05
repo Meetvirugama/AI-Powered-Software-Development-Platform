@@ -7,13 +7,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID
-
-from fastapi import Request
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 
 from ai.llm.schemas import (
     LLMError,
@@ -22,7 +18,13 @@ from ai.llm.schemas import (
     LLMUnavailableError,
     LLMValidationError,
 )
+from fastapi import Request
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
 from app.api.v1.dependencies import get_request_user_id as _request_user_id
+
+
 def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
     import sys
     analysis_mod = sys.modules.get("app.api.v1.analysis")
@@ -43,6 +45,10 @@ def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Rep
             "Repository does not exist or you do not have access.",
         )
     return repository
+
+
+async def _owned_repository_async(repository_id: UUID, request: Request, db: Session) -> Repository:
+    return await asyncio.to_thread(_owned_repository, repository_id, request, db)
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
@@ -337,7 +343,7 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
 
     raw_err = getattr(item, "error_message", None)
     return AnalysisRunSummary(
-        id=str(getattr(item, "id")),
+        id=str(item.id),
         repository_id=str(getattr(item, "repository_id", repository_id)),
         user_id=str(getattr(item, "user_id", "")) or None,
         feature_type=feature_val,
@@ -349,7 +355,7 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
         source_revision=getattr(item, "source_revision", None),
         findings_count=getattr(item, "findings_count", 0) or 0,
         error_message=redact(raw_err) if raw_err else None,
-        created_at=getattr(item, "created_at", datetime.now(timezone.utc)),
+        created_at=getattr(item, "created_at", datetime.now(UTC)),
         completed_at=getattr(item, "completed_at", None),
     )
 

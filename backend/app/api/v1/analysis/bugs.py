@@ -18,7 +18,7 @@ from app.api.v1.analysis.common import (
     ANALYSIS_ERROR_RESPONSES,
     _get_service,
     _invoke_service_method,
-    _owned_repository,
+    _owned_repository_async,
     _request_user_id,
 )
 from app.core.database import get_db
@@ -66,7 +66,7 @@ async def detect_bugs(
     """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
     timer = StageExecutionTimer("detect_bugs", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
-    repo = _owned_repository(repository_id, request, db)
+    repo = await _owned_repository_async(repository_id, request, db)
 
     with timer.measure("target_resolution_and_context"):
         resolved = resolve_bug_target_and_build_context(repository_id, repo, payload, db)

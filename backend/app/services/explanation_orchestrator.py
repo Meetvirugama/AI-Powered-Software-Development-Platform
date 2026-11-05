@@ -538,13 +538,13 @@ def ground_explanation_sources(
 
     # Multi-signal confidence calibration (task.md §6.B)
     ungrounded_ratio = ungrounded_count / len(raw_sources) if raw_sources else 0.0
-    target_found = resolved.file_record is not None
+    target_found = resolved.file_record is not None or (resolved.target is not None and not resolved.indexed_paths)
     source_references_valid = len(grounded_sources) > 0 or not raw_sources
     critical_context_missing = any(
         "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
         for m in merged_missing
     )
-    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files)
+    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files or not resolved.indexed_paths)
 
     confidence = calculate_grounding_confidence(
         target_found=target_found,

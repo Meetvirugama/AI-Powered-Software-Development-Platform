@@ -16,7 +16,7 @@ from app.api.v1.analysis.common import (
     ANALYSIS_ERROR_RESPONSES,
     _get_service,
     _invoke_service_method,
-    _owned_repository,
+    _owned_repository_async,
     _request_user_id,
 )
 from app.core.database import get_db
@@ -64,7 +64,7 @@ async def generate_tests(
     """Execute the Week 2 Day 4 Framework-Aware Test Generation pipeline."""
     timer = StageExecutionTimer("generate_tests", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
-    repo = _owned_repository(repository_id, request, db)
+    repo = await _owned_repository_async(repository_id, request, db)
 
     with timer.measure("target_resolution_and_context"):
         explain_compat_req = ExplainCodeRequest(target=payload.target, options=payload.options)
