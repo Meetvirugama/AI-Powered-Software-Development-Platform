@@ -9,18 +9,21 @@ from .client import (
     AuthenticationError,
     DimensionMismatchError,
     EmbeddingError,
+    EmbeddingProfile,
     EmbeddingProvider,
     InvalidRequestError,
     ProviderUnavailableError,
     RateLimitError,
 )
 from .gemini_provider import GeminiEmbeddingProvider
-from .service import EmbeddingService
+from .service import CachedEmbeddingService, EmbeddingService
 
 __all__ = [
     "AuthenticationError",
+    "CachedEmbeddingService",
     "DimensionMismatchError",
     "EmbeddingError",
+    "EmbeddingProfile",
     "EmbeddingProvider",
     "EmbeddingService",
     "GeminiEmbeddingProvider",
