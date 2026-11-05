@@ -91,13 +91,55 @@ class TestPromptsSubsystem:
         assert none_meta is None
 
     def test_prompt_registry_covers_core_prompts(self) -> None:
-        expected = ["chat_system", "repository_chat", "bug_detection_system", "code_review_system", "explanation_system", "test_generation_system", "repair_system", "grounding_system"]
+        expected = [
+            "chat_system",
+            "repository_chat",
+            "bug_detection_system",
+            "code_review_system",
+            "explanation_system",
+            "test_generation_system",
+            "test_planning_system",
+            "test_review_system",
+            "repair_system",
+            "grounding_system",
+        ]
         for name in expected:
             assert name in PROMPT_REGISTRY
             meta = PROMPT_REGISTRY[name]
             assert meta.prompt_id.startswith("prompt-")
             assert meta.version
             assert meta.capability
+
+    def test_render_prompt_user_templates_with_placeholders(self) -> None:
+        chat_rendered = render_prompt(
+            "repository_chat",
+            file_path="src/main.py",
+            start_line=1,
+            end_line=20,
+            repository_context="def run(): pass",
+            question="What does run do?",
+        )
+        assert "src/main.py" in chat_rendered
+        assert "What does run do?" in chat_rendered
+
+        ctx_rendered = render_prompt(
+            "context_summary",
+            file_path="src/utils.py",
+            start_line=10,
+            end_line=30,
+            code_content="def helper(): return True",
+        )
+        assert "src/utils.py" in ctx_rendered
+        assert "def helper()" in ctx_rendered
+
+        ground_rendered = render_prompt(
+            "source_grounding",
+            verified_file_list="src/auth.py",
+            answer="Handles login",
+            claimed_sources="src/auth.py:1-10",
+        )
+        assert "Handles login" in ground_rendered
+        assert "src/auth.py" in ground_rendered
 
 
 class TestPromptBuilderExtended:
