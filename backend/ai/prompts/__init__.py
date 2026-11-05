@@ -145,9 +145,7 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
 
 def get_prompt_metadata(name: str) -> PromptMetadata | None:
     """Return PromptMetadata for the given template name, or None if unregistered."""
-    clean_name = name.strip()
-    if clean_name.endswith(".txt"):
-        clean_name = clean_name[:-4]
+    clean_name = name.strip().removesuffix(".txt")
     return PROMPT_REGISTRY.get(clean_name)
 
 
@@ -273,10 +271,10 @@ def validate_required_prompts(required: list[str] | None = None) -> list[str]:
 __all__ = [
     "PROMPTS_DIR",
     "PROMPT_REGISTRY",
+    "REQUIRED_PROMPTS",
     "PromptMetadata",
     "PromptNotFoundError",
     "PromptRenderError",
-    "REQUIRED_PROMPTS",
     "clear_prompt_cache",
     "get_prompt_metadata",
     "list_available_prompts",
