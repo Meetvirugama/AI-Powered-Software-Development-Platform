@@ -16,6 +16,12 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+__all__ = [
+    "ErrorResponse",
+    "RepositoryAnswer",
+    "SourceReference",
+]
+
 # ---------------------------------------------------------------------------
 # Source citation — points to a specific file + line range in the repository
 # ---------------------------------------------------------------------------

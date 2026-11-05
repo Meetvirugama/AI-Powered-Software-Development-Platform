@@ -41,6 +41,11 @@ from ai.schemas.output import RepositoryAnswer, SourceReference
 
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "GroundingResult",
+    "GroundingValidator",
+]
+
 
 @dataclass
 class GroundingResult:

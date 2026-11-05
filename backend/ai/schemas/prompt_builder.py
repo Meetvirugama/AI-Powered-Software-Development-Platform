@@ -19,24 +19,14 @@ import logging
 import secrets
 
 from ai.llm.schemas import Message
-from ai.prompts import (
-    PROMPTS_DIR,
-    PromptNotFoundError,
-    load_prompt,
-)
+from ai.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility
-_PROMPTS_DIR = PROMPTS_DIR
-
-
-def _load_prompt(filename: str) -> str:
-    """Load a prompt template from the prompts/ directory with error fallback."""
-    try:
-        return load_prompt(filename)
-    except PromptNotFoundError as exc:
-        raise FileNotFoundError(str(exc)) from exc
+__all__ = [
+    "PromptBuilder",
+    "_fence",
+]
 
 
 # ---------------------------------------------------------------------------

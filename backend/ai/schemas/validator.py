@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["OutputValidator"]
+
 # Maximum number of repair attempts before giving up
 _MAX_REPAIR_ATTEMPTS = 2
 
