@@ -23,10 +23,11 @@ import hashlib
 import logging
 import math
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class TokenUsageRecord:
     tokens_consumed: int
     cumulative_tokens: int
     remaining_tokens: int
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 @dataclass

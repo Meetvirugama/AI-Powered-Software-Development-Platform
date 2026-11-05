@@ -21,15 +21,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
-from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
-from app.schemas.plan import PlanDependencyGraph, PlanStep, StructuredPlan
+from app.schemas.plan import PlanStep, StructuredPlan
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceExecutionEventType,
@@ -41,6 +41,8 @@ from sandbox.exceptions import (
     WorkspaceError,
     WorkspaceStateError,
 )
+
+from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
 
 if TYPE_CHECKING:
     from sandbox.workspace_manager import WorkspaceManager
@@ -85,7 +87,7 @@ class StepExecutionRecord:
     error_message: str | None = None
     duration_ms: float = 0.0
     attempts: int = 1
-    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     completed_at: str | None = None
     verification_outcome: StepVerificationOutcome | None = None
 
@@ -250,7 +252,7 @@ class AgentExecutionLoop:
         step_payloads: Mapping[str, Any] | None = None,
     ) -> AgentExecutionResult:
         """Execute an approved plan inside the task's isolated workspace sandbox."""
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         meta = self.workspace_manager.get_workspace(task_id)
         if not meta:
             raise WorkspaceError(f"Workspace not found for task '{task_id}'. Cannot execute plan.")
@@ -315,7 +317,7 @@ class AgentExecutionLoop:
                     status=StepExecutionStatus.FAILED,
                     steps_executed=step_records,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=msg,
                 )
 
@@ -356,7 +358,7 @@ class AgentExecutionLoop:
                         status=StepExecutionStatus.LOOP_DETECTED,
                         target_files=expected_files,
                         error_message=error_msg,
-                        completed_at=datetime.now(timezone.utc).isoformat(),
+                        completed_at=datetime.now(UTC).isoformat(),
                     )
                 )
                 return AgentExecutionResult(
@@ -367,7 +369,7 @@ class AgentExecutionLoop:
                     cycle_detected=True,
                     cycle_length=cycle_len,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=error_msg,
                 )
 
@@ -382,11 +384,11 @@ class AgentExecutionLoop:
                     status=StepExecutionStatus.FAILED,
                     steps_executed=step_records,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=step_record.error_message,
                 )
 
-        total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
         self.workspace_manager.record_timeline_event(
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.TOOL_INVOCATION,
@@ -412,7 +414,7 @@ class AgentExecutionLoop:
         step_id = step.step_id
         action_type = str(getattr(step, "action_type", None) or getattr(step, "step_type", "edit")).lower()
         expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
-        step_start = datetime.now(timezone.utc)
+        step_start = datetime.now(UTC)
 
         self.workspace_manager.record_timeline_event(
             task_id=task_id,
@@ -583,8 +585,8 @@ class AgentExecutionLoop:
             record.status = StepExecutionStatus.COMPLETED
             record.output = output
             record.verification_outcome = v_outcome
-            record.completed_at = datetime.now(timezone.utc).isoformat()
-            record.duration_ms = (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
+            record.completed_at = datetime.now(UTC).isoformat()
+            record.duration_ms = (datetime.now(UTC) - step_start).total_seconds() * 1000
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,
@@ -597,8 +599,8 @@ class AgentExecutionLoop:
             err_msg = redact(str(exc))
             record.status = StepExecutionStatus.FAILED
             record.error_message = err_msg
-            record.completed_at = datetime.now(timezone.utc).isoformat()
-            record.duration_ms = (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
+            record.completed_at = datetime.now(UTC).isoformat()
+            record.duration_ms = (datetime.now(UTC) - step_start).total_seconds() * 1000
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,

@@ -8,13 +8,13 @@ and verifiable task requirements across architectural, security, database, and t
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
-from ai.context.task_context import TaskContextManifest
 from app.core.secret_redaction import redact
 from app.models.task import AgentTask
+
+from ai.context.task_context import TaskContextManifest
 
 logger = logging.getLogger(__name__)
 

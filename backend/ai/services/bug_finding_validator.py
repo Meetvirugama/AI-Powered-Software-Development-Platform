@@ -11,7 +11,7 @@ Ensures:
 from __future__ import annotations
 
 import logging
-from typing import Any, Sequence
+from collections.abc import Sequence
 
 from app.core.secret_redaction import redact
 from app.schemas.analysis import BugFinding
@@ -43,14 +43,10 @@ class BugFindingValidator:
 
         # 2. Check line range sanity
         if total_lines and total_lines > 0:
-            if source_ref.start_line > total_lines:
-                source_ref.start_line = total_lines
-            if source_ref.end_line > total_lines:
-                source_ref.end_line = total_lines
-        if source_ref.start_line < 1:
-            source_ref.start_line = 1
-        if source_ref.end_line < source_ref.start_line:
-            source_ref.end_line = source_ref.start_line
+            source_ref.start_line = min(source_ref.start_line, total_lines)
+            source_ref.end_line = min(source_ref.end_line, total_lines)
+        source_ref.start_line = max(source_ref.start_line, 1)
+        source_ref.end_line = max(source_ref.end_line, source_ref.start_line)
 
         # 3. Redact secrets in description and evidence
         redacted_desc = redact(finding.description or "")

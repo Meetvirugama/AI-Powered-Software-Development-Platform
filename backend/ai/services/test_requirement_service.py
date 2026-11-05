@@ -10,19 +10,16 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
-from uuid import UUID
+from typing import Any
+
+from app.schemas.analysis import (
+    TestRequirement,
+)
+from scanner.test_gap_analyzer import TestGapAnalysisResult
 
 from ai.llm.schemas import LLMRequest, Message
 from ai.prompts import load_prompt
 from ai.schemas.prompt_builder import _fence
-from app.core.errors import APIError, ErrorCode
-from app.schemas.analysis import (
-    TestRequirement,
-    TestRequirementCategory,
-    TestScenario,
-)
-from scanner.test_gap_analyzer import TestGapAnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -148,8 +145,7 @@ class TestRequirementService:
             raw = response.content.strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1] if "\n" in raw else raw
-                if raw.endswith("```"):
-                    raw = raw[:-3]
+                raw = raw.removesuffix("```")
                 raw = raw.strip()
 
             parsed = json.loads(raw)

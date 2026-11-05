@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Sequence
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
-from app.core.secret_redaction import redact
 from app.schemas.repair import (
     DiagnosedFailure,
     FailureCategory,
@@ -37,6 +37,7 @@ from app.schemas.workspace import (
     WorkspaceExecutionEventType,
     WorkspaceFileWriteRequest,
 )
+
 if TYPE_CHECKING:
     from app.services.repair_service import (
         FailureTracebackAnalyzer,
@@ -91,6 +92,8 @@ class BoundedRepairLoop:
         if traceback_analyzer is None or patch_validator is None:
             from app.services.repair_service import (
                 FailureTracebackAnalyzer as DefaultAnalyzer,
+            )
+            from app.services.repair_service import (
                 RepairPatchValidator as DefaultValidator,
             )
             self.traceback_analyzer = traceback_analyzer or DefaultAnalyzer()
@@ -110,7 +113,7 @@ class BoundedRepairLoop:
         forbidden_files: Sequence[str] | None = None,
     ) -> BoundedRepairOutcome:
         """Run bounded repair loop until tests pass or 3-attempt ceiling is reached."""
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         meta = self.workspace_manager.get_workspace(task_id)
         if not meta:
             raise WorkspaceError(f"Workspace not found for task '{task_id}'. Cannot run repair loop.")
@@ -131,7 +134,7 @@ class BoundedRepairLoop:
         failed_count = getattr(initial_run, "failed_count", getattr(initial_run, "tests_failed", 0))
 
         if initial_run.status == TestOutcomeStatus.PASSED:
-            total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
             return BoundedRepairOutcome(
                 task_id=task_id,
                 success=True,
@@ -172,7 +175,7 @@ class BoundedRepairLoop:
 
         # Check if failure is an unrecoverable environment error
         if diagnosis.has_infrastructure_failure or not diagnosis.can_attempt_repair:
-            total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+            total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
             err_msg = f"Non-repairable infrastructure failure: {diagnosis.summary}"
             return BoundedRepairOutcome(
                 task_id=task_id,
@@ -189,7 +192,7 @@ class BoundedRepairLoop:
         # Bounded repair attempts
         while current_attempts < self.max_repair_attempts:
             current_attempts += 1
-            attempt_start = datetime.now(timezone.utc)
+            attempt_start = datetime.now(UTC)
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,
@@ -300,7 +303,7 @@ class BoundedRepairLoop:
             )
 
             if is_success:
-                total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+                total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
                 return BoundedRepairOutcome(
                     task_id=task_id,
                     success=True,
@@ -317,7 +320,7 @@ class BoundedRepairLoop:
             diagnosis = self._diagnose_failures(retest_output, framework=framework)
 
         # Budget exhausted
-        total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
         msg = f"Bounded self-repair exhausted maximum budget of {self.max_repair_attempts} attempts without passing all tests."
         logger.warning("repair_budget_exhausted", extra={"task_id": task_id, "attempts": current_attempts})
 
@@ -488,6 +491,7 @@ class BoundedRepairLoop:
             )
         except TypeError:
             from pathlib import Path
+
             from app.schemas.workspace import WorkspaceTestExecutionRequest
 
             req = WorkspaceTestExecutionRequest(

@@ -12,15 +12,9 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy.orm import Session
-
-from ai.context.task_context import TaskContextBuilder, TaskContextManifest
-from ai.schemas.validator import OutputValidator
-from ai.services.task_completeness_checker import PlanCompletenessReport, TaskCompletenessChecker
-from ai.services.task_requirement_discovery import DiscoveredTaskRequirement, TaskRequirementDiscovery
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.models.analysis_finding import AnalysisFinding
@@ -29,16 +23,22 @@ from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.models.task import AgentTask
 from app.schemas.plan import (
-    ExecutionPolicy,
+    PlannerSchema,
     PlanResourceBudget,
     PlanRisk,
     PlanStep,
     PlanTransition,
-    PlannerSchema,
     StepVerification,
-    StructuredPlan,
 )
 from app.schemas.task import TaskAssumption
+from sqlalchemy.orm import Session
+
+from ai.context.task_context import TaskContextBuilder
+from ai.schemas.validator import OutputValidator
+from ai.services.task_completeness_checker import TaskCompletenessChecker
+from ai.services.task_requirement_discovery import (
+    TaskRequirementDiscovery,
+)
 
 if TYPE_CHECKING:
     from ai.llm.client import LLMGateway
@@ -102,7 +102,7 @@ class TaskPlanner:
 
     def __init__(
         self,
-        llm_gateway: "LLMGateway | None" = None,
+        llm_gateway: LLMGateway | None = None,
         *,
         model: str | None = None,
     ) -> None:

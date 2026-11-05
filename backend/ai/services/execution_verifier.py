@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import ast
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
-from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.schemas.plan import PlanStep, StepVerification
+from app.schemas.plan import PlanStep
 
 logger = logging.getLogger(__name__)
 

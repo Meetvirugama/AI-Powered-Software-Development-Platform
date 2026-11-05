@@ -9,18 +9,18 @@ Pass 2: Counterevidence and defensive guard verification to prevent false positi
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
-from uuid import UUID
 
-from ai.context.builder import IntelligenceContext
-from ai.services.bug_detection_engine import BugDetectionEngine
-from ai.services.bug_finding_validator import BugFindingValidator
 from app.schemas.analysis import AnalysisSourceReference, BugDetectionRequest, BugFinding
 from app.services.bug_candidate_discovery import BugCandidate
 from app.services.bug_graph_context_service import BugGraphSlice
 from app.services.bug_priority_service import BugPriorityService
 from app.services.bug_validation_service import BugValidationService
+
+from ai.context.builder import IntelligenceContext
+from ai.services.bug_detection_engine import BugDetectionEngine
+from ai.services.bug_finding_validator import BugFindingValidator
 
 logger = logging.getLogger(__name__)
 

@@ -20,21 +20,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Type
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
-
-from ai.schemas.validator import OutputValidator
 from app.core.errors import APIError, ErrorCode
 from app.schemas.ai_quality import (
     AIQualityReport,
-    PermittedProviderName,
     ProviderValidationCheck,
-    ProviderValidationStatus,
     QualityBenchmarkSample,
 )
+from pydantic import BaseModel, ValidationError
+
+from ai.schemas.validator import OutputValidator
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +288,7 @@ class AIQualityEvaluator:
     def evaluate_schema_conformance(
         self,
         raw_outputs: list[str],
-        schema_cls: Type[BaseModel],
+        schema_cls: type[BaseModel],
     ) -> float:
         """Test how reliably AI text outputs convert into valid Pydantic models.
 

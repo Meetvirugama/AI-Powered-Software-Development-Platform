@@ -18,10 +18,16 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 from uuid import UUID
 
+from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact
+from app.schemas.analysis import (
+    CodeReviewRequest,
+    ReviewFinding,
+    ReviewReport,
+)
 from pydantic import BaseModel, Field, ValidationError
 
 from ai.context.builder import ContextBuilder, IntelligenceContext
@@ -34,13 +40,6 @@ from ai.llm.schemas import (
 from ai.prompts import load_prompt
 from ai.schemas.prompt_builder import _fence
 from ai.schemas.validator import OutputValidator
-from app.core.errors import APIError, ErrorCode
-from app.core.secret_redaction import redact
-from app.schemas.analysis import (
-    CodeReviewRequest,
-    ReviewFinding,
-    ReviewReport,
-)
 
 logger = logging.getLogger(__name__)
 

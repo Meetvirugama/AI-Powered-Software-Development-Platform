@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
@@ -140,7 +141,7 @@ def format_issue_from_finding(
         body = redact(custom_body.strip())
     else:
         sections = [
-            f"## Automated Developer Intelligence Finding",
+            "## Automated Developer Intelligence Finding",
             f"- **Finding ID:** `{finding_id}`" if finding_id else "- **Origin:** Developer Intelligence Suite",
             f"- **Severity:** `{severity}`",
             f"- **Category:** `{category}`",

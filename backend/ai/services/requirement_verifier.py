@@ -19,22 +19,20 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from app.core.secret_redaction import redact
-from app.schemas.plan import PlanStep, StructuredPlan
+from app.schemas.plan import StructuredPlan
+from app.schemas.planner_context import FileDiffRange, TaskDiffRanges
 from app.schemas.task import (
     TaskConstraint,
     TaskRequirement,
-    TaskSourceReference,
 )
 from app.schemas.verification import (
-    FindingSeverity,
     VerificationFinding,
     VerificationOverallStatus,
 )
-from app.schemas.planner_context import FileDiffRange, TaskDiffRanges
 from app.schemas.workspace import WorkspaceDiffResult
 
 logger = logging.getLogger(__name__)

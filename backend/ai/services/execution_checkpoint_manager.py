@@ -10,11 +10,11 @@ Guarantees:
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class ExecutionCheckpoint:
     verified_files: list[str] = field(default_factory=list)
     evidence: dict[str, Any] = field(default_factory=dict)
     remaining_budget: dict[str, Any] = field(default_factory=dict)
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -59,7 +59,7 @@ class ExecutionCheckpointManager:
     ) -> ExecutionCheckpoint:
         """Create and record an immutable checkpoint after step verification succeeds."""
         if not diff_hash:
-            diff_hash = hashlib.sha256(f"{task_id}:{step_id}:{workspace_revision}".encode("utf-8")).hexdigest()[:16]
+            diff_hash = hashlib.sha256(f"{task_id}:{step_id}:{workspace_revision}".encode()).hexdigest()[:16]
 
         checkpoint_id = f"ckpt-{task_id[:8] if len(task_id) >= 8 else task_id}-{step_id}-{len(self._checkpoints.get(task_id, [])) + 1}"
         ckpt = ExecutionCheckpoint(
