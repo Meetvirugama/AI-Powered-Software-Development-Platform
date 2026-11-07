@@ -80,6 +80,31 @@ class Settings(BaseSettings):
     ai_max_repair_attempts: int = 2
     ai_max_concurrent_calls: int = 10
 
+    # --- Retrieval System Optimization Settings (task.md §12) -------------
+    retrieval_hnsw_enabled: bool = True
+    retrieval_hnsw_exact_ef_search: int = 40
+    retrieval_hnsw_normal_ef_search: int = 64
+    retrieval_hnsw_complex_ef_search: int = 120
+    retrieval_hnsw_iterative_scan: str = "relaxed_order"
+
+    retrieval_cache_enabled: bool = True
+    retrieval_cache_ttl_seconds: int = 300
+    retrieval_cache_max_payload_bytes: int = 500_000
+
+    retrieval_code_lexical_enabled: bool = True
+
+    retrieval_graph_expansion_enabled: bool = True
+    retrieval_graph_max_seeds: int = 5
+    retrieval_graph_max_hops: int = 1
+    retrieval_graph_max_neighbors_per_seed: int = 10
+    retrieval_graph_max_candidates: int = 30
+
+    retrieval_intent_routing_enabled: bool = True
+
+    reranker_backend: str = "pytorch"
+    reranker_onnx_enabled: bool = False
+    reranker_quantization: str = "none"
+
     @property
     def active_chat_model(self) -> str:
         """Resolve active default chat model based on ai_primary_provider."""

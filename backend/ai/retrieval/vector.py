@@ -23,7 +23,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from typing import TYPE_CHECKING, Any
+import re
+from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID
 
 from sqlalchemy import text
@@ -36,7 +37,59 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["VectorRetriever"]
+__all__ = ["HNSW_PROFILES", "VectorRetriever", "resolve_hnsw_profile"]
+
+# ---------------------------------------------------------------------------
+# Adaptive HNSW Profiles (R02, task.md §4)
+# ---------------------------------------------------------------------------
+
+HNSW_PROFILES: Final[dict[str, dict[str, Any]]] = {
+    "exact": {
+        "ef_search": 40,
+        "iterative_scan": "relaxed_order",
+    },
+    "normal": {
+        "ef_search": 64,
+        "iterative_scan": "relaxed_order",
+    },
+    "complex": {
+        "ef_search": 120,
+        "iterative_scan": "relaxed_order",
+    },
+}
+
+
+def resolve_hnsw_profile(intent: str | None = None) -> str:
+    """Map query intent to an adaptive HNSW search effort profile."""
+    if not intent:
+        return "normal"
+    norm = intent.lower().strip()
+    if norm in ("exact", "exact_symbol", "path_lookup", "symbol"):
+        return "exact"
+    if norm in ("complex", "debugging", "impact_analysis", "test_generation"):
+        return "complex"
+    return "normal"
+
+
+async def _apply_adaptive_hnsw(
+    session: Any,
+    ef_search: int = 64,
+    iterative_scan: str = "relaxed_order",
+) -> None:
+    """Set transaction-local HNSW configuration if supported by the database engine."""
+    if not hasattr(session, "execute"):
+        return
+    try:
+        await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Adaptive HNSW ef_search fallback: %s", exc)
+
+    try:
+        if iterative_scan:
+            safe_scan = re.sub(r"[^\w]", "", iterative_scan)
+            await session.execute(text(f"SET LOCAL hnsw.iterative_scan = '{safe_scan}'"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Adaptive HNSW iterative_scan fallback: %s", exc)
 
 # ---------------------------------------------------------------------------
 # SQL — pgvector cosine distance operator (<=>)
@@ -143,14 +196,17 @@ class VectorRetriever(Retriever):
         repository_id: UUID,
         top_k: int = 30,
         max_distance: float | None = None,
+        profile: str | None = None,
+        query_intent: str | None = None,
     ) -> list[CodeChunk]:
         """
         Embed the query and run cosine similarity search against pgvector.
 
         Steps:
         1. Embed `query` using EmbeddingService (retries handled inside service).
-        2. Execute SQL with pgvector `<=>` cosine distance operator.
-        3. Convert each row to a typed `CodeChunk`; score = 1 − distance.
+        2. Set adaptive transaction-local HNSW configuration based on intent/profile.
+        3. Execute SQL with pgvector `<=>` cosine distance operator.
+        4. Convert each row to a typed `CodeChunk`; score = 1 − distance.
 
         Args:
             query:         Natural-language or code query string.
@@ -158,6 +214,8 @@ class VectorRetriever(Retriever):
                            Enforced at SQL level — no cross-repo leakage.
             top_k:         Maximum number of chunks to return (default 30 for RRF).
             max_distance:  Optional cosine distance ceiling override.
+            profile:       Optional explicit HNSW effort profile ('exact', 'normal', 'complex').
+            query_intent:  Optional query intent class used to auto-select HNSW profile.
 
         Returns:
             List of `CodeChunk` sorted by descending similarity score (best first).
@@ -173,6 +231,12 @@ class VectorRetriever(Retriever):
         repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
         effective_max_distance = max_distance if max_distance is not None else self._max_distance
 
+        # Determine adaptive HNSW profile settings
+        target_profile_name = profile or resolve_hnsw_profile(query_intent)
+        profile_config = HNSW_PROFILES.get(target_profile_name, HNSW_PROFILES["normal"])
+        ef_search = profile_config.get("ef_search", 64)
+        iterative_scan = profile_config.get("iterative_scan", "relaxed_order")
+
         # Step 1 — embed the query
         query_vector: list[float] = await self._embedding_service.embed(query)
         raw_dim = getattr(self._embedding_service, "dimensions", None) or getattr(
@@ -181,7 +245,7 @@ class VectorRetriever(Retriever):
         expected_dim = raw_dim if isinstance(raw_dim, int) else None
         query_vec_literal = _vec_to_pg_literal(query_vector, expected_dim=expected_dim)
 
-        # Step 2 — cosine distance search in pgvector
+        # Step 2 — cosine distance search in pgvector with transaction-local HNSW profile
         params = {
             "query_vec": query_vec_literal,
             "repository_id": str(repo_uuid),
@@ -189,10 +253,12 @@ class VectorRetriever(Retriever):
         }
         db_obj: Any = self._db
         if hasattr(db_obj, "execute"):
+            await _apply_adaptive_hnsw(db_obj, ef_search=ef_search, iterative_scan=iterative_scan)
             result = await db_obj.execute(_VECTOR_SEARCH_SQL, params)
             rows = result.fetchall()
         else:
             async with db_obj() as session:
+                await _apply_adaptive_hnsw(session, ef_search=ef_search, iterative_scan=iterative_scan)
                 result = await session.execute(_VECTOR_SEARCH_SQL, params)
                 rows = result.fetchall()
 

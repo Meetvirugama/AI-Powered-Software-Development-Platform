@@ -25,18 +25,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .base import CodeChunk, Retriever
+from .code_tokenizer import split_identifier
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["LexicalRetriever"]
 
 # ---------------------------------------------------------------------------
-# SQL — PostgreSQL full-text search
+# SQL — PostgreSQL code-aware + full-text search
 #
-# Combines strict AND matches (boosted 2.0x) with OR fallback matches
-# (`regexp_replace(:tsquery, '&', '|', 'g')`) using cover-density ranking
-# (`ts_rank_cd`) so multi-word natural-language questions still retrieve
-# high-signal code chunks when not every conversational word appears in one chunk.
+# Combines:
+# 1. Exact & sub-token matches on code_search_text with 'simple' configuration (boosted 3.0x / 2.0x)
+# 2. Natural language matches on content with 'english' configuration (boosted 1.5x)
+# 3. Soft OR relaxation fallback
+# Deterministic tie-breaking on rank DESC, id ASC.
 # ---------------------------------------------------------------------------
 
 _LEXICAL_SEARCH_SQL = text(
@@ -55,8 +57,12 @@ _LEXICAL_SEARCH_SQL = text(
             COALESCE(metadata->>'file_path', '') AS file_path,
             (
                 CASE
+                    WHEN to_tsvector('simple', COALESCE(code_search_text, content)) @@ to_tsquery('simple', :code_tsquery)
+                    THEN ts_rank_cd(to_tsvector('simple', COALESCE(code_search_text, content)), to_tsquery('simple', :code_tsquery)) * 3.0
+                    WHEN to_tsvector('simple', COALESCE(code_search_text, content)) @@ to_tsquery('simple', regexp_replace(:code_tsquery, '&', '|', 'g'))
+                    THEN ts_rank_cd(to_tsvector('simple', COALESCE(code_search_text, content)), to_tsquery('simple', regexp_replace(:code_tsquery, '&', '|', 'g'))) * 2.0
                     WHEN to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
-                    THEN ts_rank_cd(to_tsvector('english', content), to_tsquery('english', :tsquery)) * 2.0
+                    THEN ts_rank_cd(to_tsvector('english', content), to_tsquery('english', :tsquery)) * 1.5
                     ELSE ts_rank_cd(
                         to_tsvector('english', content),
                         to_tsquery('english', regexp_replace(:tsquery, '&', '|', 'g'))
@@ -67,7 +73,9 @@ _LEXICAL_SEARCH_SQL = text(
         WHERE
             repository_id = :repository_id
             AND (
-                to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
+                to_tsvector('simple', COALESCE(code_search_text, content)) @@ to_tsquery('simple', :code_tsquery)
+                OR to_tsvector('simple', COALESCE(code_search_text, content)) @@ to_tsquery('simple', regexp_replace(:code_tsquery, '&', '|', 'g'))
+                OR to_tsvector('english', content) @@ to_tsquery('english', :tsquery)
                 OR to_tsvector('english', content) @@ to_tsquery('english', regexp_replace(:tsquery, '&', '|', 'g'))
             )
     ),
@@ -78,10 +86,27 @@ _LEXICAL_SEARCH_SQL = text(
         r.*,
         r.rank / m.max_r AS normalised_rank
     FROM ranked r, max_rank m
-    ORDER BY r.rank DESC
+    ORDER BY r.rank DESC, r.id ASC
     LIMIT :top_k
     """
 )
+
+
+def _build_code_tsquery(query: str) -> str:
+    """
+    Build a code-aware tsquery for PostgreSQL 'simple' dictionary.
+
+    Splits camelCase, PascalCase, snake_case identifiers, and joins sub-tokens with '&'.
+    """
+    tokens = split_identifier(query)
+    cleaned_tokens: list[str] = []
+    for t in tokens:
+        clean = re.sub(r"[^\w]", "", t.lower())
+        if len(clean) > 1 and clean not in cleaned_tokens:
+            cleaned_tokens.append(clean)
+    if not cleaned_tokens:
+        return _sanitize_query(query)
+    return " & ".join(cleaned_tokens[:12])
 
 
 def _sanitize_query(query: str) -> str:
@@ -170,9 +195,12 @@ class LexicalRetriever(Retriever):
             )
             return []
 
+        code_tsquery = _build_code_tsquery(query)
+
         # Step 2 — execute FTS query against the GIN index
         params = {
             "tsquery": tsquery,
+            "code_tsquery": code_tsquery,
             "repository_id": str(repo_uuid),
             "top_k": top_k,
         }
