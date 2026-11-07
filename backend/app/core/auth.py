@@ -46,10 +46,15 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
             client = await get_redis_async()
     except Exception:
         client = get_redis()
+
+    if client is None:
+        logger.warning("auth_blocklist_missing_client", extra={"jti": jti})
+        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
     try:
         exists_fn = getattr(client, "exists", None)
         if exists_fn is None:
-            return False
+            logger.warning("auth_blocklist_missing_exists", extra={"jti": jti})
+            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
         if inspect.iscoroutinefunction(exists_fn):
             res = await asyncio.wait_for(exists_fn(key), timeout=1.5)
         else:
@@ -57,13 +62,16 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
             if inspect.isawaitable(res):
                 res = await asyncio.wait_for(res, timeout=1.5)
         return bool(res)
-    except TimeoutError as exc:
+    except (TimeoutError, asyncio.TimeoutError) as exc:
         logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
     except APIError:
         raise
     except Exception as exc:
-        logger.warning("auth_blocklist_check_failed", extra={"jti": jti, "error": str(exc)})
+        if "timeout" in str(exc).lower() or "timed out" in str(exc).lower():
+            logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
+        else:
+            logger.warning("auth_blocklist_check_failed", extra={"jti": jti, "error": str(exc)})
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
 
 

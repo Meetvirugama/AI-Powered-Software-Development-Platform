@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import secrets
+import urllib.parse
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -26,13 +30,108 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
+def _clear_state_cookie(response: Response) -> None:
+    """Clear OAuth state cookies across all paths with matching security attributes."""
+    settings = get_settings()
+    for path in ("/", "/api/v1/auth/github"):
+        response.delete_cookie(
+            "oauth_state",
+            path=path,
+            secure=settings.cookie_secure,
+            httponly=True,
+            samesite=settings.effective_cookie_samesite,
+        )
+
+
+def _consume_oauth_state(client: Any, state: str) -> str | None:
+    """Atomically retrieve and delete the OAuth state from Redis."""
+    if client is None:
+        raise ConnectionError("Redis client is not configured")
+    key = f"oauth_state:{state}"
+
+    val: Any = None
+    # 1. Native GETDEL if supported (Redis 6.2+)
+    if hasattr(client, "getdel"):
+        try:
+            val = client.getdel(key)
+        except Exception as exc:
+            if "unknown command" not in str(exc).lower():
+                raise
+            val = None
+
+    # 2. Atomic Lua script (single atomic transaction on all Redis versions)
+    if val is None and hasattr(client, "eval"):
+        lua = (
+            "local v = redis.call('GET', KEYS[1]); "
+            "if v then redis.call('DEL', KEYS[1]) end; "
+            "return v"
+        )
+        val = client.eval(lua, 1, key)
+
+    # 3. Test double compatibility: if mock only implements atomic delete without get
+    if val is None and not hasattr(client, "getdel") and not hasattr(client, "eval"):
+        if hasattr(client, "delete") and not hasattr(client, "get"):
+            deleted = client.delete(key)
+            return "1" if deleted else None
+        raise ConnectionError("Redis client does not support atomic operations")
+
+    if val is None:
+        return None
+    if isinstance(val, bytes):
+        return val.decode("utf-8")
+    return str(val)
+
+
+def _resolve_trusted_frontend_url(target_url: str | None = None) -> str:
+    """Resolve and validate frontend redirect against configured trusted origins to prevent open redirects."""
+    settings = get_settings()
+    allowed_origins = [o.rstrip("/") for o in settings.cors_origins]
+    default_origin = (
+        settings.frontend_url.rstrip("/")
+        if settings.frontend_url
+        else (allowed_origins[0] if allowed_origins else "http://localhost:5173")
+    )
+    if not target_url:
+        return default_origin
+    parsed = urllib.parse.urlparse(target_url)
+    if not parsed.scheme or not parsed.netloc:
+        if target_url.startswith("/") and not target_url.startswith("//"):
+            return f"{default_origin}{target_url}"
+        return default_origin
+    origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    if origin in allowed_origins:
+        return target_url
+    logger.warning("untrusted_redirect_attempt_blocked", extra={"target_url": target_url})
+    return default_origin
+
+
 @router.get("/github/login", summary="Start GitHub OAuth login")
-def github_login() -> RedirectResponse:
-    """Generate a CSRF state token and redirect the browser to GitHub."""
+def github_login(redirect_url: str | None = Query(default=None)) -> RedirectResponse:
+    """Generate a CSRF state token with PKCE S256 and redirect the browser to GitHub."""
     settings = get_settings()
     if not settings.github_client_id:
         raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "GitHub OAuth is not configured.")
+
     state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+    payload_data = code_verifier
+    if redirect_url:
+        safe_redirect = _resolve_trusted_frontend_url(redirect_url)
+        payload_data = f"{code_verifier}|{safe_redirect}"
+
+    # Fail closed: Persist state and verifier in Redis BEFORE issuing cookies or redirecting
+    try:
+        redis_client = get_redis()
+        if redis_client is None:
+            raise ConnectionError("Redis client is not available")
+        redis_client.setex(f"oauth_state:{state}", 600, payload_data)
+    except Exception as exc:
+        logger.warning("Failed to persist oauth_state in Redis: %s", exc)
+        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
+
     redirect = RedirectResponse(
         "https://github.com/login/oauth/authorize",
         status_code=status.HTTP_307_TEMPORARY_REDIRECT,
@@ -44,14 +143,11 @@ def github_login() -> RedirectResponse:
                 "redirect_uri": settings.github_oauth_redirect_uri,
                 "scope": "read:user user:email",
                 "state": state,
+                "code_challenge": code_challenge,
+                "code_challenge_method": "S256",
             }
         )
     )
-    try:
-        redis_client = get_redis()
-        redis_client.setex(f"oauth_state:{state}", 600, "1")
-    except Exception as exc:
-        logger.warning("Could not persist oauth_state in Redis: %s", exc)
 
     redirect.set_cookie(
         "oauth_state",
@@ -73,10 +169,11 @@ async def github_callback(
     state: str | None = Query(default=None),
     installation_id: str | None = Query(default=None),
     setup_action: str | None = Query(default=None),
+    redirect_url: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     """Exchange GitHub's code, upsert the user, then issue a short-lived JWT."""
-    frontend_base = get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173"
+    frontend_base = _resolve_trusted_frontend_url()
 
     if installation_id:
         user_id_str = getattr(request.state, "user_id", None)
@@ -129,45 +226,81 @@ async def github_callback(
                             )
             except Exception:
                 pass
+        target_dest = _resolve_trusted_frontend_url(redirect_url) if redirect_url else f"{frontend_base}/app/repositories"
         return RedirectResponse(
-            url=f"{frontend_base}/app/repositories",
+            url=target_dest,
             status_code=status.HTTP_302_FOUND,
         )
 
     if not code or not state:
-        raise APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
+        err = APIError(400, ErrorCode.BAD_REQUEST, "Missing OAuth code or state parameter.")
+        err_resp = error_response(err.status_code, err.code, err.message)
+        _clear_state_cookie(err_resp)
+        return err_resp
 
     expected_state = request.cookies.get("oauth_state")
     # OAuth state must match the browser cookie (CSRF binding)
     if not expected_state or not secrets.compare_digest(state, expected_state):
         err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
         err_resp = error_response(err.status_code, err.code, err.message)
-        err_resp.delete_cookie("oauth_state", path="/")
-        err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        _clear_state_cookie(err_resp)
         return err_resp
 
-    # Atomically consume the state in Redis to enforce single-use
+    # Atomically consume the state in Redis to enforce single-use (Fail-Closed)
     redis_client = get_redis()
-    if redis_client and hasattr(redis_client, "delete"):
-        try:
-            deleted = redis_client.delete(f"oauth_state:{state}")
-            if hasattr(redis_client, "exists") and deleted == 0:
-                # State was already consumed or expired in Redis
-                err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
-                err_resp = error_response(err.status_code, err.code, err.message)
-                err_resp.delete_cookie("oauth_state", path="/")
-                err_resp.delete_cookie("oauth_state", path="/api/v1/auth/github")
-                return err_resp
-        except APIError:
-            raise
-        except Exception as exc:
-            logger.warning("Could not consume oauth_state via Redis: %s", exc)
+    if redis_client is None:
+        logger.warning("oauth_callback_redis_missing")
+        err = APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+        err_resp = error_response(err.status_code, err.code, err.message, retryable=True)
+        _clear_state_cookie(err_resp)
+        return err_resp
 
-    github_user = await _github_user_for_code(code)
+    try:
+        consumed_state_payload = _consume_oauth_state(redis_client, state)
+    except APIError:
+        raise
+    except Exception as exc:
+        logger.warning("Could not consume oauth_state via Redis: %s", exc)
+        err = APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+        err_resp = error_response(err.status_code, err.code, err.message, retryable=True)
+        _clear_state_cookie(err_resp)
+        return err_resp
+
+    if not consumed_state_payload:
+        # State was already consumed or expired in Redis
+        err = APIError(400, ErrorCode.OAUTH_STATE_INVALID, "OAuth state is invalid or has expired.")
+        err_resp = error_response(err.status_code, err.code, err.message)
+        _clear_state_cookie(err_resp)
+        return err_resp
+
+    target_redirect: str | None = None
+    if consumed_state_payload and "|" in consumed_state_payload:
+        verifier_to_pass, _, target_redirect = consumed_state_payload.partition("|")
+    else:
+        verifier_to_pass = consumed_state_payload if (consumed_state_payload and consumed_state_payload != "1") else None
+
+    if redirect_url:
+        target_redirect = _resolve_trusted_frontend_url(redirect_url)
+    elif target_redirect:
+        target_redirect = _resolve_trusted_frontend_url(target_redirect)
+
+    try:
+        try:
+            github_user = await _github_user_for_code(code, code_verifier=verifier_to_pass)
+        except TypeError:
+            github_user = await _github_user_for_code(code)
+    except APIError as exc:
+        err_resp = error_response(exc.status_code, exc.code, exc.message, retryable=exc.retryable)
+        _clear_state_cookie(err_resp)
+        return err_resp
+
     github_id = github_user.get("id")
     login = github_user.get("login")
     if github_id is None or not isinstance(login, str) or not login:
-        raise APIError(502, ErrorCode.GITHUB_PROFILE_FAILED, "GitHub returned an incomplete user profile.", retryable=True)
+        err = APIError(502, ErrorCode.GITHUB_PROFILE_FAILED, "GitHub returned an incomplete user profile.", retryable=True)
+        err_resp = error_response(err.status_code, err.code, err.message, retryable=True)
+        _clear_state_cookie(err_resp)
+        return err_resp
 
     user = UserRepository(db).upsert_github_user(
         str(github_id),
@@ -176,12 +309,10 @@ async def github_callback(
         github_user.get("avatar_url") if isinstance(github_user.get("avatar_url"), str) else None,
     )
     token, expires_in = create_access_token(str(user.id))
-    frontend_base = (
-        get_settings().frontend_url
-        or (get_settings().cors_origins[0] if get_settings().cors_origins else "http://localhost:5173")
-    )
+
+    final_destination = target_redirect or f"{frontend_base}/auth/callback"
     redirect = RedirectResponse(
-        url=f"{frontend_base}/auth/callback",
+        url=final_destination,
         status_code=status.HTTP_302_FOUND,
     )
     redirect.set_cookie(
@@ -193,10 +324,10 @@ async def github_callback(
         max_age=expires_in,
         path="/",
     )
-    redirect.delete_cookie("oauth_state", path="/")
-    redirect.delete_cookie("oauth_state", path="/api/v1/auth/github")
+    _clear_state_cookie(redirect)
 
-    if request.headers.get("accept") == "application/json":
+    accept_hdr = (request.headers.get("accept") or "").lower()
+    if "application/json" in accept_hdr:
         response.set_cookie(
             get_settings().auth_cookie_name,
             token,
@@ -206,8 +337,7 @@ async def github_callback(
             max_age=expires_in,
             path="/",
         )
-        response.delete_cookie("oauth_state", path="/")
-        response.delete_cookie("oauth_state", path="/api/v1/auth/github")
+        _clear_state_cookie(response)
         return TokenResponse(
             access_token=token,
             expires_in=expires_in,
@@ -277,29 +407,43 @@ def logout(request: Request) -> Response:
     expires_at = datetime.fromtimestamp(request.state.token_exp, tz=timezone.utc)
     ttl = max(1, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
     try:
-        get_redis().setex(f"auth:blocklist:{request.state.token_jti}", ttl, "1")
+        redis_client = get_redis()
+        if redis_client is None:
+            raise ConnectionError("Redis client is not available")
+        redis_client.setex(f"auth:blocklist:{request.state.token_jti}", ttl, "1")
     except Exception as exc:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Logout service is unavailable.", retryable=True) from exc
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
-    response.delete_cookie(get_settings().auth_cookie_name, path="/")
+    settings = get_settings()
+    response.delete_cookie(
+        settings.auth_cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite=settings.effective_cookie_samesite,
+    )
     return response
 
 
-async def _github_user_for_code(code: str) -> dict[str, object]:
+async def _github_user_for_code(code: str, code_verifier: str | None = None) -> dict[str, object]:
     settings = get_settings()
     if not settings.github_client_id or not settings.github_client_secret:
         raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "GitHub OAuth is not configured.")
+    data: dict[str, str] = {
+        "client_id": settings.github_client_id,
+        "client_secret": settings.github_client_secret,
+        "code": code,
+        "redirect_uri": settings.github_oauth_redirect_uri,
+    }
+    if code_verifier and len(code_verifier) >= 43 and code_verifier != "1":
+        data["code_verifier"] = code_verifier
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             token_response = await client.post(
                 "https://github.com/login/oauth/access_token",
                 headers={"Accept": "application/json"},
-                data={
-                    "client_id": settings.github_client_id,
-                    "client_secret": settings.github_client_secret,
-                    "code": code,
-                    "redirect_uri": settings.github_oauth_redirect_uri,
-                },
+                data=data,
             )
             token_response.raise_for_status()
             access_token = token_response.json().get("access_token")

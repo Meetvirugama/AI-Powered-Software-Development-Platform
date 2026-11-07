@@ -472,14 +472,13 @@ class GitHubClient:
             )
 
         import time
-
-        import jwt as pyjwt
+        import jwt
 
         now = int(time.time())
         payload = {
             "iat": now - 60,
             "exp": now + (10 * 60),
-            "iss": settings.github_app_id,
+            "iss": str(settings.github_app_id),
         }
         pem_key = (
             settings.github_app_private_key.strip()
@@ -490,11 +489,13 @@ class GitHubClient:
             .replace("\r\n", "\n")
             .strip()
         )
-        app_jwt = pyjwt.encode(
+        app_jwt = jwt.encode(
             payload,
             pem_key,
             algorithm="RS256",
         )
+        if isinstance(app_jwt, bytes):
+            app_jwt = app_jwt.decode("utf-8")
 
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
             response = await client.post(

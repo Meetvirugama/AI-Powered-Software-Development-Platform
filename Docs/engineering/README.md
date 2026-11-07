@@ -21,8 +21,11 @@
 | [10](./10_development_tasks.md) | **Development Tasks** | Master task board, dependencies, assignments | Active |
 | [11](./11_testing_qa.md) | **Testing & QA** | Test plan, test cases, bug tracker | Active |
 | [12](./12_deployment_devops.md) | **Deployment & DevOps** | Local setup, env config, Docker | Active |
-| [13](./13_architecture_decisions.md) | **Architecture Decisions** | ADR-001 through ADR-010 | Active |
+| [13](./13_architecture_decisions.md) | **Architecture Decisions** | ADR-001 through ADR-011 | Active |
 | [14](./14_changelog.md) | **Changelog** | All significant changes by date | Active |
+| [15](./15_authentication_authorization_audit.md) | **Auth & Authorization Audit** | Complete security audit of auth implementation | Active |
+| [16](./16_issue181_implementation_plan.md) | **Issue #181 Implementation Plan** | Multi-batch implementation roadmap for auth hardening | Active |
+| [17](./17_jwt_oauth_hardening.md) | **JWT & OAuth Security Hardening** | Batch 1 technical specification & policies | Active |
 
 ---
 
