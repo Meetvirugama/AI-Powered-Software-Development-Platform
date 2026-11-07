@@ -49,17 +49,21 @@ export interface ExplanationResultViewProps {
   className?: string;
 }
 
+function escapeRegExp(string: string): string {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
  * Extracts line range from a text string if present (e.g. "L13-L16", "L15", "lines 20 to 25").
  */
 function extractLineRange(text: string): { start_line: number; end_line: number } | null {
-  const rangeMatch = text.match(/(?:lines?|L)\s*(\d+)\s*(?:–|-|to)\s*L?(\d+)/i);
+  const rangeMatch = text.match(/\b(?:lines?|L)\s*(\d+)\s*(?:–|-|to)\s*L?(\d+)\b/i);
   if (rangeMatch) {
     const s = parseInt(rangeMatch[1], 10);
     const e = parseInt(rangeMatch[2], 10);
     return { start_line: Math.min(s, e), end_line: Math.max(s, e) };
   }
-  const singleMatch = text.match(/(?:line|L)\s*(\d+)\b/i);
+  const singleMatch = text.match(/\b(?:line|L)\s*(\d+)\b/i);
   if (singleMatch) {
     const s = parseInt(singleMatch[1], 10);
     return { start_line: s, end_line: s };
@@ -167,7 +171,7 @@ export function ExplanationResultView({
     if (key_symbols) {
       const matchedSym = key_symbols.find((s) => {
         if (!s.name || s.name.length < 3) return false;
-        return new RegExp(`\\b${s.name}\\b`, 'i').test(stepText);
+        return new RegExp(`\\b${escapeRegExp(s.name)}\\b`, 'i').test(stepText);
       });
       if (
         matchedSym &&
@@ -194,28 +198,14 @@ export function ExplanationResultView({
 
   // Tailored follow-up questions based on target context
   const suggestedQuestions = useMemo(() => {
-    const isPredictOrML =
-      defaultFilePath.toLowerCase().includes('predict') ||
-      defaultFilePath.toLowerCase().includes('model') ||
-      defaultFilePath.toLowerCase().includes('ml') ||
-      (purpose && (purpose.includes('model') || purpose.includes('predict') || purpose.includes('ML')));
-
-    if (isPredictOrML) {
-      return [
-        'Why is expm1() used in the salary calculation formula?',
-        'What happens when placement prediction is 0 (unplaced student)?',
-        'Where are the model pickle files loaded and how can we implement lazy loading?',
-        'What required features and data types does the preprocessor pipeline expect?',
-      ];
-    }
-
+    const fileName = defaultFilePath.split('/').pop() || 'this component';
     return [
-      'Why is this implementation pattern, algorithm, or formula used?',
+      `Why is this implementation pattern or architecture used in ${fileName}?`,
       'What happens if input parameters are null, empty, or out of expected bounds?',
       'Trace runtime variable state and data transformations through this code',
       'Where is this code called or referenced across the repository?',
     ];
-  }, [defaultFilePath, purpose]);
+  }, [defaultFilePath]);
 
   return (
     <div className={cn('space-y-4 text-xs', className)}>
@@ -338,7 +328,15 @@ export function ExplanationResultView({
               return (
                 <li
                   key={idx}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => handleStepClick(step)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleStepClick(step);
+                    }
+                  }}
                   className={cn(
                     'flex items-start gap-2.5 p-2 rounded-lg border transition-all cursor-pointer group',
                     isStepActive
@@ -434,11 +432,15 @@ export function ExplanationResultView({
             </div>
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 if (corrected_code) {
-                  navigator.clipboard.writeText(corrected_code);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
+                  try {
+                    await navigator.clipboard.writeText(corrected_code);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  } catch {
+                    // Clipboard write failed
+                  }
                 }
               }}
               className="inline-flex items-center gap-1 px-2 py-1 rounded bg-background/80 hover:bg-background border border-border/60 text-[11px] font-mono text-foreground transition-colors cursor-pointer"
@@ -641,7 +643,15 @@ export function ExplanationResultView({
                     {evidenceClaims.map((item, idx) => (
                       <tr
                         key={idx}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => onSelectSourceReference?.(item.source)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            onSelectSourceReference?.(item.source);
+                          }
+                        }}
                         className="hover:bg-accent/50 cursor-pointer transition-colors"
                       >
                         <td className="p-2 text-foreground font-sans text-xs">{item.claim}</td>
@@ -670,7 +680,7 @@ export function ExplanationResultView({
                       <span className="truncate">{src.file_path}</span>
                     </div>
                     <span className="text-[10px] text-muted-foreground shrink-0 bg-background/70 px-1.5 py-0.5 rounded border border-border/40">
-                      {src.start_line ? `L${src.start_line}–${src.end_line}` : 'File'}
+                      {src.start_line ? (src.end_line && src.end_line !== src.start_line ? `L${src.start_line}–${src.end_line}` : `L${src.start_line}`) : 'File'}
                     </span>
                   </button>
                 ))}

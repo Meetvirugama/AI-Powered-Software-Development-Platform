@@ -226,11 +226,11 @@ def dev_login(
 ) -> TokenResponse:
     """Authenticate immediately for local development without external GitHub OAuth.
 
-    Guarded: Only permitted when settings.is_production is False.
+    Guarded: Only permitted when settings.app_env is development, dev, or local.
     """
     settings = get_settings()
-    if settings.is_production:
-        raise APIError(403, ErrorCode.FORBIDDEN, "Dev login is not permitted in production.")
+    if settings.app_env.strip().lower() not in {"development", "dev", "local"}:
+        raise APIError(403, ErrorCode.FORBIDDEN, "Dev login is only permitted in development environments.")
 
     user_repo = UserRepository(db)
     target_login = (login or "Meetvirugama").strip()

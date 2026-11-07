@@ -112,7 +112,12 @@ class SourceRevisionCache:
                         self._memory_cache.pop(oldest, None)
                         self._memory_expires.pop(oldest, None)
                     self._memory_cache[key] = entry
-                    self._memory_expires[key] = now + self._default_ttl
+                    clean_rev = revision.strip()
+                    if len(clean_rev) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_rev):
+                        mem_ttl = 7 * 86400
+                    else:
+                        mem_ttl = 300
+                    self._memory_expires[key] = now + mem_ttl
             except Exception as exc:
                 logger.warning("Redis cache read failed for key %s: %s", key, exc)
 

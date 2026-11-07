@@ -277,8 +277,9 @@ class TaskExecutionOrchestrator:
             if m_path.exists():
                 try:
                     m_data = json.loads(m_path.read_text(encoding="utf-8"))
-                    saved_diff_hash = m_data.get("verification_diff_hash")
-                except (OSError, json.JSONDecodeError):
+                    if isinstance(m_data, dict):
+                        saved_diff_hash = m_data.get("verification_diff_hash")
+                except (OSError, json.JSONDecodeError, AttributeError):
                     pass
             if not saved_diff_hash:
                 ver_rec = task_repo.get_latest_verification_result(task.id)

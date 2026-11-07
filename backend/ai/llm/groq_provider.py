@@ -293,9 +293,7 @@ class GroqProvider(LLMProvider):
 
         content = choices[0].get("message", {}).get("content", "")
         if not content:
-            reasoning = choices[0].get("message", {}).get("reasoning", "")
-            if reasoning:
-                content = reasoning
+            raise LLMUnavailableError("Groq response message contained no content.", provider=self.provider_name)
         usage = data.get("usage", {})
 
         if schema is not None:

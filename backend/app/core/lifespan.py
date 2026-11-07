@@ -119,10 +119,10 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     dimensions=settings.embedding_dimensions,
                 )
                 from ai.embeddings.service import CachedEmbeddingService
-                from app.core.redis import get_redis
+                from app.core.redis import get_async_redis_client
                 redis_client = None
                 try:
-                    redis_client = get_redis()
+                    redis_client = get_async_redis_client()
                 except Exception:
                     pass
                 embedding_service = CachedEmbeddingService(

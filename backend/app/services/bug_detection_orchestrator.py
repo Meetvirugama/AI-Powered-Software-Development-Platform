@@ -954,9 +954,9 @@ def normalize_and_ground_findings(
                 data["source_type"] = default_source_type
             if "category" not in data or not data["category"]:
                 data["category"] = meta.get("category") or data.get("rule_id") or data.get("issue_type") or "security"
-            if "severity" in data and isinstance(data["severity"], str):
+            if data.get("severity") and isinstance(data["severity"], str):
                 data["severity"] = data["severity"].upper()
-            elif "severity" not in data or not data["severity"]:
+            else:
                 sev = data.get("level") or meta.get("severity") or "MEDIUM"
                 data["severity"] = str(sev).upper()
             if "title" not in data:

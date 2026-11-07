@@ -43,7 +43,14 @@ DEFAULT_SNAPSHOT_BASE_DIR = Path(
 class RepositoryIntelligenceSnapshotManager:
     """Manages versioned physical intelligence artifacts on disk."""
 
+    MAX_CACHE_ENTRIES: ClassVar[int] = 50
     _cache: ClassVar[dict[str, tuple[float, RepositoryIntelligenceSnapshot]]] = {}
+
+    @classmethod
+    def _store_cache(cls, key: str, value: tuple[float, RepositoryIntelligenceSnapshot]) -> None:
+        if len(cls._cache) >= cls.MAX_CACHE_ENTRIES and key not in cls._cache:
+            cls._cache.pop(next(iter(cls._cache)), None)
+        cls._cache[key] = value
 
     def __init__(self, base_directory: Path | str | None = None) -> None:
         self.base_dir = Path(base_directory or DEFAULT_SNAPSHOT_BASE_DIR)
@@ -172,7 +179,7 @@ class RepositoryIntelligenceSnapshotManager:
             with open(intel_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             snapshot = RepositoryIntelligenceSnapshot.model_validate(data)
-            self._cache[cache_key] = (mtime, snapshot)
+            self._store_cache(cache_key, (mtime, snapshot))
             return snapshot
         except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
             logger.warning("Failed to load intelligence snapshot for repo %s: %s", repository_id, exc)
@@ -196,7 +203,7 @@ class RepositoryIntelligenceSnapshotManager:
                 with open(version_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 snapshot = RepositoryIntelligenceSnapshot.model_validate(data)
-                self._cache[cache_key] = (mtime, snapshot)
+                self._store_cache(cache_key, (mtime, snapshot))
                 return snapshot
             except (json.JSONDecodeError, OSError, ValueError, KeyError) as exc:
                 logger.warning("Failed to load pinned snapshot %s: %s", commit_sha, exc)

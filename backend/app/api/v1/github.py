@@ -6,6 +6,7 @@ POST /api/v1/github/repositories/:id/connect — connect a repo to the platform
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from uuid import UUID
@@ -459,14 +460,13 @@ async def github_webhook(
         try:
             try:
                 r = await get_redis_async()
-                set_fn = getattr(r, "set", None)
-                if inspect.iscoroutinefunction(set_fn):
-                    was_set = await r.set(f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True)
-                else:
-                    was_set = r.set(f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True)
-            except Exception:
-                r = get_redis()
                 was_set = r.set(f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True)
+                if inspect.isawaitable(was_set):
+                    was_set = await was_set
+            except Exception:
+                was_set = await asyncio.to_thread(
+                    get_redis().set, f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True
+                )
             if not was_set:
                 logger.info("github_webhook_duplicate_delivery", extra={"delivery_id": delivery_id, "event": event})
                 return {"status": "duplicate_delivery_ignored", "delivery_id": delivery_id}

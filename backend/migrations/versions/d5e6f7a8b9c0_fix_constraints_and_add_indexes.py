@@ -5,7 +5,7 @@ Revises: c94e1f8a2d73
 Create Date: 2026-11-05 21:50:00.000000
 """
 
-from typing import Sequence, Union
+from typing import Any, Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
@@ -16,8 +16,35 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. repository_files unique constraint and composite index (Audit A1.5)
-    # Deduplicate if duplicate rows exist prior to creating the unique constraint
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    # 1. Repoint dependent records from duplicate file rows before deleting (Audit A1.5)
+    # Update code_chunks and code_symbols references from lower-ID duplicates to the surviving keeper file
+    op.execute(
+        """
+        UPDATE code_chunks c
+        SET file_id = keeper.id
+        FROM repository_files dup
+        JOIN repository_files keeper
+          ON dup.repository_id = keeper.repository_id
+         AND dup.path = keeper.path
+         AND dup.id < keeper.id
+        WHERE c.file_id = dup.id;
+        """
+    )
+    op.execute(
+        """
+        UPDATE code_symbols s
+        SET file_id = keeper.id
+        FROM repository_files dup
+        JOIN repository_files keeper
+          ON dup.repository_id = keeper.repository_id
+         AND dup.path = keeper.path
+         AND dup.id < keeper.id
+        WHERE s.file_id = dup.id;
+        """
+    )
     op.execute(
         """
         DELETE FROM repository_files a USING repository_files b
@@ -26,137 +53,48 @@ def upgrade() -> None:
           AND a.path = b.path;
         """
     )
-    try:
+
+    def _create_index_if_missing(table_name: str, index_name: str, columns: list[Any], unique: bool = False) -> None:
+        existing = {ix["name"] for ix in inspector.get_indexes(table_name)}
+        if index_name not in existing:
+            op.create_index(index_name, table_name, columns, unique=unique)
+
+    existing_uqs = {uq["name"] for uq in inspector.get_unique_constraints("repository_files")}
+    if "uq_repository_files_repo_path" not in existing_uqs:
         op.create_unique_constraint(
             "uq_repository_files_repo_path",
             "repository_files",
             ["repository_id", "path"],
         )
-    except Exception:
-        pass
 
-    try:
-        op.create_index(
-            "ix_repository_files_repository_id_path",
-            "repository_files",
-            ["repository_id", "path"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 2. symbol_edges source and target symbol indexes (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_symbol_edges_source_symbol_id",
-            "symbol_edges",
-            ["source_symbol_id"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    try:
-        op.create_index(
-            "ix_symbol_edges_target_symbol_id",
-            "symbol_edges",
-            ["target_symbol_id"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 3. code_symbols repo + name lookup index (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_code_symbols_repository_id_name",
-            "code_symbols",
-            ["repository_id", "name"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 4. code_chunks file_id + start_line index (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_code_chunks_file_id_start_line",
-            "code_chunks",
-            ["file_id", "start_line"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 5. analysis_runs composite index (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_analysis_runs_repo_feature_created",
-            "analysis_runs",
-            ["repository_id", "feature_type", sa.text("created_at DESC")],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 6. task_events composite index (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_task_events_task_id_created_at",
-            "task_events",
-            ["task_id", "created_at"],
-            unique=False,
-        )
-    except Exception:
-        pass
-
-    # 7. tasks composite index (Audit B4.1)
-    try:
-        op.create_index(
-            "ix_tasks_repo_status_created_at",
-            "tasks",
-            ["repository_id", "status", sa.text("created_at DESC")],
-            unique=False,
-        )
-    except Exception:
-        pass
+    _create_index_if_missing("repository_files", "ix_repository_files_repository_id_path", ["repository_id", "path"])
+    _create_index_if_missing("symbol_edges", "ix_symbol_edges_source_symbol_id", ["source_symbol_id"])
+    _create_index_if_missing("symbol_edges", "ix_symbol_edges_target_symbol_id", ["target_symbol_id"])
+    _create_index_if_missing("code_symbols", "ix_code_symbols_repository_id_name", ["repository_id", "name"])
+    _create_index_if_missing("code_chunks", "ix_code_chunks_file_id_start_line", ["file_id", "start_line"])
+    _create_index_if_missing("analysis_runs", "ix_analysis_runs_repo_feature_created", ["repository_id", "feature_type", sa.text("created_at DESC")])
+    _create_index_if_missing("task_events", "ix_task_events_task_id_created_at", ["task_id", "created_at"])
+    _create_index_if_missing("tasks", "ix_tasks_repo_status_created_at", ["repository_id", "status", sa.text("created_at DESC")])
 
 
 def downgrade() -> None:
-    try:
-        op.drop_index("ix_tasks_repo_status_created_at", table_name="tasks")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_task_events_task_id_created_at", table_name="task_events")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_analysis_runs_repo_feature_created", table_name="analysis_runs")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_code_chunks_file_id_start_line", table_name="code_chunks")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_code_symbols_repository_id_name", table_name="code_symbols")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_symbol_edges_target_symbol_id", table_name="symbol_edges")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_symbol_edges_source_symbol_id", table_name="symbol_edges")
-    except Exception:
-        pass
-    try:
-        op.drop_index("ix_repository_files_repository_id_path", table_name="repository_files")
-    except Exception:
-        pass
-    try:
-        op.drop_constraint("uq_repository_files_repo_path", "repository_files", type_="unique")
-    except Exception:
-        pass
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
 
+    def _drop_index_if_exists(table_name: str, index_name: str) -> None:
+        existing = {ix["name"] for ix in inspector.get_indexes(table_name)}
+        if index_name in existing:
+            op.drop_index(index_name, table_name=table_name)
+
+    _drop_index_if_exists("tasks", "ix_tasks_repo_status_created_at")
+    _drop_index_if_exists("task_events", "ix_task_events_task_id_created_at")
+    _drop_index_if_exists("analysis_runs", "ix_analysis_runs_repo_feature_created")
+    _drop_index_if_exists("code_chunks", "ix_code_chunks_file_id_start_line")
+    _drop_index_if_exists("code_symbols", "ix_code_symbols_repository_id_name")
+    _drop_index_if_exists("symbol_edges", "ix_symbol_edges_target_symbol_id")
+    _drop_index_if_exists("symbol_edges", "ix_symbol_edges_source_symbol_id")
+    _drop_index_if_exists("repository_files", "ix_repository_files_repository_id_path")
+
+    existing_uqs = {uq["name"] for uq in inspector.get_unique_constraints("repository_files")}
+    if "uq_repository_files_repo_path" in existing_uqs:
+        op.drop_constraint("uq_repository_files_repo_path", "repository_files", type_="unique")

@@ -33,8 +33,8 @@ def get_redis() -> Redis:
     )
 
 
-async def get_redis_async() -> AsyncRedis:
-    """Return a shared async Redis client per process with timeouts configured."""
+def get_async_redis_client() -> AsyncRedis:
+    """Return a shared async Redis client without requiring an await."""
     global _async_redis_client
     if _async_redis_client is None:
         _async_redis_client = AsyncRedis.from_url(
@@ -42,6 +42,11 @@ async def get_redis_async() -> AsyncRedis:
             **_get_redis_options(),
         )
     return _async_redis_client
+
+
+async def get_redis_async() -> AsyncRedis:
+    """Return a shared async Redis client per process with timeouts configured."""
+    return get_async_redis_client()
 
 
 async def close_redis_async() -> None:

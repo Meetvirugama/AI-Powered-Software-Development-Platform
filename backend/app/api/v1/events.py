@@ -41,15 +41,15 @@ async def _resolve_optional_user_id(request: Request) -> UUID | None:
         if jti:
             try:
                 r = await get_redis_async()
-                exists_fn = getattr(r, "exists", None)
-                if inspect.iscoroutinefunction(exists_fn):
-                    if await r.exists(f"auth:blocklist:{jti}"):
-                        return None
-                elif exists_fn and r.exists(f"auth:blocklist:{jti}"):
+                exists_res = r.exists(f"auth:blocklist:{jti}")
+                if inspect.isawaitable(exists_res):
+                    exists_res = await exists_res
+                if exists_res:
                     return None
             except Exception:
                 try:
-                    if get_redis().exists(f"auth:blocklist:{jti}"):
+                    exists_res = await asyncio.to_thread(get_redis().exists, f"auth:blocklist:{jti}")
+                    if exists_res:
                         return None
                 except Exception:
                     pass
@@ -87,16 +87,16 @@ def _should_deliver_event(
             return False
         if str(event_user_id) != str(caller_user_id):
             return False
+        if owned_repo_ids is not None and isinstance(data_obj, dict) and "repository_id" in data_obj:
+            return str(data_obj["repository_id"]) in owned_repo_ids
+        return True
 
     # If the event is scoped to a repository, verify caller ownership
     if isinstance(data_obj, dict) and "repository_id" in data_obj:
         if owned_repo_ids is None:
             # Cannot verify repository ownership; fail closed (Audit A1.4)
             return False
-        if str(data_obj["repository_id"]) not in owned_repo_ids:
-            if event_user_id is not None and str(event_user_id) == str(caller_user_id):
-                return True
-            return False
+        return str(data_obj["repository_id"]) in owned_repo_ids
 
     # For general events with no repository or user scope, require authenticated user
     # unless it is explicitly a public system notice

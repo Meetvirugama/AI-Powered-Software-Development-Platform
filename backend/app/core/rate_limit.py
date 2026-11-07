@@ -69,6 +69,8 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/generate-tests/?$"), 20, 60, "user"),
         RateLimitRule("repo_review", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/review/?$"), 20, 60, "user"),
+        RateLimitRule("repo_source", frozenset({"GET", "POST"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/source(?:/.*)?$"), 30, 60, "user"),
         RateLimitRule("repo_issues", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/issues(?:/import)?/?$"), 20, 60, "user"),
         RateLimitRule("tasks_create", frozenset({"POST"}),

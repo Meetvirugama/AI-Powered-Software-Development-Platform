@@ -667,7 +667,12 @@ def record_analysis_run(
 
             AnalysisRunRepository(db).create_run(**record)
         except Exception as exc:
-            logger.debug("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
+            if hasattr(db, "rollback"):
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
     # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(
