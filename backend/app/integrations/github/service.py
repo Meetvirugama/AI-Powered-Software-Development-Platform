@@ -828,6 +828,41 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         client = GitHubClient(token)
         return await client.compare_commits(owner, repo, base, head)
 
+    async def get_branch(
+        self,
+        owner: str,
+        repo: str,
+        branch: str,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve branch metadata including commit SHA."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        clean_b = branch.removeprefix("refs/heads/")
+        return await client.get_branch(owner, repo, clean_b)
+
+    async def create_pull_request_review(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str = "COMMENT",
+        comments: list[dict[str, Any]] | None = None,
+        installation_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Create a review on a pull request with an overall comment."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        return await client.create_pull_request_review(
+            owner=owner,
+            repo=repo,
+            pr_number=pr_number,
+            body=body,
+            event=event,
+            comments=comments,
+        )
+
     async def create_task_branch(
         self,
         owner: str,

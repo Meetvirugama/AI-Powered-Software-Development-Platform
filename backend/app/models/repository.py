@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, String, DateTime
+from sqlalchemy import Boolean, Enum, ForeignKey, String, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -28,3 +28,7 @@ class Repository(TimestampedModel, Base):
     language: Mapped[str | None] = mapped_column(String, nullable=True)
     sync_status: Mapped[SyncStatus] = mapped_column(Enum(SyncStatus), default=SyncStatus.NOT_SYNCED)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_indexed_commit_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    pr_review_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    pr_review_drafts: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

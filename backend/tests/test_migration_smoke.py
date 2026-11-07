@@ -57,6 +57,7 @@ EXPECTED_TABLES = frozenset({
     "task_checkpoints",
     "task_events",
     "task_pull_requests",
+    "github_webhook_events",
 })
 
 EXPECTED_MILESTONE_REVISIONS = (
@@ -69,6 +70,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "b627460d74e0",  # pull_requests
     "b3c4d5e6f7a8",  # workflow automation & tasks
     "c94e1f8a2d73",  # week3 github_issues, tasks, task_plans, task_approvals, task_events
+    "d5e6f7a8b9c0",  # fix constraints and add indexes
+    "e1f2a3b4c5d6",  # durable github webhook events and repo automation (Issue #182)
 )
 
 
@@ -78,7 +81,7 @@ def clean_schema_name() -> Generator[str, None, None]:
     settings = get_settings()
     schema = f"smoke_{uuid.uuid4().hex[:10]}"
     try:
-        engine = create_engine(settings.database_url)
+        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
         with engine.begin() as conn:
             conn.execute(text(f"CREATE SCHEMA {schema};"))
     except Exception as exc:
@@ -173,7 +176,7 @@ def test_zero_schema_drift_against_database() -> None:
         cfg.set_main_option("sqlalchemy.url", settings.database_url)
         command.upgrade(cfg, "head")
 
-        engine = create_engine(settings.database_url)
+        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 3})
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn, opts={"compare_type": True})
             diffs = compare_metadata(ctx, Base.metadata)

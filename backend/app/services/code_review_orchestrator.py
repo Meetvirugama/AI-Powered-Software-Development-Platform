@@ -1132,3 +1132,109 @@ def compute_category_counts(findings: list[ReviewFinding]) -> dict[str, int]:
 
 
 merge_and_deduplicate_review_findings = merge_and_rank_review_findings
+
+
+class CodeReviewOrchestrator:
+    """Unified AI and static code review orchestrator for standalone API and background event processing."""
+
+    def __init__(
+        self,
+        db_session: Session | None = None,
+        github_source_service: Any = None,
+        llm_gateway: Any = None,
+        app_state: Any = None,
+    ) -> None:
+        self.db = db_session
+        self.github_source_service = github_source_service
+        self.llm_gateway = llm_gateway
+        self.app_state = app_state
+
+    async def execute_code_review(
+        self,
+        repository: Repository | Any,
+        request: CodeReviewRequest,
+        user_id: UUID | None = None,
+    ) -> ReviewReport:
+        effective_user_id = user_id or getattr(repository, "user_id", None)
+
+        state = self.app_state
+        if state is None:
+            class _AppStateProxy:
+                pass
+
+            state = _AppStateProxy()
+            if self.github_source_service:
+                state.github_source_service = self.github_source_service
+
+        resolved = await resolve_review_target_and_build_context(
+            repository_id=repository.id,
+            repo=repository,
+            payload=request,
+            user_id=effective_user_id,
+            db=self.db,
+            app_state=state,
+        )
+
+        all_findings: list[ReviewFinding] = []
+        scanner_warnings: list[str] = []
+
+        if request.include_static:
+            builtin_static, builtin_warns = await asyncio.to_thread(
+                run_static_review_on_changes,
+                repository_id=repository.id,
+                resolved=resolved,
+                app_state=state,
+            )
+            grounded_static = normalize_and_ground_review_findings(
+                raw_items=builtin_static,
+                repository_id=repository.id,
+                resolved=resolved,
+                default_source_type="STATIC",
+            )
+            all_findings.extend(grounded_static)
+            scanner_warnings.extend(builtin_warns)
+
+        review_service = getattr(state, "code_review_service", None)
+        if review_service is None and self.llm_gateway:
+            review_service = LLMCodeReviewService(llm_gateway=self.llm_gateway)
+
+        if review_service:
+            try:
+                method = getattr(review_service, "review", review_service)
+                raw_ai = await method(
+                    repository_id=repository.id,
+                    request=request,
+                    user_id=effective_user_id,
+                    db=self.db,
+                    context=resolved.intelligence_context,
+                    modified_files=resolved.modified_files,
+                    source_map=resolved.source_map,
+                    revision=resolved.revision,
+                )
+                ai_findings = (
+                    getattr(raw_ai, "findings", [])
+                    if hasattr(raw_ai, "findings")
+                    else (raw_ai.get("findings", []) if isinstance(raw_ai, dict) else [])
+                )
+                grounded_ai = normalize_and_ground_review_findings(
+                    raw_items=ai_findings,
+                    repository_id=repository.id,
+                    resolved=resolved,
+                    default_source_type="AI",
+                )
+                all_findings.extend(grounded_ai)
+            except Exception as ai_exc:
+                logger.warning("orchestrator_llm_review_warning", extra={"error": str(ai_exc)})
+
+        merged_findings = merge_and_rank_review_findings(
+            all_findings,
+            include_static=request.include_static,
+        )
+
+        missing_context = list(dict.fromkeys(resolved.missing_context + scanner_warnings))
+        report = build_grounded_review_report(
+            summary=f"Automated review completed with {len(merged_findings)} finding(s).",
+            findings=merged_findings,
+            missing_context=missing_context,
+        )
+        return report

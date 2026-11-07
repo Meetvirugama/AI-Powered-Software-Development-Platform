@@ -125,8 +125,13 @@ def client_harness(mem_db: Session, monkeypatch, tmp_path: Path):
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "adversarial-webhook-secret-token")
     get_settings.cache_clear()
 
+    async def _fake_get_redis_async():
+        return dummy_redis
+
     monkeypatch.setattr("app.core.auth.get_redis", lambda: dummy_redis)
     monkeypatch.setattr("app.core.redis.get_redis", lambda: dummy_redis)
+    monkeypatch.setattr("app.core.redis.get_redis_async", _fake_get_redis_async)
+    monkeypatch.setattr("app.api.v1.github.get_redis_async", _fake_get_redis_async)
 
     ws_root = tmp_path / "workspaces"
     ws_root.mkdir(parents=True, exist_ok=True)
@@ -747,7 +752,7 @@ class TestGitHubWebhookSecurityStress:
 
         # First delivery -> processed (or ignored if unsupported, but status is not duplicate)
         res1 = client.post("/api/v1/github/webhook", content=payload, headers=headers)
-        assert res1.status_code == 200
+        assert res1.status_code in (200, 202)
         assert res1.json().get("status") != "duplicate_delivery_ignored"
 
         # Second delivery (replay attack with identical delivery ID) -> deduplicated
