@@ -11,9 +11,14 @@ Provides:
 from __future__ import annotations
 
 import os
+import signal
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 import pytest
+
+if not hasattr(signal, "SIGKILL"):
+    signal.SIGKILL = getattr(signal, "SIGTERM", 9)
+
 from fastapi.testclient import TestClient
 import httpx
 try:
@@ -38,15 +43,17 @@ try:
 except (ImportError, ModuleNotFoundError):
     register_github_mocks = None  # type: ignore
 
+# Determine test database URL before importing database module
+TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
+DEFAULT_TEST_DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+if "DATABASE_URL" not in os.environ:
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
 from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.main import app
 from app import models as _app_models  # noqa: F401 — ensure all ORM models (including PullRequest) are registered on Base.metadata
-
-# Determine test database URL
-TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
-DEFAULT_TEST_DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
 
 # Configure SQLite compatibility for PostgreSQL-specific types if using SQLite
 @compiles(JSONB, "sqlite")
@@ -124,6 +131,19 @@ class FakeRedis:
         self.store.pop(key, None)
         self.blocklisted.discard(key)
         return int(existed)
+
+    def getdel(self, key: str) -> str | None:
+        val = self.store.pop(key, None)
+        self.blocklisted.discard(key)
+        return val
+
+    def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any:
+        if numkeys >= 1 and keys_and_args:
+            key = keys_and_args[0]
+            val = self.store.pop(key, None)
+            self.blocklisted.discard(key)
+            return val
+        return None
 
     def ping(self) -> bool:
         return True

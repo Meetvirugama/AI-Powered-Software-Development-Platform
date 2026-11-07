@@ -10,8 +10,7 @@ pgvector>=0.3,<1.0
 
 # GitHub integration (Parth — W1-03)
 httpx>=0.27,<1.0         # Async HTTP client for GitHub API calls
-PyJWT[crypto]>=2.8,<3.0  # RS256 JWT signing for GitHub App authentication
-
+PyJWT[crypto]>=2.8,<3.0  # Consolidated JWT engine for platform HS256 tokens and GitHub App RS256 signing
 sentence-transformers>=3.0,<4.0
 tiktoken>=0.7,<1.0       # Token counting for ContextBuilder (Meet — W1-12)
 pathspec>=0.12.0
