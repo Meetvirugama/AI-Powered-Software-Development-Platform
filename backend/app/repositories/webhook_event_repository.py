@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import false, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.secret_redaction import redact
@@ -143,6 +143,15 @@ class WebhookEventRepository:
         if not event:
             return None
 
+        if event.status == WebhookEventStatus.PROCESSING and event.attempts >= event.max_attempts:
+            event.status = WebhookEventStatus.DEAD_LETTER
+            event.processed_at = now
+            event.lease_expires_at = None
+            event.last_error = "Lease expired after max attempts (worker crash suspected)."
+            event.updated_at = now
+            self.session.commit()
+            return None
+
         event.status = WebhookEventStatus.PROCESSING
         event.claimed_at = now
         event.lease_expires_at = now + timedelta(seconds=lease_seconds)
@@ -152,9 +161,16 @@ class WebhookEventRepository:
         self.session.refresh(event)
         return event
 
-    def mark_succeeded(self, event_id: uuid.UUID) -> Optional[GitHubWebhookEvent]:
+    def mark_succeeded(
+        self,
+        event_id: uuid.UUID,
+        expected_claimed_at: datetime | None = None,
+    ) -> Optional[GitHubWebhookEvent]:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
+            return None
+        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+            logger.warning("webhook_fencing_token_mismatch_succeeded", extra={"event_id": str(event_id)})
             return None
         now = datetime.now(timezone.utc)
         event.status = WebhookEventStatus.SUCCEEDED
@@ -170,14 +186,22 @@ class WebhookEventRepository:
         error_message: str,
         backoff_seconds: int | None = None,
         base_backoff_seconds: int | None = None,
+        expected_claimed_at: datetime | None = None,
     ) -> Optional[GitHubWebhookEvent]:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
             return None
+        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+            logger.warning("webhook_fencing_token_mismatch_retry", extra={"event_id": str(event_id)})
+            return None
         now = datetime.now(timezone.utc)
         safe_error = redact(str(error_message))[:2000]
         if event.attempts >= event.max_attempts:
-            return self.mark_dead_letter(event_id, f"Exhausted max retries ({event.max_attempts}): {safe_error}")
+            return self.mark_dead_letter(
+                event_id,
+                f"Exhausted max retries ({event.max_attempts}): {safe_error}",
+                expected_claimed_at=expected_claimed_at,
+            )
 
         eff_backoff = backoff_seconds if backoff_seconds is not None else base_backoff_seconds
         delay = eff_backoff if eff_backoff is not None else compute_backoff_seconds(event.attempts)
@@ -189,9 +213,17 @@ class WebhookEventRepository:
         self.session.commit()
         return event
 
-    def mark_dead_letter(self, event_id: uuid.UUID, error_message: str) -> Optional[GitHubWebhookEvent]:
+    def mark_dead_letter(
+        self,
+        event_id: uuid.UUID,
+        error_message: str,
+        expected_claimed_at: datetime | None = None,
+    ) -> Optional[GitHubWebhookEvent]:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
+            return None
+        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+            logger.warning("webhook_fencing_token_mismatch_dead_letter", extra={"event_id": str(event_id)})
             return None
         now = datetime.now(timezone.utc)
         event.status = WebhookEventStatus.DEAD_LETTER
@@ -237,6 +269,8 @@ class WebhookEventRepository:
         status: WebhookEventStatus | None = None,
         event_type: str | None = None,
         repository_id: uuid.UUID | None = None,
+        repository_ids: list[uuid.UUID] | None = None,
+        installation_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[GitHubWebhookEvent], int]:
@@ -252,6 +286,18 @@ class WebhookEventRepository:
         if repository_id:
             stmt = stmt.where(GitHubWebhookEvent.repository_id == repository_id)
             count_stmt = count_stmt.where(GitHubWebhookEvent.repository_id == repository_id)
+        elif repository_ids is not None or installation_ids is not None:
+            scope_conditions = []
+            if repository_ids:
+                scope_conditions.append(GitHubWebhookEvent.repository_id.in_(repository_ids))
+            if installation_ids:
+                scope_conditions.append(GitHubWebhookEvent.installation_id.in_(installation_ids))
+            if scope_conditions:
+                stmt = stmt.where(or_(*scope_conditions))
+                count_stmt = count_stmt.where(or_(*scope_conditions))
+            else:
+                stmt = stmt.where(false())
+                count_stmt = count_stmt.where(false())
 
         total = self.session.execute(count_stmt).scalar() or 0
         events = list(

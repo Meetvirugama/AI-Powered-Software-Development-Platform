@@ -59,10 +59,10 @@ The HTTP endpoint `POST /api/v1/github/webhook` maintains a p95 latency under 1 
 3. Enforce maximum payload size (5 MB).
 4. Extract `event_type`, `action`, `installation_id`, `repository_id`.
 5. Redis fast-path delivery deduplication (`webhook_delivery:{delivery_id}`).
-6. **Durable Persistence**: Write the event to `webhook_events` table in PostgreSQL with status `pending`.
+6. **Durable Persistence**: Write the event to `github_webhook_events` table in PostgreSQL with status `pending`.
    - If PostgreSQL write fails, return a 500 retryable error so GitHub redelivers.
    - If unique constraint on `delivery_id` trips, acknowledge as duplicate.
-7. Return `200 OK` promptly upon successful persistence.
+7. Return `202 Accepted` promptly upon successful persistence (or `200 OK` for duplicate deliveries / ping).
 
 ### 3.2 Durable Event Lifecycle
 Events transition through a strict state machine:
@@ -75,13 +75,12 @@ Events transition through a strict state machine:
 ### 3.3 Atomic Worker Claims & Concurrency Control
 Workers claim events using PostgreSQL row-level locks with skip locked:
 ```sql
-UPDATE webhook_events
+UPDATE github_webhook_events
 SET status = 'processing',
     claimed_at = NOW(),
-    lease_expires_at = NOW() + INTERVAL '5 minutes',
-    claimed_by = :worker_id
+    lease_expires_at = NOW() + INTERVAL '5 minutes'
 WHERE id = (
-    SELECT id FROM webhook_events
+    SELECT id FROM github_webhook_events
     WHERE (status IN ('pending', 'retry') AND available_at <= NOW())
        OR (status = 'processing' AND lease_expires_at <= NOW())
     ORDER BY created_at ASC
@@ -96,7 +95,7 @@ Benefits:
 
 ### 3.4 Retry Policy & Exponential Backoff
 - Default maximum attempts: 5.
-- Backoff formula: `delay = min(300, base * (2 ** attempts) + uniform(0.1, 1.0))`.
+- Backoff formula: `delay = min(3600, base * (2 ** attempts) + uniform(0.1, 1.0))`.
 - Errors are sanitized (removing tokens, passwords, private keys) before storing in `last_error`.
 
 ---
@@ -140,8 +139,8 @@ Benefits:
 `opened`, `synchronize`, `reopened`, `ready_for_review`, `closed`, `converted to draft`.
 
 ### 6.2 Opt-In Configuration
-- Repository-level flag: `auto_pr_review_enabled` (default: `False`).
-- Configurable draft PR review: `review_draft_prs` (default: `False`).
+- Repository-level flag: `pr_review_enabled` (default: `False`).
+- Configurable draft PR review: `pr_review_drafts` (default: `False`).
 - If disabled, events are acknowledged and recorded without executing AI reviews.
 
 ### 6.3 Review Execution & Deduplication
@@ -176,7 +175,7 @@ Before publishing comments to GitHub:
 ## 8. Database Schema & Migration Strategy (Phase 7)
 
 ### 8.1 New Tables & Columns
-1. `webhook_events`:
+1. `github_webhook_events`:
    - `id`: UUID (PK)
    - `delivery_id`: String (Unique, Indexed)
    - `event_type`: String (Indexed)
@@ -190,7 +189,6 @@ Before publishing comments to GitHub:
    - `max_attempts`: Integer (Default 5)
    - `available_at`: DateTime (Indexed)
    - `claimed_at`: DateTime (Nullable)
-   - `claimed_by`: String (Nullable)
    - `lease_expires_at`: DateTime (Nullable, Indexed)
    - `processed_at`: DateTime (Nullable)
    - `last_error`: Text (Nullable)
@@ -200,21 +198,21 @@ Before publishing comments to GitHub:
 
 2. `repositories` modifications:
    - `last_indexed_commit_sha`: String(64) (Nullable)
-   - `auto_pr_review_enabled`: Boolean (Default False)
-   - `review_draft_prs`: Boolean (Default False)
    - `auto_sync_enabled`: Boolean (Default True)
+   - `pr_review_enabled`: Boolean (Default False)
+   - `pr_review_drafts`: Boolean (Default False)
 
 3. `github_issues`:
    - `id`: UUID (PK)
    - `repository_id`: UUID (FK `repositories.id`)
    - `issue_number`: Integer (Indexed)
    - `title`: String
+   - `body`: Text
    - `state`: String
-   - `author`: String
-   - `assignees`: JSONB
    - `labels`: JSONB
-   - `body_snippet`: Text
-   - `last_action`: String
+   - `html_url`: String
+   - `author`: String (Nullable)
+   - `origin_finding_id`: UUID (Nullable)
    - `created_at`, `updated_at`: DateTime
 
 ### 8.2 Migration Safety
@@ -229,8 +227,8 @@ Before publishing comments to GitHub:
 - `GET /api/v1/github/events`: List webhook events with filters (`status`, `event_type`, `repository_id`) and pagination.
 - `GET /api/v1/github/events/{id}`: Detailed view of event and error traces.
 - `POST /api/v1/github/events/{id}/replay`: Replay failed or dead-lettered events safely. Actively processing events cannot be replayed.
-- `GET /api/v1/github/repositories/{id}/automation`: View repository automation settings.
-- `PATCH /api/v1/github/repositories/{id}/automation`: Configure automation settings (enable/disable push sync, PR reviews, draft reviews).
+- `GET /api/v1/github/repositories/{github_repo_id}/automation`: View repository automation settings.
+- `PATCH /api/v1/github/repositories/{github_repo_id}/automation`: Configure automation settings (enable/disable push sync, PR reviews, draft reviews).
 
 ---
 

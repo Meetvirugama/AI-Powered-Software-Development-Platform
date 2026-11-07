@@ -21,6 +21,9 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis, get_redis_async
+from app.models.github_installation import GitHubInstallation
+from app.models.repository import Repository
+from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.user_repository import UserRepository
@@ -44,6 +47,20 @@ def _request_user_id(request: Request) -> UUID:
         return UUID(request.state.user_id)
     except (AttributeError, ValueError) as exc:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
+
+
+def _verify_event_access(event: GitHubWebhookEvent, user_id: UUID, db: Session) -> None:
+    has_access = False
+    if event.repository_id:
+        r = RepositoryRepository(db).get_for_user(event.repository_id, user_id)
+        if r:
+            has_access = True
+    if not has_access and event.installation_id:
+        inst = GitHubInstallationRepository(db).get_by_installation_id(event.installation_id)
+        if inst and inst.user_id == user_id:
+            has_access = True
+    if not has_access:
+        raise APIError(403, ErrorCode.FORBIDDEN, "Access denied to this event.")
 
 
 @router.get(
@@ -535,7 +552,17 @@ async def github_webhook(
             logger.info("github_webhook_db_duplicate_delivery", extra={"delivery_id": effective_delivery_id, "event": event})
             return {"status": "duplicate_delivery_ignored", "delivery_id": effective_delivery_id}
     except Exception as db_exc:
+        db.rollback()
         logger.error("github_webhook_persistence_failed", extra={"error": str(db_exc)})
+        if delivery_id:
+            try:
+                r_clean = await get_redis_async()
+                if r_clean is not None:
+                    await r_clean.delete(f"webhook_delivery:{delivery_id}")
+                else:
+                    get_redis().delete(f"webhook_delivery:{delivery_id}")
+            except Exception:
+                logger.warning("webhook_dedup_key_release_failed", extra={"delivery_id": delivery_id})
         raise APIError(
             500,
             ErrorCode.INTERNAL_SERVER_ERROR,
@@ -580,17 +607,24 @@ async def list_webhook_events(
     """Inspect durably persisted webhook events with status and event_type filters."""
     user_id = _request_user_id(request)
 
+    user_repo_ids = None
+    user_install_ids = None
     repo_uuid = None
     if repository_id:
         try:
             repo_uuid = UUID(repository_id)
         except ValueError:
             raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid repository UUID.")
-        repo = RepositoryRepository(db).get_for_user(repo_uuid, user_id)
-        if not repo:
+        repo_item = RepositoryRepository(db).get_for_user(repo_uuid, user_id)
+        if not repo_item:
             raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository not found or access denied.")
+    else:
+        user_repo_ids = [r.id for r in db.query(Repository.id).filter(Repository.user_id == user_id).all()]
+        user_install_ids = [
+            str(i.installation_id)
+            for i in db.query(GitHubInstallation.installation_id).filter(GitHubInstallation.user_id == user_id).all()
+        ]
 
-    from app.models.webhook_event import WebhookEventStatus
     status_filter = None
     if status:
         try:
@@ -604,6 +638,8 @@ async def list_webhook_events(
         status=status_filter,
         event_type=event_type,
         repository_id=repo_uuid,
+        repository_ids=user_repo_ids,
+        installation_ids=user_install_ids,
         limit=page_size,
         offset=offset,
     )
@@ -655,10 +691,7 @@ async def get_webhook_event(
     if not event:
         raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Webhook event not found.")
 
-    if event.repository_id:
-        r = RepositoryRepository(db).get_for_user(event.repository_id, user_id)
-        if not r:
-            raise APIError(403, ErrorCode.FORBIDDEN, "Access denied to this event.")
+    _verify_event_access(event, user_id, db)
 
     return {
         "id": str(event.id),
@@ -696,10 +729,7 @@ async def replay_webhook_event(
     if not event:
         raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Webhook event not found.")
 
-    if event.repository_id:
-        r = RepositoryRepository(db).get_for_user(event.repository_id, user_id)
-        if not r:
-            raise APIError(403, ErrorCode.FORBIDDEN, "Access denied to this event.")
+    _verify_event_access(event, user_id, db)
 
     try:
         replayed = repo.replay_event(event_uuid)

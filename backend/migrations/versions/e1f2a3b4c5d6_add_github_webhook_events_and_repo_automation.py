@@ -61,8 +61,12 @@ def upgrade() -> None:
     )
 
     if is_postgres:
+        op.execute("ALTER TABLE github_webhook_events ALTER COLUMN status DROP DEFAULT")
         op.execute(
             "ALTER TABLE github_webhook_events ALTER COLUMN status TYPE webhookeventstatus USING status::webhookeventstatus"
+        )
+        op.execute(
+            "ALTER TABLE github_webhook_events ALTER COLUMN status SET DEFAULT 'PENDING'::webhookeventstatus"
         )
 
     op.create_index(op.f("ix_github_webhook_events_delivery_id"), "github_webhook_events", ["delivery_id"], unique=True)

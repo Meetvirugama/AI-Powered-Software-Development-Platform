@@ -60,13 +60,14 @@ async def process_single_webhook_event(
             },
         )
 
+        claimed_at = event.claimed_at
         try:
             result = await dispatcher.dispatch(
                 event=event,
                 db=db,
                 github_service=github_service,
             )
-            event_repo.mark_succeeded(event.id)
+            event_repo.mark_succeeded(event.id, expected_claimed_at=claimed_at)
             logger.info(
                 "webhook_worker_event_succeeded",
                 extra={"event_id": str(event.id), "result": result},
@@ -79,7 +80,7 @@ async def process_single_webhook_event(
                 "webhook_worker_fatal_error",
                 extra={"event_id": str(event.id), "error": str(fatal_err)},
             )
-            event_repo.mark_dead_letter(event.id, error_message=str(fatal_err))
+            event_repo.mark_dead_letter(event.id, error_message=str(fatal_err), expected_claimed_at=claimed_at)
             return False
 
         except RetryableWebhookError as retry_err:
@@ -96,9 +97,10 @@ async def process_single_webhook_event(
                 event_repo.mark_dead_letter(
                     event.id,
                     error_message=f"Exceeded max attempts ({event.max_attempts}): {retry_err}",
+                    expected_claimed_at=claimed_at,
                 )
             else:
-                event_repo.mark_retry(event.id, error_message=str(retry_err))
+                event_repo.mark_retry(event.id, error_message=str(retry_err), expected_claimed_at=claimed_at)
             return False
 
         except Exception as unhandled_err:
@@ -111,9 +113,10 @@ async def process_single_webhook_event(
                 event_repo.mark_dead_letter(
                     event.id,
                     error_message=f"Exceeded max attempts ({event.max_attempts}): {unhandled_err}",
+                    expected_claimed_at=claimed_at,
                 )
             else:
-                event_repo.mark_retry(event.id, error_message=str(unhandled_err))
+                event_repo.mark_retry(event.id, error_message=str(unhandled_err), expected_claimed_at=claimed_at)
             return False
 
 

@@ -117,6 +117,16 @@ class PushEventHandler:
             )
             return {"status": "ignored_already_indexed", "sha": after_sha}
 
+        # Resolve GitHub numeric installation ID
+        gh_installation_id = None
+        if repo.installation_id:
+            inst = db.get(GitHubInstallation, repo.installation_id)
+            if inst and inst.installation_id:
+                try:
+                    gh_installation_id = int(inst.installation_id)
+                except (ValueError, TypeError):
+                    gh_installation_id = inst.installation_id
+
         # Reconcile against current branch HEAD to prevent older out-of-order events from overwriting newer indexed state
         if github_service and hasattr(github_service, "get_branch"):
             try:
@@ -124,9 +134,15 @@ class PushEventHandler:
                     owner=repo.owner,
                     repo=repo.name,
                     branch=default_branch,
-                    installation_id=repo.installation_id,
+                    installation_id=gh_installation_id,
                 )
-                current_head = (branch_info or {}).get("commit", {}).get("sha")
+                current_head = None
+                if isinstance(branch_info, dict):
+                    commit_data = branch_info.get("commit")
+                    if isinstance(commit_data, dict):
+                        sha_val = commit_data.get("sha")
+                        if isinstance(sha_val, str):
+                            current_head = sha_val
                 if current_head and current_head != after_sha and repo.last_indexed_commit_sha == current_head:
                     logger.info("push_ignored_stale_commit", extra={"sha": after_sha, "current_head": current_head})
                     return {"status": "ignored_stale_commit", "sha": after_sha, "current_head": current_head}
@@ -169,9 +185,15 @@ class PushEventHandler:
             db.commit()
             raise RetryableWebhookError(f"Incremental sync execution failed: {exc}") from exc
 
+        # Check job completion status in DB
+        db.expire_all()
+        refreshed_job = db.get(SyncJob, job.id)
+        if refreshed_job and refreshed_job.status == SyncJobStatus.FAILED:
+            raise RetryableWebhookError(f"Incremental sync job {job.id} failed.")
+
         # Update last indexed commit SHA on success
         repo = db.get(Repository, repo.id)
-        if repo:
+        if repo and (refreshed_job is None or refreshed_job.status != SyncJobStatus.FAILED):
             if after_sha:
                 repo.last_indexed_commit_sha = after_sha
             repo.sync_status = SyncStatus.SYNCED
@@ -403,8 +425,9 @@ class PullRequestEventHandler:
         mappable_findings = []
         unmappable_findings = []
         for f in findings:
-            file_path = getattr(f, "file_path", None)
-            start_line = getattr(f, "start_line", None)
+            ref = getattr(f, "source_reference", None)
+            file_path = getattr(ref, "file_path", None) if ref else getattr(f, "file_path", None)
+            start_line = getattr(ref, "start_line", None) if ref else getattr(f, "start_line", None)
             if file_path and start_line is not None:
                 mappable_findings.append(f)
             else:
@@ -417,11 +440,13 @@ class PullRequestEventHandler:
             for f in mappable_findings:
                 cat = getattr(f, "category", "general")
                 sev = getattr(f, "severity", "medium")
-                path = getattr(f, "file_path", "")
-                start = getattr(f, "start_line", "")
-                end = getattr(f, "end_line", start)
+                ref = getattr(f, "source_reference", None)
+                path = getattr(ref, "file_path", "") if ref else getattr(f, "file_path", "")
+                start = getattr(ref, "start_line", "") if ref else getattr(f, "start_line", "")
+                end = getattr(ref, "end_line", start) if ref else getattr(f, "end_line", start)
                 loc = f"L{start}-L{end}" if end and end != start else f"L{start}"
-                desc = (getattr(f, "title", "") or getattr(f, "description", "")).replace("\n", " ")[:120]
+                raw_desc = getattr(f, "title", "") or getattr(f, "description", "")
+                desc = raw_desc.replace("\n", " ").replace("|", "\\|")[:120]
                 lines.append(f"| {cat} | {sev} | `{path}` | {loc} | {desc} |")
             lines.append("")
 
@@ -485,6 +510,16 @@ class PullRequestEventHandler:
         if not head_sha or not pr_number:
             return {"status": "ignored_missing_pr_metadata"}
 
+        # Resolve GitHub numeric installation ID
+        gh_installation_id = None
+        if repo.installation_id:
+            inst = db.get(GitHubInstallation, repo.installation_id)
+            if inst and inst.installation_id:
+                try:
+                    gh_installation_id = int(inst.installation_id)
+                except (ValueError, TypeError):
+                    gh_installation_id = inst.installation_id
+
         # In-flight deduplication per (repo, pr_number, head_sha)
         dedup_key = f"pr_review_dedup:{repo.id}:{pr_number}:{head_sha}"
         try:
@@ -495,6 +530,14 @@ class PullRequestEventHandler:
         except Exception as redis_exc:
             logger.warning("pr_review_dedup_redis_failed", extra={"error": str(redis_exc)})
 
+        async def _release_dedup_key() -> None:
+            try:
+                r_dedup = await get_redis_async()
+                if r_dedup is not None:
+                    await r_dedup.delete(dedup_key)
+            except Exception:
+                logger.warning("pr_review_dedup_release_failed", extra={"key": dedup_key})
+
         # Pre-publish verification: Check if PR is still open and current head matches reviewed head
         if github_service:
             try:
@@ -502,13 +545,14 @@ class PullRequestEventHandler:
                     owner=repo.owner,
                     repo=repo.name,
                     pr_number=pr_number,
-                    installation_id=repo.installation_id,
+                    installation_id=gh_installation_id,
                 )
                 if pr_detail.state != "open":
                     logger.info(
                         "pr_review_abandoned_pr_closed",
                         extra={"pr_number": pr_number, "state": pr_detail.state},
                     )
+                    await _release_dedup_key()
                     return {"status": "review_abandoned_pr_closed", "state": pr_detail.state}
 
                 current_head = getattr(pr_detail, "head_commit_sha", None) or getattr(pr_detail, "head_sha", "")
@@ -521,6 +565,7 @@ class PullRequestEventHandler:
                             "reviewed_head": head_sha,
                         },
                     )
+                    await _release_dedup_key()
                     return {
                         "status": "review_abandoned_stale_head",
                         "current_head": current_head,
@@ -536,8 +581,7 @@ class PullRequestEventHandler:
             from app.services.code_review_orchestrator import CodeReviewOrchestrator
 
             review_request = CodeReviewRequest(
-                target=ReviewTarget.PR,
-                pr_number=pr_number,
+                target=ReviewTarget(type="pr", pr_number=pr_number, head_revision=head_sha),
             )
             orchestrator = CodeReviewOrchestrator(
                 db_session=db,
@@ -563,7 +607,7 @@ class PullRequestEventHandler:
                     pr_number=pr_number,
                     body=review_body,
                     event="COMMENT",
-                    installation_id=repo.installation_id,
+                    installation_id=gh_installation_id,
                 )
                 logger.info(
                     "pr_review_comment_published",
@@ -574,6 +618,7 @@ class PullRequestEventHandler:
                     "pr_review_publish_failed",
                     extra={"repo_id": str(repo.id), "pr_number": pr_number, "error": str(exc)},
                 )
+                await _release_dedup_key()
                 raise RetryableWebhookError(f"Failed to post PR review comment: {exc}") from exc
 
         return {"status": "review_published", "pr_number": pr_number, "head_sha": head_sha}

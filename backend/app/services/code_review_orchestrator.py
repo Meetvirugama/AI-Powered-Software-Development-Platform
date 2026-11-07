@@ -41,6 +41,7 @@ Implements the complete Day 5 & Scenario D / E requirements from `Docs/week2.md`
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import hashlib
 import inspect
