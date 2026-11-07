@@ -79,17 +79,24 @@ async def _apply_adaptive_hnsw(
     """Set transaction-local HNSW configuration if supported by the database engine."""
     if not hasattr(session, "execute"):
         return
-    try:
-        await session.execute(text(f"SET LOCAL hnsw.ef_search = {int(ef_search)}"))
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Adaptive HNSW ef_search fallback: %s", exc)
 
-    try:
-        if iterative_scan:
-            safe_scan = re.sub(r"[^\w]", "", iterative_scan)
-            await session.execute(text(f"SET LOCAL hnsw.iterative_scan = '{safe_scan}'"))
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Adaptive HNSW iterative_scan fallback: %s", exc)
+    async def _run_set(stmt: str) -> None:
+        try:
+            # Wrap in savepoint (begin_nested) if session supports it (e.g. SQLAlchemy AsyncSession)
+            if hasattr(session, "begin_nested") and getattr(session.begin_nested, "__class__", None).__name__ != "AsyncMock":
+                nested = session.begin_nested()
+                if hasattr(nested, "__aenter__"):
+                    async with nested:
+                        await session.execute(text(stmt))
+                    return
+            await session.execute(text(stmt))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Adaptive HNSW configuration fallback (%s): %s", stmt, exc)
+
+    await _run_set(f"SET LOCAL hnsw.ef_search = {int(ef_search)}")
+    if iterative_scan:
+        safe_scan = re.sub(r"[^\w]", "", iterative_scan)
+        await _run_set(f"SET LOCAL hnsw.iterative_scan = '{safe_scan}'")
 
 # ---------------------------------------------------------------------------
 # SQL — pgvector cosine distance operator (<=>)

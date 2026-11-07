@@ -16,6 +16,9 @@ The benchmark suite (`backend/ai/agent/benchmark.py`) consists of 35 curated, ma
 
 ## 2. Comparative Evaluation: Normal RAG vs. Agentic Chat
 
+> [!NOTE]
+> The figures below represent target baselines and synthetic evaluation reference metrics produced by `run_benchmark_simulation` (`backend/ai/agent/benchmark.py`) for deterministic test-suite comparisons and regression gating.
+
 | Metric | Normal Chat (1-Turn RAG) | Agentic Chat (Bounded Agent) | Delta / Impact |
 | :--- | :--- | :--- | :--- |
 | **Evaluated Cases** | 35 | 35 | Same benchmark set |

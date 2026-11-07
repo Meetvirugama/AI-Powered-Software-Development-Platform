@@ -59,18 +59,18 @@ The `ToolRegistry` (`backend/ai/agent/tool_registry.py`) maintains definitions, 
   {
     "type": "object",
     "properties": {
-      "path": { "type": "string", "description": "Relative file path" },
+      "file_path": { "type": "string", "description": "Relative file path" },
       "start_line": { "type": "integer", "description": "Start line (1-indexed)", "default": 1 },
       "end_line": { "type": "integer", "description": "End line (inclusive)", "default": 100 }
     },
-    "required": ["path"]
+    "required": ["file_path"]
   }
   ```
-- **Example Input:** `{"path": "backend/app/main.py", "start_line": 1, "end_line": 50}`
+- **Example Input:** `{"file_path": "backend/app/main.py", "start_line": 1, "end_line": 50}`
 - **Example Output:**
   ```json
   {
-    "path": "backend/app/main.py",
+    "file_path": "backend/app/main.py",
     "start_line": 1,
     "end_line": 50,
     "lines": "from fastapi import FastAPI\n...",

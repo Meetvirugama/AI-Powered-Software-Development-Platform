@@ -576,8 +576,8 @@ class IncrementalIndexer:
                 {"gen": new_generation, "repo_id": repository_id},
                 sess=session,
             )
-        except Exception as gen_exc:
-            logger.debug("Active index generation update skipped: %s", gen_exc)
+        except Exception as gen_exc:  # noqa: BLE001
+            logger.warning("Active index generation update failed: %s", gen_exc)
 
         await self._commit(sess=session)
         logger.info(

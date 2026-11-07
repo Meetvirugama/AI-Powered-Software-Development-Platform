@@ -12,7 +12,7 @@
 
 ### 1.3 Primary Provider 429 Rate Limiting
 - **Cause:** Gemini free-tier quota momentarily exceeded.
-- **Resolution:** The system automatically fails over to Groq. Check structured logs for `llm_gateway_fallback_tool_call`. If Groq is also rate-limited, the system falls back to baseline RAG retrieval chunks.
+- **Resolution:** The system automatically fails over to Groq. Check structured logs for `llm_gateway_primary_tool_failed_trying_fallback`. If Groq is also rate-limited, the system falls back to baseline RAG retrieval chunks.
 
 ### 1.4 Path Traversal Rejected (Validation Error)
 - **Cause:** Model attempted to call `read_file_range` with `../` or `/absolute/path`.

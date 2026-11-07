@@ -168,7 +168,7 @@ class LLMGateway:
                 if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
                     raise
 
-                if self._fallback_provider is not None:
+                if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
                     logger.warning(
                         "llm_gateway_primary_failed_trying_fallback",
                         extra={
@@ -256,7 +256,7 @@ class LLMGateway:
                 if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
                     raise
 
-                if self._fallback_provider is not None:
+                if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
                     logger.warning(
                         "llm_gateway_primary_tool_failed_trying_fallback",
                         extra={

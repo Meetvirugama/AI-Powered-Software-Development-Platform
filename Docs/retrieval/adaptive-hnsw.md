@@ -11,8 +11,8 @@ The retriever resolves an adaptive HNSW profile for each query:
 | Profile | Target Intents | `ef_search` | `iterative_scan` | Rationale |
 |---|---|---:|---|---|
 | `exact` | `exact_symbol`, `path_lookup` | 40 | `relaxed_order` | Symbol matches rely primarily on lexical retrieval; lower vector search depth saves latency |
-| `normal` | `conceptual`, `configuration_lookup` | 80 | `relaxed_order` | Balanced semantic search depth for general conceptual questions |
-| `complex` | `debugging`, `impact_analysis`, `test_generation` | 160 | `relaxed_order` | High-depth graph scan maximizing semantic recall across disparate code patterns |
+| `normal` | `conceptual`, `configuration_lookup` | 64 | `relaxed_order` | Balanced semantic search depth for general conceptual questions |
+| `complex` | `debugging`, `impact_analysis`, `test_generation` | 120 | `relaxed_order` | High-depth graph scan maximizing semantic recall across disparate code patterns |
 
 ## 3. Safe Execution & Fallbacks
 

@@ -716,8 +716,9 @@ function SourceList({
 
 function AgentMetadataBadge({ metadata }: { metadata: AgentMetadata }) {
   const [expanded, setExpanded] = useState(false);
-  const toolCount = metadata.tools_called ?? 0;
-  const durationSec = metadata.duration_ms ? (metadata.duration_ms / 1000).toFixed(1) : null;
+  const toolCount = metadata.tool_calls ?? metadata.tools_called ?? 0;
+  const durationMs = metadata.execution_time_ms ?? metadata.duration_ms;
+  const durationSec = durationMs ? (durationMs / 1000).toFixed(1) : null;
   const tools = metadata.tool_summary ?? [];
 
   return (
@@ -752,17 +753,19 @@ function AgentMetadataBadge({ metadata }: { metadata: AgentMetadata }) {
       {expanded && tools.length > 0 && (
         <ul className="rounded-lg border border-border bg-muted/40 p-2 space-y-1 font-mono text-[11px] max-h-40 overflow-y-auto">
           {tools.map((t, i) => {
+            const inputObj = (t.input || {}) as Record<string, unknown>;
             const detail =
-              t.input.path
-                ? String(t.input.path)
-                : t.input.query
-                ? `query: "${String(t.input.query)}"`
-                : t.input.name
-                ? `symbol: ${String(t.input.name)}`
-                : JSON.stringify(t.input);
+              inputObj.path || inputObj.file_path
+                ? String(inputObj.path || inputObj.file_path)
+                : inputObj.query
+                ? `query: "${String(inputObj.query)}"`
+                : inputObj.name || inputObj.symbol
+                ? `symbol: ${String(inputObj.name || inputObj.symbol)}`
+                : JSON.stringify(inputObj);
+            const toolName = t.tool || t.name || 'tool';
             return (
               <li key={i} className="flex items-center justify-between text-muted-foreground gap-2">
-                <span className="text-foreground font-semibold shrink-0">{t.tool}</span>
+                <span className="text-foreground font-semibold shrink-0">{String(toolName)}</span>
                 <span className="truncate text-[10px] text-muted-foreground/80 font-mono text-right" title={detail}>
                   {detail}
                 </span>

@@ -534,6 +534,7 @@ class LLMToolRequest(BaseModel):
     )
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1)
+    allow_fallback: bool = Field(default=True, description="Whether fallback provider may be attempted on outage.")
     request_id: str | None = Field(
         default=None,
         description="Optional correlation identifier for tracing.",

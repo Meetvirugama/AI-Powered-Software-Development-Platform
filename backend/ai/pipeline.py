@@ -243,7 +243,7 @@ class RAGPipeline:
         cleaned_question = (question or "").strip()
         repo_uuid = self._coerce_uuid(repository_id)
         memory = memory or []
-        chat_history = self._normalise_history(history)
+        chat_history = self._normalise_history(history or [])
         selected_model = model or self._model
 
         # Guard against empty query
@@ -342,7 +342,12 @@ class RAGPipeline:
             validated = await self.grounding_validator.validate_sources(
                 raw_answer, repo_uuid
             )
-        validated = validated.model_copy(update={"answer": redact(validated.answer)})
+        validated = validated.model_copy(
+            update={
+                "answer": redact(validated.answer),
+                "agent_metadata": None,
+            }
+        )
 
         total_latency_ms = (time.monotonic() - start_time) * 1000
         logger.info(
@@ -386,7 +391,7 @@ class RAGPipeline:
         cleaned_question = (question or "").strip()
         repo_uuid = self._coerce_uuid(repository_id)
         memory = memory or []
-        chat_history = self._normalise_history(history)
+        chat_history = self._normalise_history(history or [])
         selected_model = model or self._model
 
         # Guard against empty query
@@ -671,6 +676,8 @@ class RAGPipeline:
 
                 try:
                     data = json.loads(content)
+                    if isinstance(data, dict):
+                        data["agent_metadata"] = None
                     return RepositoryAnswer(**data)
 
                 except (json.JSONDecodeError, ValueError, TypeError) as parse_err:

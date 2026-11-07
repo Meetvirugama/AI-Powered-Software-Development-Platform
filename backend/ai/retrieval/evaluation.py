@@ -152,10 +152,10 @@ def compute_latency_percentiles(latencies_ms: list[float]) -> dict[str, float]:
 # Representative 150+ benchmark query dataset covering all 10 categories
 _CATEGORIES = [
     ("exact_symbol", "exact_symbol", [
-        ("Where is getUserById defined?", ["src/services/user_service.py"], ["getUserById"]),
-        ("Find UserAuthenticationService", ["src/auth/service.py"], ["UserAuthenticationService"]),
-        ("Where is JWTMiddleware implemented?", ["src/middleware/jwt.py"], ["JWTMiddleware"]),
-        ("Find hash_password implementation", ["src/auth/crypto.py"], ["hash_password"]),
+        ("Where is UserRepository defined?", ["backend/app/repositories/user_repository.py"], ["UserRepository"]),
+        ("Find UserAuthenticationService", ["backend/app/core/auth.py"], ["UserAuthenticationService"]),
+        ("Where is JWTMiddleware implemented?", ["backend/app/core/auth.py"], ["JWTMiddleware"]),
+        ("Find hash_password implementation", ["backend/app/core/security.py"], ["hash_password"]),
         ("Where is CodeChunk defined?", ["backend/ai/retrieval/base.py"], ["CodeChunk"]),
         ("Find VectorRetriever class", ["backend/ai/retrieval/vector.py"], ["VectorRetriever"]),
         ("Where is LexicalRetriever defined?", ["backend/ai/retrieval/lexical.py"], ["LexicalRetriever"]),
@@ -164,17 +164,17 @@ _CATEGORIES = [
         ("Find RetrievalResultCache", ["backend/ai/retrieval/cache.py"], ["RetrievalResultCache"]),
         ("Where is CrossEncoderReranker defined?", ["backend/ai/retrieval/reranker.py"], ["CrossEncoderReranker"]),
         ("Find IncrementalIndexer", ["backend/indexer/incremental.py"], ["IncrementalIndexer"]),
-        ("Where is create_access_token defined?", ["src/auth/tokens.py"], ["create_access_token"]),
-        ("Find verify_credentials method", ["src/auth/service.py"], ["verify_credentials"]),
+        ("Where is create_access_token defined?", ["backend/app/core/security.py"], ["create_access_token"]),
+        ("Find verify_token method", ["backend/app/core/security.py"], ["verify_token"]),
         ("Where is build_retrieval_cache_key implemented?", ["backend/ai/retrieval/cache_keys.py"], ["build_retrieval_cache_key"]),
     ]),
     ("path_lookup", "path_lookup", [
-        ("Open src/auth/login.py", ["src/auth/login.py"], []),
+        ("Open backend/app/api/v1/auth.py", ["backend/app/api/v1/auth.py"], []),
         ("Open backend/ai/retrieval/vector.py", ["backend/ai/retrieval/vector.py"], []),
-        ("Open src/services/user_service.py", ["src/services/user_service.py"], []),
+        ("Open backend/app/repositories/user_repository.py", ["backend/app/repositories/user_repository.py"], []),
         ("Open backend/app/core/config.py", ["backend/app/core/config.py"], []),
         ("Open backend/indexer/incremental.py", ["backend/indexer/incremental.py"], []),
-        ("Open src/middleware/jwt.py", ["src/middleware/jwt.py"], []),
+        ("Open backend/app/core/auth.py", ["backend/app/core/auth.py"], []),
         ("Open backend/ai/retrieval/hybrid.py", ["backend/ai/retrieval/hybrid.py"], []),
         ("Open backend/ai/retrieval/fusion.py", ["backend/ai/retrieval/fusion.py"], []),
         ("Open backend/ai/retrieval/cache.py", ["backend/ai/retrieval/cache.py"], []),
@@ -186,8 +186,8 @@ _CATEGORIES = [
         ("Open backend/ai/retrieval/code_tokenizer.py", ["backend/ai/retrieval/code_tokenizer.py"], []),
     ]),
     ("conceptual", "conceptual", [
-        ("Explain how user authentication works", ["src/auth/service.py", "src/auth/login.py"], []),
-        ("Which file contains the login route?", ["src/auth/login.py"], []),
+        ("Explain how user authentication works", ["backend/app/core/auth.py", "backend/app/api/v1/auth.py"], []),
+        ("Which file contains the login route?", ["backend/app/api/v1/auth.py"], []),
         ("How does hybrid retrieval aggregate results?", ["backend/ai/retrieval/hybrid.py", "backend/ai/retrieval/fusion.py"], []),
         ("How does incremental indexing detect changed files?", ["backend/indexer/incremental.py"], []),
         ("Describe the Redis result caching mechanism", ["backend/ai/retrieval/cache.py"], []),
@@ -203,8 +203,8 @@ _CATEGORIES = [
         ("How are symbol edges stored and categorized?", ["backend/app/models/symbol_edge.py"], []),
     ]),
     ("debugging", "debugging", [
-        ("Why does token refresh fail?", ["src/auth/tokens.py"], []),
-        ("What happens when payment verification fails?", ["src/services/payment.py"], []),
+        ("Why does token refresh fail?", ["backend/app/core/security.py"], []),
+        ("What happens when repository lookup fails?", ["backend/app/api/v1/repositories.py"], []),
         ("Why is vector search raising syntax error on hnsw scan?", ["backend/ai/retrieval/vector.py"], []),
         ("Why does Redis connection timeout during peak traffic?", ["backend/app/core/redis.py"], []),
         ("Fix bug in code chunk line range calculation", ["backend/indexer/incremental.py"], []),
@@ -331,10 +331,8 @@ def _build_dataset() -> list[BenchmarkQuery]:
         for q_text, files, symbols in queries:
             qid = f"Q{idx:03d}"
             grades: dict[str, int] = {}
-            for f in files:
-                grades[f] = 3
-            for s in symbols:
-                grades[s] = 2
+            for rank_idx, f in enumerate(files):
+                grades[f] = 3 if rank_idx == 0 else 2
 
             dataset.append(
                 BenchmarkQuery(
@@ -387,7 +385,11 @@ async def evaluate_retriever(
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         latencies_ms.append(elapsed_ms)
 
-        retrieved_files = [c.file_path for c in results]
+        # Deduplicate retrieved files preserving rank order
+        retrieved_files: list[str] = []
+        for c in results:
+            if c.file_path and c.file_path not in retrieved_files:
+                retrieved_files.append(c.file_path)
         relevant_files = set(bq.expected_files)
 
         r5 = compute_recall_at_k(retrieved_files, relevant_files, 5)

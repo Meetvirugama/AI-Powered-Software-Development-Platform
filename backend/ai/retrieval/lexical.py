@@ -97,16 +97,34 @@ def _build_code_tsquery(query: str) -> str:
     Build a code-aware tsquery for PostgreSQL 'simple' dictionary.
 
     Splits camelCase, PascalCase, snake_case identifiers, and joins sub-tokens with '&'.
+    Tokenizes per word so multi-word queries with identifiers target the code tokens.
     """
-    tokens = split_identifier(query)
-    cleaned_tokens: list[str] = []
-    for t in tokens:
-        clean = re.sub(r"[^\w]", "", t.lower())
-        if len(clean) > 1 and clean not in cleaned_tokens:
-            cleaned_tokens.append(clean)
-    if not cleaned_tokens:
+    words = query.strip().split()
+    if not words:
         return _sanitize_query(query)
-    return " & ".join(cleaned_tokens[:12])
+
+    identifier_tokens: list[str] = []
+    all_tokens: list[str] = []
+
+    for w in words:
+        is_ident = bool(
+            re.search(r"[a-z][A-Z]", w)  # camelCase
+            or "_" in w  # snake_case
+            or ("." in w and not w.endswith("."))  # file.py or method.call
+        )
+        sub_tokens = split_identifier(w)
+        for st in sub_tokens:
+            clean = re.sub(r"[^\w]", "", st.lower())
+            if len(clean) > 1:
+                if is_ident and clean not in identifier_tokens:
+                    identifier_tokens.append(clean)
+                if clean not in all_tokens:
+                    all_tokens.append(clean)
+
+    tokens_to_use = identifier_tokens if identifier_tokens else all_tokens
+    if not tokens_to_use:
+        return _sanitize_query(query)
+    return " & ".join(tokens_to_use[:12])
 
 
 def _sanitize_query(query: str) -> str:

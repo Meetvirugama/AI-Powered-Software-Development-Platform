@@ -96,3 +96,30 @@ class TestAdaptiveHNSW:
         )
         assert len(chunks) == 1
         assert chunks[0].score == pytest.approx(0.9, rel=1e-3)
+
+    @pytest.mark.asyncio
+    async def test_adaptive_hnsw_with_nested_transaction(self):
+        """When session.begin_nested() is available as an async context manager, wrap SET LOCAL."""
+        repo_id = uuid.uuid4()
+        session = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        session.execute = AsyncMock(return_value=mock_result)
+
+        nested_ctx = AsyncMock()
+        session.begin_nested = MagicMock(return_value=nested_ctx)
+
+        mock_embedding = AsyncMock()
+        mock_embedding.embed = AsyncMock(return_value=[0.1] * 768)
+        mock_embedding.dimensions = 768
+
+        retriever = VectorRetriever(db=session, embedding_service=mock_embedding)
+        await retriever.retrieve(
+            query="find getUserById",
+            repository_id=repo_id,
+            top_k=10,
+            query_intent="exact_symbol",
+        )
+
+        assert session.begin_nested.call_count >= 1
+        assert nested_ctx.__aenter__.call_count >= 1

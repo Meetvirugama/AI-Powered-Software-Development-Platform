@@ -379,9 +379,13 @@ export type ChatMode = 'normal' | 'agentic';
  * Summarised repository tool activity returned by an agentic chat run.
  */
 export interface AgentToolActivity {
-  tool: string;
-  input: Record<string, unknown>;
+  tool?: string;
+  name?: string;
+  input?: Record<string, unknown>;
   error?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  [key: string]: unknown;
 }
 
 /**
@@ -389,10 +393,18 @@ export interface AgentToolActivity {
  */
 export interface AgentMetadata {
   mode: 'agentic';
-  rounds: number;
-  tools_called: number;
-  duration_ms: number;
-  evidence_count: number;
+  provider?: string;
+  model?: string;
+  rounds?: number;
+  model_calls?: number;
+  tool_calls?: number;
+  tools_called?: number;
+  stop_reason?: string;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  execution_time_ms?: number;
+  duration_ms?: number;
+  evidence_count?: number;
   tool_summary?: AgentToolActivity[];
   budget?: Record<string, unknown>;
   [key: string]: unknown;

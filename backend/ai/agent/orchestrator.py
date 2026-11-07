@@ -13,6 +13,7 @@ Coordinates the multi-turn repository investigation loop:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -36,6 +37,7 @@ from ai.llm.schemas import (
 from ai.pipeline import RAGPipeline
 from ai.retrieval.base import CodeChunk
 from ai.schemas.output import RepositoryAnswer
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -71,17 +73,28 @@ class AgentOrchestrator:
         tool_registry: ToolRegistry | None = None,
         tool_executor: ToolExecutor | None = None,
         rag_pipeline: RAGPipeline | None = None,
-        model: str = "gemini-flash-lite-latest",
-        primary_provider: str = "gemini",
-        fallback_provider: str | None = "groq",
+        model: str | None = None,
+        primary_provider: str | None = None,
+        fallback_provider: str | None = None,
+        fallback_enabled: bool | None = None,
     ) -> None:
+        settings = get_settings()
         self._llm_gateway = llm_gateway
         self._tool_registry = tool_registry or create_default_registry()
-        self._tool_executor = tool_executor or ToolExecutor(self._tool_registry)
+        self._tool_executor = tool_executor or ToolExecutor(
+            self._tool_registry,
+            default_timeout_seconds=getattr(settings, "agent_tool_timeout_seconds", 5.0),
+            max_result_bytes=getattr(settings, "agent_max_tool_result_bytes", 8192),
+        )
         self._rag_pipeline = rag_pipeline
-        self._model = model
-        self._primary_provider = primary_provider
-        self._fallback_provider = fallback_provider
+        self._model = model or getattr(settings, "agent_model", "gemini-flash-lite-latest")
+        self._primary_provider = primary_provider or getattr(settings, "agent_primary_provider", "gemini")
+        self._fallback_provider = (
+            fallback_provider if fallback_provider is not None else getattr(settings, "agent_fallback_provider", "groq")
+        )
+        self._fallback_enabled = (
+            fallback_enabled if fallback_enabled is not None else getattr(settings, "agent_fallback_enabled", True)
+        )
 
     async def run(
         self,
@@ -95,9 +108,18 @@ class AgentOrchestrator:
         """
         Execute an agentic repository investigation turn.
         """
+        settings = get_settings()
         repo_uuid = UUID(str(repository_id))
         request_id = uuid.uuid4().hex[:12]
-        effective_budget = budget or AgentBudget()
+        effective_budget = budget or AgentBudget(
+            max_rounds=getattr(settings, "agent_max_rounds", 3),
+            max_tool_calls=getattr(settings, "agent_max_tool_calls", 6),
+            max_model_calls=getattr(settings, "agent_max_model_calls", 4),
+            max_parallel_tool_calls=getattr(settings, "agent_max_parallel_tool_calls", 2),
+            max_input_tokens=getattr(settings, "agent_max_input_tokens", 12000),
+            max_output_tokens=getattr(settings, "agent_max_output_tokens", 2000),
+            max_request_seconds=getattr(settings, "agent_max_request_seconds", 35.0),
+        )
 
         state = AgentState(
             request_id=request_id,
@@ -105,6 +127,7 @@ class AgentOrchestrator:
             question=question,
             user_id=user_id,
             budget=effective_budget,
+            max_evidence_bytes=getattr(settings, "agent_max_total_evidence_bytes", 24576),
         )
 
         state.record_event("agent_started", "Agent investigation started", data={"question": question[:100]})
@@ -175,6 +198,11 @@ class AgentOrchestrator:
                 data={"round": state.budget.current_round},
             )
 
+            remaining_time = state.budget.remaining_seconds()
+            if remaining_time <= 0.0:
+                state.stop_reason = "timeout"
+                break
+
             tool_req = LLMToolRequest.create(
                 model=self._model,
                 messages=state.messages,
@@ -182,10 +210,18 @@ class AgentOrchestrator:
                 temperature=0.0,
                 max_tokens=512,
                 request_id=request_id,
+                allow_fallback=self._fallback_enabled,
             )
 
             try:
-                llm_resp: LLMToolResponse = await self._llm_gateway.generate_with_tools(tool_req)
+                llm_resp: LLMToolResponse = await asyncio.wait_for(
+                    self._llm_gateway.generate_with_tools(tool_req),
+                    timeout=remaining_time,
+                )
+            except asyncio.TimeoutError:
+                logger.error("agent_llm_call_timeout", extra={"elapsed": state.budget.elapsed_seconds()})
+                state.stop_reason = "timeout"
+                break
             except (LLMUnavailableError, LLMTimeoutError, LLMRateLimitError) as exc:
                 logger.error("agent_llm_gateway_outage", extra={"error": str(exc)})
                 state.stop_reason = "provider_error"
@@ -206,13 +242,11 @@ class AgentOrchestrator:
                 state.record_event("agent_completed", "Model determined sufficient evidence collected")
                 break
 
-            # Model requested tool calls
-            state.messages.append(
-                Message.assistant(content=llm_resp.content, tool_calls=llm_resp.tool_calls)
-            )
-
-            # Enforce max parallel tool calls
+            # Enforce max parallel tool calls first so assistant message declares only calls to execute
             calls_to_execute = llm_resp.tool_calls[: state.budget.max_parallel_tool_calls]
+            state.messages.append(
+                Message.assistant(content=llm_resp.content, tool_calls=calls_to_execute)
+            )
 
             has_repeated = False
             for tc in calls_to_execute:
@@ -247,7 +281,11 @@ class AgentOrchestrator:
                     "tool_call_completed" if not tool_res.is_error else "tool_call_failed",
                     f"Completed tool {tc.name}",
                     tool_name=tc.name,
-                    data={"is_error": tool_res.is_error, "duration_ms": tool_res.execution_time_ms},
+                    data={
+                        "arguments": tc.arguments,
+                        "is_error": tool_res.is_error,
+                        "duration_ms": tool_res.execution_time_ms,
+                    },
                 )
 
                 if not state.budget.can_continue():
@@ -278,29 +316,59 @@ class AgentOrchestrator:
                 seen_spans.add(span_key)
                 unique_chunks.append(ch)
 
+        tool_summary = []
+        for event in state.activity_events:
+            if event.event_type in ("tool_call_completed", "tool_call_failed"):
+                event_data = event.data if isinstance(event.data, dict) else {}
+                tool_summary.append({
+                    "tool": event.tool_name or "unknown",
+                    "input": event_data.get("arguments", {}),
+                    "is_error": event_data.get("is_error", False),
+                    "duration_ms": event_data.get("duration_ms", 0.0),
+                })
+
         agent_metadata = {
             "mode": "agentic",
             "provider": state.provider_used or self._primary_provider,
             "model": state.model_used or self._model,
+            "rounds": state.budget.current_round,
             "model_calls": state.budget.model_call_count,
             "tool_calls": state.budget.tool_call_count,
+            "tools_called": state.budget.tool_call_count,
             "stop_reason": state.stop_reason or "completed",
             "total_input_tokens": state.budget.accumulated_input_tokens,
             "total_output_tokens": state.budget.accumulated_output_tokens,
             "execution_time_ms": total_duration_ms,
+            "duration_ms": total_duration_ms,
             "evidence_count": len(state.evidence),
+            "tool_summary": tool_summary,
         }
 
         logger.info("agentic_chat_completed", extra={"request_id": request_id, **agent_metadata})
 
         if self._rag_pipeline and hasattr(self._rag_pipeline, "finalize_agent_chat"):
-            return await self._rag_pipeline.finalize_agent_chat(
-                question=question,
-                repository_id=repo_uuid,
-                evidence_chunks=unique_chunks,
-                history=history,
-                agent_metadata=agent_metadata,
-            )
+            final_timeout = max(5.0, state.budget.remaining_seconds())
+            try:
+                return await asyncio.wait_for(
+                    self._rag_pipeline.finalize_agent_chat(
+                        question=question,
+                        repository_id=repo_uuid,
+                        evidence_chunks=unique_chunks,
+                        history=history,
+                        agent_metadata=agent_metadata,
+                    ),
+                    timeout=final_timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.error("agent_finalize_timeout", extra={"elapsed": state.budget.elapsed_seconds()})
+                agent_metadata["stop_reason"] = "finalize_timeout"
+                return RepositoryAnswer(
+                    answer="Investigation completed but final response generation timed out.",
+                    sources=[],
+                    confidence="low",
+                    status="timeout",
+                    agent_metadata=agent_metadata,
+                )
 
         # Fallback if no RAGPipeline injected (e.g. standalone test)
         return RepositoryAnswer(

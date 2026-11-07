@@ -33,14 +33,40 @@ def create_reranker(
     Falls back safely to PyTorch if ONNX is requested but fails initialization.
     """
     settings = get_settings()
-    configured_backend = (backend or getattr(settings, "reranker_backend", "pytorch")).lower()
+    if backend:
+        chosen_backend = backend.lower()
+    elif getattr(settings, "reranker_backend", None):
+        chosen_backend = settings.reranker_backend.lower()
+    elif getattr(settings, "reranker_onnx_enabled", False):
+        chosen_backend = "onnx"
+    else:
+        chosen_backend = "pytorch"
+
     model_path = kwargs.pop("model_path", None) or onnx_model_path or getattr(settings, "reranker_onnx_model_path", None)
 
-    if configured_backend == "onnx" or getattr(settings, "reranker_onnx_enabled", False):
+    if chosen_backend == "onnx":
+        onnx_kwargs = {
+            k: v for k, v in kwargs.items()
+            if k in {"onnx_session", "tokenizer", "max_length", "min_logit"}
+        }
+        if not backend:
+            try:
+                import onnxruntime  # noqa: F401
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "onnx_reranker_factory_creation_failed_falling_back_to_pytorch",
+                    extra={"error": str(exc)},
+                )
+                pytorch_kwargs = {
+                    k: v for k, v in kwargs.items()
+                    if k in {"model_name", "model", "min_logit", "max_chars"}
+                }
+                return CrossEncoderReranker(**pytorch_kwargs)
+
         try:
             return ONNXCrossEncoderReranker(
                 model_path=model_path,
-                **kwargs,
+                **onnx_kwargs,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -48,4 +74,8 @@ def create_reranker(
                 extra={"error": str(exc)},
             )
 
-    return CrossEncoderReranker(**kwargs)
+    pytorch_kwargs = {
+        k: v for k, v in kwargs.items()
+        if k in {"model_name", "model", "min_logit", "max_chars"}
+    }
+    return CrossEncoderReranker(**pytorch_kwargs)

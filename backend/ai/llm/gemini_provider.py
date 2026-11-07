@@ -272,15 +272,19 @@ class GeminiProvider(LLMProvider):
                     resp_content = json.loads(msg.content)
                 except (json.JSONDecodeError, TypeError):
                     resp_content = {"output": msg.content}
-                contents.append({
-                    "role": "function",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": msg.name or "tool",
-                            "response": {"name": msg.name or "tool", "content": resp_content},
-                        }
-                    }]
-                })
+                fr_part = {
+                    "functionResponse": {
+                        "name": msg.name or "tool",
+                        "response": {"name": msg.name or "tool", "content": resp_content},
+                    }
+                }
+                if contents and contents[-1].get("role") == "function":
+                    contents[-1]["parts"].append(fr_part)
+                else:
+                    contents.append({
+                        "role": "function",
+                        "parts": [fr_part],
+                    })
 
         requested_model = (request.model or "").strip()
         if (

@@ -288,8 +288,8 @@ class HybridRetriever(Retriever):
         else:
             final_results = fused[:top_k]
 
-        # Step 7: Store Final Results in Redis Cache
-        if self._cache is not None and final_results:
+        # Step 7: Store Final Results in Redis Cache (skip caching degraded fallback results)
+        if self._cache is not None and final_results and not fallback_used:
             await self._cache.set(cache_key, final_results)
 
         return final_results

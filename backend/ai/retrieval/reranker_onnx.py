@@ -51,7 +51,10 @@ class ONNXCrossEncoderReranker:
         if self._session is not None and self._tokenizer is not None:
             return True
 
-        if self._session is None and self._model_path:
+        if self._session is None:
+            if not self._model_path:
+                self.last_status = "uninitialized: no model path or session"
+                return False
             try:
                 import onnxruntime as ort
                 self._session = ort.InferenceSession(self._model_path)
@@ -63,11 +66,22 @@ class ONNXCrossEncoderReranker:
         if self._tokenizer is None:
             try:
                 from transformers import AutoTokenizer
-                self._tokenizer = AutoTokenizer.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
+                try:
+                    self._tokenizer = AutoTokenizer.from_pretrained(
+                        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                        local_files_only=True,
+                    )
+                except Exception:
+                    self._tokenizer = AutoTokenizer.from_pretrained(
+                        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("onnx_tokenizer_init_failed", extra={"error": str(exc)})
                 self.last_status = f"tokenizer_failed: {exc}"
                 return False
+
+        if self._session is None or self._tokenizer is None:
+            return False
 
         self.last_status = "ready"
         return True

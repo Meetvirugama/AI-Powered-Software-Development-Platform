@@ -122,6 +122,10 @@ class AgentBudget:
         """Seconds elapsed since budget initialization."""
         return time.monotonic() - self.started_at
 
+    def remaining_seconds(self) -> float:
+        """Seconds remaining within max_request_seconds budget."""
+        return max(0.0, self.max_request_seconds - self.elapsed_seconds())
+
     def summary(self) -> dict[str, Any]:
         """Summary metrics of consumed budget."""
         return {
