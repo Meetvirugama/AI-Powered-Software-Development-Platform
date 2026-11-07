@@ -30,6 +30,9 @@ from .schemas import (
     LLMRequest,
     LLMResponse,
     LLMTimeoutError,
+    LLMToolCall,
+    LLMToolRequest,
+    LLMToolResponse,
     LLMUnavailableError,
     validate_structured_payload,
 )
@@ -245,6 +248,194 @@ class GroqProvider(LLMProvider):
 
         raise LLMUnavailableError(
             f"Groq unavailable after {_MAX_RETRIES} attempts.",
+            provider=self.provider_name,
+        )
+
+    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
+        """Execute chat completion with tool-calling capabilities on Groq."""
+        resolved_model = self._resolve_model(request.model)
+        payload = self._build_tool_payload(request, resolved_model)
+
+        last_error: LLMError | None = None
+
+        async with self._semaphore:
+            for attempt in range(1, _MAX_RETRIES + 1):
+                api_key = self._next_key()
+                client = self._get_client()
+
+                try:
+                    start_ns = time.monotonic_ns()
+                    resp = await client.post(
+                        _GROQ_CHAT_URL,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+
+                    if resp.status_code == 200:
+                        return self._parse_tool_response(
+                            resp.json(),
+                            latency_ms=latency_ms,
+                            model=resolved_model,
+                        )
+
+                    if resp.status_code == 429:
+                        last_error = LLMRateLimitError(
+                            "Groq rate limit exceeded.",
+                            provider=self.provider_name,
+                        )
+                        logger.warning(
+                            "groq_rate_limit_rotating_key",
+                            extra={"attempt": attempt, "key_masked": f"{api_key[:4]}...{api_key[-4:]}"},
+                        )
+                        await asyncio.sleep(0.1)
+                        continue
+
+                    if resp.status_code == 400:
+                        err_body = resp.text[:300]
+                        try:
+                            err_data = resp.json()
+                            if isinstance(err_data, dict):
+                                err_body = err_data.get("error", {}).get("message", err_body)
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+                        raise LLMUnavailableError(
+                            f"Groq 400 Bad Request: {err_body}",
+                            status_code=400,
+                            provider=self.provider_name,
+                        )
+
+                    if resp.status_code in (401, 403):
+                        raise LLMAuthenticationError(
+                            f"Groq authentication failure (HTTP {resp.status_code}).",
+                            status_code=resp.status_code,
+                            provider=self.provider_name,
+                        )
+
+                    if resp.status_code in _RETRYABLE_STATUS_CODES:
+                        last_error = LLMUnavailableError(
+                            f"Groq server error (HTTP {resp.status_code}).",
+                            status_code=resp.status_code,
+                            provider=self.provider_name,
+                        )
+
+                except httpx.TimeoutException as exc:
+                    last_error = LLMTimeoutError(str(exc), provider=self.provider_name)
+                except httpx.RequestError as exc:
+                    last_error = LLMUnavailableError(str(exc), provider=self.provider_name)
+
+                if attempt < _MAX_RETRIES:
+                    wait_time = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+                    logger.info(
+                        "groq_retry_backoff",
+                        extra={"attempt": attempt, "wait_seconds": wait_time, "error": str(last_error)},
+                    )
+                    await asyncio.sleep(wait_time)
+
+        if last_error is not None:
+            raise last_error
+
+        raise LLMUnavailableError(
+            f"Groq unavailable after {_MAX_RETRIES} attempts.",
+            provider=self.provider_name,
+        )
+
+    def _build_tool_payload(self, request: LLMToolRequest, model: str) -> dict[str, Any]:
+        """Convert LLMToolRequest into OpenAI/Groq wire format with function tools."""
+        messages: list[dict[str, Any]] = []
+        for m in request.messages:
+            if m.role == "tool":
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": m.tool_call_id or "",
+                    "name": m.name or "tool",
+                    "content": m.content,
+                })
+            elif m.role == "assistant":
+                msg_dict: dict[str, Any] = {"role": "assistant"}
+                if m.content:
+                    msg_dict["content"] = m.content
+                else:
+                    msg_dict["content"] = None
+                if m.tool_calls:
+                    msg_dict["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else str(tc.arguments),
+                            },
+                        }
+                        for tc in m.tool_calls
+                    ]
+                messages.append(msg_dict)
+            else:
+                messages.append({"role": m.role, "content": m.content})
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+        }
+
+        if request.tools:
+            payload["tools"] = [t.to_openai_dict() for t in request.tools]
+
+        if request.tool_choice:
+            payload["tool_choice"] = request.tool_choice
+
+        return payload
+
+    def _parse_tool_response(
+        self,
+        data: dict[str, Any],
+        latency_ms: float,
+        model: str,
+    ) -> LLMToolResponse:
+        """Parse Groq wire response into normalized LLMToolResponse."""
+        choices = data.get("choices")
+        if not choices:
+            raise LLMUnavailableError("Groq response contained no choices.", provider=self.provider_name)
+
+        choice = choices[0]
+        message = choice.get("message", {})
+        content = message.get("content") or ""
+        raw_tool_calls = message.get("tool_calls", [])
+
+        tool_calls: list[LLMToolCall] = []
+        for rtc in raw_tool_calls:
+            fn = rtc.get("function", {})
+            fn_name = fn.get("name", "")
+            raw_args = fn.get("arguments", "{}")
+            if isinstance(raw_args, dict):
+                parsed_args = raw_args
+            else:
+                try:
+                    parsed_args = json.loads(raw_args)
+                except (json.JSONDecodeError, TypeError):
+                    parsed_args = {}
+            tool_calls.append(
+                LLMToolCall(
+                    id=rtc.get("id", ""),
+                    name=fn_name,
+                    arguments=parsed_args,
+                )
+            )
+
+        usage = data.get("usage", {})
+        return LLMToolResponse(
+            content=content,
+            tool_calls=tool_calls,
+            model=model,
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            latency_ms=round(latency_ms, 2),
+            finish_reason=choice.get("finish_reason"),
             provider=self.provider_name,
         )
 

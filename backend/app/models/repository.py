@@ -28,6 +28,8 @@ class Repository(TimestampedModel, Base):
     language: Mapped[str | None] = mapped_column(String, nullable=True)
     sync_status: Mapped[SyncStatus] = mapped_column(Enum(SyncStatus), default=SyncStatus.NOT_SYNCED)
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    active_index_generation: Mapped[str | None] = mapped_column(String, nullable=True, default="gen_0")
+    active_commit_sha: Mapped[str | None] = mapped_column(String, nullable=True)
     last_indexed_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     pr_review_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

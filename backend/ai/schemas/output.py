@@ -12,7 +12,7 @@ team_rules.md:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -91,6 +91,10 @@ class RepositoryAnswer(BaseModel):
     ] = Field(
         default="completed",
         description="Outcome status of the Q&A generation.",
+    )
+    agent_metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Execution telemetry and tool statistics for agentic chat mode.",
     )
 
 

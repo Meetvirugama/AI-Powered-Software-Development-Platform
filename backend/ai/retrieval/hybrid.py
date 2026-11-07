@@ -1,29 +1,31 @@
 """
-Hybrid Retriever — Concurrent Vector + Lexical Search with RRF and Cross-Encoder Reranking.
+Hybrid Retriever — Concurrent Vector + Lexical Search with RRF, Graph Expansion, Redis Caching, and Cross-Encoder Reranking.
 Owner: Meet — W1-12
 
 Integrates:
-1. VectorRetriever (pgvector cosine similarity)
-2. LexicalRetriever (PostgreSQL full-text search)
-3. RRFFusion (Reciprocal Rank Fusion rank aggregation)
-4. Optional CrossEncoderReranker (MiniLM cross-encoder joint scoring)
-
-Features:
-- Concurrent async retrieval using ``asyncio.gather`` for minimal latency.
-- Graceful degradation: if vector or lexical search fails, proceeds with surviving results.
-- End-to-end typing and lifecycle management.
+1. VectorRetriever (pgvector cosine similarity with adaptive HNSW ef_search)
+2. LexicalRetriever (PostgreSQL code-aware full-text search)
+3. RRFFusion (Adaptive Reciprocal Rank Fusion with intent-directed weights)
+4. Bounded SymbolGraphExpander (1-hop symbol relationship graph expansion)
+5. RetrievalResultCache (Asynchronous Redis result caching with generation invalidation)
+6. Optional CrossEncoderReranker (MiniLM cross-encoder joint scoring)
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
-from typing import Self
+from typing import Any, Self
 from uuid import UUID
 
 from .base import CodeChunk, RetrievalUnavailableError, Retriever
+from .cache import RetrievalResultCache
+from .cache_keys import build_retrieval_cache_key
 from .fusion import RRFFusion
+from .graph_expansion import SymbolGraphExpander
 from .reranker import CrossEncoderReranker
+from .vector import resolve_hnsw_profile
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,8 @@ __all__ = ["HybridRetriever", "RetrievalUnavailableError"]
 
 class HybridRetriever(Retriever):
     """
-    Production hybrid retriever combining vector similarity and lexical full-text search.
+    Production hybrid retriever combining vector similarity, lexical full-text search,
+    symbol graph expansion, Redis result caching, and cross-encoder reranking.
     """
 
     _DEFAULT_CANDIDATE_TOP_K: int = 30
@@ -44,6 +47,8 @@ class HybridRetriever(Retriever):
         lexical_retriever: Retriever | None = None,
         fusion: RRFFusion | None = None,
         reranker: CrossEncoderReranker | None = None,
+        graph_expander: SymbolGraphExpander | None = None,
+        cache: RetrievalResultCache | None = None,
         vector_top_k: int = _DEFAULT_CANDIDATE_TOP_K,
         lexical_top_k: int = _DEFAULT_CANDIDATE_TOP_K,
     ) -> None:
@@ -51,6 +56,8 @@ class HybridRetriever(Retriever):
         self._lexical_retriever = lexical_retriever
         self._fusion = fusion or RRFFusion()
         self._reranker = reranker
+        self._graph_expander = graph_expander
+        self._cache = cache
         self._vector_top_k = vector_top_k
         self._lexical_top_k = lexical_top_k
 
@@ -69,14 +76,27 @@ class HybridRetriever(Retriever):
         """Optional cross-encoder reranker."""
         return self._reranker
 
+    @property
+    def graph_expander(self) -> SymbolGraphExpander | None:
+        """Optional symbol-graph expander."""
+        return self._graph_expander
+
+    @property
+    def cache(self) -> RetrievalResultCache | None:
+        """Optional Redis result cache."""
+        return self._cache
+
     async def retrieve(
         self,
         query: str,
         repository_id: UUID | str,
         top_k: int = _DEFAULT_FINAL_TOP_K,
+        index_generation: int | str = 0,
+        query_intent: str | None = None,
     ) -> list[CodeChunk]:
         """
-        Execute concurrent hybrid retrieval, RRF fusion, and optional reranking.
+        Execute concurrent hybrid retrieval with caching, intent routing, graph expansion,
+        and optional reranking.
         """
         if not query or not query.strip() or top_k <= 0:
             return []
@@ -87,7 +107,30 @@ class HybridRetriever(Retriever):
             else UUID(str(repository_id))
         )
 
-        # Step 1: Run vector and lexical retrieval concurrently
+        # Step 1: Detect query intent
+        intent = query_intent or self._fusion.detect_query_intent(query)
+
+        # Step 2: Check Redis Cache
+        cache_key = build_retrieval_cache_key(
+            query=query,
+            repository_id=repo_uuid,
+            index_generation=index_generation,
+            intent=str(intent),
+            top_k=top_k,
+            vector_top_k=self._vector_top_k,
+            lexical_top_k=self._lexical_top_k,
+        )
+
+        if self._cache is not None:
+            cached_results = await self._cache.get(cache_key)
+            if cached_results is not None:
+                logger.debug(
+                    "hybrid_retrieval_cache_hit",
+                    extra={"repo_id": str(repo_uuid), "key": cache_key, "count": len(cached_results)},
+                )
+                return cached_results
+
+        # Step 3: Run vector and lexical retrieval concurrently
         vector_chunks: list[CodeChunk] = []
         lexical_chunks: list[CodeChunk] = []
         vector_failed = False
@@ -99,11 +142,19 @@ class HybridRetriever(Retriever):
 
         tasks = []
         if self._vector_retriever is not None:
-            tasks.append(("vector", self._vector_retriever.retrieve(
-                query=query,
-                repository_id=repo_uuid,
-                top_k=self._vector_top_k,
-            )))
+            # Check if vector_retriever supports profile/query_intent
+            vec_sig = inspect.signature(self._vector_retriever.retrieve)
+            vec_kwargs: dict[str, Any] = {
+                "query": query,
+                "repository_id": repo_uuid,
+                "top_k": self._vector_top_k,
+            }
+            if "query_intent" in vec_sig.parameters:
+                vec_kwargs["query_intent"] = str(intent)
+            if "profile" in vec_sig.parameters:
+                vec_kwargs["profile"] = resolve_hnsw_profile(str(intent))
+
+            tasks.append(("vector", self._vector_retriever.retrieve(**vec_kwargs)))
         else:
             vector_failed = True
             vector_err_str = "Vector retriever not configured."
@@ -190,26 +241,58 @@ class HybridRetriever(Retriever):
             )
             return []
 
-        # Step 2: Reciprocal Rank Fusion
-        fused = self._fusion.fuse(
+        candidate_n = max(top_k, self._DEFAULT_CANDIDATE_TOP_K)
+
+        # Step 4: Initial Reciprocal Rank Fusion
+        fused = self._fusion.fuse_adaptive(
+            query,
             vector_chunks,
             lexical_chunks,
-            top_n=max(top_k, self._DEFAULT_CANDIDATE_TOP_K),
+            top_n=candidate_n,
         )
 
         if not fused:
             return []
 
-        # Step 3: Optional Cross-Encoder Reranking (offloaded to worker thread to avoid blocking event loop)
+        # Step 5: Bounded Symbol-Graph Expansion
+        if self._graph_expander is not None:
+            try:
+                graph_chunks = await self._graph_expander.expand(
+                    candidates=fused,
+                    repository_id=repo_uuid,
+                    intent=str(intent),
+                )
+                if graph_chunks:
+                    fused = self._fusion.fuse_adaptive(
+                        query,
+                        vector_chunks,
+                        lexical_chunks,
+                        graph_results=graph_chunks,
+                        top_n=candidate_n,
+                    )
+            except Exception as graph_exc:  # noqa: BLE001
+                logger.warning(
+                    "hybrid_retrieval_graph_expansion_error",
+                    extra={"repo_id": str(repo_uuid), "error": str(graph_exc)},
+                )
+
+        # Step 6: Optional Cross-Encoder Reranking
+        final_results: list[CodeChunk]
         if self._reranker is not None:
-            return await asyncio.to_thread(
+            final_results = await asyncio.to_thread(
                 self._reranker.rerank,
                 query=query,
                 candidates=fused,
                 top_n=top_k,
             )
+        else:
+            final_results = fused[:top_k]
 
-        return fused[:top_k]
+        # Step 7: Store Final Results in Redis Cache (skip caching degraded fallback results)
+        if self._cache is not None and final_results and not fallback_used:
+            await self._cache.set(cache_key, final_results)
+
+        return final_results
 
     async def aclose(self) -> None:
         """Close child retriever resources safely."""

@@ -21,10 +21,12 @@ import inspect
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any
 from uuid import UUID
 
+from ai.retrieval.code_tokenizer import generate_code_search_text
 from app.core.secret_redaction import redact
 from scanner.detector import LanguageDetector
 from scanner.extractor import SymbolExtractor
@@ -396,8 +398,8 @@ class IncrementalIndexer:
             chunk_query = text(
                 """
                 INSERT INTO code_chunks 
-                (id, repository_id, file_id, symbol_id, content, token_count, embedding, start_line, end_line, content_hash, metadata)
-                VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
+                (id, repository_id, file_id, symbol_id, content, code_search_text, token_count, embedding, start_line, end_line, content_hash, metadata)
+                VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :code_search_text, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
                 """
             )
 
@@ -409,6 +411,21 @@ class IncrementalIndexer:
                     vec = [0.0] * dim
                 vec_literal = _vec_to_pg_literal(vec)
                 safe_symbol_id = chunk.symbol_id if chunk.symbol_id in persisted_symbol_ids else None
+
+                sym_name = ""
+                sym_kind = ""
+                if safe_symbol_id:
+                    matching_sym = next((s for s in symbols if getattr(s, "id", None) == safe_symbol_id), None)
+                    if matching_sym:
+                        sym_name = getattr(matching_sym, "name", "")
+                        sym_kind = getattr(matching_sym, "kind", "")
+
+                code_search_text = generate_code_search_text(
+                    content=chunk.content,
+                    file_path=file_rel_path,
+                    symbol_name=sym_name,
+                    symbol_kind=sym_kind,
+                )
 
                 metadata = {
                     "file_path": file_rel_path,
@@ -427,6 +444,7 @@ class IncrementalIndexer:
                         "file_id": file_id,
                         "symbol_id": safe_symbol_id,
                         "content": chunk.content,
+                        "code_search_text": code_search_text,
                         "tokens": chunk.token_count,
                         "embedding": vec_literal,
                         "start": chunk.start_line,
@@ -549,6 +567,17 @@ class IncrementalIndexer:
             logger.info("Published persistent intelligence snapshot for repo %s (valid: %s)", repository_id, manifest.is_valid)
         except Exception as snap_exc:
             logger.warning("Repository intelligence snapshot generation skipped: %s", snap_exc)
+
+        # R04: Advance active index generation atomically upon successful sync completion
+        new_generation = f"gen_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+        try:
+            await self._execute(
+                text("UPDATE repositories SET active_index_generation = :gen, sync_status = 'SYNCED', last_synced_at = CURRENT_TIMESTAMP WHERE id = :repo_id"),
+                {"gen": new_generation, "repo_id": repository_id},
+                sess=session,
+            )
+        except Exception as gen_exc:  # noqa: BLE001
+            logger.warning("Active index generation update failed: %s", gen_exc)
 
         await self._commit(sess=session)
         logger.info(

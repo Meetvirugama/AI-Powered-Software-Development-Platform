@@ -13,8 +13,10 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+import uuid
 from collections.abc import Sequence
 from itertools import cycle
 from typing import Any
@@ -30,6 +32,9 @@ from .schemas import (
     LLMRequest,
     LLMResponse,
     LLMTimeoutError,
+    LLMToolCall,
+    LLMToolRequest,
+    LLMToolResponse,
     LLMUnavailableError,
     LLMValidationError,
     validate_structured_payload,
@@ -219,6 +224,208 @@ class GeminiProvider(LLMProvider):
                         continue
 
                     # Non-retryable error
+                    safe_body = _redact_key(response.text[:300], current_key)
+                    raise LLMError(
+                        f"Gemini API error (HTTP {response.status_code}): {safe_body}",
+                        status_code=response.status_code,
+                        provider=self.provider_name,
+                    )
+
+                except httpx.TimeoutException as exc:
+                    safe_err = _redact_key(str(exc), current_key)
+                    last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
+                    logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
+                    await asyncio.sleep(0.5)
+                except httpx.TransportError as exc:
+                    safe_err = _redact_key(str(exc), current_key)
+                    last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
+                    logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
+                    await asyncio.sleep(0.5)
+
+            if isinstance(last_error, LLMError):
+                raise last_error
+            raise LLMUnavailableError(f"Gemini failed after {self._max_retries} attempts.", provider=self.provider_name)
+
+    def _build_tool_payload(self, request: LLMToolRequest) -> tuple[dict[str, Any], str]:
+        """Convert LLMToolRequest into Gemini JSON payload including function declarations."""
+        system_instructions: list[str] = []
+        contents: list[dict[str, Any]] = []
+
+        for msg in request.messages:
+            if msg.role == "system":
+                system_instructions.append(msg.content)
+            elif msg.role == "user":
+                contents.append({"role": "user", "parts": [{"text": msg.content}]})
+            elif msg.role == "assistant":
+                parts: list[dict[str, Any]] = []
+                if msg.content:
+                    parts.append({"text": msg.content})
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
+                if not parts:
+                    parts.append({"text": ""})
+                contents.append({"role": "model", "parts": parts})
+            elif msg.role == "tool":
+                resp_content: Any
+                try:
+                    resp_content = json.loads(msg.content)
+                except (json.JSONDecodeError, TypeError):
+                    resp_content = {"output": msg.content}
+                fr_part = {
+                    "functionResponse": {
+                        "name": msg.name or "tool",
+                        "response": {"name": msg.name or "tool", "content": resp_content},
+                    }
+                }
+                if contents and contents[-1].get("role") == "function":
+                    contents[-1]["parts"].append(fr_part)
+                else:
+                    contents.append({
+                        "role": "function",
+                        "parts": [fr_part],
+                    })
+
+        requested_model = (request.model or "").strip()
+        if (
+            not requested_model
+            or requested_model == "default"
+            or requested_model.startswith(("gpt-", "openai/"))
+        ):
+            model_name = self._default_model
+        else:
+            model_name = requested_model
+        model_name = model_name.removeprefix("models/")
+
+        payload: dict[str, Any] = {"contents": contents}
+
+        if system_instructions:
+            payload["system_instruction"] = {
+                "parts": [{"text": "\n\n".join(system_instructions)}]
+            }
+
+        if request.tools:
+            function_declarations = [t.to_gemini_dict() for t in request.tools]
+            payload["tools"] = [{"functionDeclarations": function_declarations}]
+
+        if request.tool_choice:
+            tc = request.tool_choice
+            if isinstance(tc, str):
+                mode_map = {"auto": "AUTO", "none": "NONE", "required": "ANY", "any": "ANY"}
+                mode = mode_map.get(tc.lower(), "AUTO")
+                payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
+            elif isinstance(tc, dict):
+                payload["toolConfig"] = tc
+
+        generation_config: dict[str, Any] = {}
+        if request.temperature is not None:
+            generation_config["temperature"] = request.temperature
+        if request.max_tokens is not None:
+            generation_config["maxOutputTokens"] = request.max_tokens
+
+        if generation_config:
+            payload["generationConfig"] = generation_config
+
+        return payload, model_name
+
+    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
+        """Execute chat completion with tool-calling capabilities against Gemini REST API."""
+        async with self._semaphore:
+            payload, model = self._build_tool_payload(request)
+            client = self._get_client()
+
+            last_error: Exception | None = None
+            start_time = time.monotonic()
+
+            for attempt in range(self._max_retries):
+                current_key = self._next_key()
+                url = f"{_GEMINI_API_BASE}/{model}:generateContent"
+                headers = {"x-goog-api-key": current_key}
+
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        latency_ms = (time.monotonic() - start_time) * 1000.0
+
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            raise LLMValidationError(
+                                f"Gemini returned 0 candidates: {data}",
+                                provider=self.provider_name,
+                            )
+
+                        candidate = candidates[0]
+                        content_parts = candidate.get("content", {}).get("parts", [])
+                        text_fragments: list[str] = []
+                        tool_calls: list[LLMToolCall] = []
+
+                        for p in content_parts:
+                            if p.get("text"):
+                                text_fragments.append(p["text"])
+                            if "functionCall" in p:
+                                fc = p["functionCall"]
+                                fn_name = fc.get("name", "")
+                                fn_args = fc.get("args", {})
+                                if not isinstance(fn_args, dict):
+                                    try:
+                                        fn_args = json.loads(str(fn_args))
+                                    except (json.JSONDecodeError, TypeError):
+                                        fn_args = {}
+                                call_id = f"call_{uuid.uuid4().hex[:10]}"
+                                tool_calls.append(
+                                    LLMToolCall(
+                                        id=call_id,
+                                        name=fn_name,
+                                        arguments=fn_args,
+                                    )
+                                )
+
+                        usage = data.get("usageMetadata", {})
+                        input_tokens = usage.get("promptTokenCount", 0)
+                        output_tokens = usage.get("candidatesTokenCount", 0)
+
+                        return LLMToolResponse(
+                            content="".join(text_fragments),
+                            tool_calls=tool_calls,
+                            model=model,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            latency_ms=round(latency_ms, 2),
+                            finish_reason=candidate.get("finishReason"),
+                            provider=self.provider_name,
+                        )
+
+                    if response.status_code in (401, 403):
+                        error_msg = _redact_key(response.text, current_key)
+                        logger.error("gemini_auth_failed", extra={"status": response.status_code, "body": error_msg[:200]})
+                        raise LLMAuthenticationError(
+                            f"Gemini authentication failed (HTTP {response.status_code})",
+                            status_code=response.status_code,
+                            provider=self.provider_name,
+                        )
+
+                    if response.status_code == 429:
+                        logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1})
+                        last_error = LLMRateLimitError(
+                            "Gemini rate limit exceeded (HTTP 429)",
+                            provider=self.provider_name,
+                        )
+                        await asyncio.sleep(0.1)
+                        continue
+
+                    if response.status_code in _RETRYABLE_STATUS_CODES:
+                        safe_body = _redact_key(response.text[:200], current_key)
+                        logger.warning("gemini_transient_error", extra={"status": response.status_code, "attempt": attempt + 1})
+                        last_error = LLMUnavailableError(
+                            f"Gemini service error (HTTP {response.status_code}): {safe_body}",
+                            status_code=response.status_code,
+                            provider=self.provider_name,
+                        )
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+
                     safe_body = _redact_key(response.text[:300], current_key)
                     raise LLMError(
                         f"Gemini API error (HTTP {response.status_code}): {safe_body}",

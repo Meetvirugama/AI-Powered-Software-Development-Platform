@@ -17,6 +17,7 @@ class CodeChunk(TimestampedModel, Base):
     file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repository_files.id"), index=True)
     symbol_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("code_symbols.id"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
+    code_search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer)
     embedding: Mapped[Any] = mapped_column(Vector(768))
     start_line: Mapped[int] = mapped_column(Integer)
@@ -64,6 +65,11 @@ class CodeChunk(TimestampedModel, Base):
         Index(
             "ix_code_chunks_content_gin",
             text("to_tsvector('english', content)"),
+            postgresql_using="gin"
+        ),
+        Index(
+            "ix_code_chunks_code_search_gin",
+            text("to_tsvector('simple', COALESCE(code_search_text, content))"),
             postgresql_using="gin"
         ),
         Index("ix_code_chunks_repo_hash", "repository_id", "content_hash"),

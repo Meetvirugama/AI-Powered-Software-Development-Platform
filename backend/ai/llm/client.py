@@ -29,6 +29,8 @@ from .schemas import (
     LLMRequest,
     LLMResponse,
     LLMTimeoutError,
+    LLMToolRequest,
+    LLMToolResponse,
     LLMUnavailableError,
 )
 
@@ -166,7 +168,7 @@ class LLMGateway:
                 if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
                     raise
 
-                if self._fallback_provider is not None:
+                if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
                     logger.warning(
                         "llm_gateway_primary_failed_trying_fallback",
                         extra={
@@ -217,6 +219,143 @@ class LLMGateway:
                     "error_type": error_type,
                 },
             )
+
+    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
+        """
+        Execute a tool-capable inference request through the provider with comprehensive telemetry.
+
+        Guarantees:
+        - Returns a validated, typed ``LLMToolResponse`` containing generated text or tool calls.
+        - Emits structured logging metrics on both success and failure.
+        - Translates transient outages to optional fallback provider if configured.
+        - Preserves tool definitions and conversation turns during fallback.
+        - Enforces provider timeouts and key rotations.
+        """
+        if not isinstance(request, LLMToolRequest):
+            raise TypeError(f"Expected LLMToolRequest instance, got {type(request).__name__}")
+        if not request.messages:
+            raise ValueError("LLMToolRequest must contain at least one Message turn.")
+
+        request_id = getattr(request, "request_id", None) or uuid.uuid4().hex[:12]
+        start_time = time.monotonic()
+        success = False
+        response: LLMToolResponse | None = None
+        error_type: str | None = None
+        effective_provider = self._provider
+        effective_model = request.model
+
+        try:
+            try:
+                response = await self._provider.generate_with_tools(request)
+            except (
+                LLMUnavailableError,
+                LLMTimeoutError,
+                LLMRateLimitError,
+                LLMAuthenticationError,
+            ) as exc:
+                if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
+                    raise
+
+                if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
+                    logger.warning(
+                        "llm_gateway_primary_tool_failed_trying_fallback",
+                        extra={
+                            "request_id": request_id,
+                            "primary": self._provider.provider_name,
+                            "fallback": self._fallback_provider.provider_name,
+                            "error_type": type(exc).__name__,
+                        },
+                    )
+                    effective_provider = self._fallback_provider
+                    fallback_request = self._build_fallback_tool_request(request)
+                    effective_model = fallback_request.model
+                    response = await self._fallback_provider.generate_with_tools(fallback_request)
+                else:
+                    raise
+
+            if not isinstance(response, LLMToolResponse):
+                raise TypeError(
+                    f"Provider {effective_provider.provider_name!r} returned "
+                    f"{type(response).__name__!r} instead of LLMToolResponse."
+                )
+
+            success = True
+            return response
+
+        except LLMError as exc:
+            error_type = type(exc).__name__
+            raise
+
+        finally:
+            latency_ms = (time.monotonic() - start_time) * 1000.0
+            logger.info(
+                "llm_tool_call",
+                extra={
+                    "request_id": request_id,
+                    "provider": effective_provider.provider_name,
+                    "effective_provider": effective_provider.provider_name,
+                    "requested_provider": self._provider.provider_name,
+                    "model": effective_model,
+                    "effective_model": effective_model,
+                    "requested_model": request.model,
+                    "fallback_used": effective_provider != self._provider,
+                    "tool_calls_count": len(response.tool_calls) if response else 0,
+                    "is_final": response.is_final if response else False,
+                    "input_tokens": response.input_tokens if response else None,
+                    "output_tokens": response.output_tokens if response else None,
+                    "total_tokens": response.total_tokens if response else None,
+                    "latency_ms": round(latency_ms, 2),
+                    "success": success,
+                    "error_type": error_type,
+                },
+            )
+
+    def _build_fallback_tool_request(self, request: LLMToolRequest) -> LLMToolRequest:
+        """
+        Translate request model for the fallback provider while strictly preserving
+        tools, messages, temperature, and tokens.
+        """
+        assert self._fallback_provider is not None
+        fb_name = (self._fallback_provider.provider_name or "").lower()
+        req_model = (request.model or "").strip()
+        primary_default = getattr(self._provider, "default_model", None)
+
+        target_model: str | None = None
+
+        if (req_model, fb_name) in self._model_map:
+            target_model = self._model_map[(req_model, fb_name)]
+        elif (req_model, fb_name) in EXPLICIT_MODEL_TRANSLATION_MAP:
+            target_model = EXPLICIT_MODEL_TRANSLATION_MAP[(req_model, fb_name)]
+        elif not req_model or req_model == "default" or req_model == primary_default:
+            target_model = self._fallback_provider.default_model
+        else:
+            is_cross_vendor = (
+                (fb_name == "groq" and req_model.lower().startswith("gemini"))
+                or (
+                    fb_name == "gemini"
+                    and (
+                        req_model.lower().startswith("openai/")
+                        or req_model.lower().startswith("llama")
+                        or req_model.lower().startswith("qwen")
+                    )
+                )
+            )
+            if is_cross_vendor:
+                target_model = CROSS_PROVIDER_DEFAULT_MODELS.get(
+                    fb_name, self._fallback_provider.default_model
+                )
+            else:
+                target_model = req_model
+
+        return LLMToolRequest(
+            messages=request.messages,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            model=target_model or self._fallback_provider.default_model,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            request_id=getattr(request, "request_id", None),
+        )
 
     def _build_fallback_request(self, request: LLMRequest) -> LLMRequest:
         """

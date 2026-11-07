@@ -369,15 +369,59 @@ export interface ChatHistoryMessage {
 }
 
 /**
+ * Execution mode for the repository chat endpoint.
+ * - 'normal': Standard 1-turn retrieval-augmented generation.
+ * - 'agentic': Multi-round bounded autonomous agent investigation using read-only repository tools.
+ */
+export type ChatMode = 'normal' | 'agentic';
+
+/**
+ * Summarised repository tool activity returned by an agentic chat run.
+ */
+export interface AgentToolActivity {
+  tool?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  error?: string;
+  is_error?: boolean;
+  duration_ms?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Metadata attached to an agentic chat response.
+ */
+export interface AgentMetadata {
+  mode: 'agentic';
+  provider?: string;
+  model?: string;
+  rounds?: number;
+  model_calls?: number;
+  tool_calls?: number;
+  tools_called?: number;
+  stop_reason?: string;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  execution_time_ms?: number;
+  duration_ms?: number;
+  evidence_count?: number;
+  tool_summary?: AgentToolActivity[];
+  budget?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/**
  * Request payload for the repository chat endpoint.
  *
  * Mirrors backend RepositoryChatRequest (backend/app/schemas/repository.py).
  *   - question: 1–4000 chars, no whitespace-only
  *   - history:  max 50 messages, each content 1–20000 chars
+ *   - mode:     "normal" | "agentic" (default: "normal")
  */
 export interface RepositoryChatRequest {
   question: string;
   history: ChatHistoryMessage[];
+  mode?: ChatMode;
 }
 
 /**
@@ -429,6 +473,8 @@ export interface RepositoryChatResponse {
     | 'retrieval_degraded'
     | 'provider_unavailable'
     | 'invalid_output';
+  /** Agentic execution metadata if request was executed in agentic mode. */
+  agent_metadata?: AgentMetadata | null;
 }
 
 /**
@@ -437,7 +483,7 @@ export interface RepositoryChatResponse {
  * This is a UI-only type — it is NEVER sent to the backend as-is.
  * The hook converts ChatMessage[] → ChatHistoryMessage[] when building requests.
  *
- * UI-only fields: id, timestamp, isStreaming, confidence.
+ * UI-only fields: id, timestamp, isStreaming, confidence, mode, agentMetadata.
  */
 export interface ChatMessage {
   /** Client-generated unique identifier (React key). */
@@ -462,4 +508,12 @@ export interface ChatMessage {
    * Reserved for future real streaming support.
    */
   isStreaming?: boolean;
+  /**
+   * Execution mode used for this message exchange.
+   */
+  mode?: ChatMode;
+  /**
+   * Compact metadata summary if produced by agentic mode.
+   */
+  agentMetadata?: AgentMetadata | null;
 }

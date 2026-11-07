@@ -18,8 +18,12 @@ import {
   ExternalLink,
   Layers,
   X,
+  Sparkles,
+  Wrench,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
-import type { ChatMessage, ChatSource, ChatConfidence } from '../types/api';
+import type { ChatMessage, ChatSource, ChatConfidence, AgentMetadata, ChatMode } from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Page
@@ -38,7 +42,7 @@ export function RepositoryChat() {
   const { data: repo, isLoading: repoLoading } = useRepository(id);
 
   // Chat state — conversation messages live in this hook's local state.
-  const { messages, isPending, error, sendMessage, clearConversation } =
+  const { messages, isPending, error, mode, setMode, sendMessage, clearConversation } =
     useRepositoryChat(id);
 
   const fileParam = searchParams.get('file');
@@ -84,14 +88,14 @@ export function RepositoryChat() {
     prevMessageCountRef.current = messageCount;
 
     if (isNewMessage) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
       return;
     }
 
     const { scrollTop, scrollHeight, clientHeight } = container;
     const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
     if (distanceFromBottom <= 150) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      bottomRef.current?.scrollIntoView?.({ behavior: 'smooth' });
     }
   }, [messages]);
 
@@ -162,6 +166,42 @@ export function RepositoryChat() {
         </div>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          {/* Mode Selector */}
+          <div
+            className="flex items-center gap-0.5 bg-muted/60 p-0.5 rounded-lg border border-border text-xs"
+            role="group"
+            aria-label="Chat Mode"
+          >
+            <button
+              type="button"
+              onClick={() => setMode('normal')}
+              className={cn(
+                'px-2.5 py-1 rounded-md font-medium transition-all text-xs',
+                mode === 'normal'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={mode === 'normal'}
+            >
+              Normal Chat
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('agentic')}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-md font-medium transition-all text-xs',
+                mode === 'agentic'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              aria-pressed={mode === 'agentic'}
+              title="Autonomous repository investigation with code search, symbol lookup, and caller graphs"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>Agentic Chat</span>
+            </button>
+          </div>
+
           {allSources.length > 0 && (
             <button
               onClick={() => setActiveSource(allSources[0])}
@@ -237,7 +277,7 @@ export function RepositoryChat() {
             )}
 
             {isPending && !messages.some((m) => m.role === 'assistant' && m.isStreaming) && (
-              <TypingIndicator />
+              <TypingIndicator mode={mode} />
             )}
           </>
         )}
@@ -452,7 +492,9 @@ function MessageBubble({
           {message.content ? (
             <MessageContent content={message.content} />
           ) : (
-            <span className="text-muted-foreground/60 text-xs italic">Thinking…</span>
+            <span className="text-muted-foreground/60 text-xs italic">
+              {message.mode === 'agentic' ? 'Investigating repository code…' : 'Thinking…'}
+            </span>
           )}
           {message.isStreaming && (
             <span
@@ -473,6 +515,11 @@ function MessageBubble({
               minute: '2-digit',
             })}
           </time>
+        )}
+
+        {/* Agentic Execution Metadata */}
+        {!isUser && !message.isStreaming && message.agentMetadata && (
+          <AgentMetadataBadge metadata={message.agentMetadata} />
         )}
 
         {/* Confidence badge */}
@@ -664,31 +711,131 @@ function SourceList({
 }
 
 // ---------------------------------------------------------------------------
+// AgentMetadataBadge — shows compact agentic metrics and tool usage
+// ---------------------------------------------------------------------------
+
+function AgentMetadataBadge({ metadata }: { metadata: AgentMetadata }) {
+  const [expanded, setExpanded] = useState(false);
+  const toolCount = metadata.tool_calls ?? metadata.tools_called ?? 0;
+  const durationMs = metadata.execution_time_ms ?? metadata.duration_ms;
+  const durationSec = durationMs ? (durationMs / 1000).toFixed(1) : null;
+  const tools = metadata.tool_summary ?? [];
+
+  return (
+    <div className="w-full text-xs space-y-1.5 pt-0.5">
+      <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
+          <Sparkles className="h-3 w-3" />
+          Agentic mode
+        </span>
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+          <Wrench className="h-3 w-3" />
+          {toolCount} {toolCount === 1 ? 'tool call' : 'tool calls'}
+        </span>
+        {durationSec && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+            {durationSec}s
+          </span>
+        )}
+        {tools.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded(!expanded)}
+            className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors ml-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded px-1"
+            aria-expanded={expanded}
+          >
+            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            <span>{expanded ? 'Hide tools' : 'View tools'}</span>
+          </button>
+        )}
+      </div>
+
+      {expanded && tools.length > 0 && (
+        <ul className="rounded-lg border border-border bg-muted/40 p-2 space-y-1 font-mono text-[11px] max-h-40 overflow-y-auto">
+          {tools.map((t, i) => {
+            const inputObj = (t.input || {}) as Record<string, unknown>;
+            const detail =
+              inputObj.path || inputObj.file_path
+                ? String(inputObj.path || inputObj.file_path)
+                : inputObj.query
+                ? `query: "${String(inputObj.query)}"`
+                : inputObj.name || inputObj.symbol
+                ? `symbol: ${String(inputObj.name || inputObj.symbol)}`
+                : JSON.stringify(inputObj);
+            const toolName = t.tool || t.name || 'tool';
+            return (
+              <li key={i} className="flex items-center justify-between text-muted-foreground gap-2">
+                <span className="text-foreground font-semibold shrink-0">{String(toolName)}</span>
+                <span className="truncate text-[10px] text-muted-foreground/80 font-mono text-right" title={detail}>
+                  {detail}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // TypingIndicator — animated dots while the assistant is responding
 // ---------------------------------------------------------------------------
 
-function TypingIndicator() {
+function TypingIndicator({ mode }: { mode?: ChatMode }) {
+  const isAgentic = mode === 'agentic';
+
   return (
-    <div className="flex items-start gap-3" role="status" aria-label="Assistant is typing">
+    <div
+      className="flex items-start gap-3"
+      role="status"
+      aria-label={isAgentic ? 'Agent is investigating repository' : 'Assistant is typing'}
+    >
       <div
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border bg-muted text-muted-foreground border-border"
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-full border',
+          isAgentic
+            ? 'bg-primary/10 text-primary border-primary/30'
+            : 'bg-muted text-muted-foreground border-border',
+        )}
         aria-hidden="true"
       >
-        <Bot className="h-4 w-4" />
+        {isAgentic ? <Sparkles className="h-4 w-4 animate-pulse" /> : <Bot className="h-4 w-4" />}
       </div>
-      <div className="bg-muted rounded-2xl rounded-tl-sm px-4 py-3 flex items-center gap-1.5">
-        <span
-          className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce"
-          style={{ animationDelay: '0ms' }}
-        />
-        <span
-          className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce"
-          style={{ animationDelay: '160ms' }}
-        />
-        <span
-          className="h-2 w-2 rounded-full bg-muted-foreground/50 animate-bounce"
-          style={{ animationDelay: '320ms' }}
-        />
+      <div className="bg-card border border-border rounded-2xl rounded-tl-sm px-4 py-3 flex flex-col gap-1.5 shadow-sm">
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full animate-bounce',
+                isAgentic ? 'bg-primary' : 'bg-muted-foreground/50',
+              )}
+              style={{ animationDelay: '0ms' }}
+            />
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full animate-bounce',
+                isAgentic ? 'bg-primary' : 'bg-muted-foreground/50',
+              )}
+              style={{ animationDelay: '160ms' }}
+            />
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full animate-bounce',
+                isAgentic ? 'bg-primary' : 'bg-muted-foreground/50',
+              )}
+              style={{ animationDelay: '320ms' }}
+            />
+          </div>
+          <span className="text-xs font-medium text-foreground">
+            {isAgentic ? 'Investigating repository code…' : 'Thinking…'}
+          </span>
+        </div>
+        {isAgentic && (
+          <p className="text-[11px] text-muted-foreground">
+            Executing bounded read-only investigation (code search, symbol inspection, caller graphs).
+          </p>
+        )}
       </div>
     </div>
   );

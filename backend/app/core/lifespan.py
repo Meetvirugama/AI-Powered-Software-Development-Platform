@@ -139,10 +139,34 @@ def init_rag_pipeline(app: FastAPI) -> bool:
             except Exception as emb_exc:
                 logger.warning("vector_retriever_init_failed_falling_back_to_lexical", extra={"error": str(emb_exc)})
 
+        cache = None
+        if getattr(settings, "retrieval_cache_enabled", False):
+            try:
+                from app.core.redis import get_async_redis_client
+                r_client = get_async_redis_client()
+                if r_client is not None:
+                    from ai.retrieval.cache import RetrievalResultCache
+                    cache = RetrievalResultCache(
+                        redis_client=r_client,
+                        ttl_seconds=getattr(settings, "retrieval_cache_ttl_seconds", 3600),
+                    )
+            except Exception as c_exc:  # noqa: BLE001
+                logger.warning("retrieval_cache_init_failed", extra={"error": str(c_exc)})
+
+        graph_expander = None
+        if getattr(settings, "symbol_graph_expansion_enabled", False):
+            try:
+                from ai.retrieval.graph_expander import SymbolGraphExpander
+                graph_expander = SymbolGraphExpander(db=AsyncSessionLocal)
+            except Exception as g_exc:  # noqa: BLE001
+                logger.warning("graph_expander_init_failed", extra={"error": str(g_exc)})
+
         retriever = HybridRetriever(
             vector_retriever=vector_retriever,
             lexical_retriever=lexical_retriever,
             reranker=reranker,
+            graph_expander=graph_expander,
+            cache=cache,
         )
 
         grounding_validator = GroundingValidator(db_session=AsyncSessionLocal)
@@ -159,6 +183,20 @@ def init_rag_pipeline(app: FastAPI) -> bool:
         has_llm = llm_gateway is not None
         is_ready = has_retriever and has_llm
         app.state.service_readiness["rag_pipeline"] = is_ready
+
+        if settings.agentic_chat_enabled and llm_gateway is not None:
+            try:
+                from ai.agent.orchestrator import AgentOrchestrator
+                app.state.agent_orchestrator = AgentOrchestrator(
+                    llm_gateway=llm_gateway,
+                    rag_pipeline=app.state.rag_pipeline,
+                    model=settings.agent_model,
+                    primary_provider=settings.agent_primary_provider,
+                    fallback_provider=settings.agent_fallback_provider,
+                )
+            except Exception as a_exc:  # noqa: BLE001
+                logger.warning("agent_orchestrator_init_failed", extra={"error": str(a_exc)})
+
         logger.info(
             "rag_pipeline_init",
             extra={"has_retriever": has_retriever, "has_llm": has_llm, "is_ready": is_ready},

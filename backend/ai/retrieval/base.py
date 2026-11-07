@@ -62,6 +62,7 @@ class CodeChunk:
     reranker_logit: float | None = None
     vector_similarity: float | None = None
     lexical_rank: float | None = None
+    graph_score: float | None = None
 
     def __post_init__(self) -> None:
         """Defensively ensure UUID types for primary identification fields."""
@@ -108,6 +109,7 @@ class CodeChunk:
             reranker_logit=float(data["reranker_logit"]) if data.get("reranker_logit") is not None else None,
             vector_similarity=float(data["vector_similarity"]) if data.get("vector_similarity") is not None else None,
             lexical_rank=float(data["lexical_rank"]) if data.get("lexical_rank") is not None else None,
+            graph_score=float(data["graph_score"]) if data.get("graph_score") is not None else None,
         )
 
     @classmethod
@@ -151,6 +153,11 @@ class CodeChunk:
             lexical_rank=(
                 float(item.lexical_rank)
                 if getattr(item, "lexical_rank", None) is not None
+                else None
+            ),
+            graph_score=(
+                float(item.graph_score)
+                if getattr(item, "graph_score", None) is not None
                 else None
             ),
         )

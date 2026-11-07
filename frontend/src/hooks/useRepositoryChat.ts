@@ -38,6 +38,7 @@ import { askRepositoryQuestion } from '../services/chat';
 import type {
   ChatMessage,
   ChatHistoryMessage,
+  ChatMode,
   RepositoryChatResponse,
 } from '../types/api';
 
@@ -87,8 +88,12 @@ export interface UseRepositoryChatReturn {
   isPending: boolean;
   /** Error string from the last failed request, or null. */
   error: string | null;
-  /** Send a question. No-op while isPending. */
-  sendMessage: (question: string) => void;
+  /** Currently selected chat mode ('normal' or 'agentic'). */
+  mode: ChatMode;
+  /** Update the active chat mode. */
+  setMode: (mode: ChatMode) => void;
+  /** Send a question. No-op while isPending. Optional mode override. */
+  sendMessage: (question: string, overrideMode?: ChatMode) => void;
   /** Clear all messages and reset state. */
   clearConversation: () => void;
 }
@@ -114,6 +119,7 @@ export function useRepositoryChat(
   const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
   const [pendingRepos, setPendingRepos] = useState<Record<string, boolean>>({});
   const [errorMap, setErrorMap] = useState<Record<string, string | null>>({});
+  const [mode, setMode] = useState<ChatMode>('normal');
 
   // Active AbortControllers per repository
   const abortControllersRef = useRef<Record<string, AbortController>>({});
@@ -170,9 +176,11 @@ export function useRepositoryChat(
    * If retrying an unanswered user question, reuses the existing user turn.
    */
   const sendMessage = useCallback(
-    (question: string) => {
+    (question: string, overrideMode?: ChatMode) => {
       const trimmed = question.trim();
       if (!trimmed || isPending || !repositoryId) return;
+
+      const activeMode = overrideMode ?? mode;
 
       // Abort any existing in-flight request for this repository
       if (abortControllersRef.current[repositoryId]) {
@@ -202,6 +210,7 @@ export function useRepositoryChat(
         timestamp: new Date().toISOString(),
         sources: [],
         isStreaming: false,
+        mode: activeMode,
       };
 
       const assistantId = newMessageId();
@@ -212,6 +221,7 @@ export function useRepositoryChat(
         timestamp: new Date().toISOString(),
         sources: [],
         isStreaming: true,
+        mode: activeMode,
       };
 
       // 3. Update state synchronously — pure state update, NO API calls inside updater.
@@ -249,7 +259,7 @@ export function useRepositoryChat(
       // 4. Fire API request outside the state setter
       askRepositoryQuestion(
         repositoryId,
-        { question: trimmed, history: currentHistory },
+        { question: trimmed, history: currentHistory, mode: activeMode },
         controller.signal,
       )
         .then((response: RepositoryChatResponse) => {
@@ -272,6 +282,8 @@ export function useRepositoryChat(
                       sources: response.sources ?? [],
                       confidence: response.confidence,
                       isStreaming: false,
+                      mode: response.agent_metadata?.mode ?? activeMode,
+                      agentMetadata: response.agent_metadata ?? null,
                     }
                   : msg,
               ),
@@ -356,7 +368,7 @@ export function useRepositoryChat(
           }));
         });
     },
-    [conversations, isPending, repositoryId],
+    [conversations, isPending, repositoryId, mode],
   );
 
   /** Abort the current repository's request and clear its messages, error, and pending status. */
@@ -383,5 +395,5 @@ export function useRepositoryChat(
     }));
   }, [repositoryId]);
 
-  return { messages, isPending, error, sendMessage, clearConversation };
+  return { messages, isPending, error, mode, setMode, sendMessage, clearConversation };
 }
