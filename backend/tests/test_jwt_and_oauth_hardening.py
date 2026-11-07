@@ -16,28 +16,24 @@ import hashlib
 import time
 import uuid
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from fastapi.testclient import TestClient
-
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.security import (
-    ALLOWED_PLATFORM_ALGORITHMS,
     TOKEN_TYPE_ACCESS,
     create_access_token,
     decode_access_token,
 )
-from app.integrations.github.client import GitHubClient
 from app.integrations.github.token_manager import InstallationTokenManager
 from app.main import app
 from app.models.user import User
-
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Test Fixtures & Helpers
@@ -130,6 +126,13 @@ def _configure_test_settings(monkeypatch, **overrides: Any) -> Settings:
         monkeypatch.setenv(k.upper(), str(v))
     get_settings.cache_clear()
     return get_settings()
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_cache():
+    """Ensure settings cache is cleared after each test so monkeypatched envs do not leak."""
+    yield
+    get_settings.cache_clear()
 
 
 # ===========================================================================
@@ -844,7 +847,7 @@ class TestRedirectAndCSRFProtection:
     """Test suite for open-redirect prevention and cookie CSRF checks."""
 
     def test_allowed_frontend_redirect(self, monkeypatch) -> None:
-        settings = _configure_test_settings(
+        _configure_test_settings(
             monkeypatch,
             cors_allowed_origins="https://app.example.com",
             frontend_url="https://app.example.com",
@@ -859,7 +862,7 @@ class TestRedirectAndCSRFProtection:
         assert url_rel.startswith("https://app.example.com")
 
     def test_rejected_arbitrary_redirect_prevents_open_redirect(self, monkeypatch) -> None:
-        settings = _configure_test_settings(
+        _configure_test_settings(
             monkeypatch,
             cors_allowed_origins="https://app.example.com",
             frontend_url="https://app.example.com",
@@ -929,7 +932,7 @@ class TestRedirectAndCSRFProtection:
         assert resp.json()["error"]["code"] == "FORBIDDEN"
 
     def test_oauth_callback_query_redirect_url_allowed_destination(self, monkeypatch) -> None:
-        settings = _configure_test_settings(
+        _configure_test_settings(
             monkeypatch,
             cors_allowed_origins="https://app.example.com",
             frontend_url="https://app.example.com",
@@ -973,7 +976,7 @@ class TestRedirectAndCSRFProtection:
             app.dependency_overrides.clear()
 
     def test_oauth_callback_query_redirect_url_attack_destination_blocked(self, monkeypatch) -> None:
-        settings = _configure_test_settings(
+        _configure_test_settings(
             monkeypatch,
             cors_allowed_origins="https://app.example.com",
             frontend_url="https://app.example.com",
@@ -1049,7 +1052,7 @@ class TestDualTrustDomainIsolation:
         assert decoded["exp"] - decoded["iat"] == 660  # 60s past skew + 600s TTL
 
     def test_platform_token_cannot_decode_with_rsa_key(self, test_rsa_key_pair, monkeypatch) -> None:
-        pem_private, pem_public = test_rsa_key_pair
+        _pem_private, pem_public = test_rsa_key_pair
         _configure_test_settings(monkeypatch)
 
         token, _ = create_access_token(str(uuid.uuid4()))

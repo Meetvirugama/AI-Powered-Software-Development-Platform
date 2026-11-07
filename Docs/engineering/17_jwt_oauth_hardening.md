@@ -33,7 +33,7 @@ Platform access tokens permit **only symmetric HMAC algorithms**:
 | `exp` | `int` | Expiration Timestamp | Required UTC epoch timestamp, must be `> iat` and `> current_time` |
 
 ### Error Sanitization
-Internal JWT decoding exceptions (`ExpiredSignatureError`, `InvalidSignatureError`, `MissingRequiredClaimError`, `InvalidAudienceError`, `InvalidIssuerError`) are caught and masked behind a uniform `401 Unauthorized` API error envelope (`ErrorCode.UNAUTHORIZED`) with generic, safe client-facing messages ("Token has expired" or "Invalid or malformed token") to prevent token-probing timing/oracle attacks.
+Internal JWT decoding exceptions (`ExpiredSignatureError`, `InvalidSignatureError`, `MissingRequiredClaimError`, `InvalidAudienceError`, `InvalidIssuerError`) are caught and masked behind a uniform `401 Unauthorized` API error envelope (`ErrorCode.UNAUTHORIZED`) with generic, safe client-facing messages ("Invalid or expired access token." or "Invalid access token.") to prevent token-probing timing/oracle attacks.
 
 ---
 
@@ -173,7 +173,7 @@ OAuth callback redirect destinations are validated through `_resolve_trusted_fro
 
 Because platform JWT validation now strictly validates `iss`, `aud`, `token_type`, and `jti`:
 - Tokens issued prior to Batch 1 hardening lack the `iss`, `aud`, or `token_type` claims.
-- These legacy tokens are cleanly rejected upon decoding with `401 Unauthorized` (`INVALID_TOKEN`).
+- These legacy tokens are cleanly rejected upon decoding with `401 Unauthorized` (`ErrorCode.UNAUTHORIZED`, `"Invalid access token."`).
 - Because access tokens are short-lived (default 15 minutes), clients will simply refresh their session by authenticating through GitHub OAuth.
 - No insecure backward-compatibility bypass is permitted, guaranteeing zero acceptance of weakly structured tokens.
 

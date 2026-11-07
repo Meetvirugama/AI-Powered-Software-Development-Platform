@@ -190,6 +190,7 @@ Implement stateful session management, rotating refresh tokens with reuse detect
     - Set `refresh_token` in HTTP-only cookie (`name="refresh_token"`, `max_age=30 days`, `path="/api/v1/auth"`, `secure=True`, `samesite="lax"`).
     - Set `access_token` in HTTP-only cookie (`name="access_token"`, `max_age=15 mins`, `path="/"`, `secure=True`, `samesite="lax"`).
   - **Add `POST /api/v1/auth/refresh`:**
+    - Explicitly included in `PUBLIC_PATHS` (or unauthenticated route allowlist) in `JWTMiddleware` so callers with expired access tokens can successfully renew their session without failing early middleware authentication.
     - Reads `refresh_token` cookie (or bearer refresh header).
     - Hashes token and looks up `RefreshToken` record in DB.
     - **Replay / Theft Detection:** If token record was already `revoked_at is not None`:
@@ -329,15 +330,15 @@ Upgrade the frontend authentication architecture to support seamless background 
     }
     ```
 - `frontend/src/services/auth.ts`:
-  - Add `refreshSession()` function:
+  - Add `refreshSession()` function (unwrapping standard API response payload):
     ```typescript
     export async function refreshSession(): Promise<User> {
-      const response = await apiClient.post<User>('/auth/refresh');
-      return response.data;
+      const response = await apiClient.post<{ data: User }>('/auth/refresh');
+      return response.data.data;
     }
     ```
 - `frontend/src/services/api.ts`:
-  - Implement single-flight refresh queue and mutex:
+  - Implement single-flight refresh queue, mutex, and cross-tab coordination:
     ```typescript
     let isRefreshing = false;
     let refreshPromise: Promise<User> | null = null;
@@ -345,6 +346,10 @@ Upgrade the frontend authentication architecture to support seamless background 
       resolve: (value?: unknown) => void;
       reject: (reason?: unknown) => void;
     }> = [];
+
+    // Cross-Tab Coordination: Use BroadcastChannel or localStorage timestamp lock
+    // to coordinate refreshes across concurrent tabs, preventing redundant refresh requests.
+    const authChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('auth_refresh') : null;
 
     const processQueue = (error: unknown) => {
       failedQueue.forEach((promise) => {
@@ -432,7 +437,10 @@ gitGraph
     commit id: "d5a6b7c (data backfill & FKs)"
 ```
 
-To ensure maintainability and atomic rollback, the changes can be authored either as a single consolidated migration or sequential revisions. The recommended approach is **a single atomic migration** (`d1a2b3c4d5e6_auth_rbac_and_session_schema.py`) that executes in a single transaction block:
+To ensure maintainability and atomic rollback, the changes can be authored either as a single consolidated migration or sequential revisions. The recommended approach is **a single atomic migration** (`d1a2b3c4d5e6_auth_rbac_and_session_schema.py`) that executes in a single transaction block.
+
+> [!NOTE]
+> **Production Decoupling Note:** In high-volume production deployments, structural DDL operations (creating enums, new tables, and columns with default values) should be decoupled from heavy data backfill scripts (such as creating default projects for all existing users and updating repository foreign keys) to avoid prolonged exclusive table locks.
 
 ```sql
 -- 1. Enum Types
@@ -531,6 +539,10 @@ WHERE p.owner_user_id = r.user_id AND r.project_id IS NULL;
 ```
 
 ### 4.2 Downgrade Feasibility & Safety
+
+> [!WARNING]
+> **Destructive Rollback & Data Loss Warning:** Downgrading this migration drops `user_sessions`, `refresh_tokens`, `projects`, and `project_memberships`, which permanently deletes all active user sessions and collaborative project data created after deployment. A full database backup / snapshot must be taken prior to executing downgrades in staging or production environments.
+
 The downgrade procedure is fully scripted:
 ```python
 def downgrade() -> None:

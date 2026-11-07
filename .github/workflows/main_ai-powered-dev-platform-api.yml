@@ -88,6 +88,7 @@ jobs:
                  backend/tests/test_m1_security_multi_tenancy.py \
                  backend/tests/test_prit_w3_d4_restricted_test_runner.py \
                  backend/tests/test_prit_w3_d6_reliability_and_recovery.py \
+                 backend/tests/test_jwt_and_oauth_hardening.py \
                  tests/e2e/ \
                  --no-cov -v
 

@@ -28,9 +28,12 @@ The objective of Issue #181 is to transition the platform from its initial singl
 
 ## 2. Current Architecture & Request Flow
 
+> [!NOTE]
+> This section documents the **pre-Batch-1 baseline architecture and security posture** as evaluated during the initial audit of Issue #181. Gaps identified here (e.g., `python-jose` usage, OAuth state fail-open fallback, lack of PKCE) are resolved in the Batch 1 hardening implementation (see [`Docs/engineering/17_jwt_oauth_hardening.md`](17_jwt_oauth_hardening.md)).
+
 ### 2.1 Incoming Request Pipeline & Middleware Hierarchy
 
-The application runs on FastAPI (Starlette). Middleware is registered in [`backend/app/main.py`](file:///backend/app/main.py#L58-L76). Because Starlette executes middleware in reverse order of addition (the last added middleware runs first), the actual execution sequence for every incoming HTTP request is:
+The application runs on FastAPI (Starlette). Middleware is registered in [`backend/app/main.py`](../../backend/app/main.py#L58-L76). Because Starlette executes middleware in reverse order of addition (the last added middleware runs first), the actual execution sequence for every incoming HTTP request is:
 
 ```mermaid
 flowchart TD
@@ -46,7 +49,7 @@ flowchart TD
 1. **SecurityHeadersMiddleware:** Applies defensive headers (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy`).
 2. **CORSMiddleware:** Evaluates `Origin` header against `settings.cors_origins`. Preflight `OPTIONS` requests terminate here with 200/204 before entering downstream auth middleware.
 3. **RequestIdMiddleware:** Establishes request tracing by reading or minting `X-Request-ID` attached to `request.state.request_id`.
-4. **JWTMiddleware ([`backend/app/core/auth.py`](file:///backend/app/core/auth.py#L62-L105)):**
+4. **JWTMiddleware ([`backend/app/core/auth.py`](../../backend/app/core/auth.py#L62-L105)):**
    - Bypasses strict authentication for `PUBLIC_PATHS` (`/health`, `/docs`, `/openapi.json`, `/api/v1/events`, `/api/v1/github/webhook`, etc.) and `/api/v1/auth/github/*`. On public routes, calls `_try_populate_user_state` to opportunistically extract `user_id` if a valid token is supplied.
    - For protected routes, extracts token from `Authorization: Bearer <token>` or HTTP-only cookie (`access_token`).
    - If missing: returns immediate `401 UNAUTHORIZED`.
@@ -54,7 +57,7 @@ flowchart TD
    - **Token Signature & Claims Decoding:** Uses `decode_access_token` via `python-jose` with `settings.jwt_secret`.
    - **Revocation Check:** Checks Redis asynchronously (`_is_token_blocklisted_async`) for key `auth:blocklist:{jti}` with a 1.5-second timeout.
    - Attaches `request.state.user_id`, `request.state.token_jti`, and `request.state.token_exp`.
-5. **RateLimitMiddleware ([`backend/app/core/rate_limit.py`](file:///backend/app/core/rate_limit.py#L200-L288)):**
+5. **RateLimitMiddleware ([`backend/app/core/rate_limit.py`](../../backend/app/core/rate_limit.py#L200-L288)):**
    - Reads `request.state.user_id` for per-user rules (e.g. `/tasks`, `/repositories/:id/chat`) or client IP for per-IP rules (e.g. `/auth/github/callback`).
    - Evaluates rate limits using Redis pipeline (`INCR` + `EXPIRE`).
 6. **Route Handler & Dependencies:**
@@ -67,22 +70,22 @@ flowchart TD
 
 | Module Path | Layer | Primary Responsibility | Critical Dependencies |
 |---|---|---|---|
-| [`backend/app/api/v1/auth.py`](file:///backend/app/api/v1/auth.py) | API | OAuth initiation (`/github/login`), callback processing (`/github/callback`), current user profile (`/me`), and logout (`/logout`). | `UserRepository`, `get_redis()`, `httpx`, `security.create_access_token` |
-| [`backend/app/core/security.py`](file:///backend/app/core/security.py) | Core Security | Platform JWT minting (`create_access_token`) and verification (`decode_access_token`). | `jose.jwt`, `Settings` (`jwt_secret`, `jwt_algorithm`) |
-| [`backend/app/core/auth.py`](file:///backend/app/core/auth.py) | Middleware | `JWTMiddleware`, token extraction (cookie & bearer), CSRF origin check, Redis JTI blocklist check. | `decode_access_token`, `get_redis()`, `Settings` |
-| [`backend/app/core/config.py`](file:///backend/app/core/config.py) | Configuration | Application configuration loaded via Pydantic `BaseSettings`. Includes production security validators. | Pydantic Settings, `.env` |
-| [`backend/app/core/redis.py`](file:///backend/app/core/redis.py) | Infrastructure | Synchronous and asynchronous Redis client factory (`get_redis()`, `get_redis_async()`). | `redis.Redis`, `redis.asyncio.Redis` |
-| [`backend/app/core/rate_limit.py`](file:///backend/app/core/rate_limit.py) | Middleware | Sliding-window route rate limiting backed by Redis with bounded in-memory fallback. | Redis, `get_settings()` |
-| [`backend/app/api/v1/dependencies.py`](file:///backend/app/api/v1/dependencies.py) | Dependency Injection | `get_request_user_id`, `get_owned_repository`, `get_owned_task`. | `RepositoryRepository`, `TaskRepository` |
-| [`backend/app/repositories/user_repository.py`](file:///backend/app/repositories/user_repository.py) | Data Access | User lookup by ID, GitHub ID, or login; user creation and profile upsert. | SQLAlchemy `Session`, `User` model |
-| [`backend/app/models/user.py`](file:///backend/app/models/user.py) | ORM Model | Maps `users` table: GitHub ID, login, email, avatar URL, timestamps. | SQLAlchemy `TimestampedModel` |
-| [`backend/app/integrations/github/token_manager.py`](file:///backend/app/integrations/github/token_manager.py) | Integration | GitHub App installation token generation with Redis caching and single-flight lock. | `PyJWT` (`jwt.encode`), `Redis`, `httpx` |
-| [`backend/app/integrations/github/client.py`](file:///backend/app/integrations/github/client.py) | Integration | GitHub REST API client; contains secondary App JWT signing method. | `jose.jwt` (duplicate!), `httpx` |
-| [`frontend/src/stores/useAuthStore.ts`](file:///frontend/src/stores/useAuthStore.ts) | Frontend State | Client-side Zustand store holding authenticated `user` and `isAuthenticated` boolean. | Zustand |
-| [`frontend/src/services/auth.ts`](file:///frontend/src/services/auth.ts) | Frontend Service | Service wrappers for `getCurrentUser()` (`/auth/me`) and `logout()` (`/auth/logout`). | `apiClient` |
-| [`frontend/src/services/api.ts`](file:///frontend/src/services/api.ts) | Frontend HTTP | Axios instance configured with `withCredentials: true`, timeout rules, and 401 redirect logic. | Axios |
-| [`frontend/src/hooks/useAuth.ts`](file:///frontend/src/hooks/useAuth.ts) | Frontend Hook | Session verification hook running `getCurrentUser()` on app mount. | `useAuthStore`, `auth.ts` |
-| [`frontend/src/layouts/ProtectedRoute.tsx`](file:///frontend/src/layouts/ProtectedRoute.tsx) | Frontend Routing | Route boundary redirecting unauthenticated users to `/login`. | React Router, `useAuth` |
+| [`backend/app/api/v1/auth.py`](../../backend/app/api/v1/auth.py) | API | OAuth initiation (`/github/login`), callback processing (`/github/callback`), current user profile (`/me`), and logout (`/logout`). | `UserRepository`, `get_redis()`, `httpx`, `security.create_access_token` |
+| [`backend/app/core/security.py`](../../backend/app/core/security.py) | Core Security | Platform JWT minting (`create_access_token`) and verification (`decode_access_token`). | `jose.jwt`, `Settings` (`jwt_secret`, `jwt_algorithm`) |
+| [`backend/app/core/auth.py`](../../backend/app/core/auth.py) | Middleware | `JWTMiddleware`, token extraction (cookie & bearer), CSRF origin check, Redis JTI blocklist check. | `decode_access_token`, `get_redis()`, `Settings` |
+| [`backend/app/core/config.py`](../../backend/app/core/config.py) | Configuration | Application configuration loaded via Pydantic `BaseSettings`. Includes production security validators. | Pydantic Settings, `.env` |
+| [`backend/app/core/redis.py`](../../backend/app/core/redis.py) | Infrastructure | Synchronous and asynchronous Redis client factory (`get_redis()`, `get_redis_async()`). | `redis.Redis`, `redis.asyncio.Redis` |
+| [`backend/app/core/rate_limit.py`](../../backend/app/core/rate_limit.py) | Middleware | Sliding-window route rate limiting backed by Redis with bounded in-memory fallback. | Redis, `get_settings()` |
+| [`backend/app/api/v1/dependencies.py`](../../backend/app/api/v1/dependencies.py) | Dependency Injection | `get_request_user_id`, `get_owned_repository`, `get_owned_task`. | `RepositoryRepository`, `TaskRepository` |
+| [`backend/app/repositories/user_repository.py`](../../backend/app/repositories/user_repository.py) | Data Access | User lookup by ID, GitHub ID, or login; user creation and profile upsert. | SQLAlchemy `Session`, `User` model |
+| [`backend/app/models/user.py`](../../backend/app/models/user.py) | ORM Model | Maps `users` table: GitHub ID, login, email, avatar URL, timestamps. | SQLAlchemy `TimestampedModel` |
+| [`backend/app/integrations/github/token_manager.py`](../../backend/app/integrations/github/token_manager.py) | Integration | GitHub App installation token generation with Redis caching and single-flight lock. | `PyJWT` (`jwt.encode`), `Redis`, `httpx` |
+| [`backend/app/integrations/github/client.py`](../../backend/app/integrations/github/client.py) | Integration | GitHub REST API client; contains secondary App JWT signing method. | `jose.jwt` (duplicate!), `httpx` |
+| [`frontend/src/stores/useAuthStore.ts`](../../frontend/src/stores/useAuthStore.ts) | Frontend State | Client-side Zustand store holding authenticated `user` and `isAuthenticated` boolean. | Zustand |
+| [`frontend/src/services/auth.ts`](../../frontend/src/services/auth.ts) | Frontend Service | Service wrappers for `getCurrentUser()` (`/auth/me`) and `logout()` (`/auth/logout`). | `apiClient` |
+| [`frontend/src/services/api.ts`](../../frontend/src/services/api.ts) | Frontend HTTP | Axios instance configured with `withCredentials: true`, timeout rules, and 401 redirect logic. | Axios |
+| [`frontend/src/hooks/useAuth.ts`](../../frontend/src/hooks/useAuth.ts) | Frontend Hook | Session verification hook running `getCurrentUser()` on app mount. | `useAuthStore`, `auth.ts` |
+| [`frontend/src/layouts/ProtectedRoute.tsx`](../../frontend/src/layouts/ProtectedRoute.tsx) | Frontend Routing | Route boundary redirecting unauthenticated users to `/login`. | React Router, `useAuth` |
 
 ---
 
@@ -122,11 +125,11 @@ classDiagram
 | **Token Issuer (`iss`)** | Currently missing; should be `agent-platform` | `settings.github_app_id` (numeric string) |
 | **Token Subject (`sub`)** | Internal `user.id` (UUID string) | None (App-level identity) |
 | **Token Lifetime** | `settings.jwt_expire_minutes` (default 15 minutes) | 10 minutes (maximum permitted by GitHub API) |
-| **Current Library Used** | `python-jose` ([`backend/app/core/security.py`](file:///backend/app/core/security.py#L8)) | **Mixed:** `PyJWT` in [`token_manager.py`](file:///backend/app/integrations/github/token_manager.py#L21) vs. `python-jose` in [`client.py`](file:///backend/app/integrations/github/client.py#L475) |
+| **Current Library Used** | `python-jose` ([`backend/app/core/security.py`](../../backend/app/core/security.py#L8)) | **Mixed:** `PyJWT` in [`token_manager.py`](../../backend/app/integrations/github/token_manager.py#L21) vs. `python-jose` in [`client.py`](../../backend/app/integrations/github/client.py#L475) |
 
 ### 4.2 Critical Findings & Risks
-1. **Dual JWT Dependencies:** Declaring both `python-jose[cryptography]>=3.3,<4.0` and `PyJWT[crypto]>=2.8,<3.0` in [`backend/requirements.txt`](file:///backend/requirements.txt#L13-L15) and [`pyproject.toml`](file:///pyproject.toml#L27-L28) introduces dependency bloat and confusion. `python-jose` is effectively unmaintained and has known parsing vulnerabilities, whereas `PyJWT` is actively maintained.
-2. **Library Inconsistency in Domain B:** [`backend/app/integrations/github/token_manager.py`](file:///backend/app/integrations/github/token_manager.py#L165) uses `PyJWT` (`jwt.encode(payload, pem_key, algorithm="RS256")`), while [`backend/app/integrations/github/client.py`](file:///backend/app/integrations/github/client.py#L475) performs an inline import:
+1. **Dual JWT Dependencies:** Declaring both `python-jose[cryptography]>=3.3,<4.0` and `PyJWT[crypto]>=2.8,<3.0` in [`backend/requirements.txt`](../../backend/requirements.txt#L13-L15) and [`pyproject.toml`](../../pyproject.toml#L27-L28) introduces dependency bloat and confusion. `python-jose` is effectively unmaintained and has known parsing vulnerabilities, whereas `PyJWT` is actively maintained.
+2. **Library Inconsistency in Domain B:** [`backend/app/integrations/github/token_manager.py`](../../backend/app/integrations/github/token_manager.py#L165) uses `PyJWT` (`jwt.encode(payload, pem_key, algorithm="RS256")`), while [`backend/app/integrations/github/client.py`](../../backend/app/integrations/github/client.py#L475) performs an inline import:
    ```python
    from jose import jwt as jose_jwt
    app_jwt = jose_jwt.encode(payload, pem_key, algorithm="RS256")
@@ -142,7 +145,7 @@ classDiagram
 
 ## 5. OAuth State Lifecycle Audit
 
-The GitHub OAuth 2.0 flow is implemented in [`backend/app/api/v1/auth.py`](file:///backend/app/api/v1/auth.py).
+The GitHub OAuth 2.0 flow is implemented in [`backend/app/api/v1/auth.py`](../../backend/app/api/v1/auth.py).
 
 ### 5.1 Flow Traceability
 
@@ -174,7 +177,7 @@ sequenceDiagram
 ```
 
 ### 5.2 Vulnerability Analysis of OAuth State
-- **Redis Failure Fails Open (P0):** In [`backend/app/api/v1/auth.py`](file:///backend/app/api/v1/auth.py#L53-L54):
+- **Redis Failure Fails Open (P0):** In [`backend/app/api/v1/auth.py`](../../backend/app/api/v1/auth.py#L53-L54):
   ```python
   try:
       redis_client = get_redis()
@@ -182,7 +185,7 @@ sequenceDiagram
   except Exception as exc:
       logger.warning("Could not persist oauth_state in Redis: %s", exc)
   ```
-  And during callback consumption ([`backend/app/api/v1/auth.py`](file:///backend/app/api/v1/auth.py#L163-L164)):
+  And during callback consumption ([`backend/app/api/v1/auth.py`](../../backend/app/api/v1/auth.py#L163-L164)):
   ```python
   except Exception as exc:
       logger.warning("Could not consume oauth_state via Redis: %s", exc)
@@ -198,12 +201,12 @@ sequenceDiagram
 Redis is utilized across three distinct operational surfaces:
 1. **JWT Revocation Blocklist (`auth:blocklist:{jti}`):**
    - **Behavior on Failure:** **Fails Closed.**
-   - In [`backend/app/core/auth.py`](file:///backend/app/core/auth.py#L52-L60), if Redis times out (1.5s limit) or throws a connection error, `_is_token_blocklisted_async` raises `APIError(503, ErrorCode.SERVICE_UNAVAILABLE)`. This guarantees that if Redis is offline, revoked tokens cannot bypass authentication.
+   - In [`backend/app/core/auth.py`](../../backend/app/core/auth.py#L52-L60), if Redis times out (1.5s limit) or throws a connection error, `_is_token_blocklisted_async` raises `APIError(503, ErrorCode.SERVICE_UNAVAILABLE)`. This guarantees that if Redis is offline, revoked tokens cannot bypass authentication.
 2. **OAuth State Verification (`oauth_state:{state}`):**
    - **Behavior on Failure:** **Fails Open.** (Critical flaw identified in Section 5).
 3. **Rate Limiting (`ratelimit:{rule}:{identity}:{window}`):**
    - **Behavior on Failure:** **Mixed / Asymmetric.**
-   - In [`backend/app/core/rate_limit.py`](file:///backend/app/core/rate_limit.py#L255-L258):
+   - In [`backend/app/core/rate_limit.py`](../../backend/app/core/rate_limit.py#L255-L258):
      - For `AI_EXPENSIVE_RULES` (`repo_chat`, `task_plan`, `repo_review`, etc.), it falls back to a bounded in-memory store (`_fallback_ai_store`).
      - For non-AI rules—including `auth_callback` (`/api/v1/auth/github/callback`)—it executes `return await call_next(request)`. **Rate limiting fails completely open for authentication endpoints during Redis outages**, exposing login endpoints to unthrottled brute-force attacks.
 
@@ -214,8 +217,8 @@ Redis is utilized across three distinct operational surfaces:
 ### 7.1 Current Single-Tenant Ownership Model
 
 The application currently enforces an isolated, 1-to-1 repository ownership model:
-- Repositories belong directly to a single `user_id` ([`backend/app/models/repository.py`](file:///backend/app/models/repository.py#L22)).
-- Tasks belong to a `repository_id` and have an optional `user_id` ([`backend/app/models/task.py`](file:///backend/app/models/task.py#L236)).
+- Repositories belong directly to a single `user_id` ([`backend/app/models/repository.py`](../../backend/app/models/repository.py#L22)).
+- Tasks belong to a `repository_id` and have an optional `user_id` ([`backend/app/models/task.py`](../../backend/app/models/task.py#L236)).
 - Isolation is verified using helper functions:
   ```python
   # backend/app/api/v1/dependencies.py
@@ -290,7 +293,7 @@ erDiagram
 
 ### 8.2 Migration Lineage & Test Infrastructure
 
-The repository uses Alembic for database migrations. The migration chain in [`backend/migrations/versions/`](file:///backend/migrations/versions/) is completely linear:
+The repository uses Alembic for database migrations. The migration chain in [`backend/migrations/versions/`](../../backend/migrations/versions/) is completely linear:
 
 1. `24498ac67b3e` — `add_pgvector_extension` (Revises: None)
 2. `5f6dc031921b` — `identity_schema` (Revises: `24498ac67b3e`)
@@ -345,7 +348,7 @@ sequenceDiagram
 ```
 
 ### 9.2 Key Frontend Architectural Deficiencies
-1. **Disruptive 401 Hard Redirect:** In [`frontend/src/services/api.ts`](file:///frontend/src/services/api.ts#L83-L93):
+1. **Disruptive 401 Hard Redirect:** In [`frontend/src/services/api.ts`](../../frontend/src/services/api.ts#L83-L93):
    ```typescript
    if (
      error.response?.status === 401 &&
@@ -403,20 +406,20 @@ sequenceDiagram
 
 ## 11. Test Coverage Matrix & Gap Analysis
 
-An exhaustive review of the existing test suites was conducted across [`backend/tests/`](file:///backend/tests/) and [`frontend/src/test/`](file:///frontend/src/test/).
+An exhaustive review of the existing test suites was conducted across [`backend/tests/`](../../backend/tests/) and [`frontend/src/test/`](../../frontend/src/test/).
 
 ### 11.1 Test Coverage Matrix
 
 | Requirement / Scenario | Existing Test File(s) | Current Coverage Status | Notes & Identified Deficiencies |
 |---|---|---|---|
-| **Unauthenticated Request -> 401** | [`backend/tests/test_auth.py`](file:///backend/tests/test_auth.py#L12), [`test_auth_and_repositories_api.py`](file:///backend/tests/test_auth_and_repositories_api.py#L43) | **Covered** | Verified across multiple protected endpoints. |
-| **Invalid JWT Token -> 401** | [`backend/tests/test_auth.py`](file:///backend/tests/test_auth.py#L53) | **Covered** | Malformed and tampered tokens rejected. |
-| **Revoked Token (Redis JTI) -> 401** | [`backend/tests/test_auth.py`](file:///backend/tests/test_auth.py#L67), [`test_auth_and_repositories_api.py`](file:///backend/tests/test_auth_and_repositories_api.py#L125) | **Covered** | Redis blocklist JTI lookup verified. |
-| **Redis Outage During Token Check -> 503** | [`backend/tests/test_auth.py`](file:///backend/tests/test_auth.py#L89) | **Covered** | Confirms fail-closed behavior for token blocklist. |
-| **OAuth CSRF State Generation** | [`backend/tests/test_auth_and_repositories_api.py`](file:///backend/tests/test_auth_and_repositories_api.py#L53) | **Covered** | Verifies redirect header and `oauth_state` cookie. |
-| **OAuth State Cookie & Redis Binding** | [`backend/tests/test_auth_and_repositories_api.py`](file:///backend/tests/test_auth_and_repositories_api.py#L73) | **Covered** | Verifies cookie match and Redis single-use deletion. |
+| **Unauthenticated Request -> 401** | [`backend/tests/test_auth.py`](../../backend/tests/test_auth.py#L12), [`test_auth_and_repositories_api.py`](../../backend/tests/test_auth_and_repositories_api.py#L43) | **Covered** | Verified across multiple protected endpoints. |
+| **Invalid JWT Token -> 401** | [`backend/tests/test_auth.py`](../../backend/tests/test_auth.py#L53) | **Covered** | Malformed and tampered tokens rejected. |
+| **Revoked Token (Redis JTI) -> 401** | [`backend/tests/test_auth.py`](../../backend/tests/test_auth.py#L67), [`test_auth_and_repositories_api.py`](../../backend/tests/test_auth_and_repositories_api.py#L125) | **Covered** | Redis blocklist JTI lookup verified. |
+| **Redis Outage During Token Check -> 503** | [`backend/tests/test_auth.py`](../../backend/tests/test_auth.py#L89) | **Covered** | Confirms fail-closed behavior for token blocklist. |
+| **OAuth CSRF State Generation** | [`backend/tests/test_auth_and_repositories_api.py`](../../backend/tests/test_auth_and_repositories_api.py#L53) | **Covered** | Verifies redirect header and `oauth_state` cookie. |
+| **OAuth State Cookie & Redis Binding** | [`backend/tests/test_auth_and_repositories_api.py`](../../backend/tests/test_auth_and_repositories_api.py#L73) | **Covered** | Verifies cookie match and Redis single-use deletion. |
 | **OAuth State Fail-Closed on Redis Outage** | *None* | **Missing** | Existing code fails open; no test asserts fail-closed behavior. |
-| **CSRF Origin Validation (Cookie Auth)** | [`backend/tests/test_day6_integration_and_security.py`](file:///backend/tests/test_day6_integration_and_security.py) | **Covered** | Verifies rejection of untrusted cross-origin POST requests. |
+| **CSRF Origin Validation (Cookie Auth)** | [`backend/tests/test_day6_integration_and_security.py`](../../backend/tests/test_day6_integration_and_security.py) | **Covered** | Verifies rejection of untrusted cross-origin POST requests. |
 | **Token Refresh Endpoint (`/auth/refresh`)** | *None* | **Missing** | Endpoint not yet implemented. |
 | **Refresh Token Rotation (Single-Use)** | *None* | **Missing** | Refresh token persistence not yet implemented. |
 | **Refresh Token Theft Detection & Invalidation** | *None* | **Missing** | Token family invalidation logic not yet implemented. |
