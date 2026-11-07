@@ -76,7 +76,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_github_webhook_events_lease_expires_at"), "github_webhook_events", ["lease_expires_at"], unique=False)
 
     # 3. Add automation columns to repositories
-    op.add_column("repositories", sa.Column("last_indexed_commit_sha", sa.String(length=40), nullable=True))
+    op.add_column("repositories", sa.Column("last_indexed_commit_sha", sa.String(length=64), nullable=True))
     op.add_column("repositories", sa.Column("auto_sync_enabled", sa.Boolean(), server_default=sa.true(), nullable=False))
     op.add_column("repositories", sa.Column("pr_review_enabled", sa.Boolean(), server_default=sa.false(), nullable=False))
     op.add_column("repositories", sa.Column("pr_review_drafts", sa.Boolean(), server_default=sa.false(), nullable=False))

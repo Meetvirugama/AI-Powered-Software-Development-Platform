@@ -863,6 +863,18 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             comments=comments,
         )
 
+    async def get_pull_request_files(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        installation_id: UUID | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Retrieve list of files modified in a pull request."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        return await client.get_pull_request_files(owner, repo, pr_number)
+
     async def create_task_branch(
         self,
         owner: str,
