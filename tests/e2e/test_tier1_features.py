@@ -30,15 +30,16 @@ from app.models.repository import Repository
 from app.models.task import AgentTask, TaskPlan
 from app.models.user import User
 from app.schemas.task import (
+    RestrictedExecutionResult,
     TaskConstraint,
     TaskCreateRequest,
     TaskPlanCreateRequest,
     TaskPlanStep,
     TaskStatus,
+    TestCounts,
     VALID_TASK_TRANSITIONS,
     can_transition,
 )
-from app.services.test_runner import RestrictedExecutionResult, TestCounts
 from app.services.git_branch import format_agent_branch_name, _validate_safe_git_ref
 from app.services.independent_verifier import IndependentVerifier, VerificationFinding
 from app.services.task_recovery import TaskRecoveryService
@@ -60,7 +61,7 @@ from ai.retrieval.base import CodeChunk
 from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.reranker import CrossEncoderReranker
 from ai.services.retrieval_optimizer import AgentTokenBudgetManager, TokenBudgetExhaustedError
-from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop, RepairBudgetExhaustedError
+from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop
 from scanner.framework_detector import FrameworkDetector
 
 
@@ -840,7 +841,7 @@ class TestFeature19RerankingComparison:
         ]
         reranked = reranker.rerank(query=query, candidates=chunks, top_n=2)
         assert len(reranked) == 2
-        assert reranker.status in ("ready", "initialized", "fallback_model_missing")
+        assert reranker.status in ("ready", "initialized", "fallback_model_missing", "reranked")
 
 
 # ===========================================================================

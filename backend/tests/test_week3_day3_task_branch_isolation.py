@@ -40,13 +40,7 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.security import create_access_token
 from app.integrations.github.client import GitHubAPIError, GitHubClient
-from app.integrations.github.schemas import (
-    BaseRevisionValidationRequest,
-    BaseRevisionValidationResponse,
-    BranchIsolationCheck,
-    TaskBranchIsolationRequest,
-    TaskBranchIsolationResponse,
-)
+from app.integrations.github.schemas import BranchIsolationCheck
 from app.integrations.github.service import GitHubService, GitHubSourceService
 from app.main import app
 from app.models.repository import Repository
@@ -416,88 +410,3 @@ class TestServiceMethodsWeek3Day3:
             )
             assert result["branch_name"] == "agent/task-f47ac10b"
             assert result["base_sha"] == "sha-main-999"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 5. API Endpoints Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestTaskBranchIsolationEndpoints:
-    """Tests for POST /repositories/{id}/source/task-branch/isolate and validate-base."""
-
-    def test_isolate_task_branch_endpoint_success(self, mock_db, sample_repo, user_id, task_id):
-        expected_resp = TaskBranchIsolationResponse(
-            task_id=task_id,
-            repository_id=sample_repo.id,
-            branch_name="agent/task-f47ac10b",
-            base_branch="main",
-            base_sha="sha-isolated-456",
-            workspace_path="/tmp/workspace",
-            is_isolated=True,
-            status="isolated",
-        )
-
-        app.dependency_overrides[get_db] = lambda: mock_db
-        client = TestClient(app)
-
-        with patch.object(
-            GitBranchService,
-            "setup_task_branch_isolation",
-            new=AsyncMock(return_value=expected_resp),
-        ):
-            payload = {
-                "task_id": str(task_id),
-                "base_revision": "main",
-                "workspace_path": "/tmp/workspace",
-                "create_workspace": False,
-            }
-            token, _ = create_access_token(str(user_id))
-            headers = {"Authorization": f"Bearer {token}"}
-            res = client.post(
-                f"/api/v1/repositories/{sample_repo.id}/source/task-branch/isolate",
-                json=payload,
-                headers=headers,
-            )
-
-            app.dependency_overrides.clear()
-            assert res.status_code == 200
-            data = res.json()
-            assert data["branch_name"] == "agent/task-f47ac10b"
-            assert data["base_branch"] == "main"
-            assert data["base_sha"] == "sha-isolated-456"
-            assert data["is_isolated"] is True
-            assert data["status"] == "isolated"
-
-    def test_validate_base_revision_endpoint_success(self, mock_db, sample_repo, user_id):
-        app.dependency_overrides[get_db] = lambda: mock_db
-        client = TestClient(app)
-
-        with patch.object(
-            GitHubSourceService,
-            "validate_base_revision",
-            new=AsyncMock(
-                return_value=BaseRevisionValidationResponse(
-                    repository_id=sample_repo.id,
-                    base_revision="feature/jwt",
-                    commit_sha="sha-jwt-123456",
-                    ref_type="branch",
-                    is_valid=True,
-                )
-            ),
-        ):
-            payload = {"base_revision": "feature/jwt"}
-            token, _ = create_access_token(str(user_id))
-            headers = {"Authorization": f"Bearer {token}"}
-            res = client.post(
-                f"/api/v1/repositories/{sample_repo.id}/source/task-branch/validate-base",
-                json=payload,
-                headers=headers,
-            )
-
-            app.dependency_overrides.clear()
-            assert res.status_code == 200
-            data = res.json()
-            assert data["base_revision"] == "feature/jwt"
-            assert data["commit_sha"] == "sha-jwt-123456"
-            assert data["ref_type"] == "branch"
-            assert data["is_valid"] is True

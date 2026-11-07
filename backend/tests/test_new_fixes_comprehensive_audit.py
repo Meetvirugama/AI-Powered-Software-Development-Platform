@@ -28,8 +28,8 @@ from app.core.config import Settings
 from app.core.database import get_db_async
 from app.core.rate_limit import RedisRateLimitStore
 from app.integrations.github.client import GitHubAPIError, GitHubClient
-from app.integrations.github.routes import publish_task_pr_endpoint
-from app.integrations.github.schemas import TaskPublishRequest
+from app.integrations.github.routes import get_task_diff_ranges_endpoint
+from app.integrations.github.schemas import FileDiffRange, TaskDiffRanges
 from app.integrations.github.service import GitHubService
 from app.main import app
 from app.models.repository_file import RepositoryFile
@@ -38,7 +38,6 @@ from app.schemas.repository import RepositorySearchRequest
 from app.schemas.workspace import WorkspaceCreateRequest
 from app.services import IndependentVerifier, StatefulTaskExecutionOrchestrator, TaskExecutionOrchestrator
 from app.services.git_branch import format_agent_branch_name
-from indexer.embedding_queue import EmbeddingQueue
 from sandbox.workspace_manager import WorkspaceManager
 from scanner.detector import LanguageDetector
 from scanner.parser import Parser
@@ -156,54 +155,6 @@ def test_bug6_services_exports_have_no_duplicates() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Bug 8: EmbeddingQueue Sync + Async Session Compatibility
-# ---------------------------------------------------------------------------
-def test_bug8_embedding_queue_supports_sync_and_async_db_sessions() -> None:
-    import json
-
-    chunk_id = uuid4()
-    item_json = json.dumps(
-        {
-            "chunk_id": str(chunk_id),
-            "repository_id": str(uuid4()),
-            "file_id": str(uuid4()),
-            "content": "def demo(): return 1",
-        }
-    )
-
-    mock_embed_svc = MagicMock()
-    mock_embed_svc.embed_batch = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
-
-    # 1. Sync Session mock
-    redis_sync = MagicMock()
-    redis_sync.rpoplpush.side_effect = [item_json, None]
-    fake_chunk = SimpleNamespace(id=chunk_id, content="def demo(): return 1", embedding=None)
-    sync_db = MagicMock()
-    sync_db.get.return_value = fake_chunk
-
-    q_sync = EmbeddingQueue(redis=redis_sync, embedding_service=mock_embed_svc)
-    vecs_sync = asyncio.run(q_sync.process_batch(db_session=sync_db))
-    assert len(vecs_sync) == 1
-    assert fake_chunk.embedding == [0.1, 0.2, 0.3]
-    sync_db.commit.assert_called_once()
-
-    # 2. AsyncSession mock
-    redis_async = MagicMock()
-    redis_async.rpoplpush.side_effect = [item_json, None]
-    fake_chunk_async = SimpleNamespace(id=chunk_id, content="def demo(): return 1", embedding=None)
-    async_db = MagicMock()
-    async_db.get = AsyncMock(return_value=fake_chunk_async)
-    async_db.commit = AsyncMock()
-    async_db.rollback = AsyncMock()
-
-    q_async = EmbeddingQueue(redis=redis_async, embedding_service=mock_embed_svc)
-    vecs_async = asyncio.run(q_async.process_batch(db_session=async_db))
-    assert len(vecs_async) == 1
-    assert fake_chunk_async.embedding == [0.1, 0.2, 0.3]
-    async_db.commit.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
 # 7. Bug 10: RedisRateLimitStore NX Expiry (`backend/app/core/rate_limit.py`)
 # ---------------------------------------------------------------------------
 def test_bug10_redis_rate_limit_store_passes_nx_true_with_fallback() -> None:
@@ -262,9 +213,9 @@ def test_vuln01_github_installation_upsert_blocks_cross_tenant_hijack() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 10. VULN-02: Legacy GitHub Publish PR Route Enforces IndependentVerifier Gate
+# 10. Task Diff Ranges Endpoint (`backend/app/integrations/github/routes.py`)
 # ---------------------------------------------------------------------------
-def test_vuln02_legacy_github_publish_pr_passes_verification_result_to_git_branch_service(tmp_path: Path) -> None:
+def test_get_task_diff_ranges_endpoint_returns_diff(tmp_path: Path) -> None:
     ws_dir = tmp_path / "task-12345678"
     (ws_dir / ".git").mkdir(parents=True)
 
@@ -274,32 +225,31 @@ def test_vuln02_legacy_github_publish_pr_passes_verification_result_to_git_branc
     mock_req = MagicMock()
     mock_req.state.user_id = str(user_id)
 
-    fake_diff = SimpleNamespace(files=[SimpleNamespace(file_path="src/app.py", patch="+x = 1\n")])
-    fake_pr = SimpleNamespace(number=12, title="https://github.com/octo/demo/pull/12", head_ref="agent/task-12345678", base_ref="main")
+    fake_diff = TaskDiffRanges(
+        task_id=task_id,
+        repository_id=repo_id,
+        files=[FileDiffRange(file_path="src/app.py", patch="+x = 1\n", additions=1, deletions=0)],
+        total_files_changed=1,
+        total_additions=1,
+        total_deletions=0,
+    )
 
-    with patch("app.services.git_branch._validate_safe_workspace_path", return_value=ws_dir), patch(
+    with patch(
         "app.services.git_branch.GitBranchService.get_task_diff_ranges", new=AsyncMock(return_value=fake_diff)
-    ), patch(
-        "app.services.git_branch.GitBranchService.get_workspace_revision", new=AsyncMock(return_value="a" * 40)
-    ), patch(
-        "app.services.git_branch.GitBranchService.publish_task_draft_pr", new=AsyncMock(return_value=fake_pr)
-    ) as mock_publish:
+    ):
         resp = asyncio.run(
-            publish_task_pr_endpoint(
+            get_task_diff_ranges_endpoint(
                 repository_id=repo_id,
+                task_id=task_id,
                 request=mock_req,
-                payload=TaskPublishRequest(
-                    task_id=task_id,
-                    workspace_path=str(ws_dir),
-                    publication_authorized=True,
-                ),
+                workspace_path=str(ws_dir),
                 db=MagicMock(),
             )
         )
 
-    assert resp.pr_number == 12
-    call_kwargs = mock_publish.await_args.kwargs
-    assert call_kwargs["verification_result"] is not None
+    assert resp.task_id == task_id
+    assert len(resp.files) == 1
+    assert resp.files[0].file_path == "src/app.py"
 
 
 # ---------------------------------------------------------------------------

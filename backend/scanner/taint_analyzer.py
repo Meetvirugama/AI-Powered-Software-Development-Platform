@@ -11,7 +11,7 @@ import ast
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -356,9 +356,9 @@ class TaintAnalyzer:
                 tainted_ref = self._find_tainted_ref_in_expr(arg, tainted_vars)
                 if tainted_ref:
                     sanitizers = sanitized_vars.get(tainted_ref, [])
-                    is_safe = bool(sanitizers)
-                    # Check shell=True kwargs
+                    # Check shell=True kwargs - if shell=True is passed, it is not safe even with partial sanitizers
                     shell_true = any(k.arg == "shell" and getattr(k.value, "value", False) is True for k in call.keywords)
+                    is_safe = bool(sanitizers) and not shell_true
 
                     source_node = tainted_vars[tainted_ref]
                     sink_node = TaintNode(

@@ -13,13 +13,14 @@ Features:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
+from collections.abc import Sequence
 from itertools import cycle
-from typing import Any, Sequence
+from typing import Any
 
 import httpx
+from pydantic import BaseModel
 
 from .provider import LLMProvider
 from .schemas import (
@@ -31,7 +32,7 @@ from .schemas import (
     LLMTimeoutError,
     LLMUnavailableError,
     LLMValidationError,
-    Message,
+    validate_structured_payload,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,17 +113,13 @@ class GeminiProvider(LLMProvider):
         if (
             not requested_model
             or requested_model == "default"
-            or requested_model.startswith("gpt-")
-            or requested_model.startswith("openai/")
+            or requested_model.startswith(("gpt-", "openai/"))
         ):
             model_name = self._default_model
         else:
             model_name = requested_model
         # Strip models/ prefix if present
-        if model_name.startswith("models/"):
-            model_name = model_name[len("models/"):]
-        if model_name in ("gemini-flash-lite-latest", "gemini-1.5-flash", "gemini-2.0-flash"):
-            model_name = "gemini-flash-latest"
+        model_name = model_name.removeprefix("models/")
 
         payload: dict[str, Any] = {"contents": contents}
 
@@ -182,39 +179,7 @@ class GeminiProvider(LLMProvider):
 
                         # Validate JSON schema if required
                         if request.response_schema is not None:
-                            raw = content_text.strip()
-                            if raw.startswith("```"):
-                                lines = raw.splitlines()
-                                if len(lines) >= 2 and lines[0].startswith("```"):
-                                    raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
-
-                            first_brace = raw.find("{")
-                            first_bracket = raw.find("[")
-                            if (
-                                first_bracket != -1
-                                and (first_brace == -1 or first_bracket < first_brace)
-                                and "]" in raw
-                            ):
-                                raw = raw[first_bracket : raw.rfind("]") + 1]
-                            elif first_brace != -1 and "}" in raw:
-                                raw = raw[first_brace : raw.rfind("}") + 1]
-
-                            try:
-                                parsed_json = json.loads(raw)
-                                if (
-                                    isinstance(parsed_json, list)
-                                    and hasattr(request.response_schema, "model_fields")
-                                    and "findings" in getattr(request.response_schema, "model_fields", {})
-                                ):
-                                    parsed_json = {"findings": parsed_json}
-                                if hasattr(request.response_schema, "model_validate"):
-                                    request.response_schema.model_validate(parsed_json)
-                            except Exception as val_exc:
-                                raise LLMValidationError(
-                                    f"Structured output schema validation failed: {val_exc}",
-                                    provider=self.provider_name,
-                                    raw_response=content_text,
-                                ) from val_exc
+                            self._validate_structured_output(content_text, request.response_schema)
 
                         return LLMResponse(
                             content=content_text,
@@ -261,12 +226,12 @@ class GeminiProvider(LLMProvider):
                         provider=self.provider_name,
                     )
 
-                except (httpx.TimeoutException, httpx.ConnectTimeout) as exc:
+                except httpx.TimeoutException as exc:
                     safe_err = _redact_key(str(exc), current_key)
                     last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
                     logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
                     await asyncio.sleep(0.5)
-                except (httpx.NetworkError, httpx.TransportError) as exc:
+                except httpx.TransportError as exc:
                     safe_err = _redact_key(str(exc), current_key)
                     last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
                     logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
@@ -280,3 +245,10 @@ class GeminiProvider(LLMProvider):
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
             self._client = None
+
+    @staticmethod
+    def _validate_structured_output(content: str, schema: type[BaseModel]) -> None:
+        validate_structured_payload(content, schema, provider="gemini")
+
+
+__all__ = ["GeminiProvider", "_redact_key"]

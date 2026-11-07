@@ -12,11 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Cache dependency installations
-COPY requirements.txt ./
 COPY backend/requirements.txt ./backend/requirements.txt
-COPY backend/requirements-dev.txt ./backend/requirements-dev.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r backend/requirements.txt
 
 # Copy platform source tree
 COPY . .

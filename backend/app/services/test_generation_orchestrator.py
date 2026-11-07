@@ -32,8 +32,6 @@ Implements the complete Day 4 & Scenario C / E requirements from `Docs/week2.md`
 from __future__ import annotations
 
 import ast
-import configparser
-import json
 import logging
 import os
 from pathlib import Path
@@ -41,40 +39,27 @@ import re
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.builder import (
-    ContextBuilder,
     IntelligenceContext,
     RepositoryFile as ContextRepoFile,
-    SymbolContext,
     TargetSnippet,
 )
 from ai.context.test_context import TestContextBuilder
-from ai.llm.schemas import (
-    LLMRequest,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.models.code_chunk import CodeChunk
-from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.schemas.analysis import (
     AnalysisSourceReference,
-    ExplainCodeRequest,
     SupportedTestFramework,
-    TestGenerationRequest,
     TestGenerationResult,
     TestScenario,
 )
 from app.services.bug_detection_orchestrator import redact_secrets_in_text
 from app.services.explanation_orchestrator import (
     ResolvedExplanationTarget,
-    resolve_target_and_build_context,
 )
 from scanner.framework_detector import FrameworkDetectionResult, FrameworkDetector
 
@@ -135,7 +120,6 @@ def detect_repository_test_framework(
             all_repo_files = []
 
     file_list = [f.path for f in all_repo_files]
-    path_to_record = {f.path: f for f in all_repo_files}
 
     # Load key manifest and conftest/test files from DB chunks so FrameworkDetector can inspect them
     manifest_contents: dict[str, str] = {}
@@ -752,74 +736,6 @@ def propose_test_file_path(
     return validate_repo_relative_path(proposed), naming_pattern
 
 
-def detect_test_framework_and_conventions(
-    repository_id: UUID,
-    repo: Repository | Any,
-    payload: TestGenerationRequest,
-    resolved: ResolvedExplanationTarget,
-    db: Session | Any,
-) -> DetectedTestConventions:
-    """Detect test framework & conventions using both FrameworkDetector and FileTestMapper."""
-    detection, _, _ = detect_repository_test_framework(
-        repository_id=repository_id,
-        target_path=resolved.target.path,
-        requested_framework=payload.framework,
-        db=db,
-    )
-    indexed_paths = list(resolved.indexed_paths.keys())
-    existing_py_tests = [
-        p
-        for p in indexed_paths
-        if p.endswith(".py")
-        and (
-            posixpath.basename(p).startswith("test_")
-            or posixpath.basename(p).endswith("_test.py")
-            or "/tests/" in f"/{p}"
-        )
-    ]
-    existing_js_tests = [
-        p
-        for p in indexed_paths
-        if any(
-            p.endswith(s)
-            for s in (
-                ".test.ts",
-                ".spec.ts",
-                ".test.tsx",
-                ".spec.tsx",
-                ".test.js",
-                ".spec.js",
-                ".test.jsx",
-                ".spec.jsx",
-            )
-        )
-        or "/__tests__/" in f"/{p}"
-    ]
-    fw: SupportedTestFramework = (detection.framework or "pytest")  # type: ignore[assignment]
-    proposed_path, naming_pattern = propose_test_file_path(
-        target_path=resolved.target.path,
-        framework=fw,
-        indexed_paths=indexed_paths,
-        existing_py_tests=existing_py_tests,
-        existing_js_tests=existing_js_tests,
-    )
-    warnings = list(detection.warnings)
-    path_exists = proposed_path in resolved.indexed_paths
-    if path_exists:
-        warnings.append(
-            f"Proposed test file '{proposed_path}' already exists in the repository; preview carefully before overwriting."
-        )
-    return DetectedTestConventions(
-        framework=fw,
-        proposed_test_path=proposed_path,
-        existing_test_files=existing_py_tests if fw in ("pytest", "unittest") else existing_js_tests,
-        fixture_files=list(detection.fixture_files if hasattr(detection, "fixture_files") else detection.fixtures),
-        naming_pattern=naming_pattern,
-        path_already_exists=path_exists,
-        warnings=warnings,
-    )
-
-
 def validate_generated_test_code(
     test_content: str,
     framework: SupportedTestFramework,
@@ -834,28 +750,3 @@ def validate_generated_test_code(
     )
     return validate_generated_test_syntax(test_content, framework, effective_path)
 
-
-def sanitize_and_ground_test_result(
-    raw_result: TestGenerationResult,
-    *,
-    repository_id: UUID,
-    resolved: ResolvedExplanationTarget,
-    conventions: DetectedTestConventions,
-) -> TestGenerationResult:
-    """Adapter wrapping validate_and_sanitize_generated_tests with DetectedTestConventions."""
-    synth_detection = FrameworkDetectionResult(
-        language="TypeScript" if conventions.framework == "jest" else "Python",
-        framework=conventions.framework,
-        confidence="high",
-        status="DETECTED",
-        is_supported=True,
-        fixtures=list(conventions.fixture_files),
-        warnings=list(conventions.warnings),
-    )
-    return validate_and_sanitize_generated_tests(
-        raw_result,
-        repository_id=repository_id,
-        resolved=resolved,
-        detection=synth_detection,
-        default_proposed_path=conventions.proposed_test_path,
-    )

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -111,37 +111,4 @@ class TestCoverageAnalyzer:
 
         return result
 
-    def estimate_symbol_coverage(
-        self,
-        file_path: str,
-        start_line: int,
-        end_line: int,
-        coverage_result: TestCoverageResult,
-    ) -> tuple[bool, float]:
-        """Estimate whether a symbol's line range was covered based on parsed coverage results.
-
-        Returns (is_covered, coverage_ratio).
-        """
-        norm_path = file_path.replace("\\", "/").lstrip("/")
-        summary = coverage_result.file_summaries.get(norm_path)
-        if not summary:
-            # If no detailed line data, return baseline based on overall file coverage
-            return False, 0.0
-
-        if summary.total_statements == 0:
-            return True, 100.0
-
-        # If file had 100% coverage, all symbols are covered
-        if summary.coverage_percent >= 99.9:
-            return True, 100.0
-
-        # Check uncovered lines against symbol range
-        total_sym_lines = max(1, end_line - start_line + 1)
-        uncovered_in_sym = [ln for ln in summary.uncovered_lines if start_line <= ln <= end_line]
-        if uncovered_in_sym:
-            covered_ratio = max(0.0, (total_sym_lines - len(uncovered_in_sym)) / total_sym_lines)
-            return covered_ratio > 0.5, round(covered_ratio * 100.0, 1)
-
-        # Pro-rated by file coverage
-        return summary.coverage_percent > 0, summary.coverage_percent
 

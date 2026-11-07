@@ -26,20 +26,21 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop, RepairBudgetExhaustedError
+from ai.services.bounded_repair_loop import MAX_TASK_REPAIR_ATTEMPTS, BoundedRepairLoop
 from ai.services.retrieval_optimizer import AgentTokenBudgetManager, TokenBudgetExhaustedError
 from app.core.errors import APIError, ErrorCode
 from app.models.task import AgentTask, TaskStatus
 from app.schemas.task import (
+    RestrictedExecutionResult,
     TaskConstraint,
     TaskRequirement,
     TaskSourceReference,
+    TestCounts,
     can_transition,
 )
 from app.services.git_branch import format_agent_branch_name, _validate_safe_git_ref
 from app.services.independent_verifier import IndependentVerifier, VerificationFinding
 from app.services.repair_service import RepairPatchValidator
-from app.services.test_runner import RestrictedExecutionResult, TestCounts
 from sandbox.command_runner import (
     ALLOWED_COMMAND_TEMPLATES,
     DEFAULT_COMMAND_TIMEOUT_SECONDS,

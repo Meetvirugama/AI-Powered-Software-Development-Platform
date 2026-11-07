@@ -14,15 +14,13 @@ Responsibilities:
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
-from uuid import UUID
-
-from pydantic import BaseModel, Field
 
 from app.schemas.workspace import WorkspaceStatus
+from pydantic import BaseModel, Field
 from sandbox.path_guard import WorkspacePathGuard
-from sandbox.resource_monitor import WorkspaceResourceMonitor
+
 from scanner.detector import LanguageDetector
 from scanner.framework_detector import FrameworkDetector
 
@@ -118,7 +116,7 @@ class WorkspaceBaseValidator:
             for t_file in target_files:
                 try:
                     # Confinement check via path guard
-                    resolved = self._path_guard.resolve_within_workspace(w_path, t_file)
+                    self._path_guard.resolve_within_workspace(w_path, t_file)
                     verified_files.append(t_file.replace("\\", "/").lstrip("/"))
                 except Exception as exc:
                     errors.append(f"Target file validation failed for '{t_file}': {exc}")

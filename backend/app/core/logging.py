@@ -12,7 +12,7 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
-from app.core.secret_redaction import SecretRedactingFilter, _STANDARD_RECORD_ATTRS
+from app.core.secret_redaction import SecretRedactingFilter
 
 request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
 

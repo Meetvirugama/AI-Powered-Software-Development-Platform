@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.api.v1.analysis.common import (
     ANALYSIS_ERROR_RESPONSES,
     _coerce_run_summary,
-    _owned_repository,
+    _owned_repository_async,
     _request_user_id,
 )
 from app.core.database import get_db
@@ -66,7 +66,7 @@ async def list_analysis_runs(
     db: Session = Depends(get_db),
 ) -> PaginatedAnalysisRunResponse:
     """Return paginated analysis runs scoped to a repository owned by the caller."""
-    _owned_repository(repository_id, request, db)
+    await _owned_repository_async(repository_id, request, db)
     offset = (page - 1) * page_size
 
     normalized_feature_type = normalize_analysis_feature_type(feature_type)
@@ -180,7 +180,7 @@ async def get_analysis_runs_summary(
     db: Session = Depends(get_db),
 ) -> AnalysisRunMetricsSummaryResponse:
     """Return aggregate run metrics, integrity status, and retention metrics for an owned repository."""
-    _owned_repository(repository_id, request, db)
+    await _owned_repository_async(repository_id, request, db)
 
     if hasattr(db, "execute") or hasattr(db, "query"):
         try:
@@ -277,7 +277,9 @@ async def get_analysis_run(
         run_record = res
     else:
         try:
-            from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
+            from app.repositories.analysis_run_repository import (
+                AnalysisRunRepository,  # type: ignore
+            )
 
             run_record = AnalysisRunRepository(db).get_by_id(run_id)
         except Exception:
@@ -302,7 +304,7 @@ async def get_analysis_run(
     except (TypeError, ValueError) as exc:
         raise APIError(404, ErrorCode.ANALYSIS_RUN_NOT_FOUND, "Analysis run not found.") from exc
 
-    _owned_repository(repo_uuid, request, db)
+    await _owned_repository_async(repo_uuid, request, db)
 
     if isinstance(run_record, AnalysisRunDetailResponse):
         return AnalysisRunDetailResponse.model_validate(redact_obj(run_record.model_dump(mode="json")))
@@ -342,7 +344,7 @@ async def get_analysis_run(
         test_output=redact(getattr(run_record, "test_output", None)) if getattr(run_record, "test_output", None) else None,
         findings=redact_obj(raw_findings),
         error_message=redact(getattr(run_record, "error_message", None)) if getattr(run_record, "error_message", None) else None,
-        created_at=getattr(run_record, "created_at", datetime.now(timezone.utc)),
+        created_at=getattr(run_record, "created_at", datetime.now(UTC)),
         completed_at=getattr(run_record, "completed_at", None),
     )
     return detail

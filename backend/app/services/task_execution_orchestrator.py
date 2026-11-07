@@ -16,6 +16,7 @@ Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import subprocess
@@ -83,21 +84,12 @@ from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
 from app.services.git_branch import GitBranchService, format_agent_branch_name
 from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
-    WorkspaceAuthorizationError,
-    WorkspaceCommandTimeoutError,
     WorkspaceCommitError,
-    WorkspaceDiffValidationError,
     WorkspaceDuplicateRepairPatchError,
-    WorkspaceError,
-    WorkspacePathEscapeError,
-    WorkspacePolicyViolationError,
     WorkspaceProtectedBranchError,
-    WorkspacePublicationUnauthorizedError,
     WorkspacePushError,
     WorkspaceRecoveryError,
     WorkspaceRepairBudgetExhaustedError,
-    WorkspaceStaleApprovalError,
-    WorkspaceStaleRevisionError,
     WorkspaceStateError,
 )
 from sandbox.tool_policy_bridge import WorkspaceToolPolicyBridge, register_workspace_tools
@@ -285,8 +277,9 @@ class TaskExecutionOrchestrator:
             if m_path.exists():
                 try:
                     m_data = json.loads(m_path.read_text(encoding="utf-8"))
-                    saved_diff_hash = m_data.get("verification_diff_hash")
-                except Exception:
+                    if isinstance(m_data, dict):
+                        saved_diff_hash = m_data.get("verification_diff_hash")
+                except (OSError, json.JSONDecodeError, AttributeError):
                     pass
             if not saved_diff_hash:
                 ver_rec = task_repo.get_latest_verification_result(task.id)

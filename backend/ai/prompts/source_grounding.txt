@@ -15,8 +15,8 @@ SOURCES CLAIMED:
 {claimed_sources}
 
 Respond with a JSON object:
-{
+{{
   "grounded_sources": [...],
   "ungrounded_sources": [...],
   "verdict": "<fully_grounded|partially_grounded|ungrounded>"
-}
+}}

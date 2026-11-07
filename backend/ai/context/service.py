@@ -21,31 +21,26 @@ import hashlib
 import logging
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from ai.context.bug_context import BugContextExtractor, extract_bug_context
+from ai.context.bug_context import extract_bug_context
 from ai.context.builder import (
     ContextBuilder,
     ContextLimits,
-    ContextStatus,
     IntelligenceContext,
-    IntelligenceContextRequest,
     IntelligenceContextResponse,
-    MissingContextInfo,
     RepositoryFile,
     SymbolContext,
     TargetSnippet,
     count_tokens,
 )
-from ai.context.explanation import ExplanationContextEnricher, enrich_explanation_context
+from ai.context.explanation import enrich_explanation_context
 from ai.context.review_context import (
     ModifiedFile,
-    ReviewBlastRadius,
-    ReviewContextBuilder,
     build_multi_file_review_context,
 )
-from ai.context.test_context import TestContextBuilder, build_test_generation_context
+from ai.context.test_context import build_test_generation_context
 
 logger = logging.getLogger(__name__)
 

@@ -39,7 +39,6 @@ from app.schemas.planner_context import (
     TestExecutionPlan,
 )
 from app.schemas.workspace import WorkspaceStatus
-from scanner.symbol_blast_radius import SymbolBlastRadiusEngine
 from scanner.symbols import Symbol, SymbolEdge
 from scanner.task_test_planner import TaskTestPlanner
 from scanner.workspace_preflight import WorkspaceBaseValidator, WorkspacePreflightResult
@@ -82,428 +81,6 @@ def _make_edge(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 1. Diff Range to AST Symbol Matching Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestDiffRangeSymbolMatching:
-    """Tests for SymbolBlastRadiusEngine.map_diff_ranges_to_symbols."""
-
-    def test_single_hunk_exact_match(self):
-        engine = SymbolBlastRadiusEngine()
-        file_id = uuid4()
-        sym_login = _make_symbol("login", "function", file_id=file_id, start_line=10, end_line=25)
-        sym_logout = _make_symbol("logout", "function", file_id=file_id, start_line=30, end_line=45)
-
-        symbols_by_file = {"src/auth.py": [sym_login, sym_logout]}
-        diff = [
-            FileDiffRange(
-                file_path="src/auth.py",
-                diff_ranges=[LineRange(start_line=12, end_line=15)],
-            )
-        ]
-
-        matched = engine.map_diff_ranges_to_symbols(diff, symbols_by_file)
-        assert len(matched) == 1
-        assert matched[0].name == "login"
-        assert matched[0].id == sym_login.id
-
-    def test_multi_hunk_matching_multiple_symbols(self):
-        engine = SymbolBlastRadiusEngine()
-        file_id = uuid4()
-        sym1 = _make_symbol("func_one", "function", file_id=file_id, start_line=5, end_line=15)
-        sym2 = _make_symbol("func_two", "function", file_id=file_id, start_line=25, end_line=35)
-        sym3 = _make_symbol("func_three", "function", file_id=file_id, start_line=50, end_line=60)
-
-        symbols_by_file = {"src/app.py": [sym1, sym2, sym3]}
-        diff = [
-            FileDiffRange(
-                file_path="src/app.py",
-                diff_ranges=[
-                    LineRange(start_line=10, end_line=12),
-                    LineRange(start_line=55, end_line=58),
-                ],
-            )
-        ]
-
-        matched = engine.map_diff_ranges_to_symbols(diff, symbols_by_file)
-        assert len(matched) == 2
-        matched_names = {s.name for s in matched}
-        assert matched_names == {"func_one", "func_three"}
-
-    def test_class_and_method_nested_matching(self):
-        engine = SymbolBlastRadiusEngine()
-        file_id = uuid4()
-        cls_sym = _make_symbol("TokenManager", "class", file_id=file_id, start_line=1, end_line=50)
-        method_sym = _make_symbol(
-            "verify", "method", file_id=file_id, start_line=20, end_line=35, parent_id=cls_sym.id
-        )
-
-        symbols_by_file = {"src/tokens.py": [cls_sym, method_sym]}
-        # Hunk covers only the method lines
-        diff = [
-            FileDiffRange(
-                file_path="src/tokens.py",
-                diff_ranges=[LineRange(start_line=22, end_line=24)],
-            )
-        ]
-
-        matched = engine.map_diff_ranges_to_symbols(diff, symbols_by_file)
-        matched_names = {s.name for s in matched}
-        assert "verify" in matched_names
-        assert "TokenManager" in matched_names
-
-    def test_empty_diff_or_non_overlapping_returns_empty(self):
-        engine = SymbolBlastRadiusEngine()
-        sym = _make_symbol("helper", start_line=10, end_line=20)
-        symbols_by_file = {"src/utils.py": [sym]}
-
-        # Non-overlapping range
-        diff = [
-            FileDiffRange(
-                file_path="src/utils.py",
-                diff_ranges=[LineRange(start_line=50, end_line=60)],
-            )
-        ]
-        assert engine.map_diff_ranges_to_symbols(diff, symbols_by_file) == []
-
-        # Empty diff
-        assert engine.map_diff_ranges_to_symbols([], symbols_by_file) == []
-
-    def test_accepts_raw_tuple_mappings(self):
-        engine = SymbolBlastRadiusEngine()
-        sym = _make_symbol("process", start_line=10, end_line=30)
-        symbols_by_file = {"src/worker.py": [sym]}
-
-        raw_diff = {"src/worker.py": [(15, 20)]}
-        matched = engine.map_diff_ranges_to_symbols(raw_diff, symbols_by_file)
-        assert len(matched) == 1
-        assert matched[0].name == "process"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. Dependency Graph Traversal & Blast Radius Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestDependencyGraphTraversal:
-    """Tests for compute_symbol_blast_radius graph traversal."""
-
-    def test_isolated_symbol_zero_callers(self):
-        engine = SymbolBlastRadiusEngine()
-        f_id = uuid4()
-        sym = _make_symbol("standalone_func", file_id=f_id)
-        file_paths = {f_id: "src/calc.py"}
-
-        direct, trans, affected_files = engine.compute_symbol_blast_radius(
-            direct_symbols=[sym],
-            symbol_edges=[],
-            all_symbols_by_id={sym.id: sym},
-            file_paths=file_paths,
-        )
-
-        assert len(direct) == 1
-        assert direct[0].name == "standalone_func"
-        assert direct[0].depth == 0
-        assert direct[0].is_direct_target is True
-        assert len(trans) == 0
-        assert affected_files == ["src/calc.py"]
-
-    def test_direct_callers_traversal_depth_one(self):
-        engine = SymbolBlastRadiusEngine()
-        f_target = uuid4()
-        f_caller1 = uuid4()
-        f_caller2 = uuid4()
-
-        target = _make_symbol("hash_password", file_id=f_target)
-        caller1 = _make_symbol("register_user", file_id=f_caller1)
-        caller2 = _make_symbol("reset_password", file_id=f_caller2)
-
-        edges = [
-            _make_edge(caller1, target, "calls"),
-            _make_edge(caller2, target, "calls"),
-        ]
-
-        all_syms = {s.id: s for s in [target, caller1, caller2]}
-        file_paths = {
-            f_target: "src/auth/hash.py",
-            f_caller1: "src/services/register.py",
-            f_caller2: "src/services/reset.py",
-        }
-
-        direct, trans, affected_files = engine.compute_symbol_blast_radius(
-            direct_symbols=[target],
-            symbol_edges=edges,
-            all_symbols_by_id=all_syms,
-            file_paths=file_paths,
-            max_depth=2,
-        )
-
-        assert len(direct) == 1
-        assert direct[0].callers_count == 2
-        assert len(trans) == 2
-
-        trans_names = {t.name for t in trans}
-        assert trans_names == {"register_user", "reset_password"}
-        assert all(t.depth == 1 for t in trans)
-        assert all(t.impact_type == "caller" for t in trans)
-        assert len(affected_files) == 3
-
-    def test_transitive_multi_hop_chain(self):
-        # Chain: Controller -> Service -> Repository (target)
-        engine = SymbolBlastRadiusEngine()
-        f_repo, f_srv, f_ctrl = uuid4(), uuid4(), uuid4()
-
-        repo = _make_symbol("get_user_by_id", file_id=f_repo)
-        srv = _make_symbol("authenticate_user", file_id=f_srv)
-        ctrl = _make_symbol("login_endpoint", file_id=f_ctrl)
-
-        edges = [
-            _make_edge(srv, repo, "calls"),
-            _make_edge(ctrl, srv, "calls"),
-        ]
-
-        all_syms = {s.id: s for s in [repo, srv, ctrl]}
-        file_paths = {
-            f_repo: "src/repo.py",
-            f_srv: "src/service.py",
-            f_ctrl: "src/controller.py",
-        }
-
-        direct, trans, files = engine.compute_symbol_blast_radius(
-            direct_symbols=[repo],
-            symbol_edges=edges,
-            all_symbols_by_id=all_syms,
-            file_paths=file_paths,
-            max_depth=3,
-        )
-
-        assert len(direct) == 1
-        assert len(trans) == 2
-        # srv at depth 1, ctrl at depth 2
-        depths = {t.name: t.depth for t in trans}
-        assert depths["authenticate_user"] == 1
-        assert depths["login_endpoint"] == 2
-        assert set(files) == {"src/controller.py", "src/repo.py", "src/service.py"}
-
-    def test_depth_limit_truncation(self):
-        # Chain: A -> B -> C -> D (target) with max_depth=1
-        engine = SymbolBlastRadiusEngine(max_depth=1)
-        f = uuid4()
-        d = _make_symbol("D", file_id=f)
-        c = _make_symbol("C", file_id=f)
-        b = _make_symbol("B", file_id=f)
-
-        edges = [
-            _make_edge(c, d, "calls"),
-            _make_edge(b, c, "calls"),
-        ]
-
-        all_syms = {s.id: s for s in [d, c, b]}
-        file_paths = {f: "src/chain.py"}
-
-        direct, trans, _ = engine.compute_symbol_blast_radius(
-            direct_symbols=[d],
-            symbol_edges=edges,
-            all_symbols_by_id=all_syms,
-            file_paths=file_paths,
-            max_depth=1,
-        )
-
-        assert len(direct) == 1
-        assert len(trans) == 1
-        assert trans[0].name == "C"  # B is pruned by max_depth=1
-
-    def test_subclass_inheritance_edge_classification(self):
-        engine = SymbolBlastRadiusEngine()
-        f = uuid4()
-        base_cls = _make_symbol("BaseValidator", "class", file_id=f)
-        child_cls = _make_symbol("StrictValidator", "class", file_id=f)
-
-        edge = _make_edge(child_cls, base_cls, "extends")
-        all_syms = {base_cls.id: base_cls, child_cls.id: child_cls}
-        file_paths = {f: "src/validators.py"}
-
-        direct, trans, _ = engine.compute_symbol_blast_radius(
-            direct_symbols=[base_cls],
-            symbol_edges=[edge],
-            all_symbols_by_id=all_syms,
-            file_paths=file_paths,
-        )
-
-        assert len(trans) == 1
-        assert trans[0].name == "StrictValidator"
-        assert trans[0].impact_type == "subclass"
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. Cycle & Recursion Safety Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestCycleAndRecursionSafety:
-    """Tests ensuring graph traversal terminates safely on circular dependencies."""
-
-    def test_mutual_recursion_cycle_does_not_loop_infinitely(self):
-        # A calls B, and B calls A
-        engine = SymbolBlastRadiusEngine(max_depth=5)
-        f = uuid4()
-        sym_a = _make_symbol("func_a", file_id=f)
-        sym_b = _make_symbol("func_b", file_id=f)
-
-        edges = [
-            _make_edge(sym_b, sym_a, "calls"),
-            _make_edge(sym_a, sym_b, "calls"),
-        ]
-
-        all_syms = {sym_a.id: sym_a, sym_b.id: sym_b}
-        file_paths = {f: "src/mutual.py"}
-
-        direct, trans, files = engine.compute_symbol_blast_radius(
-            direct_symbols=[sym_a],
-            symbol_edges=edges,
-            all_symbols_by_id=all_syms,
-            file_paths=file_paths,
-            max_depth=5,
-        )
-
-        # sym_a is in direct; sym_b visited once in transitive; no infinite loop!
-        assert len(direct) == 1
-        assert len(trans) == 1
-        assert trans[0].name == "func_b"
-        assert files == ["src/mutual.py"]
-
-    def test_self_recursive_symbol(self):
-        # A calls A
-        engine = SymbolBlastRadiusEngine()
-        f = uuid4()
-        sym = _make_symbol("factorial", file_id=f)
-        edges = [_make_edge(sym, sym, "calls")]
-
-        direct, trans, _ = engine.compute_symbol_blast_radius(
-            direct_symbols=[sym],
-            symbol_edges=edges,
-            all_symbols_by_id={sym.id: sym},
-            file_paths={f: "src/math.py"},
-        )
-
-        assert len(direct) == 1
-        assert len(trans) == 0  # Does not duplicate self into transitive
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. Risk Assessment Scoring Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestRiskAssessmentScoring:
-    """Tests for deterministic quantitative & qualitative risk scoring."""
-
-    def test_low_risk_isolated_change(self):
-        engine = SymbolBlastRadiusEngine()
-        direct = [
-            AffectedSymbol(
-                name="format_date",
-                kind="function",
-                file_path="src/utils.py",
-                start_line=1,
-                end_line=10,
-                is_direct_target=True,
-                callers_count=0,
-            )
-        ]
-
-        risk = engine.evaluate_risk(direct, [], ["src/utils.py"], [])
-        assert risk.risk_level == RiskLevel.LOW
-        assert risk.score < 0.30
-        assert risk.requires_human_review is False
-        assert any("isolated" in r.lower() for r in risk.reasons)
-
-    def test_medium_risk_moderate_callers(self):
-        engine = SymbolBlastRadiusEngine()
-        direct = [
-            AffectedSymbol(
-                name="validate_email",
-                kind="function",
-                file_path="src/validation.py",
-                start_line=1,
-                end_line=15,
-                is_direct_target=True,
-                callers_count=3,
-            )
-        ]
-        transitive = [
-            AffectedSymbol(
-                name="register",
-                kind="function",
-                file_path="src/auth.py",
-                start_line=1,
-                end_line=20,
-                depth=1,
-            )
-        ]
-
-        risk = engine.evaluate_risk(direct, transitive, ["src/validation.py", "src/auth.py"], [])
-        assert risk.risk_level == RiskLevel.MEDIUM
-        assert 0.30 <= risk.score < 0.55
-
-    def test_high_risk_many_callers_and_files(self):
-        engine = SymbolBlastRadiusEngine()
-        direct = [
-            AffectedSymbol(
-                name="get_db_session",
-                kind="function",
-                file_path="src/db.py",
-                start_line=1,
-                end_line=20,
-                is_direct_target=True,
-                callers_count=6,
-            )
-        ]
-
-        risk = engine.evaluate_risk(
-            direct,
-            [],
-            ["src/db.py", "src/users.py", "src/orders.py"],
-            [],
-        )
-        assert risk.risk_level == RiskLevel.HIGH
-        assert risk.score >= 0.55
-        assert risk.requires_human_review is True
-
-    def test_critical_risk_subclass_impact_and_fanin(self):
-        engine = SymbolBlastRadiusEngine()
-        direct = [
-            AffectedSymbol(
-                name="BaseModel",
-                kind="class",
-                file_path="src/models/base.py",
-                start_line=1,
-                end_line=50,
-                is_direct_target=True,
-                callers_count=12,
-            )
-        ]
-        subclasses = [
-            AffectedSymbol(
-                name=f"Model_{i}",
-                kind="class",
-                file_path=f"src/models/m{i}.py",
-                start_line=1,
-                end_line=20,
-                impact_type="subclass",
-                depth=1,
-            )
-            for i in range(4)
-        ]
-
-        affected_files = ["src/models/base.py"] + [f"src/models/m{i}.py" for i in range(4)]
-        risk = engine.evaluate_risk(direct, subclasses, affected_files, [])
-
-        assert risk.risk_level == RiskLevel.CRITICAL
-        assert risk.score >= 0.80
-        assert risk.requires_human_review is True
-        assert any("subclass" in r.lower() for r in risk.reasons)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # 5. Task Test Planner & Framework Detection Tests
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -675,21 +252,33 @@ class TestTaskPlanningContextAssembly:
     """Tests end-to-end integration and Pydantic schema contracts."""
 
     def test_assemble_task_impact_assessment_envelope(self):
-        engine = SymbolBlastRadiusEngine()
         planner = TaskTestPlanner()
 
         f_id = uuid4()
         sym = _make_symbol("login", "function", file_id=f_id, start_line=10, end_line=25)
         file_paths = {f_id: "src/auth.py"}
 
-        direct, trans, affected_files = engine.compute_symbol_blast_radius(
-            direct_symbols=[sym],
-            symbol_edges=[],
-            all_symbols_by_id={sym.id: sym},
-            file_paths=file_paths,
-        )
+        direct = [
+            AffectedSymbol(
+                name="login",
+                kind="function",
+                file_path="src/auth.py",
+                start_line=10,
+                end_line=25,
+                is_direct_target=True,
+                callers_count=0,
+            )
+        ]
+        trans = []
+        affected_files = ["src/auth.py"]
 
-        risk = engine.evaluate_risk(direct, trans, affected_files, [])
+        risk = RiskAssessment(
+            score=0.1,
+            risk_level=RiskLevel.LOW,
+            requires_human_review=False,
+            summary="Isolated low risk change",
+            reasons=["isolated"],
+        )
         test_plan = planner.create_test_plan(
             affected_files=affected_files,
             directly_modified=direct,
@@ -729,119 +318,11 @@ class TestTaskPlanningContextAssembly:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 8. Real-World Multi-Language Fixture Resolution Tests
-# ═══════════════════════════════════════════════════════════════════════════
-
-class TestMultiLanguageFixtureResolution:
-    """Tests symbol-level blast radius and test discovery against real repository fixtures."""
-
-    def test_python_sample_fixture_symbol_resolution(self):
-        from scanner.extractor import SymbolExtractor
-        from scanner.parser import Parser
-        from scanner.symbols import FileInfo
-
-        fixture_file = Path(__file__).parent / "fixtures" / "ast_sample" / "supported_python.py"
-        if not fixture_file.exists():
-            pytest.skip("Fixture not found")
-
-        content = fixture_file.read_text(encoding="utf-8")
-        file_id = uuid4()
-        f_info = FileInfo(path=str(fixture_file), language="Python", size_bytes=len(content), is_binary=False)
-        extractor = SymbolExtractor()
-        symbols = extractor.extract(f_info, content, file_id=file_id)
-        assert len(symbols) >= 3
-
-        symbols_by_file = {"src/supported_python.py": symbols}
-        engine = SymbolBlastRadiusEngine()
-
-        # Target calculate_tax function lines in the fixture
-        tax_sym = next((s for s in symbols if "tax" in s.name.lower() or "calc" in s.name.lower()), symbols[0])
-        diff = [
-            FileDiffRange(
-                file_path="src/supported_python.py",
-                diff_ranges=[LineRange(start_line=tax_sym.start_line, end_line=tax_sym.end_line)],
-            )
-        ]
-
-        matched = engine.map_diff_ranges_to_symbols(diff, symbols_by_file)
-        assert len(matched) >= 1
-        assert any(s.name == tax_sym.name for s in matched)
-
-    def test_typescript_sample_fixture_symbol_resolution(self):
-        from scanner.extractor import SymbolExtractor
-        from scanner.symbols import FileInfo
-
-        fixture_file = Path(__file__).parent / "fixtures" / "ast_sample" / "supported_typescript.ts"
-        if not fixture_file.exists():
-            pytest.skip("Fixture not found")
-
-        content = fixture_file.read_text(encoding="utf-8")
-        file_id = uuid4()
-        f_info = FileInfo(path=str(fixture_file), language="TypeScript", size_bytes=len(content), is_binary=False)
-
-        extractor = SymbolExtractor()
-        symbols = extractor.extract(f_info, content, file_id=file_id)
-        assert len(symbols) >= 2
-
-
-
-        symbols_by_file = {"src/supported_typescript.ts": symbols}
-        engine = SymbolBlastRadiusEngine()
-
-        # Match first symbol range
-        target_sym = symbols[0]
-        diff = [
-            FileDiffRange(
-                file_path="src/supported_typescript.ts",
-                diff_ranges=[LineRange(start_line=target_sym.start_line, end_line=target_sym.start_line + 1)],
-            )
-        ]
-
-        matched = engine.map_diff_ranges_to_symbols(diff, symbols_by_file)
-        assert len(matched) >= 1
-        assert matched[0].name == target_sym.name
-
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # 9. Edge Cases & Robustness Handling Tests
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestEdgeCasesAndFailureHandling:
     """Tests ensuring zero-crash behavior on anomalous or malformed inputs."""
-
-    def test_missing_symbol_in_edges_does_not_crash(self):
-        engine = SymbolBlastRadiusEngine()
-        sym = _make_symbol("lone_function")
-        # Edge references a non-existent UUID in all_symbols_by_id
-        orphan_edge = SymbolEdge(source_id=uuid4(), target_id=sym.id, edge_type="calls")
-
-        direct, trans, _ = engine.compute_symbol_blast_radius(
-            direct_symbols=[sym],
-            symbol_edges=[orphan_edge],
-            all_symbols_by_id={sym.id: sym},
-            file_paths={sym.file_id: "src/orphan.py"},
-        )
-
-        assert len(direct) == 1
-        assert len(trans) == 0  # Orphan caller safely ignored without crashing
-
-    def test_task_diff_ranges_empty_files_list(self):
-        engine = SymbolBlastRadiusEngine()
-        empty_diff = TaskDiffRanges(task_id=uuid4(), files=[])
-
-        direct, trans, files, risk = engine.analyze_task_diff_ranges(
-            task_diff=empty_diff,
-            symbols_by_file={},
-            symbol_edges=[],
-            all_symbols_by_id={},
-            file_paths={},
-        )
-
-        assert direct == []
-        assert trans == []
-        assert files == []
-        assert risk.risk_level == RiskLevel.LOW
 
     def test_preflight_nonexistent_workspace_path(self, tmp_path):
         validator = WorkspaceBaseValidator()

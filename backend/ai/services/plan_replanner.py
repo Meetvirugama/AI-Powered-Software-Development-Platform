@@ -8,18 +8,18 @@ instead of restarting the entire plan or repeating previously verified actions.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
-from ai.context.task_context import TaskContextManifest
 from app.core.secret_redaction import redact
 from app.models.task import AgentTask
 from app.schemas.plan import (
     PlanDependencyGraph,
     PlanStep,
-    PlanTransition,
-    StepVerification,
     StructuredPlan,
 )
+
+from ai.context.task_context import TaskContextManifest
 
 if TYPE_CHECKING:
     from ai.llm.client import LLMGateway
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class PlanReplanner:
     """Computes targeted recovery plans from verified execution checkpoints."""
 
-    def __init__(self, llm_gateway: "LLMGateway | None" = None) -> None:
+    def __init__(self, llm_gateway: LLMGateway | None = None) -> None:
         self._gateway = llm_gateway
 
     def replan_from_failure(

@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, List, Optional
+from typing import Any
 from uuid import UUID, uuid4
 
 try:
@@ -11,7 +11,6 @@ except ImportError:
 from .parser import Parser, _sanitize_source_text
 from .symbols import FileInfo, Symbol
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -21,15 +20,15 @@ class SymbolExtractor:
     from tree-sitter concrete syntax trees or resilient AST/regex fallbacks.
     """
 
-    def __init__(self, parser: Optional[Parser] = None):
+    def __init__(self, parser: Parser | None = None):
         self.parser = parser or Parser()
 
     def extract(
         self,
         file_info: FileInfo,
         content: str,
-        file_id: Optional[UUID] = None,
-    ) -> List[Symbol]:
+        file_id: UUID | None = None,
+    ) -> list[Symbol]:
         """Extract all symbols from a file's content based on its detected language."""
         if file_info.is_binary:
             return []
@@ -47,7 +46,7 @@ class SymbolExtractor:
                 return self._extract_js_ts_fallback(safe_content, file_id)
             return []
 
-        symbols: List[Symbol] = []
+        symbols: list[Symbol] = []
         lines = safe_content.splitlines()
 
         def get_sig(node: Any) -> str:
@@ -59,7 +58,7 @@ class SymbolExtractor:
         def get_text(node: Any) -> str:
             return node.text.decode("utf-8", errors="replace")
 
-        def walk(node: Any, parent_id: Optional[UUID] = None):
+        def walk(node: Any, parent_id: UUID | None = None):
             t = node.type
 
             if t in ("import_statement", "import_from_statement"):
@@ -205,11 +204,11 @@ class SymbolExtractor:
         walk(tree.root_node)
         return symbols
 
-    def _extract_python_ast(self, content: str, file_id: UUID) -> List[Symbol]:
+    def _extract_python_ast(self, content: str, file_id: UUID) -> list[Symbol]:
         """Fallback Python AST extractor with partial syntax-error recovery."""
         import ast
 
-        symbols: List[Symbol] = []
+        symbols: list[Symbol] = []
         lines = content.splitlines()
         tree = None
         try:
@@ -331,11 +330,11 @@ class SymbolExtractor:
         content: str,
         file_id: UUID,
         min_line: int = 1,
-    ) -> List[Symbol]:
+    ) -> list[Symbol]:
         """Line-by-line Python symbol recovery when syntax errors prevent full AST compilation."""
-        symbols: List[Symbol] = []
+        symbols: list[Symbol] = []
         lines = content.splitlines()
-        current_class_id: Optional[UUID] = None
+        current_class_id: UUID | None = None
         current_class_indent: int = 0
 
         for idx, raw_line in enumerate(lines):
@@ -386,9 +385,9 @@ class SymbolExtractor:
 
         return symbols
 
-    def _extract_js_ts_fallback(self, content: str, file_id: UUID) -> List[Symbol]:
+    def _extract_js_ts_fallback(self, content: str, file_id: UUID) -> list[Symbol]:
         """Regex/structural symbol extractor for JS/TS when tree-sitter grammar is unavailable."""
-        symbols: List[Symbol] = []
+        symbols: list[Symbol] = []
         lines = content.splitlines()
         for idx, raw_line in enumerate(lines):
             lineno = idx + 1

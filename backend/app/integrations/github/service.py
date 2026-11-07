@@ -22,25 +22,23 @@ import logging
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import httpx
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import is_within
 from app.integrations.github.cache import SourceRevisionCache
-from app.integrations.github.client import GitHubAPIError, GitHubClient
+from app.integrations.github.client import GitHubClient
 from app.integrations.github.schemas import PullRequestInfo
 from app.models.github_installation import GitHubInstallation as DBGitHubInstallation
-from app.models.repository import Repository
 from app.core.secret_redaction import redact
 from .base import (
     GitHubBranch,

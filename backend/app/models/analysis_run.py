@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text

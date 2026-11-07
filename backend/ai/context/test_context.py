@@ -27,7 +27,6 @@ from ai.context.builder import (
     RepositoryFile,
     SymbolContext,
     TargetSnippet,
-    count_tokens,
 )
 
 logger = logging.getLogger(__name__)

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import TYPE_CHECKING, Optional, Protocol
 from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -245,7 +244,6 @@ async def search_repository(
     """Search only code indexed for a repository the authenticated user owns."""
     from app.core.secret_redaction import redact
 
-    import asyncio
 
     _owned_repository(repository_id, request, db)
     pipeline = get_rag_pipeline(request)

@@ -24,14 +24,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 
-from sqlalchemy import delete, desc, func, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import APIError, ErrorCode
-from app.core.secret_redaction import redact, redact_obj
 from app.models.analysis_finding import AnalysisFinding
 from app.models.task import (
-    AgentTask,
     ApprovalDecision,
     ExecutionStatus,
     GitHubIssue,
@@ -39,14 +37,11 @@ from app.models.task import (
     RepairResult,
     Task,
     TaskApproval,
-    TaskApprovalRecord,
     TaskCheckpoint,
     TaskEvent,
-    TaskEventRecord,
     TaskEventType,
     TaskExecution,
     TaskPlan,
-    TaskPlanRecord,
     TaskPlanStatus,
     TaskPullRequest,
     TaskSourceType,
@@ -353,8 +348,13 @@ class TaskRepository:
         task_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
     ) -> Optional[Task]:
-        """Fetch a task verifying user ownership."""
-        return self.get_task(task_id, user_id=user_id)
+        """Fetch a task verifying user ownership without eager loads."""
+        t_uuid = _ensure_uuid(task_id)
+        u_uuid = _ensure_uuid(user_id)
+        if not t_uuid or not u_uuid:
+            return None
+        stmt = select(Task).where(Task.id == t_uuid, Task.user_id == u_uuid)
+        return self.session.execute(stmt).scalar_one_or_none()
 
     def list_tasks(
         self,
@@ -2061,12 +2061,12 @@ class TaskRepository:
     # 2. Tasks & Intake (F31, F32, F39)
     # ------------------------------------------------------------------
 
-    def get_task_for_user(
+    def get_task_detail_for_user(
         self,
         task_id: uuid.UUID | str,
         user_id: uuid.UUID | str,
     ) -> Optional[Task]:
-        """Fetch a task verifying user ownership."""
+        """Fetch a task with eager-loaded collections verifying user ownership."""
         t_uuid = _ensure_uuid(task_id)
         u_uuid = _ensure_uuid(user_id)
         if not t_uuid or not u_uuid:
@@ -2343,40 +2343,6 @@ class TaskRepository:
             .order_by(RepairAttempt.attempt_number.asc())
         )
         return list(self.session.scalars(stmt).all())
-
-    def list_tool_invocations(self, task_id: uuid.UUID | str) -> list[ToolInvocation]:
-        """List all persisted ToolInvocation records for a task ordered by created_at asc."""
-        t_uuid = _ensure_uuid(task_id)
-        if t_uuid is None:
-            return []
-        stmt = (
-            select(ToolInvocation)
-            .where(ToolInvocation.task_id == t_uuid)
-            .order_by(ToolInvocation.created_at.asc())
-        )
-        return list(self.session.scalars(stmt).all())
-
-    def _append_event(
-        self,
-        *,
-        task_id: uuid.UUID | str,
-        event_type: str,
-        actor_id: uuid.UUID | str | None = None,
-        from_status: str | None = None,
-        to_status: str | None = None,
-        summary: str = "",
-        payload: dict[str, Any] | None = None,
-    ) -> TaskEvent:
-        """Internal helper alias for appending timeline events."""
-        return self.record_event(
-            task_id=task_id,
-            event_type=event_type,
-            event_data=payload,
-            user_id=actor_id,
-            from_status=from_status,
-            to_status=to_status,
-            summary=summary,
-        )
 
     def list_events(self, task_id: uuid.UUID | str) -> list[TaskEvent]:
         """List all events for a task, ordered by created_at asc."""

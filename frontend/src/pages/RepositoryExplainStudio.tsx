@@ -22,10 +22,12 @@ import { ExplanationResultView } from '../components/explorer/ExplanationResultV
 import { AnalysisHistoryDrawer } from '../components/explorer/AnalysisHistoryDrawer';
 import { StudioLayout } from '../components/studios/StudioLayout';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
+import { cn } from '../lib/utils';
 import type {
   SourceReference,
   CodeExplanation,
   CodeExplanationResponse,
+  ExplanationLevel,
 } from '../types/analysis';
 
 const BADGE_COLOR_MAP: Record<string, string> = {
@@ -52,6 +54,7 @@ export function RepositoryExplainStudio() {
   const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
+  const [explanationLevel, setExplanationLevel] = useState<ExplanationLevel>('detailed');
 
   // Related files state (Repository Intelligence Engine — task.md §6)
   const [userSelectedRelatedPaths, setUserSelectedRelatedPaths] = useState<Set<string> | null>(null);
@@ -108,6 +111,7 @@ export function RepositoryExplainStudio() {
 
     explainMutation.mutate({
       target: activeTarget,
+      explanation_level: explanationLevel,
       context: {
         include_graph_context: true,
         include_callers: true,
@@ -117,7 +121,7 @@ export function RepositoryExplainStudio() {
         selected_files: allSelected,
       },
     });
-  }, [selectedFile, activeTarget, explainMutation, selectedRelatedPaths, customSelectedFiles]);
+  }, [selectedFile, activeTarget, explainMutation, selectedRelatedPaths, customSelectedFiles, explanationLevel]);
 
   // Keyboard shortcut: Cmd/Ctrl + Enter triggers explain
   useEffect(() => {
@@ -194,9 +198,10 @@ export function RepositoryExplainStudio() {
     }
   };
 
-  const handleAskFollowUp = () => {
+  const handleAskFollowUp = (question?: string) => {
     if (!selectedFile) return;
-    navigate(`/app/repositories/${repoId}/chat?file=${encodeURIComponent(selectedFile.path)}`);
+    const qParam = question ? `&prompt=${encodeURIComponent(question)}` : '';
+    navigate(`/app/repositories/${repoId}/chat?file=${encodeURIComponent(selectedFile.path)}${qParam}`);
   };
 
   return (
@@ -213,24 +218,43 @@ export function RepositoryExplainStudio() {
       onOpenHistory={() => setHistoryOpen(true)}
       historyTitle="View explanation history"
       actionButton={
-        <button
-          onClick={handleRunExplain}
-          disabled={!selectedFile || explainMutation.isPending}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
-        >
-          {explainMutation.isPending ? (
-            <>
-              <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              <span>Explaining...</span>
-            </>
-          ) : (
-            <>
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Explain with Repository Context</span>
-              <span className="hidden lg:inline text-[10px] opacity-75 font-mono ml-1">⌘↵</span>
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center rounded-md bg-muted/60 p-0.5 border border-border/70" title="Explanation Level (task.md §6.D)">
+            {(['concise', 'detailed', 'deep_technical'] as const).map((lvl) => (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => setExplanationLevel(lvl)}
+                className={cn(
+                  'px-2 py-1 text-[11px] font-medium rounded transition-all cursor-pointer',
+                  explanationLevel === lvl
+                    ? 'bg-background text-foreground shadow-xs font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {lvl === 'concise' ? 'Overview' : lvl === 'detailed' ? 'Detailed' : 'Deep'}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={handleRunExplain}
+            disabled={!selectedFile || explainMutation.isPending}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+          >
+            {explainMutation.isPending ? (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                <span>Explaining...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Explain with Repository Context</span>
+                <span className="hidden lg:inline text-[10px] opacity-75 font-mono ml-1">⌘↵</span>
+              </>
+            )}
+          </button>
+        </div>
       }
       sourcePanel={
         selectedFile ? (
@@ -480,7 +504,7 @@ export function RepositoryExplainStudio() {
                 </div>
 
                 <button
-                  onClick={handleAskFollowUp}
+                  onClick={() => handleAskFollowUp()}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors cursor-pointer"
                 >
                   <MessageSquare className="h-3.5 w-3.5 text-primary" />
@@ -491,8 +515,10 @@ export function RepositoryExplainStudio() {
 
               <ExplanationResultView
                 explanation={explanationResult}
+                targetFilePath={selectedFile?.path}
                 activeSourceReference={activeSourceReference}
                 onSelectSourceReference={handleSelectSourceReference}
+                onAskFollowUp={handleAskFollowUp}
               />
             </div>
           ) : (

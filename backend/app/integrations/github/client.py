@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -472,7 +472,8 @@ class GitHubClient:
             )
 
         import time
-        from jose import jwt as jose_jwt
+
+        import jwt as pyjwt
 
         now = int(time.time())
         payload = {
@@ -489,7 +490,7 @@ class GitHubClient:
             .replace("\r\n", "\n")
             .strip()
         )
-        app_jwt = jose_jwt.encode(
+        app_jwt = pyjwt.encode(
             payload,
             pem_key,
             algorithm="RS256",

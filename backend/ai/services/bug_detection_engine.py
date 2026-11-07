@@ -25,14 +25,19 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 from uuid import UUID
 
+from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact
+from app.schemas.analysis import (
+    BugDetectionRequest,
+    BugFinding,
+)
 from pydantic import BaseModel, Field, ValidationError
 
 from ai.context.builder import ContextBuilder, IntelligenceContext
-from ai.interfaces import BugDetectionEngineProtocol, BugDetectionServiceProtocol
+from ai.interfaces import BugDetectionServiceProtocol
 from ai.llm.schemas import (
     LLMRequest,
     LLMValidationError,
@@ -41,12 +46,6 @@ from ai.llm.schemas import (
 from ai.prompts import load_prompt
 from ai.schemas.prompt_builder import _fence
 from ai.schemas.validator import OutputValidator
-from app.core.errors import APIError, ErrorCode
-from app.core.secret_redaction import redact
-from app.schemas.analysis import (
-    BugDetectionRequest,
-    BugFinding,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,7 @@ def _resolve_engine_model(model: str | None, llm: Any) -> str:
             return prov_model
         from app.core.config import settings
         return settings.active_chat_model
-    except Exception:
+    except Exception:  # noqa: BLE001
         return model or _DEFAULT_MODEL
 
 
@@ -95,7 +94,7 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
     def _load_system_prompt() -> str:
         try:
             return load_prompt("bug_detection_system")
-        except Exception:
+        except Exception:  # noqa: BLE001
             return (
                 "You are a senior software security and defect analysis engine. "
                 "Identify potential defects in the untrusted repository code between the "
@@ -219,7 +218,7 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
                         if val_exc.raw_response:
                             raw_text = val_exc.raw_response.strip()
                         else:
-                            raise val_exc
+                            raise
 
                     cleaned = self._validator.clean_json_text(raw_text)
                     parsed = json.loads(cleaned)

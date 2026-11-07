@@ -21,26 +21,26 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
-from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
-from app.schemas.plan import PlanDependencyGraph, PlanStep, StructuredPlan
+from app.schemas.plan import PlanStep, StructuredPlan
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceExecutionEventType,
-    WorkspaceFileReadRequest,
-    WorkspaceFileWriteRequest,
     WorkspaceStatus,
 )
 from sandbox.exceptions import (
     WorkspaceError,
     WorkspaceStateError,
 )
+
+from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
 
 if TYPE_CHECKING:
     from sandbox.workspace_manager import WorkspaceManager
@@ -85,7 +85,7 @@ class StepExecutionRecord:
     error_message: str | None = None
     duration_ms: float = 0.0
     attempts: int = 1
-    started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     completed_at: str | None = None
     verification_outcome: StepVerificationOutcome | None = None
 
@@ -124,7 +124,7 @@ class LoopDetector:
         normalized_files = tuple(sorted(str(f).strip() for f in target_files))
         try:
             serialized = json.dumps(content_or_args, sort_keys=True, default=str)
-        except Exception:
+        except Exception:  # noqa: BLE001
             serialized = str(content_or_args)
         payload_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
         return ActionFingerprint(
@@ -140,9 +140,8 @@ class LoopDetector:
         n = len(self._history)
 
         # Check for immediate identical repeat
-        if n >= 2 and self._history[-1] == self._history[-2]:
-            if self.max_cycle_repetitions <= 1:
-                return True, 1
+        if n >= 2 and self._history[-1] == self._history[-2] and self.max_cycle_repetitions <= 1:
+            return True, 1
 
         # Check for repeating cycles of length k from 1 up to max_cycle_window
         for k in range(1, min(self.max_cycle_window + 1, n // self.max_cycle_repetitions + 1)):
@@ -250,7 +249,7 @@ class AgentExecutionLoop:
         step_payloads: Mapping[str, Any] | None = None,
     ) -> AgentExecutionResult:
         """Execute an approved plan inside the task's isolated workspace sandbox."""
-        start_time = datetime.now(timezone.utc)
+        start_time = datetime.now(UTC)
         meta = self.workspace_manager.get_workspace(task_id)
         if not meta:
             raise WorkspaceError(f"Workspace not found for task '{task_id}'. Cannot execute plan.")
@@ -315,7 +314,7 @@ class AgentExecutionLoop:
                     status=StepExecutionStatus.FAILED,
                     steps_executed=step_records,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=msg,
                 )
 
@@ -324,7 +323,7 @@ class AgentExecutionLoop:
             expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
             step_input = dict(payload_map.get(step_id, {}) or {})
             if "content" not in step_input and action_type in ("edit", "create", "write", "modify", "refactor"):
-                for other_pid, other_input in payload_map.items():
+                for other_input in payload_map.values():
                     if isinstance(other_input, dict) and "content" in other_input:
                         step_input["content"] = other_input["content"]
                         break
@@ -356,7 +355,7 @@ class AgentExecutionLoop:
                         status=StepExecutionStatus.LOOP_DETECTED,
                         target_files=expected_files,
                         error_message=error_msg,
-                        completed_at=datetime.now(timezone.utc).isoformat(),
+                        completed_at=datetime.now(UTC).isoformat(),
                     )
                 )
                 return AgentExecutionResult(
@@ -367,7 +366,7 @@ class AgentExecutionLoop:
                     cycle_detected=True,
                     cycle_length=cycle_len,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=error_msg,
                 )
 
@@ -382,11 +381,11 @@ class AgentExecutionLoop:
                     status=StepExecutionStatus.FAILED,
                     steps_executed=step_records,
                     total_iterations=iteration_count,
-                    total_duration_ms=(datetime.now(timezone.utc) - start_time).total_seconds() * 1000,
+                    total_duration_ms=(datetime.now(UTC) - start_time).total_seconds() * 1000,
                     error_message=step_record.error_message,
                 )
 
-        total_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
+        total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
         self.workspace_manager.record_timeline_event(
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.TOOL_INVOCATION,
@@ -412,7 +411,7 @@ class AgentExecutionLoop:
         step_id = step.step_id
         action_type = str(getattr(step, "action_type", None) or getattr(step, "step_type", "edit")).lower()
         expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
-        step_start = datetime.now(timezone.utc)
+        step_start = datetime.now(UTC)
 
         self.workspace_manager.record_timeline_event(
             task_id=task_id,
@@ -440,14 +439,13 @@ class AgentExecutionLoop:
                 replacement_content = str(step_input.get("replacement_content", ""))
                 patched_files: dict[str, int] = {}
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "patch_file"):
-                        res = self.workspace_manager.patch_file(
-                            task_id=task_id,
-                            file_path=target_file,
-                            target_content=target_content,
-                            replacement_content=replacement_content,
-                        )
-                        patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
+                    res = self.workspace_manager.patch_file(
+                        task_id=task_id,
+                        file_path=target_file,
+                        target_content=target_content,
+                        replacement_content=replacement_content,
+                    )
+                    patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
                 output = {"patched_files": patched_files}
 
             elif action_type in ("edit", "create", "write", "modify", "refactor"):
@@ -458,49 +456,33 @@ class AgentExecutionLoop:
                         "Placeholder synthetic writes are prohibited."
                     )
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "write_file"):
-                        res = self.workspace_manager.write_file(
-                            task_id=task_id,
-                            file_path=target_file,
-                            content=content,
-                            create_parents=True,
-                        )
-                        output = {"written_bytes": getattr(res, "bytes_written", len(content))}
-                    else:
-                        req = WorkspaceFileWriteRequest(
-                            task_id=task_id,
-                            file_path=target_file,
-                            content=content,
-                            create_directories=True,
-                        )
-                        res = self.workspace_manager.safe_write_file(req)
-                        output = {"written_bytes": getattr(res, "bytes_written", len(content))}
+                    res = self.workspace_manager.write_file(
+                        task_id=task_id,
+                        file_path=target_file,
+                        content=content,
+                        create_parents=True,
+                    )
+                    output = {"written_bytes": getattr(res, "bytes_written", len(content))}
 
             elif action_type == "delete":
                 deleted_files: list[str] = []
                 for target_file in expected_files:
-                    if hasattr(self.workspace_manager, "delete_file"):
-                        self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
-                        deleted_files.append(target_file)
+                    self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
+                    deleted_files.append(target_file)
                 output = {"deleted_files": deleted_files}
 
             elif action_type in ("inspect", "read"):
                 read_outputs: dict[str, str] = {}
                 for target_file in expected_files:
                     try:
-                        if hasattr(self.workspace_manager, "read_file"):
-                            res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                            if hasattr(res, "success") and not res.success:
-                                err = getattr(res, "error", None) or getattr(res, "error_message", None) or "read failed"
-                                if "not found" in str(err).lower() or "does not exist" in str(err).lower():
-                                    read_outputs[target_file] = f"[FILE_NOT_YET_CREATED: {target_file}]"
-                                else:
-                                    raise WorkspaceError(f"Inspection step '{step_id}' failed reading '{target_file}': {err}")
+                        res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                        if hasattr(res, "success") and not res.success:
+                            err = getattr(res, "error", None) or getattr(res, "error_message", None) or "read failed"
+                            if "not found" in str(err).lower() or "does not exist" in str(err).lower():
+                                read_outputs[target_file] = f"[FILE_NOT_YET_CREATED: {target_file}]"
                             else:
-                                read_outputs[target_file] = getattr(res, "content", "") or ""
+                                raise WorkspaceError(f"Inspection step '{step_id}' failed reading '{target_file}': {err}")
                         else:
-                            req = WorkspaceFileReadRequest(task_id=task_id, file_path=target_file)
-                            res = self.workspace_manager.safe_read_file(req)
                             read_outputs[target_file] = getattr(res, "content", "") or ""
                     except WorkspaceError:
                         raise
@@ -515,7 +497,7 @@ class AgentExecutionLoop:
                     written_tests: list[str] = []
                     for target_file in expected_files:
                         content = step_input.get("content")
-                        if content is not None and hasattr(self.workspace_manager, "write_file"):
+                        if content is not None:
                             self.workspace_manager.write_file(
                                 task_id=task_id,
                                 file_path=target_file,
@@ -525,13 +507,10 @@ class AgentExecutionLoop:
                             written_tests.append(target_file)
                     output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
                 else:
-                    cmd = step_input.get("command") or getattr(step, "command", None) or ("pytest" if action_type == "test" else "pytest")
+                    cmd = step_input.get("command") or getattr(step, "command", None) or "pytest"
                     args = list(step_input.get("args") or [])
                     req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
-                    if hasattr(self.workspace_manager, "execute_command"):
-                        res = self.workspace_manager.execute_command(req)
-                    else:
-                        res = self.workspace_manager.run_command_in_workspace(req)
+                    res = self.workspace_manager.execute_command(req)
                     output = {
                         "exit_code": res.exit_code,
                         "stdout": res.stdout,
@@ -558,13 +537,12 @@ class AgentExecutionLoop:
             file_contents: dict[str, str] = {}
             for target_file in expected_files:
                 try:
-                    if hasattr(self.workspace_manager, "read_file"):
-                        r_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
-                        cnt = getattr(r_res, "content", None)
-                        if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
-                            file_contents[target_file] = str(cnt)
-                except Exception:
-                    pass
+                    r_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                    cnt = getattr(r_res, "content", None)
+                    if getattr(r_res, "success", True) and isinstance(cnt, (str, bytes)):
+                        file_contents[target_file] = str(cnt)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("verifier_file_read_error", extra={"error": str(exc), "file": target_file})
 
             v_outcome = self.execution_verifier.verify_step_execution(
                 task_id=task_id,
@@ -583,8 +561,8 @@ class AgentExecutionLoop:
             record.status = StepExecutionStatus.COMPLETED
             record.output = output
             record.verification_outcome = v_outcome
-            record.completed_at = datetime.now(timezone.utc).isoformat()
-            record.duration_ms = (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
+            record.completed_at = datetime.now(UTC).isoformat()
+            record.duration_ms = (datetime.now(UTC) - step_start).total_seconds() * 1000
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,
@@ -593,12 +571,12 @@ class AgentExecutionLoop:
                 payload={"step_id": step_id, "duration_ms": record.duration_ms},
             )
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             err_msg = redact(str(exc))
             record.status = StepExecutionStatus.FAILED
             record.error_message = err_msg
-            record.completed_at = datetime.now(timezone.utc).isoformat()
-            record.duration_ms = (datetime.now(timezone.utc) - step_start).total_seconds() * 1000
+            record.completed_at = datetime.now(UTC).isoformat()
+            record.duration_ms = (datetime.now(UTC) - step_start).total_seconds() * 1000
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,

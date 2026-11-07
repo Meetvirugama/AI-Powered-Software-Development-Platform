@@ -59,7 +59,6 @@ from app.services.code_review_orchestrator import (
     run_static_review_on_changes,
 )
 from app.services.git_branch import GitBranchService
-from review.blast_radius import BlastRadiusEngine
 from scanner.import_tracker import ImportTracker
 from scanner.source_mapper import ReviewSourceMapResult
 from scanner.static_bug_scanner import StaticBugScanner
@@ -642,7 +641,7 @@ def test_github_integration_routes_reject_path_traversal_on_commits_and_invalid_
     assert resp_sha.status_code == 400
 
 
-def test_static_bug_scanner_adapter_and_blast_radius_engine() -> None:
+def test_static_bug_scanner_adapter() -> None:
     scanner = StaticBugScanner()
     res = scanner.scan(
         file_path="app/sample.py",
@@ -650,23 +649,6 @@ def test_static_bug_scanner_adapter_and_blast_radius_engine() -> None:
     )
     assert res["success"] is True
     assert len(res["findings"]) >= 1
-
-    tracker = ImportTracker()
-    info_a = FileInfo(path="app/a.py", size_bytes=20, language="Python", is_binary=False)
-    info_b = FileInfo(path="app/b.py", size_bytes=10, language="Python", is_binary=False)
-    m_a = tracker.parse_imports(
-        info_a,
-        "import app.b\n",
-        known_files=["app/a.py", "app/b.py"],
-    )
-    m_b = tracker.parse_imports(
-        info_b,
-        "x = 1\n",
-        known_files=["app/a.py", "app/b.py"],
-    )
-    blast = BlastRadiusEngine().compute(["app/b.py"], {"app/a.py": m_a, "app/b.py": m_b})
-    assert blast["affected_files"] == ["app/a.py"]
-    assert blast["total_affected"] == 1
 
 
 # ---------------------------------------------------------------------------

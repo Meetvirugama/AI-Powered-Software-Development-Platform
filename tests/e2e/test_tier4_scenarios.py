@@ -25,11 +25,10 @@ from app.api.v1.events import _should_deliver_event
 from app.core.errors import APIError
 from app.models.task import AgentTask, TaskStatus
 from app.schemas.repair import RepairPatchPayload
-from app.schemas.task import TaskConstraint, can_transition
+from app.schemas.task import RestrictedExecutionResult, TaskConstraint, TestCounts, can_transition
 from app.services.git_branch import format_agent_branch_name
 from app.services.independent_verifier import IndependentVerifier
 from app.services.repair_service import RepairPatchValidator
-from app.services.test_runner import RestrictedExecutionResult, TestCounts
 from sandbox.command_runner import WorkspaceCommandRunner
 from sandbox.test_runner import WorkspaceTestRunner
 from scanner.framework_detector import FrameworkDetector

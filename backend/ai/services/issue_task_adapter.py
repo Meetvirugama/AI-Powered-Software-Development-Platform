@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import re
 import secrets
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
@@ -140,7 +141,7 @@ def format_issue_from_finding(
         body = redact(custom_body.strip())
     else:
         sections = [
-            f"## Automated Developer Intelligence Finding",
+            "## Automated Developer Intelligence Finding",
             f"- **Finding ID:** `{finding_id}`" if finding_id else "- **Origin:** Developer Intelligence Suite",
             f"- **Severity:** `{severity}`",
             f"- **Category:** `{category}`",
@@ -308,85 +309,6 @@ class IssueToTaskAdapter:
             source=source_ref,
             requirements=requirements,
             assumptions=assumptions,
-            constraints=self._default_constraints(),
-            base_revision=base_revision,
-        )
-
-    def from_finding(
-        self,
-        *,
-        repository_id: UUID | str,
-        finding: Any,
-        source_type: str = "BUG_FINDING",
-        base_revision: str | None = None,
-    ) -> TaskIntakePayload:
-        """Convert a Week 2 BugFinding or ReviewFinding directly into a TaskIntakePayload."""
-        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
-        title, body, labels = format_issue_from_finding(finding)
-
-        if hasattr(finding, "to_dict"):
-            f_data = finding.to_dict()
-        elif isinstance(finding, dict):
-            f_data = finding
-        else:
-            f_data = {}
-
-        finding_id = str(f_data.get("id") or getattr(finding, "id", ""))
-        raw_path = str(
-            f_data.get("file_path")
-            or (f_data.get("source_reference") or {}).get("file_path")
-            or getattr(finding, "file_path", "")
-        )
-
-        target_files: list[str] = []
-        if raw_path:
-            try:
-                norm_path = validate_repo_relative_path(raw_path)
-                if norm_path.lower() not in {p.lower() for p in self._protected_files}:
-                    target_files.append(norm_path)
-            except UnsafePathError:
-                pass
-
-        category = self._infer_category(title, body, labels)
-        effective_source_type = (
-            "REVIEW_FINDING" if source_type == "REVIEW_FINDING" else "BUG_FINDING"
-        )
-        commit_sha_rev = (
-            base_revision
-            if (base_revision and re.match(r"^[0-9a-fA-F]{7,64}$", base_revision.strip()))
-            else None
-        )
-
-        return TaskIntakePayload(
-            repository_id=repo_uuid,
-            title=title[:256],
-            description=body,
-            source=TaskSourceReference(
-                type=effective_source_type,  # type: ignore[arg-type]
-                finding_id=finding_id or None,
-                repository_id=str(repo_uuid),
-                base_revision=commit_sha_rev,
-            ),
-            requirements=[
-                TaskRequirement(
-                    id="req-1",
-                    description=f"Remediate {effective_source_type.lower().replace('_', ' ')}: {title}",
-                    category=category,
-                    target_files=target_files,
-                    acceptance_criteria=[
-                        "Eliminate the reported defect without breaking existing callers.",
-                        "Add regression test coverage for the affected code path.",
-                    ],
-                )
-            ],
-            assumptions=[
-                TaskAssumption(
-                    id="asm-1",
-                    description="Existing unit test suite can execute inside the isolated task workspace.",
-                    unresolved=False,
-                    risk_level="low",
-                )
-            ],
             constraints=self._default_constraints(),
             base_revision=base_revision,
         )

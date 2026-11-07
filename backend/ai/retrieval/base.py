@@ -17,6 +17,12 @@ from dataclasses import asdict, dataclass
 from typing import Any, Self
 from uuid import UUID
 
+__all__ = [
+    "CodeChunk",
+    "RetrievalUnavailableError",
+    "Retriever",
+]
+
 
 class RetrievalUnavailableError(RuntimeError):
     """Raised when all configured retrieval backends fail (e.g. both vector and lexical search error)."""
@@ -127,10 +133,26 @@ class CodeChunk:
             content_hash=str(getattr(item, "content_hash", "")),
             score=float(getattr(item, "score", 0.0)),
             file_path=str(getattr(item, "file_path", "")),
-            rrf_score=getattr(item, "rrf_score", None),
-            reranker_logit=getattr(item, "reranker_logit", None),
-            vector_similarity=getattr(item, "vector_similarity", None),
-            lexical_rank=getattr(item, "lexical_rank", None),
+            rrf_score=(
+                float(item.rrf_score)
+                if getattr(item, "rrf_score", None) is not None
+                else None
+            ),
+            reranker_logit=(
+                float(item.reranker_logit)
+                if getattr(item, "reranker_logit", None) is not None
+                else None
+            ),
+            vector_similarity=(
+                float(item.vector_similarity)
+                if getattr(item, "vector_similarity", None) is not None
+                else None
+            ),
+            lexical_rank=(
+                float(item.lexical_rank)
+                if getattr(item, "lexical_rank", None) is not None
+                else None
+            ),
         )
 
 

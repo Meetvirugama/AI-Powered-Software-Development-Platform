@@ -12,7 +12,7 @@ from starlette.responses import Response
 
 from app.core.config import get_settings
 from app.core.errors import APIError, ErrorCode, error_response
-from app.core.redis import get_redis
+from app.core.redis import get_redis, get_redis_async
 from app.core.security import decode_access_token
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ PUBLIC_PATHS = {
     "/api/v1/health/live",
     "/api/v1/health/ready",
     "/api/v1/events",
+    "/api/v1/auth/dev-login",
     "/api/v1/github/webhook",
     "/api/v1/github/installation/callback",
 }
@@ -37,7 +38,14 @@ PUBLIC_PATHS = {
 async def _is_token_blocklisted_async(jti: str) -> bool:
     """Check if token jti is revoked without blocking the async event loop."""
     key = f"auth:blocklist:{jti}"
-    client = get_redis()
+    try:
+        from app.core.redis import get_redis as default_get_redis
+        if get_redis is not default_get_redis:
+            client = get_redis()
+        else:
+            client = await get_redis_async()
+    except Exception:
+        client = get_redis()
     try:
         exists_fn = getattr(client, "exists", None)
         if exists_fn is None:

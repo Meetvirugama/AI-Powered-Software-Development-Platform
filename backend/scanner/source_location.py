@@ -8,9 +8,8 @@ Fulfills Week 2 Day 1: AST and Source Location Foundation.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
-from uuid import UUID
 
 from .extractor import SymbolExtractor
 from .parser import Parser
@@ -24,10 +23,10 @@ class ResolutionResult:
     """Explicit result of resolving a target snippet or symbol range in source code."""
 
     success: bool
-    range: Optional[SourceRange] = None
-    enclosing_symbol: Optional[Symbol] = None
-    error_code: Optional[str] = None  # "UNSUPPORTED_LANGUAGE" | "SYMBOL_NOT_FOUND" | "LINE_OUT_OF_BOUNDS" | "EMPTY_CONTENT" | "PARSE_ERROR"
-    error_message: Optional[str] = None
+    range: SourceRange | None = None
+    enclosing_symbol: Symbol | None = None
+    error_code: str | None = None  # "UNSUPPORTED_LANGUAGE" | "SYMBOL_NOT_FOUND" | "LINE_OUT_OF_BOUNDS" | "EMPTY_CONTENT" | "PARSE_ERROR"
+    error_message: str | None = None
     is_supported: bool = True
 
     def to_dict(self) -> dict:
@@ -68,8 +67,8 @@ class SourceLocationResolver:
 
     def __init__(
         self,
-        extractor: Optional[SymbolExtractor] = None,
-        parser: Optional[Parser] = None,
+        extractor: SymbolExtractor | None = None,
+        parser: Parser | None = None,
     ):
         self.parser = parser or Parser()
         self.extractor = extractor or SymbolExtractor(parser=self.parser)
@@ -104,10 +103,10 @@ class SourceLocationResolver:
         self,
         symbols: Sequence[Symbol],
         symbol_name: str,
-        file_content: Optional[str] = None,
+        file_content: str | None = None,
         file_path: str = "",
-        kind: Optional[str] = None,
-    ) -> Optional[SourceRange]:
+        kind: str | None = None,
+    ) -> SourceRange | None:
         """Resolve a symbol name (or qualified name like `Class.method`) to its exact SourceRange.
 
         Returns None if no matching symbol is found.
@@ -115,7 +114,7 @@ class SourceLocationResolver:
         if not symbols or not symbol_name:
             return None
 
-        target_sym: Optional[Symbol] = None
+        target_sym: Symbol | None = None
 
         # Check for qualified name e.g. "User.save" or "MyClass.helper"
         if "." in symbol_name:
@@ -171,7 +170,7 @@ class SourceLocationResolver:
         self,
         symbols: Sequence[Symbol],
         line: int,
-    ) -> Optional[Symbol]:
+    ) -> Symbol | None:
         """Find the most specific (tightest span) symbol enclosing a given 1-indexed line number.
 
         For example, if line 25 is inside method `calculate` (lines 20-30) which is
@@ -197,7 +196,7 @@ class SourceLocationResolver:
         self,
         symbols: Sequence[Symbol],
         line: int,
-    ) -> List[Symbol]:
+    ) -> list[Symbol]:
         """Return the hierarchical chain of enclosing symbols from outermost (class) to innermost (method)."""
         if not symbols or line < 1:
             return []
@@ -216,11 +215,11 @@ class SourceLocationResolver:
         self,
         file_path: str,
         content: str,
-        symbols: Optional[Sequence[Symbol]] = None,
-        symbol_name: Optional[str] = None,
-        start_line: Optional[int] = None,
-        end_line: Optional[int] = None,
-        language: Optional[str] = None,
+        symbols: Sequence[Symbol] | None = None,
+        symbol_name: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        language: str | None = None,
     ) -> ResolutionResult:
         """Resolve a target snippet and enclosing context for an intelligence request.
 
@@ -260,7 +259,7 @@ class SourceLocationResolver:
             )
 
         # Extract symbols if not provided
-        file_symbols: List[Symbol] = list(symbols) if symbols is not None else []
+        file_symbols: list[Symbol] = list(symbols) if symbols is not None else []
         if symbols is None and is_supported:
             file_info = FileInfo(file_path, len(content), lang, False)
             file_symbols = self.extractor.extract(file_info, content)
@@ -304,8 +303,7 @@ class SourceLocationResolver:
                 )
 
             effective_end = end_line if end_line is not None else start_line
-            if effective_end < start_line:
-                effective_end = start_line
+            effective_end = max(effective_end, start_line)
 
             snippet = self.extract_snippet(content, start_line, effective_end)
             enclosing = self.find_enclosing_symbol(file_symbols, start_line)

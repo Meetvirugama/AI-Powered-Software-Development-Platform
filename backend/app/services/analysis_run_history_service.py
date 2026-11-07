@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from contextlib import contextmanager
-from typing import Any, Generator, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session
 
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus
 from app.repositories.analysis_run_repository import AnalysisRunRepository

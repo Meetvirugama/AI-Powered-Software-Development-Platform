@@ -20,7 +20,9 @@ team_rules.md:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     from ai.embeddings.service import EmbeddingService
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["VectorRetriever"]
 
 # ---------------------------------------------------------------------------
 # SQL — pgvector cosine distance operator (<=>)
@@ -70,8 +74,6 @@ def _vec_to_pg_literal(vector: list[float], expected_dim: int | None = None) -> 
     1. The vector is non-empty and has the expected dimension (if specified).
     2. Every float value is finite (rejects NaN, +Inf, -Inf).
     """
-    import math
-
     if not vector:
         raise ValueError("Vector cannot be empty.")
     if expected_dim is not None and len(vector) != expected_dim:
@@ -227,6 +229,12 @@ class VectorRetriever(Retriever):
         return chunks
 
     async def aclose(self) -> None:
-        """Close embedding service resources if supported."""
+        """Close embedding service and database resources if supported."""
         if hasattr(self._embedding_service, "aclose") and callable(self._embedding_service.aclose):
             await self._embedding_service.aclose()
+        if hasattr(self._db, "aclose") and callable(self._db.aclose):
+            await self._db.aclose()
+        elif hasattr(self._db, "close") and callable(self._db.close):
+            res = self._db.close()
+            if asyncio.iscoroutine(res):
+                await res

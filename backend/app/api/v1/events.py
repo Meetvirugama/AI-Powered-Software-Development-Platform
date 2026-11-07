@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import time
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
 
 from app.core.auth import _get_token
 from app.core.database import get_db
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["events"])
 
 
-def _resolve_optional_user_id(request: Request) -> UUID | None:
+async def _resolve_optional_user_id(request: Request) -> UUID | None:
     """Resolve authenticated user_id from request.state or JWT token/cookie if present."""
     state_uid = getattr(request.state, "user_id", None)
     if state_uid:
@@ -38,8 +38,21 @@ def _resolve_optional_user_id(request: Request) -> UUID | None:
     try:
         claims = decode_access_token(token)
         jti = str(claims.get("jti", ""))
-        if jti and get_redis().exists(f"auth:blocklist:{jti}"):
-            return None
+        if jti:
+            try:
+                r = await get_redis_async()
+                exists_res = r.exists(f"auth:blocklist:{jti}")
+                if inspect.isawaitable(exists_res):
+                    exists_res = await exists_res
+                if exists_res:
+                    return None
+            except Exception:
+                try:
+                    exists_res = await asyncio.to_thread(get_redis().exists, f"auth:blocklist:{jti}")
+                    if exists_res:
+                        return None
+                except Exception:
+                    pass
         return UUID(str(claims["sub"]))
     except Exception:
         return None
@@ -74,16 +87,16 @@ def _should_deliver_event(
             return False
         if str(event_user_id) != str(caller_user_id):
             return False
+        if owned_repo_ids is not None and isinstance(data_obj, dict) and "repository_id" in data_obj:
+            return str(data_obj["repository_id"]) in owned_repo_ids
+        return True
 
     # If the event is scoped to a repository, verify caller ownership
     if isinstance(data_obj, dict) and "repository_id" in data_obj:
-        if caller_user_id is None and owned_repo_ids is None:
+        if owned_repo_ids is None:
+            # Cannot verify repository ownership; fail closed (Audit A1.4)
             return False
-        if owned_repo_ids is not None:
-            if str(data_obj["repository_id"]) not in owned_repo_ids:
-                if event_user_id is not None and str(event_user_id) == str(caller_user_id):
-                    return True
-                return False
+        return str(data_obj["repository_id"]) in owned_repo_ids
 
     # For general events with no repository or user scope, require authenticated user
     # unless it is explicitly a public system notice
@@ -93,17 +106,6 @@ def _should_deliver_event(
             return False
 
     return True
-
-
-def _is_event_authorized_for_user(
-    raw_data: str,
-    owned_repo_ids: set[str] | None,
-    caller_user_id: str | None = None,
-) -> bool:
-    """Ensure repository-scoped and user-scoped events are only delivered to the authorized owner."""
-    if owned_repo_ids is None and caller_user_id is None:
-        return False
-    return _should_deliver_event(raw_data, caller_user_id, owned_repo_ids)
 
 
 @router.get("/events", summary="Subscribe to real-time platform events (SSE)")
@@ -117,7 +119,7 @@ async def stream_events(
     """
     from app.core.database import SessionLocal
 
-    user_uuid = _resolve_optional_user_id(request)
+    user_uuid = await _resolve_optional_user_id(request)
     caller_user_id = str(user_uuid) if user_uuid is not None else getattr(request.state, "user_id", None)
     owned_repo_ids: set[str] | None = None
     if user_uuid is not None:

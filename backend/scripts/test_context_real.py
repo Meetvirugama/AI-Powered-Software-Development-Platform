@@ -354,7 +354,6 @@ async def main() -> None:
     # ─────────────────────────────────────────────────────────────────────────
     header("TEST 7 — PromptBuilder message structure (system/data separation)")
 
-    from ai.llm.schemas import Message
 
     pb = PromptBuilder()
     messages = pb.build_chat_prompt(

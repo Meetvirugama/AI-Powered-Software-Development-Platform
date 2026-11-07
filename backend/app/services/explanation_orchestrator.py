@@ -16,22 +16,18 @@ Implements the 9-step explanation pipeline required by `Docs/week2.md` §6:
 
 from __future__ import annotations
 
-import inspect
-import json
 import logging
 import os
 from pathlib import Path
-import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 _DEFAULT_TIKTOKEN_CACHE = Path(__file__).resolve().parents[3] / ".venv" / "data-gym-cache"
 if _DEFAULT_TIKTOKEN_CACHE.exists():
     os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(_DEFAULT_TIKTOKEN_CACHE))
 
-from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from ai.context.builder import (
@@ -41,16 +37,6 @@ from ai.context.builder import (
     SymbolContext,
     TargetSnippet,
 )
-from ai.llm.schemas import (
-    LLMError,
-    LLMRateLimitError,
-    LLMRequest,
-    LLMTimeoutError,
-    LLMUnavailableError,
-    LLMValidationError,
-    Message,
-)
-from ai.schemas.prompt_builder import _fence
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, require_safe_repo_path, validate_repo_relative_path
 from app.core.secret_redaction import redact, redact_obj
@@ -64,9 +50,7 @@ from app.schemas.analysis import (
     AnalysisSourceReference,
     AnalysisTarget,
     CodeExplanation,
-    CodeExplanationResponse,
     ExplainCodeRequest,
-    SymbolSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -484,13 +468,31 @@ def resolve_target_and_build_context(
     )
 
 
+def calculate_grounding_confidence(
+    *,
+    target_found: bool,
+    source_references_valid: bool,
+    related_symbols_verified: bool,
+    critical_context_missing: bool,
+    ungrounded_ratio: float = 0.0,
+) -> str:
+    """Calculates multi-signal deterministic grounding confidence (task.md §5 Problem 3 & §6.B)."""
+    if not target_found or not source_references_valid or ungrounded_ratio > 0.5:
+        return "low"
+    if critical_context_missing or ungrounded_ratio > 0.2:
+        return "low"
+    if not related_symbols_verified:
+        return "medium"
+    return "high"
+
+
 def ground_explanation_sources(
     explanation: CodeExplanation,
     *,
     repository_id: UUID,
     resolved: ResolvedExplanationTarget,
 ) -> CodeExplanation:
-    """Step 7b: Remove hallucinated or unsafe citations and ensure target source reference is grounded."""
+    """Step 7b: Remove hallucinated or unsafe citations and calibrate confidence using multi-signal grounding."""
     merged_missing = list(dict.fromkeys([*explanation.missing_context, *resolved.missing_context]))
 
     raw_sources = list(explanation.sources)
@@ -534,13 +536,23 @@ def ground_explanation_sources(
             )
         )
 
-    confidence = explanation.confidence
-    if raw_sources:
-        ungrounded_ratio = ungrounded_count / len(raw_sources)
-        if len(grounded_sources) == 0 or ungrounded_ratio > 0.5:
-            confidence = "low"
-        elif ungrounded_count > 0 and confidence == "high":
-            confidence = "medium"
+    # Multi-signal confidence calibration (task.md §6.B)
+    ungrounded_ratio = ungrounded_count / len(raw_sources) if raw_sources else 0.0
+    target_found = resolved.file_record is not None or (resolved.target is not None and not resolved.indexed_paths)
+    source_references_valid = len(grounded_sources) > 0 or not raw_sources
+    critical_context_missing = any(
+        "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
+        for m in merged_missing
+    )
+    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files or not resolved.indexed_paths)
+
+    confidence = calculate_grounding_confidence(
+        target_found=target_found,
+        source_references_valid=source_references_valid,
+        related_symbols_verified=related_symbols_verified,
+        critical_context_missing=critical_context_missing,
+        ungrounded_ratio=ungrounded_ratio,
+    )
 
     # Guarantee that when a real target file was resolved, its grounded citation is attached
     if not grounded_sources and resolved.file_record is not None:
@@ -648,70 +660,21 @@ def record_analysis_run(
         "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
     }
 
-    # 1. Try feature-specific history service or general analysis_run_service
-    candidate_services = []
-    if feature_type in ("generate_tests", "tests"):
-        svc = getattr(app_state, "test_generation_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type in ("detect_bugs", "bugs"):
-        svc = getattr(app_state, "bug_scan_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type == "explain":
-        svc = getattr(app_state, "explanation_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-    elif feature_type in ("review", "code_review"):
-        svc = getattr(app_state, "review_history_service", None)
-        if svc is not None:
-            candidate_services.append(svc)
-
-    general_run_svc = getattr(app_state, "analysis_run_service", None)
-    if general_run_svc is not None and general_run_svc not in candidate_services:
-        candidate_services.append(general_run_svc)
-
-    saved = False
-    for target_service in candidate_services:
-        if saved:
-            break
-        for method_name in ("record_run", "save_run", "create_run"):
-            fn = getattr(target_service, method_name, None)
-            if callable(fn):
-                try:
-                    import inspect
-                    sig = inspect.signature(fn)
-                    if "db" in sig.parameters and db is not None:
-                        fn(record, db=db)
-                    else:
-                        fn(record)
-                except (TypeError, ValueError):
-                    try:
-                        fn(record)
-                    except Exception as inner_exc:
-                        logger.debug("analysis_run_service_save_fallback_failed", extra={"error": str(inner_exc)})
-                        continue
-                except Exception as exc:
-                    logger.debug("analysis_run_service_save_skipped", extra={"error": str(exc)})
-                    continue
-                saved = True
-                break
-
-    # 2. Try Om's AnalysisRunRepository if available in app.repositories
-    if not saved and hasattr(db, "query"):
+    # 1. Direct persistence to AnalysisRunRepository when database session is available
+    if db is not None:
         try:
-            from app.repositories.analysis_run_repository import AnalysisRunRepository  # type: ignore
+            from app.repositories.analysis_run_repository import AnalysisRunRepository
 
-            repo_layer = AnalysisRunRepository(db)
-            for method_name in ("create_run", "create", "save"):
-                fn = getattr(repo_layer, method_name, None)
-                if callable(fn):
-                    fn(**record)
-                    break
-        except Exception:
-            pass
+            AnalysisRunRepository(db).create_run(**record)
+        except Exception as exc:
+            if hasattr(db, "rollback"):
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+            logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
-    # 3. Always maintain an in-memory bounded history store on app.state for immediate retrieval
+    # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(
         app_state, "_analysis_run_history", None
     )

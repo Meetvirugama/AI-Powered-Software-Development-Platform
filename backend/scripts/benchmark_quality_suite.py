@@ -21,17 +21,14 @@ Measures and validates:
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 import logging
-import math
 import os
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 from uuid import UUID, uuid4
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -41,7 +38,7 @@ from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.hybrid import HybridRetriever
 from ai.retrieval.reranker import CrossEncoderReranker
 from ai.context.review_context import ModifiedFile
-from app.schemas.analysis import AnalysisSourceReference, BugFinding, ReviewFinding, ReviewTarget
+from app.schemas.analysis import AnalysisSourceReference, ReviewFinding, ReviewTarget
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
 from app.services.code_review_orchestrator import (
     ResolvedReviewTarget,
@@ -381,9 +378,6 @@ def run_bug_detection_quality_benchmark() -> dict[str, Any]:
             fp += 1
         else:
             tn += 1
-
-    total_defects = len(DEFECT_CASES)
-    total_cleans = len(CLEAN_CASES)
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0

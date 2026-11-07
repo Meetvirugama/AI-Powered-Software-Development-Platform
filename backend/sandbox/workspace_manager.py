@@ -19,24 +19,20 @@ import json
 import logging
 import os
 import shutil
-import stat
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from app.core.config import PROJECT_ROOT
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
-    DiffImmutabilityCheckRequest,
     DiffImmutabilityCheckResult,
-    DiffValidationRequest,
     DiffValidationResult,
     RepairAttemptRecord,
-    StaleRevisionCheckRequest,
     StaleRevisionCheckResult,
     TestFailureClassification,
     TestOutcomeStatus,
@@ -46,19 +42,14 @@ from app.schemas.workspace import (
     WorkspaceCommitRequest,
     WorkspaceCommitResult,
     WorkspaceCreateRequest,
-    WorkspaceCreateResult,
-    WorkspaceDiffRequest,
     WorkspaceDiffResult,
     WorkspaceDiskUsageResult,
     WorkspaceDraftPRRequest,
     WorkspaceDraftPRResult,
     WorkspaceExecutionEvent,
     WorkspaceExecutionEventType,
-    WorkspaceFilePatchRequest,
     WorkspaceFilePatchResult,
-    WorkspaceFileReadRequest,
     WorkspaceFileReadResult,
-    WorkspaceFileWriteRequest,
     WorkspaceFileWriteResult,
     WorkspaceInvariantCheckResult,
     WorkspaceIsolationType,
@@ -77,12 +68,12 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionResult,
     can_transition_workspace,
 )
+
 from sandbox.command_runner import WorkspaceCommandRunner
 from sandbox.constants import (
     DEFAULT_MAX_ORPHAN_AGE_SECONDS,
     DEFAULT_MAX_WORKSPACE_FILES,
     DEFAULT_WORKSPACE_SUBDIR,
-    MAX_TASK_LOCK_TIMEOUT_SECONDS,
     PROTECTED_BRANCHES,
     RECOVERY_STALE_TIMEOUT_SECONDS,
     SECRET_SCAN_PATTERNS,
@@ -91,35 +82,18 @@ from sandbox.diff_verifier import WorkspaceDiffVerifier
 from sandbox.exceptions import (
     WorkspaceAuthorizationError,
     WorkspaceCleanupError,
-    WorkspaceCommandError,
-    WorkspaceCommandTimeoutError,
     WorkspaceCommitError,
-    WorkspaceConcurrentOperationError,
     WorkspaceCreationError,
-    WorkspaceDiffDivergedError,
-    WorkspaceDiffError,
-    WorkspaceDiffValidationError,
-    WorkspaceDiskQuotaExceededError,
-    WorkspaceDraftPRError,
-    WorkspaceDuplicateRepairPatchError,
     WorkspaceError,
-    WorkspaceFileError,
-    WorkspaceInvariantViolationError,
-    WorkspaceLimitExceededError,
-    WorkspacePathEscapeError,
     WorkspacePolicyViolationError,
-    WorkspacePostVerificationMutationError,
     WorkspaceProtectedBranchError,
     WorkspacePublicationUnauthorizedError,
     WorkspacePushError,
     WorkspaceRecoveryError,
     WorkspaceRepairBudgetExhaustedError,
-    WorkspaceSecretLeakDetectedError,
     WorkspaceStaleApprovalError,
     WorkspaceStaleRevisionError,
     WorkspaceStateError,
-    WorkspaceTestExecutionError,
-    WorkspaceUnsupportedFrameworkError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
@@ -243,7 +217,7 @@ class WorkspaceManager:
             )
             metadata.isolation_type = isolation_used
             metadata.status = WorkspaceStatus.READY
-            metadata.updated_at = datetime.now(timezone.utc).isoformat()
+            metadata.updated_at = datetime.now(UTC).isoformat()
             self._save_metadata_file(metadata)
             self._monitors[task_id] = WorkspaceResourceMonitor(workspace_path, limits)
 
@@ -278,7 +252,7 @@ class WorkspaceManager:
         except Exception as exc:
             metadata.status = WorkspaceStatus.FAILED
             metadata.error_message = redact(str(exc))
-            metadata.updated_at = datetime.now(timezone.utc).isoformat()
+            metadata.updated_at = datetime.now(UTC).isoformat()
             # Clean up partial directory on failure
             self._safe_remove_dir(workspace_path)
             raise WorkspaceCreationError(f"Failed to create workspace for task '{task_id}': {exc}") from exc
@@ -424,7 +398,7 @@ class WorkspaceManager:
             )
 
         meta.status = new_status
-        meta.updated_at = datetime.now(timezone.utc).isoformat()
+        meta.updated_at = datetime.now(UTC).isoformat()
         self._save_metadata_file(meta)
         return meta
 
@@ -480,7 +454,7 @@ class WorkspaceManager:
                 status=meta.status,
                 branch_name=meta.branch_name,
                 base_revision=meta.base_revision,
-                started_at=datetime.now(timezone.utc).isoformat(),
+                started_at=datetime.now(UTC).isoformat(),
             )
 
         if meta.status not in (WorkspaceStatus.READY, WorkspaceStatus.STOPPED):
@@ -491,7 +465,7 @@ class WorkspaceManager:
         self.transition_state(task_id, WorkspaceStatus.IN_USE)
 
         # 4. Emit Timeline Event
-        started_at = datetime.now(timezone.utc).isoformat()
+        started_at = datetime.now(UTC).isoformat()
         self.record_timeline_event(
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.EXECUTION_STARTED,
@@ -546,7 +520,7 @@ class WorkspaceManager:
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.EXECUTION_RESUMED,
             message="Execution resumed in isolated workspace.",
-            payload={"resumed_at": datetime.now(timezone.utc).isoformat()},
+            payload={"resumed_at": datetime.now(UTC).isoformat()},
         )
         return meta
 
@@ -572,7 +546,7 @@ class WorkspaceManager:
             raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
         meta.status = WorkspaceStatus.FAILED
         meta.error_message = redact(error_message)
-        meta.updated_at = datetime.now(timezone.utc).isoformat()
+        meta.updated_at = datetime.now(UTC).isoformat()
         self.record_timeline_event(
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
@@ -785,7 +759,7 @@ class WorkspaceManager:
             task_id=task_id,
             workspace_id=workspace_id,
             event_type=event_type,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             status=status,
             message=redact(message),
             payload=sanitized_payload,
@@ -805,7 +779,6 @@ class WorkspaceManager:
         """Safely read a file within the task's isolated workspace."""
         try:
             root = self.get_workspace_path(task_id)
-            meta = self._workspaces[task_id]
             resolved = WorkspacePathGuard.resolve_within_workspace(root, file_path)
 
             if not resolved.exists() or not resolved.is_file():
@@ -843,7 +816,6 @@ class WorkspaceManager:
         """Safely write or overwrite a file within the task's isolated workspace."""
         try:
             root = self.get_workspace_path(task_id)
-            meta = self._workspaces[task_id]
             resolved = WorkspacePathGuard.resolve_within_workspace(root, file_path)
 
             encoded = content.encode("utf-8")
@@ -988,7 +960,7 @@ class WorkspaceManager:
 
         try:
             meta.status = WorkspaceStatus.CLEANUP_PENDING
-            meta.updated_at = datetime.now(timezone.utc).isoformat()
+            meta.updated_at = datetime.now(UTC).isoformat()
 
             # Attempt Git worktree removal if applicable
             if meta.isolation_type == "git_worktree":
@@ -1022,7 +994,7 @@ class WorkspaceManager:
             self._safe_remove_dir(workspace_path)
 
             meta.status = WorkspaceStatus.CLEANED
-            meta.cleaned_at = datetime.now(timezone.utc).isoformat()
+            meta.cleaned_at = datetime.now(UTC).isoformat()
             meta.updated_at = meta.cleaned_at
             self._monitors.pop(task_id, None)
             self._repo_roots.pop(task_id, None)
@@ -1456,7 +1428,7 @@ class WorkspaceManager:
             f"- **Task ID**: `{task_id}`",
             f"- **Head Branch**: `{head_branch}`",
             f"- **Base Branch**: `{base_branch}`",
-            f"- **Status**: Ready for Human Review",
+            "- **Status**: Ready for Human Review",
             "",
             "## 📊 Diff & Change Statistics",
             f"- **Files Changed**: `{diff_result.total_files_changed}`",
@@ -1581,7 +1553,7 @@ class WorkspaceManager:
                         # Interrupted during creation -> mark FAILED
                         meta.status = WorkspaceStatus.FAILED
                         meta.error_message = "Creation interrupted by worker crash or restart."
-                        meta.updated_at = datetime.now(timezone.utc).isoformat()
+                        meta.updated_at = datetime.now(UTC).isoformat()
                         recovered_status = WorkspaceStatus.FAILED
                         details = "Worker interrupted during creation; marked FAILED."
                         self.record_timeline_event(
@@ -1600,8 +1572,8 @@ class WorkspaceManager:
                                 try:
                                     dt = datetime.fromisoformat(ts_str)
                                     if dt.tzinfo is None:
-                                        dt = dt.replace(tzinfo=timezone.utc)
-                                    age = (datetime.now(timezone.utc) - dt).total_seconds()
+                                        dt = dt.replace(tzinfo=UTC)
+                                    age = (datetime.now(UTC) - dt).total_seconds()
                                     if age >= stale_timeout_seconds:
                                         is_stale = True
                                 except Exception:
@@ -1611,7 +1583,7 @@ class WorkspaceManager:
 
                         if is_stale:
                             meta.status = WorkspaceStatus.STOPPED
-                            meta.updated_at = datetime.now(timezone.utc).isoformat()
+                            meta.updated_at = datetime.now(UTC).isoformat()
                             recovered_status = WorkspaceStatus.STOPPED
                             details = "Interrupted active execution halted safely at STOPPED."
                             self.record_timeline_event(
@@ -1685,7 +1657,7 @@ class WorkspaceManager:
         if prev_status == WorkspaceStatus.CREATING:
             meta.status = WorkspaceStatus.FAILED
             meta.error_message = "Creation interrupted by worker crash or restart."
-            meta.updated_at = datetime.now(timezone.utc).isoformat()
+            meta.updated_at = datetime.now(UTC).isoformat()
             recovered_status = WorkspaceStatus.FAILED
             details = "Interrupted creation marked FAILED."
             self.record_timeline_event(

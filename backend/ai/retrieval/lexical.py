@@ -15,6 +15,7 @@ Retrieval flow:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any
@@ -26,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .base import CodeChunk, Retriever
 
 logger = logging.getLogger(__name__)
+
+__all__ = ["LexicalRetriever"]
 
 # ---------------------------------------------------------------------------
 # SQL — PostgreSQL full-text search
@@ -212,3 +215,12 @@ class LexicalRetriever(Retriever):
         )
 
         return chunks
+
+    async def aclose(self) -> None:
+        """Close database session resources if directly owned and closable."""
+        if hasattr(self._db, "aclose") and callable(self._db.aclose):
+            await self._db.aclose()
+        elif hasattr(self._db, "close") and callable(self._db.close):
+            res = self._db.close()
+            if asyncio.iscoroutine(res):
+                await res

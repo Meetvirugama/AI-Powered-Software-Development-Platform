@@ -24,7 +24,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Generator
 
 from app.core.logging import request_id_context
@@ -100,10 +100,6 @@ class StageExecutionTimer:
         finally:
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             self.stages_ms[stage_name] = self.stages_ms.get(stage_name, 0.0) + elapsed_ms
-
-    def record_stage(self, stage_name: str, duration_ms: float) -> None:
-        """Directly record execution duration for a stage."""
-        self.stages_ms[stage_name] = round(duration_ms, 2)
 
     def record_tokens(
         self,

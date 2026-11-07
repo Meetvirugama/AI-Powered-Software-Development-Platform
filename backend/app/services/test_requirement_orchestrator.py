@@ -11,13 +11,12 @@ evidence mapping, coverage analysis, and gap prioritization across 3 modes:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.code_chunk import CodeChunk
 from app.models.repository_file import RepositoryFile
 from app.schemas.analysis import (
     TestGenerationRequest,
@@ -26,7 +25,7 @@ from app.schemas.analysis import (
 )
 from scanner.symbols import Symbol, SymbolEdge
 from scanner.test_coverage_analyzer import TestCoverageAnalyzer, TestCoverageResult
-from scanner.test_gap_analyzer import TestGapAnalyzer, TestGapAnalysisResult
+from scanner.test_gap_analyzer import TestGapAnalyzer
 from scanner.test_mapper import FileTestMapper, TestEvidenceLevel
 from scanner.test_quality_analyzer import TestQualityAnalyzer
 from scanner.test_requirement_discovery import TestRequirementDiscovery

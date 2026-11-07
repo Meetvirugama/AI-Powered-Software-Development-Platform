@@ -1,26 +1,26 @@
 import re
-from typing import Dict, List, Optional
 from uuid import UUID
+
 from .symbols import Symbol, SymbolEdge
 
 
 class DependencyGraphBuilder:
     def __init__(
         self,
-        symbols: List[Symbol],
-        file_contents: Optional[Dict[UUID, str]] = None,
+        symbols: list[Symbol],
+        file_contents: dict[UUID, str] | None = None,
     ):
         self.symbols = symbols
-        self.file_contents: Dict[UUID, str] = file_contents or {}
-        self.symbols_by_name: Dict[str, List[Symbol]] = {}
+        self.file_contents: dict[UUID, str] = file_contents or {}
+        self.symbols_by_name: dict[str, list[Symbol]] = {}
         for s in symbols:
             self.symbols_by_name.setdefault(s.name, []).append(s)
 
-    def build(self) -> List[SymbolEdge]:
-        edges: List[SymbolEdge] = []
+    def build(self) -> list[SymbolEdge]:
+        edges: list[SymbolEdge] = []
         seen: set[tuple[UUID, UUID, str]] = set()
         for sym in self.symbols:
-            sym_edges: List[SymbolEdge] = []
+            sym_edges: list[SymbolEdge] = []
             if sym.kind == "import":
                 sym_edges.extend(self._parse_import(sym))
             elif sym.kind in ("class", "interface"):
@@ -35,7 +35,7 @@ class DependencyGraphBuilder:
                     edges.append(e)
         return edges
 
-    def _parse_import(self, sym: Symbol) -> List[SymbolEdge]:
+    def _parse_import(self, sym: Symbol) -> list[SymbolEdge]:
         edges = []
         words = re.findall(r'[a-zA-Z_]\w*', sym.signature or "")
         for word in words:
@@ -61,7 +61,7 @@ class DependencyGraphBuilder:
 
         return edges
 
-    def _parse_class_inheritance(self, sym: Symbol) -> List[SymbolEdge]:
+    def _parse_class_inheritance(self, sym: Symbol) -> list[SymbolEdge]:
         edges = []
 
         extends_match = re.search(r'extends\s+([a-zA-Z_]\w*)', sym.signature or "")
@@ -92,8 +92,8 @@ class DependencyGraphBuilder:
 
         return edges
 
-    def _parse_calls(self, sym: Symbol) -> List[SymbolEdge]:
-        edges: List[SymbolEdge] = []
+    def _parse_calls(self, sym: Symbol) -> list[SymbolEdge]:
+        edges: list[SymbolEdge] = []
         body_text = ""
         if sym.file_id and sym.file_id in self.file_contents:
             lines = self.file_contents[sym.file_id].splitlines()

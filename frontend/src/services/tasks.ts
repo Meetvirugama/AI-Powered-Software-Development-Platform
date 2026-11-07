@@ -370,25 +370,6 @@ export async function getTaskVerification(taskId: string): Promise<VerificationR
 }
 
 /**
- * Ensure isolated task branch agent/task-<id> and reject protected branches.
- * POST /api/v1/tasks/:taskId/branch
- */
-export async function ensureTaskBranch(
-  taskId: string,
-  branchName?: string
-): Promise<{
-  task_id: string;
-  repository_id: string;
-  branch_name: string;
-  base_revision: string;
-  workspace_status: string;
-  is_protected: boolean;
-}> {
-  const response = await apiClient.post(`/tasks/${taskId}/branch`, branchName ? { branch_name: branchName } : {});
-  return response.data;
-}
-
-/**
  * Stage and commit validated workspace changes on the task branch.
  * POST /api/v1/tasks/:taskId/commit
  */
@@ -410,29 +391,6 @@ export async function commitTaskChanges(
   files_committed: string[];
 }> {
   const response = await apiClient.post(`/tasks/${taskId}/commit`, payload || {});
-  return response.data;
-}
-
-/**
- * Push verified task branch after checking human publication authorization.
- * POST /api/v1/tasks/:taskId/push
- */
-export async function pushTaskBranch(
-  taskId: string,
-  payload: {
-    publication_authorized: boolean;
-    branch_name?: string;
-    remote_name?: string;
-    current_remote_head_sha?: string;
-  }
-): Promise<{
-  success: boolean;
-  task_id: string;
-  branch: string;
-  pushed_sha: string;
-  remote_name: string;
-}> {
-  const response = await apiClient.post(`/tasks/${taskId}/push`, payload);
   return response.data;
 }
 
@@ -541,31 +499,6 @@ export async function publishDraftPR(
 }
 
 /**
- * Save a secret-scrubbed recovery checkpoint for a task.
- * POST /api/v1/tasks/:taskId/checkpoints
- */
-export async function saveTaskCheckpoint(
-  taskId: string,
-  payload: {
-    step_name: string;
-    state_data?: Record<string, unknown>;
-    recovery_instructions?: string;
-  }
-): Promise<TaskCheckpointResponse> {
-  const response = await apiClient.post<TaskCheckpointResponse>(`/tasks/${taskId}/checkpoints`, payload);
-  return response.data;
-}
-
-/**
- * List persisted recovery checkpoints for a task.
- * GET /api/v1/tasks/:taskId/checkpoints
- */
-export async function listTaskCheckpoints(taskId: string): Promise<TaskCheckpointResponse[]> {
-  const response = await apiClient.get<TaskCheckpointResponse[]>(`/tasks/${taskId}/checkpoints`);
-  return response.data;
-}
-
-/**
  * Execute recovery and state reconciliation for an interrupted, blocked, or failed task.
  * POST /api/v1/tasks/:taskId/recover
  */
@@ -581,23 +514,6 @@ export async function recoverTask(
     `/tasks/${taskId}/recover`,
     body
   );
-  return response.data;
-}
-
-/**
- * Run Day 6 sandbox security, path confinement, disk budget, and diff immutability checks.
- * GET /api/v1/tasks/:taskId/invariants
- */
-export async function checkTaskInvariants(
-  taskId: string
-): Promise<{
-  task_id: string;
-  valid: boolean;
-  violations: string[];
-  disk_budget?: Record<string, unknown> | null;
-  diff_immutability?: Record<string, unknown> | null;
-}> {
-  const response = await apiClient.get(`/tasks/${taskId}/invariants`);
   return response.data;
 }
 
@@ -706,34 +622,6 @@ export async function createGitHubIssue(
     `/repositories/${repositoryId}/issues`,
     payload
   );
-  return response.data;
-}
-
-/**
- * Explicitly authorize branch publication (READY_FOR_PUBLICATION -> PUBLISHING).
- * POST /api/v1/tasks/:taskId/authorize-publication
- */
-export async function authorizeTaskPublication(
-  taskId: string,
-  payload: { head_sha: string; notes?: string }
-): Promise<{
-  task_id: string;
-  status: string;
-  head_sha: string;
-  authorized: boolean;
-  user_id?: string | null;
-  authorized_at?: string | null;
-}> {
-  const response = await apiClient.post(`/tasks/${taskId}/authorize-publication`, payload);
-  return response.data;
-}
-
-/**
- * Retrieve end-to-end audit traceability graph from finding/issue to Draft PR.
- * GET /api/v1/tasks/:taskId/traceability
- */
-export async function getTaskTraceability(taskId: string): Promise<Record<string, any>> {
-  const response = await apiClient.get<Record<string, any>>(`/tasks/${taskId}/traceability`);
   return response.data;
 }
 

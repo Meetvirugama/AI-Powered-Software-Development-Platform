@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+
+from app.schemas.plan import StructuredPlan
 
 from ai.services.execution_budget_manager import ExecutionBudgetManager
-from ai.services.execution_checkpoint_manager import ExecutionCheckpoint, ExecutionCheckpointManager
+from ai.services.execution_checkpoint_manager import ExecutionCheckpointManager
 from ai.services.plan_replanner import PlanReplanner
-from app.schemas.plan import StructuredPlan
 
 logger = logging.getLogger(__name__)
 

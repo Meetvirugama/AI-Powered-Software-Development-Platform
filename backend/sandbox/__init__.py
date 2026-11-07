@@ -98,8 +98,8 @@ __all__ = [
     "CRITICAL_PROJECT_FILES",
     "DEFAULT_COMMAND_TIMEOUT_SECONDS",
     "DEFAULT_MAX_DISK_BYTES",
-    "DEFAULT_MAX_FILE_SIZE_BYTES",
     "DEFAULT_MAX_FILES_MODIFIED",
+    "DEFAULT_MAX_FILE_SIZE_BYTES",
     "DEFAULT_MAX_ORPHAN_AGE_SECONDS",
     "DEFAULT_MAX_WORKSPACE_FILES",
     "DEFAULT_TIMEOUT_SECONDS",
@@ -115,7 +115,6 @@ __all__ = [
     "RECOVERY_STALE_TIMEOUT_SECONDS",
     "SECRET_SCAN_PATTERNS",
     "SENSITIVE_ENV_VARS",
-    "kill_process_tree",
     "TOOL_CHECK_DISK_BUDGET",
     "TOOL_CHECK_STALE_REVISION",
     "TOOL_CLEANUP_ORPHANED",
@@ -173,6 +172,7 @@ __all__ = [
     "WorkspaceTestRunner",
     "WorkspaceToolPolicyBridge",
     "WorkspaceUnsupportedFrameworkError",
+    "kill_process_tree",
     "register_workspace_tools",
 ]
 

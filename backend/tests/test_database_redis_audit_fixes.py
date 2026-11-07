@@ -31,7 +31,6 @@ from app.models.sync_job import SyncJob, SyncJobStatus
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.services.sync_worker import recover_stale_processing_jobs, sync_worker_loop
-from indexer.embedding_queue import EmbeddingQueue
 from indexer.models import Chunk
 
 
@@ -115,51 +114,6 @@ async def test_recover_stale_processing_jobs():
         assert str(job_id) in recovered
         mock_redis.lrem.assert_called_with("sync_jobs:processing", 1, raw_payload)
         mock_redis.rpush.assert_called_with("sync_jobs", json.dumps(payload))
-
-
-# ---------------------------------------------------------------------------
-# 3. EmbeddingQueue: Batch Count Validation & DB Rollback Protection
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_embedding_queue_batch_count_mismatch_raises():
-    """Verify EmbeddingQueue rejects mismatched vector counts and does not clear processing queue."""
-    mock_redis = MagicMock()
-    mock_redis.rpoplpush.return_value = json.dumps(
-        {"chunk_id": str(uuid.uuid4()), "content": "print('hello')"}
-    )
-    mock_service = MagicMock()
-    # Return 2 vectors for 1 item (mismatch)
-    mock_service.embed_batch = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
-
-    eq = EmbeddingQueue(mock_redis, mock_service)
-    with pytest.raises(ValueError, match="Embedding batch count mismatch"):
-        await eq.process_batch(db_session=None)
-
-
-@pytest.mark.asyncio
-async def test_embedding_queue_persistence_failure_rolls_back_and_requeues():
-    """Verify EmbeddingQueue does not acknowledge work if DB persistence fails."""
-    chunk_id = uuid.uuid4()
-    raw_item = json.dumps({"chunk_id": str(chunk_id), "content": "func()"})
-    mock_redis = MagicMock()
-    # First call returns item, second call returns None
-    mock_redis.rpoplpush.side_effect = [raw_item, None]
-
-    mock_service = MagicMock()
-    mock_service.embed_batch = AsyncMock(return_value=[[0.5] * 768])
-
-    mock_db = MagicMock()
-    mock_db.commit.side_effect = RuntimeError("Disk full / DB failure")
-
-    eq = EmbeddingQueue(mock_redis, mock_service)
-    with pytest.raises(RuntimeError, match="Database persistence failed"):
-        await eq.process_batch(db_session=mock_db)
-
-    # Must rollback DB
-    mock_db.rollback.assert_called_once()
-    # Must re-push to queue
-    mock_redis.lpush.assert_called_with("embedding_queue", raw_item)
 
 
 # ---------------------------------------------------------------------------

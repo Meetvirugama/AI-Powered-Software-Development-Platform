@@ -14,6 +14,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from datetime import datetime, timezone
 from enum import Enum
@@ -393,7 +394,7 @@ class TaskIntakePayload(BaseModel):
                         "max_budget_tokens": 20000,
                     }
                 ]
-            if not d.get("title") and d.get("description"):
+            if d.get("title") is None and d.get("description"):
                 first_line = str(d["description"]).strip().split("\n")[0].strip()
                 d["title"] = first_line[:120] if len(first_line) >= 3 else "Autonomous Development Task"
             return d
@@ -790,6 +791,46 @@ class TaskRecoveryResponse(BaseModel):
     timestamp: Optional[str] = None
 
 
+TestExecutionStatus = Literal["PASSED", "FAILED", "TIMEOUT", "INFRASTRUCTURE_ERROR"]
+
+
+@dataclass
+class TestCounts:
+    """Parsed test counts from test runner execution."""
+    __test__ = False
+
+    passed: int = 0
+    failed: int = 0
+    errors: int = 0
+    skipped: int = 0
+    total: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "passed": self.passed,
+            "failed": self.failed,
+            "errors": self.errors,
+            "skipped": self.skipped,
+            "total": self.total,
+        }
+
+
+@dataclass
+class RestrictedExecutionResult:
+    """Sanitized and bounded outcome of a restricted test run."""
+    command: list[str]
+    exit_code: int
+    status: TestExecutionStatus
+    duration_ms: int
+    stdout: str
+    stderr: str
+    test_counts: TestCounts
+    workspace_revision: str | None = None
+    timed_out: bool = False
+    is_infrastructure_error: bool = False
+    error_message: str | None = None
+
+
 __all__ = [
     "PaginatedTaskListResponse",
     "TaskAssumption",
@@ -804,6 +845,9 @@ __all__ = [
     "TaskSourceType",
     "TaskStatus",
     "TaskSummaryResponse",
+    "TestCounts",
+    "TestExecutionStatus",
+    "RestrictedExecutionResult",
     "VALID_TASK_TRANSITIONS",
     "can_transition",
     # Om (Workflows & Recovery)

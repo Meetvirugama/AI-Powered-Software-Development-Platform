@@ -22,12 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Enumerations
 # ---------------------------------------------------------------------------
 
-class FileTargetType(str, enum.Enum):
-    """Supported target types for source retrieval."""
-    FILE = "file"
-    DIRECTORY = "directory"
-
-
 class DiffStatus(str, enum.Enum):
     """Status of a file within a diff."""
     ADDED = "added"
@@ -211,14 +205,6 @@ class CommitDetail(BaseModel):
     stats: Optional[dict] = None
 
 
-class CommitListRequest(BaseModel):
-    """Request to list commits for a repository."""
-    ref: Optional[str] = Field(default=None, description="Branch, tag or SHA.")
-    path: Optional[str] = Field(default=None, description="Filter commits by file path.")
-    per_page: int = Field(default=30, ge=1, le=100)
-    page: int = Field(default=1, ge=1)
-
-
 class CommitListResponse(BaseModel):
     """Paginated list of commits."""
     commits: list[CommitDetail]
@@ -268,13 +254,6 @@ class PullRequestDiffResponse(BaseModel):
     total_additions: int = 0
     total_deletions: int = 0
     total_changes: int = 0
-
-
-class PullRequestListRequest(BaseModel):
-    """Request to list pull requests for a repository."""
-    state: str = Field(default="open", pattern="^(open|closed|all)$")
-    per_page: int = Field(default=30, ge=1, le=100)
-    page: int = Field(default=1, ge=1)
 
 
 # ---------------------------------------------------------------------------

@@ -54,7 +54,7 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
         expected_output_schema="RepositoryAnswer",
         last_evaluated="2026-10-31",
         description="User prompt template combining retrieved code chunks and user question",
-        required_variables=("context", "question"),
+        required_variables=("file_path", "start_line", "end_line", "repository_context", "question"),
     ),
     "bug_detection_system": PromptMetadata(
         prompt_id="prompt-bug-det-sys-001",
@@ -119,7 +119,7 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
         expected_output_schema="GroundingVerification",
         last_evaluated="2026-10-31",
         description="User prompt for validating cited sources against repository ground truth",
-        required_variables=("answer", "sources", "files"),
+        required_variables=("verified_file_list", "answer", "claimed_sources"),
     ),
     "summary_system": PromptMetadata(
         prompt_id="prompt-sum-sys-001",
@@ -138,16 +138,32 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
         expected_output_schema=None,
         last_evaluated="2026-10-31",
         description="User prompt template for code chunk summarization",
-        required_variables=("code_content",),
+        required_variables=("file_path", "start_line", "end_line", "code_content"),
+    ),
+    "test_planning_system": PromptMetadata(
+        prompt_id="prompt-test-plan-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="test_generation",
+        expected_output_schema="TestPlanResult",
+        last_evaluated="2026-11-04",
+        description="System prompt for test scenario planning and requirement matrix generation",
+    ),
+    "test_review_system": PromptMetadata(
+        prompt_id="prompt-test-rev-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="test_generation",
+        expected_output_schema="TestReviewResult",
+        last_evaluated="2026-11-04",
+        description="System prompt for adversarial test quality review and assertion completeness checking",
     ),
 }
 
 
 def get_prompt_metadata(name: str) -> PromptMetadata | None:
     """Return PromptMetadata for the given template name, or None if unregistered."""
-    clean_name = name.strip()
-    if clean_name.endswith(".txt"):
-        clean_name = clean_name[:-4]
+    clean_name = name.strip().removesuffix(".txt")
     return PROMPT_REGISTRY.get(clean_name)
 
 
@@ -248,6 +264,8 @@ REQUIRED_PROMPTS: list[str] = [
     "explanation_system",
     "bug_detection_system",
     "test_generation_system",
+    "test_planning_system",
+    "test_review_system",
     "code_review_system",
     "repair_system",
     "grounding_system",
@@ -273,10 +291,10 @@ def validate_required_prompts(required: list[str] | None = None) -> list[str]:
 __all__ = [
     "PROMPTS_DIR",
     "PROMPT_REGISTRY",
+    "REQUIRED_PROMPTS",
     "PromptMetadata",
     "PromptNotFoundError",
     "PromptRenderError",
-    "REQUIRED_PROMPTS",
     "clear_prompt_cache",
     "get_prompt_metadata",
     "list_available_prompts",

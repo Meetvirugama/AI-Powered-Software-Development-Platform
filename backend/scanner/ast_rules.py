@@ -10,16 +10,16 @@ from __future__ import annotations
 
 import ast
 import logging
-import os
-from dataclasses import asdict, dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any
 
 from .detector import LanguageDetector
 from .parser import Parser
 from .source_location import SourceLocationResolver
-from .symbols import FileInfo, ParseResult, SourceRange, Symbol
-from .target_selector import TargetSelectionResult, TargetSelector
+from .symbols import FileInfo, ParseResult, SourceRange
+from .target_selector import TargetSelector
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +36,16 @@ class ASTBugFinding:
     line_number: int  # 1-indexed start line
     end_line: int  # 1-indexed end line (inclusive)
     column: int = 1  # 1-indexed column
-    end_column: Optional[int] = None
+    end_column: int | None = None
     evidence: str = ""
     remediation: str = ""
     confidence: str = "high"  # "high" | "medium" | "low"
     is_structural: bool = True
     scanner: str = "ast_rules"
-    enclosing_symbol: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    enclosing_symbol: str | None = None
+    metadata: dict[str, Any] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert finding to standard dictionary representation."""
         return {
             "rule_id": self.rule_id,
@@ -66,7 +66,7 @@ class ASTBugFinding:
             "metadata": self.metadata or {},
         }
 
-    def to_static_finding_dict(self) -> Dict[str, Any]:
+    def to_static_finding_dict(self) -> dict[str, Any]:
         """Convert finding to Devu's StaticFinding dictionary format."""
         meta = dict(self.metadata or {})
         meta.update(
@@ -97,16 +97,16 @@ class ASTRuleAnalysisResult:
 
     success: bool
     file_path: str
-    findings: List[ASTBugFinding] = field(default_factory=list)
+    findings: list[ASTBugFinding] = field(default_factory=list)
     parse_status: str = "OK"  # "OK" | "SYNTAX_WARNING" | "PARSE_ERROR" | "UNSUPPORTED_LANGUAGE"
     has_syntax_errors: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
     rules_evaluated: int = 0
-    target_range: Optional[SourceRange] = None
-    target_symbol: Optional[str] = None
+    target_range: SourceRange | None = None
+    target_symbol: str | None = None
     total_lines: int = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert result to dictionary representation."""
         return {
             "success": self.success,
@@ -128,9 +128,9 @@ class ASTRuleAnalysisResult:
             "total_lines": self.total_lines,
         }
 
-    def findings_by_severity(self) -> Dict[str, List[ASTBugFinding]]:
+    def findings_by_severity(self) -> dict[str, list[ASTBugFinding]]:
         """Group findings by severity level."""
-        groups: Dict[str, List[ASTBugFinding]] = {
+        groups: dict[str, list[ASTBugFinding]] = {
             "critical": [],
             "high": [],
             "medium": [],
@@ -144,9 +144,9 @@ class ASTRuleAnalysisResult:
             groups[sev].append(finding)
         return groups
 
-    def findings_by_category(self) -> Dict[str, List[ASTBugFinding]]:
+    def findings_by_category(self) -> dict[str, list[ASTBugFinding]]:
         """Group findings by bug category."""
-        groups: Dict[str, List[ASTBugFinding]] = {}
+        groups: dict[str, list[ASTBugFinding]] = {}
         for finding in self.findings:
             cat = finding.category.lower()
             if cat not in groups:
@@ -175,8 +175,8 @@ class BaseASTRule:
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
         """Inspect a Python AST tree and return detected structural findings."""
         return []
 
@@ -186,8 +186,8 @@ class BaseASTRule:
         content: str,
         file_path: str,
         language: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
         """Inspect a Tree-sitter AST and return detected structural findings."""
         return []
 
@@ -224,12 +224,12 @@ class UnclosedResourceRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         # Track assignments inside with-statements to avoid false positives
-        with_managed_lines: Set[int] = set()
+        with_managed_lines: set[int] = set()
         for node in ast.walk(tree):
             if isinstance(node, (ast.With, ast.AsyncWith)):
                 for item in node.items:
@@ -293,9 +293,9 @@ class SwallowedExceptionRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.ExceptHandler):
@@ -315,9 +315,7 @@ class SwallowedExceptionRule(BaseASTRule):
                 is_empty_or_pass = False
                 if len(node.body) == 1:
                     stmt = node.body[0]
-                    if isinstance(stmt, ast.Pass):
-                        is_empty_or_pass = True
-                    elif isinstance(stmt, ast.Expr) and isinstance(
+                    if isinstance(stmt, ast.Pass) or isinstance(stmt, ast.Expr) and isinstance(
                         stmt.value, ast.Constant
                     ):
                         is_empty_or_pass = True
@@ -372,9 +370,9 @@ class SwallowedExceptionRule(BaseASTRule):
         content: str,
         file_path: str,
         language: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
         if language in ("javascript", "typescript", "JavaScript", "TypeScript"):
             # Look for catch_clause with empty compound_statement
             def traverse(node: Any):
@@ -427,9 +425,9 @@ class MutableDefaultArgumentRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -484,9 +482,9 @@ class NullDereferenceComparisonRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             # 1. Comparison with == None or != None
@@ -588,9 +586,9 @@ class IterationMutationRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, (ast.For, ast.AsyncFor)):
@@ -685,9 +683,9 @@ class IdenticalBranchesRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.If):
@@ -726,8 +724,8 @@ class IdenticalBranchesRule(BaseASTRule):
                         pass
 
                 # 2. Check duplicate conditions in if-elif chain
-                conditions: List[Tuple[str, int, int]] = []
-                current: Optional[ast.If] = node
+                conditions: list[tuple[str, int, int]] = []
+                current: ast.If | None = node
                 while current:
                     try:
                         cond_str = ast.unparse(current.test)
@@ -739,7 +737,7 @@ class IdenticalBranchesRule(BaseASTRule):
                     else:
                         break
 
-                seen_conditions: Set[str] = set()
+                seen_conditions: set[str] = set()
                 for cond_str, cond_line, cond_end in conditions:
                     if cond_str in seen_conditions:
                         snippet = self._extract_line_snippet(lines, cond_line)
@@ -786,11 +784,11 @@ class DeadCodeRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
-        def check_block(body: List[ast.stmt]):
+        def check_block(body: list[ast.stmt]):
             terminal_found = False
             for stmt in body:
                 if terminal_found:
@@ -820,7 +818,7 @@ class DeadCodeRule(BaseASTRule):
                     terminal_found = True
 
         for node in ast.walk(tree):
-            for field_name, value in ast.iter_fields(node):
+            for _field_name, value in ast.iter_fields(node):
                 if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
                     check_block(value)
 
@@ -847,9 +845,9 @@ class DynamicExecutionRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
@@ -890,9 +888,9 @@ class DynamicExecutionRule(BaseASTRule):
         content: str,
         file_path: str,
         language: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
         if language in ("javascript", "typescript", "JavaScript", "TypeScript"):
             def traverse(node: Any):
                 if node.type == "call_expression":
@@ -944,9 +942,9 @@ class SelfComparisonAssignmentRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             # Self assignment: x = x
@@ -1020,9 +1018,9 @@ class OffByOneIndexingRule(BaseASTRule):
         tree: ast.AST,
         content: str,
         file_path: str,
-        lines: List[str],
-    ) -> List[ASTBugFinding]:
-        findings: List[ASTBugFinding] = []
+        lines: list[str],
+    ) -> list[ASTBugFinding]:
+        findings: list[ASTBugFinding] = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.Subscript):
@@ -1062,7 +1060,7 @@ class OffByOneIndexingRule(BaseASTRule):
 # Default Rule Registry
 # ---------------------------------------------------------------------------
 
-DEFAULT_RULES: List[BaseASTRule] = [
+DEFAULT_RULES: list[BaseASTRule] = [
     UnclosedResourceRule(),
     SwallowedExceptionRule(),
     MutableDefaultArgumentRule(),
@@ -1089,29 +1087,25 @@ class ASTBugAnalyzer:
 
     def __init__(
         self,
-        parser: Optional[Parser] = None,
-        rules: Optional[Sequence[BaseASTRule]] = None,
-        target_selector: Optional[TargetSelector] = None,
-        source_resolver: Optional[SourceLocationResolver] = None,
-        detector: Optional[LanguageDetector] = None,
+        parser: Parser | None = None,
+        rules: Sequence[BaseASTRule] | None = None,
+        target_selector: TargetSelector | None = None,
+        source_resolver: SourceLocationResolver | None = None,
+        detector: LanguageDetector | None = None,
     ):
         self.parser = parser or Parser()
-        self.rules: List[BaseASTRule] = list(rules or DEFAULT_RULES)
+        self.rules: list[BaseASTRule] = list(rules or DEFAULT_RULES)
         self.target_selector = target_selector or TargetSelector(parser=self.parser)
         self.source_resolver = source_resolver or SourceLocationResolver(parser=self.parser)
         self.detector = detector or LanguageDetector()
-
-    def register_rule(self, rule: BaseASTRule) -> None:
-        """Register a new custom AST rule into the analysis engine."""
-        self.rules.append(rule)
 
     def analyze_code(
         self,
         content: str,
         file_path: str = "",
-        target_range: Optional[SourceRange] = None,
-        target_symbol: Optional[str] = None,
-        language: Optional[str] = None,
+        target_range: SourceRange | None = None,
+        target_symbol: str | None = None,
+        language: str | None = None,
     ) -> ASTRuleAnalysisResult:
         """Analyze source code string against all registered AST rules.
 
@@ -1136,7 +1130,7 @@ class ASTBugAnalyzer:
             is_binary=False,
         )
         detected_lang = language or self.detector.detect(file_info)
-        resolved_range: Optional[SourceRange] = target_range
+        resolved_range: SourceRange | None = target_range
 
         # If a target symbol is specified without an explicit range, resolve its bounds
         if target_symbol and resolved_range is None:
@@ -1156,15 +1150,15 @@ class ASTBugAnalyzer:
                     symbol_kind=sel_result.symbol_kind,
                 )
 
-        raw_findings: List[ASTBugFinding] = []
+        raw_findings: list[ASTBugFinding] = []
         parse_status = "OK"
         has_syntax_errors = False
-        error_message: Optional[str] = None
+        error_message: str | None = None
         rules_evaluated = 0
 
         # Python Analysis via ast.parse
         if detected_lang.lower() == "python":
-            python_ast: Optional[ast.AST] = None
+            python_ast: ast.AST | None = None
             try:
                 python_ast = ast.parse(content, filename=file_path or "<string>")
             except (SyntaxError, UnicodeEncodeError) as e:
@@ -1258,7 +1252,7 @@ class ASTBugAnalyzer:
             error_message = f"Language '{detected_lang}' is not supported for AST analysis"
 
         # Filter findings to target range if specified
-        final_findings: List[ASTBugFinding] = []
+        final_findings: list[ASTBugFinding] = []
         for finding in raw_findings:
             if resolved_range is not None:
                 # Finding must overlap with target line bounds
@@ -1288,9 +1282,9 @@ class ASTBugAnalyzer:
     def analyze_file(
         self,
         file_path: str,
-        repo_root: Optional[str] = None,
-        target_range: Optional[SourceRange] = None,
-        target_symbol: Optional[str] = None,
+        repo_root: str | None = None,
+        target_range: SourceRange | None = None,
+        target_symbol: str | None = None,
     ) -> ASTRuleAnalysisResult:
         """Analyze a file on disk with path traversal protections and explicit status."""
         safe_path = Path(file_path)
@@ -1336,39 +1330,9 @@ class ASTBugAnalyzer:
             target_symbol=target_symbol,
         )
 
-    def analyze_target_selection(
-        self,
-        target_result: TargetSelectionResult,
-        content: str,
-    ) -> ASTRuleAnalysisResult:
-        """Directly analyze a verified target selection from TargetSelector."""
-        if not target_result.success:
-            return ASTRuleAnalysisResult(
-                success=False,
-                file_path=target_result.file_path,
-                findings=[],
-                parse_status="PARSE_ERROR",
-                error_message=target_result.error_message,
-            )
-
-        target_range = SourceRange(
-            file_path=target_result.file_path,
-            start_line=target_result.start_line,
-            end_line=target_result.end_line,
-            symbol_name=target_result.symbol_name,
-            symbol_kind=target_result.symbol_kind,
-        )
-
-        return self.analyze_code(
-            content=content,
-            file_path=target_result.file_path,
-            target_range=target_range,
-            target_symbol=target_result.symbol_name,
-        )
-
     def to_static_findings(
         self,
         findings: Sequence[ASTBugFinding],
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Export AST bug findings to Devu's normalized StaticFinding dictionary format."""
         return [f.to_static_finding_dict() for f in findings]

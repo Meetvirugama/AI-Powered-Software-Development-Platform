@@ -20,21 +20,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Type
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ValidationError
-
-from ai.schemas.validator import OutputValidator
 from app.core.errors import APIError, ErrorCode
 from app.schemas.ai_quality import (
     AIQualityReport,
-    PermittedProviderName,
     ProviderValidationCheck,
-    ProviderValidationStatus,
     QualityBenchmarkSample,
 )
+from pydantic import BaseModel, ValidationError
+
+from ai.schemas.validator import OutputValidator
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +288,7 @@ class AIQualityEvaluator:
     def evaluate_schema_conformance(
         self,
         raw_outputs: list[str],
-        schema_cls: Type[BaseModel],
+        schema_cls: type[BaseModel],
     ) -> float:
         """Test how reliably AI text outputs convert into valid Pydantic models.
 
@@ -315,8 +312,10 @@ class AIQualityEvaluator:
                 if isinstance(data, dict):
                     schema_cls.model_validate(data)
                     valid_count += 1
-            except (json.JSONDecodeError, ValidationError, Exception):
+            except (json.JSONDecodeError, ValidationError):
                 # Failed schema validation
+                continue
+            except Exception:  # noqa: BLE001, S112
                 continue
 
         return valid_count / len(raw_outputs)
@@ -345,7 +344,7 @@ class AIQualityEvaluator:
         fp_count = sum(1 for s in clean_results if s.is_false_positive)
 
         # Evaluate defect fixtures (measure precision and recall)
-        defect_results, precision, recall, f1 = self.evaluate_defect_fixtures(defect_fixtures)
+        _, precision, recall, f1 = self.evaluate_defect_fixtures(defect_fixtures)
 
         total_samples = len(clean_samples) + len(defect_fixtures)
 

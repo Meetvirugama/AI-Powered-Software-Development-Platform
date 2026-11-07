@@ -16,24 +16,24 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from app.core.secret_redaction import redact
 from app.schemas.workspace import WorkspaceCommandResult
+
 from sandbox.constants import (
     ALLOWED_COMMAND_TEMPLATES,
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
     DISALLOWED_COMMAND_TOKENS,
     MAX_COMMAND_OUTPUT_BYTES,
     MAX_TIMEOUT_SECONDS,
-    SENSITIVE_ENV_VARS,
 )
 from sandbox.exceptions import (
     WorkspaceCommandError,
@@ -360,7 +360,7 @@ class WorkspaceCommandRunner:
                 timed_out=False,
             )
 
-        except subprocess.TimeoutExpired as exc:
+        except subprocess.TimeoutExpired:
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             logger.warning(
                 "workspace_command_timeout",
@@ -428,3 +428,17 @@ class RawCommandResult:
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode or exit_code
+
+
+__all__ = [
+    "ALLOWED_COMMAND_TEMPLATES",
+    "DEFAULT_COMMAND_TIMEOUT_SECONDS",
+    "MAX_COMMAND_OUTPUT_BYTES",
+    "MAX_TIMEOUT_SECONDS",
+    "RawCommandResult",
+    "WorkspaceCommandError",
+    "WorkspaceCommandResult",
+    "WorkspaceCommandRunner",
+    "WorkspaceCommandTimeoutError",
+    "WorkspacePolicyViolationError",
+]

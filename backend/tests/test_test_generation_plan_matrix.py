@@ -33,7 +33,6 @@ import pytest
 
 from ai.context.models import SymbolContext, TargetSnippet
 from ai.context.intelligence_context import build_test_intelligence_context
-from ai.services.test_requirement_service import TestRequirementService
 from app.core.errors import APIError
 from app.models.repository_file import RepositoryFile
 from app.schemas.analysis import (
@@ -48,7 +47,8 @@ from app.schemas.analysis import (
 from app.services.test_generation_orchestrator import check_generated_test_path
 from app.services.test_generation_report import format_test_suite_report_markdown
 from app.services.test_requirement_orchestrator import TestRequirementOrchestrator
-from app.services.test_runner import CommandPolicyValidator, RestrictedTestRunner
+from sandbox.command_runner import WorkspaceCommandRunner
+from sandbox.exceptions import WorkspacePolicyViolationError
 from scanner.symbols import Symbol, SymbolEdge
 from scanner.test_coverage_analyzer import TestCoverageAnalyzer
 from scanner.test_gap_analyzer import TestGapAnalyzer
@@ -211,30 +211,6 @@ def test_tg_req_matrix_all_categories_covered():
 
 
 # ==============================================================================
-# SECTION 8: Scenario-Category Coverage Tests (TG-CAT-001 to TG-CAT-030)
-# ==============================================================================
-
-def test_tg_cat_scenario_diversity():
-    """TG-CAT-001 - TG-CAT-030: Ensure planned scenarios cover boundary, null, exception, and normal paths."""
-    service = TestRequirementService()
-    req = TestRequirement(
-        requirement_id="REQ-TEST-CAT-1",
-        title="Valid charge processing",
-        category="functional",
-        priority="CRITICAL",
-        source_files=["app/payment.py"],
-        source_symbols=["process_charge"],
-        expected_behavior="Charges card and returns 200 JSON",
-        status="MISSING",
-    )
-    gap_res = TestGapAnalyzer().analyze_gaps([req])
-    plan = service.create_deterministic_plan("app/payment.py", gap_res, framework="pytest")
-    assert len(plan.scenarios) > 0
-    categories = {s.category for s in plan.scenarios}
-    assert "functional" in categories
-
-
-# ==============================================================================
 # SECTION 9: Existing Test Inventory & Mapping (TG-MAP-001 to TG-MAP-020)
 # ==============================================================================
 
@@ -354,30 +330,6 @@ def test_tg_pri_critical_security_over_formatting():
 
 
 # ==============================================================================
-# SECTION 12: Test Planning & Generation (TG-PLAN-001 to TG-PLAN-018)
-# ==============================================================================
-
-def test_tg_plan_traceability():
-    """TG-PLAN-001 - TG-PLAN-018: Every planned scenario must trace directly to requirement IDs."""
-    service = TestRequirementService()
-    req = TestRequirement(
-        requirement_id="REQ-PLAN-01",
-        title="Boundary check on age limit",
-        category="boundary",
-        priority="HIGH",
-        source_files=["app/user.py"],
-        source_symbols=["validate_age"],
-        expected_behavior="Reject age < 18",
-        status="MISSING",
-    )
-    gap_res = TestGapAnalyzer().analyze_gaps([req])
-    plan = service.create_deterministic_plan("app/user.py", gap_res, framework="pytest")
-    assert len(plan.scenarios) > 0
-    for sc in plan.scenarios:
-        assert sc.requirement_id == req.requirement_id
-
-
-# ==============================================================================
 # SECTION 13: Correctness & Quality (TG-GEN-001 to TG-GEN-030)
 # ==============================================================================
 
@@ -445,11 +397,11 @@ def test_tg_mut_score_reporting():
 
 def test_tg_run_restricted_sandbox_blocks_escapes():
     """TG-RUN-001 - TG-RUN-025: Restricted runner forbids dangerous commands and validates test commands."""
-    with pytest.raises(APIError):
-        CommandPolicyValidator.validate_command("rm -rf /")
+    runner = WorkspaceCommandRunner()
+    with pytest.raises(WorkspacePolicyViolationError):
+        runner.validate_command("rm -rf /")
 
-    valid_cmd = CommandPolicyValidator.validate_command("pytest tests/test_auth.py")
-    assert "pytest" in valid_cmd[0]
+    runner.validate_command("pytest", ["tests/test_auth.py"])
 
 
 # ==============================================================================

@@ -7,6 +7,11 @@ from __future__ import annotations
 import logging
 from uuid import UUID, uuid4
 
+from ai.intelligence.related_files import (
+    RelatedFileDiscoveryService,
+    RelatedFilesDiscoveryResponse,
+)
+from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 from fastapi import APIRouter, Depends, Request
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -16,6 +21,7 @@ from app.api.v1.analysis.common import (
     _get_service,
     _invoke_service_method,
     _owned_repository,
+    _owned_repository_async,
     _request_user_id,
 )
 from app.core.database import get_db
@@ -23,11 +29,6 @@ from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
 from app.core.telemetry import StageExecutionTimer
-from ai.intelligence.related_files import (
-    RelatedFileDiscoveryService,
-    RelatedFilesDiscoveryResponse,
-)
-from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 from app.schemas.analysis import (
     CodeExplanation,
     CodeExplanationResponse,
@@ -50,11 +51,6 @@ router = APIRouter(tags=["analysis"])
     responses=ANALYSIS_ERROR_RESPONSES,
     summary="Discover automatically related files for a code explanation target",
     description="Traverses the repository knowledge graph to discover direct dependencies, callers, database models, schemas, and tests for a selected file/symbol.",
-)
-@router.get(
-    "/repositories/{repository_id}/related-files",
-    response_model=RelatedFilesDiscoveryResponse,
-    include_in_schema=False,
 )
 def get_related_files(
     repository_id: UUID,
@@ -116,7 +112,7 @@ async def explain_code(
     """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
     timer = StageExecutionTimer("explain", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
-    repo = _owned_repository(repository_id, request, db)
+    repo = await _owned_repository_async(repository_id, request, db)
 
     with timer.measure("target_resolution_and_context"):
         resolved = resolve_target_and_build_context(repository_id, repo, payload, db)

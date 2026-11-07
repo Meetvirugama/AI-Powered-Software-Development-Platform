@@ -29,21 +29,21 @@ from ai.intelligence.snapshot_manager import (
 )
 
 __all__ = [
+    "DEFAULT_SNAPSHOT_BASE_DIR",
+    "DependencyImpactAnalyzer",
+    "DiscoveredRelatedFile",
     "EntryPointMetadata",
     "FileIntelligenceMetadata",
     "GraphEdge",
     "GraphNode",
+    "ImpactAnalysisReport",
     "IntelligenceManifest",
     "ModuleMetadata",
     "OverviewMetadata",
-    "RepositoryIntelligenceSnapshot",
-    "RepositoryIntelligenceBuilder",
-    "RepositoryIntelligenceSnapshotManager",
-    "DependencyImpactAnalyzer",
-    "ImpactAnalysisReport",
-    "DiscoveredRelatedFile",
-    "RelatedFilesDiscoveryResponse",
     "RelatedFileDiscoveryService",
-    "DEFAULT_SNAPSHOT_BASE_DIR",
+    "RelatedFilesDiscoveryResponse",
+    "RepositoryIntelligenceBuilder",
+    "RepositoryIntelligenceSnapshot",
+    "RepositoryIntelligenceSnapshotManager",
 ]
 

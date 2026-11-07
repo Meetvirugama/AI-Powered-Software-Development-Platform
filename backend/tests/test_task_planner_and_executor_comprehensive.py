@@ -72,8 +72,6 @@ from app.schemas.plan import (
 from app.schemas.workspace import WorkspaceStatus
 from app.services.task_execution_report import TaskExecutionReportGenerator
 from app.schemas.planner_context import AffectedSymbol
-from scanner.task_acceptance_mapper import TaskAcceptanceMapper
-from scanner.task_impact_analyzer import TaskImpactAnalyzer
 from scanner.task_test_planner import TaskTestPlanner
 
 
@@ -463,22 +461,6 @@ class TestSection76TestPlannerAndEvidenceHierarchy:
             symbol_edges=[edge],
         )
         assert "authenticate" not in untested
-
-    def test_tst_10_blast_radius_impact_analysis(self):
-        """TST-10: Impact analyzer discovers callers and categorizes 3-tiered test scopes."""
-        from types import SimpleNamespace
-        analyzer = TaskImpactAnalyzer()
-        sym = SimpleNamespace(name="generate_token", file_path="src/auth.py")
-        edge = SimpleNamespace(caller_symbol="login_handler", callee_symbol="generate_token")
-        report = analyzer.analyze_impact(
-            target_files=["src/auth.py"],
-            symbols=[sym],
-            edges=[edge],
-            existing_tests=["tests/test_auth.py"],
-        )
-        assert "src/auth.py" in report.target_files
-        assert "generate_token" in report.directly_modified_symbols
-        assert "login_handler" in report.direct_callers
 
     def test_tst_01_framework_detection_pytest(self):
         """TST-01 & TST-15: Detects pytest framework from repository configuration."""

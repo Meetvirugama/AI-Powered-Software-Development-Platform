@@ -12,15 +12,9 @@ from __future__ import annotations
 
 import logging
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy.orm import Session
-
-from ai.context.task_context import TaskContextBuilder, TaskContextManifest
-from ai.schemas.validator import OutputValidator
-from ai.services.task_completeness_checker import PlanCompletenessReport, TaskCompletenessChecker
-from ai.services.task_requirement_discovery import DiscoveredTaskRequirement, TaskRequirementDiscovery
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.models.analysis_finding import AnalysisFinding
@@ -29,16 +23,22 @@ from app.models.repository import Repository
 from app.models.repository_file import RepositoryFile
 from app.models.task import AgentTask
 from app.schemas.plan import (
-    ExecutionPolicy,
+    PlannerSchema,
     PlanResourceBudget,
     PlanRisk,
     PlanStep,
     PlanTransition,
-    PlannerSchema,
     StepVerification,
-    StructuredPlan,
 )
 from app.schemas.task import TaskAssumption
+from sqlalchemy.orm import Session
+
+from ai.context.task_context import TaskContextBuilder
+from ai.schemas.validator import OutputValidator
+from ai.services.task_completeness_checker import TaskCompletenessChecker
+from ai.services.task_requirement_discovery import (
+    TaskRequirementDiscovery,
+)
 
 if TYPE_CHECKING:
     from ai.llm.client import LLMGateway
@@ -102,7 +102,7 @@ class TaskPlanner:
 
     def __init__(
         self,
-        llm_gateway: "LLMGateway | None" = None,
+        llm_gateway: LLMGateway | None = None,
         *,
         model: str | None = None,
     ) -> None:
@@ -192,7 +192,7 @@ class TaskPlanner:
                                 req_target_files.insert(0, norm_fp)
                         except UnsafePathError:
                             pass
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("planner_context_query_warning", extra={"error": str(exc)})
 
         # Match candidate files from repo_files if req_target_files is empty (autonomous agent discovery)
@@ -295,8 +295,8 @@ class TaskPlanner:
             if isinstance(raw_asm, dict) and raw_asm.get("id") and raw_asm.get("description"):
                 try:
                     assumptions.append(TaskAssumption.model_validate(raw_asm))
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("ignoring_malformed_assumption", extra={"error": str(exc)})
         if not assumptions:
             assumptions.append(
                 TaskAssumption(
@@ -558,7 +558,7 @@ class TaskPlanner:
                     )
                 if isinstance(instance, PlannerSchema):
                     return self._sanitize_llm_plan(instance, ctx)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "task_planner_llm_fallback",
                     extra={"task_id": str(task.id), "error": redact(str(exc))},

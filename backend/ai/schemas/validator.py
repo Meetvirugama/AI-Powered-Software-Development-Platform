@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["OutputValidator"]
+
 # Maximum number of repair attempts before giving up
 _MAX_REPAIR_ATTEMPTS = 2
 
@@ -191,7 +193,7 @@ class OutputValidator:
             try:
                 from app.core.config import settings
                 repair_model = settings.active_chat_model
-            except Exception:
+            except Exception:  # noqa: BLE001
                 repair_model = "gemini-flash-lite-latest"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):

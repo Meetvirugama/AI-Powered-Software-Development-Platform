@@ -19,10 +19,9 @@ import fnmatch
 import logging
 import re
 import subprocess
-import time
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
@@ -34,6 +33,7 @@ from app.schemas.workspace import (
     SecretScanFinding,
     WorkspaceDiffResult,
 )
+
 from sandbox.constants import (
     CRITICAL_PROJECT_FILES,
     FORBIDDEN_FILE_PATTERNS,
@@ -41,10 +41,7 @@ from sandbox.constants import (
 )
 from sandbox.exceptions import (
     WorkspaceDiffError,
-    WorkspaceDiffValidationError,
     WorkspacePathEscapeError,
-    WorkspaceSecretLeakDetectedError,
-    WorkspaceStaleApprovalError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 
@@ -122,7 +119,7 @@ class WorkspaceDiffVerifier:
             is_empty=is_empty,
             files=file_summaries,
             raw_diff=raw_diff,
-            extracted_at=datetime.now(timezone.utc).isoformat(),
+            extracted_at=datetime.now(UTC).isoformat(),
         )
 
     def parse_unified_diff(
@@ -327,45 +324,8 @@ class WorkspaceDiffVerifier:
             secret_findings=secret_findings,
             blocking_findings=blocking_findings,
             warnings=warnings,
-            validated_at=datetime.now(timezone.utc).isoformat(),
+            validated_at=datetime.now(UTC).isoformat(),
         )
-
-    def assert_revision_integrity(
-        self,
-        workspace_path: Path,
-        expected_base_revision: str,
-    ) -> str:
-        """Verify that the workspace working tree is based on the expected base revision.
-
-        Raises:
-            WorkspaceStaleApprovalError: If base revision has drifted or changed.
-        """
-        if not workspace_path.exists():
-            raise WorkspaceStaleApprovalError(f"Workspace path does not exist: {workspace_path}")
-
-        git_dir = workspace_path / ".git"
-        if not git_dir.exists():
-            return expected_base_revision
-
-        try:
-            # Check current commit or branch parent
-            cmd = ["git", "-C", str(workspace_path), "rev-parse", "HEAD"]
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10,
-            )
-            if proc.returncode == 0:
-                current_sha = proc.stdout.strip()
-                # In git worktree or branch, HEAD may be a commit on the branch
-                # Verify if expected_base_revision is an ancestor or matches
-                return current_sha
-        except Exception as exc:
-            logger.warning("git_rev_parse_failed", extra={"error": str(exc)})
-
-        return expected_base_revision
 
     # -----------------------------------------------------------------------
     # Internal Helpers

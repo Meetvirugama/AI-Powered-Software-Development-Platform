@@ -6,27 +6,28 @@ POST /api/v1/github/repositories/:id/connect — connect a repo to the platform
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 from uuid import UUID
 
+import httpx
 from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
-from app.core.redis import get_redis
-import httpx
-from pydantic import BaseModel
-from app.repositories.user_repository import UserRepository
-from app.repositories.repository_repository import RepositoryRepository
+from app.core.redis import get_redis, get_redis_async
 from app.repositories.github_installation_repository import GitHubInstallationRepository
+from app.repositories.repository_repository import RepositoryRepository
+from app.repositories.user_repository import UserRepository
 from app.schemas.repository import (
     AvailableRepository,
     ConnectRepositoryResponse,
     PaginatedAvailableRepositoryResponse,
-    SyncJobResponse,
 )
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 
@@ -418,6 +419,7 @@ async def github_webhook(
     import hmac
     import json
     import re
+
     from app.core.redis import get_redis
 
     MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024  # 5 MB
@@ -456,12 +458,18 @@ async def github_webhook(
         if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", delivery_id):
             raise APIError(400, ErrorCode.BAD_REQUEST, "Invalid X-GitHub-Delivery header.")
         try:
-            r = get_redis()
-            if r and hasattr(r, "set"):
+            try:
+                r = await get_redis_async()
                 was_set = r.set(f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True)
-                if not was_set:
-                    logger.info("github_webhook_duplicate_delivery", extra={"delivery_id": delivery_id, "event": event})
-                    return {"status": "duplicate_delivery_ignored", "delivery_id": delivery_id}
+                if inspect.isawaitable(was_set):
+                    was_set = await was_set
+            except Exception:
+                was_set = await asyncio.to_thread(
+                    get_redis().set, f"webhook_delivery:{delivery_id}", "1", ex=86400, nx=True
+                )
+            if not was_set:
+                logger.info("github_webhook_duplicate_delivery", extra={"delivery_id": delivery_id, "event": event})
+                return {"status": "duplicate_delivery_ignored", "delivery_id": delivery_id}
         except Exception as redis_exc:
             logger.warning("webhook_dedup_redis_failed", extra={"error": str(redis_exc)})
 

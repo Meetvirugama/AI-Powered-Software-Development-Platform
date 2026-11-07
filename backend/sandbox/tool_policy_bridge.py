@@ -15,20 +15,21 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Mapping
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
 from agent.tools.router import ToolDefinition, ToolRequest, ToolResult, ToolRouter
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
-    WorkspaceStatus,
     WorkspaceCommitRequest,
     WorkspaceDraftPRRequest,
     WorkspacePushRequest,
+    WorkspaceStatus,
     WorkspaceTestExecutionRequest,
-    WorkspaceToolPolicyRequest,
     WorkspaceToolPolicyResult,
 )
+
 from sandbox.constants import (
     DEFAULT_MAX_ORPHAN_AGE_SECONDS,
     PROTECTED_BRANCHES,
@@ -40,7 +41,6 @@ from sandbox.exceptions import (
     WorkspacePolicyViolationError,
     WorkspaceProtectedBranchError,
     WorkspacePublicationUnauthorizedError,
-    WorkspaceStateError,
 )
 from sandbox.path_guard import WorkspacePathGuard
 

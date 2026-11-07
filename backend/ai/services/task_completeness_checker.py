@@ -8,11 +8,13 @@ security rules, migrations, tests, and acceptance criteria before human approval
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
+
+from app.schemas.plan import StructuredPlan
 
 from ai.services.task_requirement_discovery import DiscoveredTaskRequirement
-from app.schemas.plan import PlanStep, StructuredPlan
 
 logger = logging.getLogger(__name__)
 

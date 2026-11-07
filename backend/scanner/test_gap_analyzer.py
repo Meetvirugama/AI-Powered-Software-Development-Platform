@@ -9,16 +9,15 @@ Prioritizes testing gaps by criticality, security risk, and regression impact.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from app.schemas.analysis import (
-    TestQualityReport,
     TestRequirement,
-    TestRequirementCategory,
-    TestRequirementPriority,
     TestRequirementStatus,
 )
+
 from scanner.test_coverage_analyzer import TestCoverageResult
 from scanner.test_mapper import TestEvidenceLevel
 

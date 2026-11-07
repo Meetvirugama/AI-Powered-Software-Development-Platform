@@ -15,11 +15,11 @@ Provides robust defense-in-depth against:
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path, PurePosixPath
 
 from app.core.input_security import UnsafePathError, is_within, validate_repo_relative_path
+
 from sandbox.constants import (
     DANGEROUS_PATH_SEGMENTS,
     PROTECTED_SYSTEM_PREFIXES,

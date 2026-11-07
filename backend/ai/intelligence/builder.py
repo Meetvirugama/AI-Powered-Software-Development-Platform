@@ -11,9 +11,10 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import Any, Sequence
+from typing import Any
 from uuid import UUID
 
 from ai.intelligence.models import (
@@ -50,12 +51,10 @@ class RepositoryIntelligenceBuilder:
     ) -> RepositoryIntelligenceSnapshot:
         """Construct the complete intelligence snapshot from database records and parsed AST data."""
         contents = file_contents or {}
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(UTC).isoformat()
 
         # 1. Process files
-        file_id_to_record: dict[str, Any] = {}
         file_id_to_path: dict[str, str] = {}
-        file_path_to_id: dict[str, str] = {}
         file_intels: list[FileIntelligenceMetadata] = []
         languages_count: dict[str, int] = defaultdict(int)
 
@@ -63,9 +62,7 @@ class RepositoryIntelligenceBuilder:
             f_id = str(getattr(f, "id", ""))
             f_path = str(getattr(f, "path", ""))
             f_lang = str(getattr(f, "language", "") or "text").lower()
-            file_id_to_record[f_id] = f
             file_id_to_path[f_id] = f_path
-            file_path_to_id[f_path] = f_id
 
             if f_lang and f_lang != "text":
                 languages_count[f_lang] += 1
@@ -73,10 +70,7 @@ class RepositoryIntelligenceBuilder:
             is_test = bool(
                 "test" in f_path.lower()
                 or f_path.startswith("tests/")
-                or f_path.endswith("_test.py")
-                or f_path.endswith(".test.ts")
-                or f_path.endswith(".test.tsx")
-                or f_path.endswith(".spec.ts")
+                or f_path.endswith(("_test.py", ".test.ts", ".test.tsx", ".spec.ts"))
             )
 
             file_intels.append(
@@ -98,7 +92,6 @@ class RepositoryIntelligenceBuilder:
 
         # 2. Process Symbols & Graph Nodes
         symbol_nodes: list[GraphNode] = []
-        symbol_id_to_node: dict[str, GraphNode] = {}
         entry_points: list[EntryPointMetadata] = []
 
         for s in symbols:
@@ -121,7 +114,6 @@ class RepositoryIntelligenceBuilder:
                 signature=s_sig,
             )
             symbol_nodes.append(node)
-            symbol_id_to_node[s_id] = node
 
             # Attach symbol name to file metadata
             if s_path in file_intel_map and s_name not in file_intel_map[s_path].symbols:
@@ -226,11 +218,11 @@ class RepositoryIntelligenceBuilder:
         content: str,
     ) -> EntryPointMetadata | None:
         """Detect API routes, worker entrypoints, and main runners."""
-        sig = signature.lower()
         node_name = node.name.lower()
 
         # FastAPI / Flask decorator
-        route_match = re.search(r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', content)
+        search_body = f"{signature}\n{content}" if signature else content
+        route_match = re.search(r'@(?:router|app)\.(get|post|put|delete|patch)\s*\(\s*["\']([^"\']+)["\']', search_body)
         if route_match:
             method, route = route_match.groups()
             return EntryPointMetadata(
@@ -243,7 +235,7 @@ class RepositoryIntelligenceBuilder:
                 framework="fastapi",
             )
 
-        if node_name in ("main", "run", "start") or path.endswith("main.py") or path.endswith("index.ts"):
+        if node_name in ("main", "run", "start") or path.endswith(("main.py", "index.ts")):
             return EntryPointMetadata(
                 id=f"entry_{node.id}",
                 path=path,
@@ -308,7 +300,7 @@ class RepositoryIntelligenceBuilder:
             p = f.path.lower()
             if "fastapi" in p or "app/main.py" in p:
                 frameworks.add("FastAPI")
-            if "react" in p or p.endswith(".tsx") or p.endswith(".jsx"):
+            if "react" in p or p.endswith((".tsx", ".jsx")):
                 frameworks.add("React")
             if "vite.config" in p:
                 frameworks.add("Vite")

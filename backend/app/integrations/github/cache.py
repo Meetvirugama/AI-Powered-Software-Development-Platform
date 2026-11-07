@@ -27,18 +27,6 @@ from uuid import UUID
 logger = logging.getLogger(__name__)
 
 
-class RevisionMismatchError(Exception):
-    """Raised when a cached entry does not match the requested revision."""
-
-    def __init__(self, requested: str, found: str, path: str) -> None:
-        super().__init__(
-            f"Cache revision mismatch for '{path}': requested '{requested}', found '{found}'."
-        )
-        self.requested = requested
-        self.found = found
-        self.path = path
-
-
 class SourceRevisionCache:
     """Revision-safe cache for repository source code with bounded memory TTL and capacity.
 
@@ -113,6 +101,10 @@ class SourceRevisionCache:
                 if raw is not None:
                     if isinstance(raw, bytes):
                         raw = raw.decode("utf-8")
+                    if raw.startswith("zlib:"):
+                        import base64
+                        import zlib
+                        raw = zlib.decompress(base64.b64decode(raw[5:])).decode("utf-8")
                     entry = json.loads(raw)
                     # Populate memory cache with TTL
                     if len(self._memory_cache) >= self._max_memory_entries and key not in self._memory_cache:
@@ -120,7 +112,12 @@ class SourceRevisionCache:
                         self._memory_cache.pop(oldest, None)
                         self._memory_expires.pop(oldest, None)
                     self._memory_cache[key] = entry
-                    self._memory_expires[key] = now + self._default_ttl
+                    clean_rev = revision.strip()
+                    if len(clean_rev) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_rev):
+                        mem_ttl = 7 * 86400
+                    else:
+                        mem_ttl = 300
+                    self._memory_expires[key] = now + mem_ttl
             except Exception as exc:
                 logger.warning("Redis cache read failed for key %s: %s", key, exc)
 
@@ -169,7 +166,14 @@ class SourceRevisionCache:
         validation upon retrieval.
         """
         key = self.build_key(repository_id, revision, path)
-        ttl = ttl_seconds if ttl_seconds is not None else self._default_ttl
+        if ttl_seconds is not None:
+            ttl = ttl_seconds
+        else:
+            clean_rev = revision.strip()
+            if len(clean_rev) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_rev):
+                ttl = 7 * 86400  # 7 days for immutable commit SHAs (Audit B5.4)
+            else:
+                ttl = 300  # 5 minutes for mutable branch heads (Audit B5.4)
         now = time.monotonic()
 
         # Ensure revision metadata is explicitly attached to the entry
@@ -192,7 +196,14 @@ class SourceRevisionCache:
         if self._redis is not None:
             try:
                 serialized = json.dumps(entry)
-                self._redis.setex(key, ttl, serialized)
+                if len(serialized) > 8192:
+                    import base64
+                    import zlib
+                    compressed = base64.b64encode(zlib.compress(serialized.encode("utf-8"))).decode("ascii")
+                    payload = f"zlib:{compressed}"
+                else:
+                    payload = serialized
+                self._redis.setex(key, ttl, payload)
             except Exception as exc:
                 logger.warning("Redis cache write failed for key %s: %s", key, exc)
 
@@ -202,15 +213,24 @@ class SourceRevisionCache:
             immutable_key = self.build_key(repository_id, commit_sha, path)
             immutable_entry = dict(entry)
             immutable_entry["revision"] = commit_sha
+            immutable_ttl = 7 * 86400
             if len(self._memory_cache) >= self._max_memory_entries and immutable_key not in self._memory_cache:
                 oldest = next(iter(self._memory_cache))
                 self._memory_cache.pop(oldest, None)
                 self._memory_expires.pop(oldest, None)
             self._memory_cache[immutable_key] = immutable_entry
-            self._memory_expires[immutable_key] = now + ttl
+            self._memory_expires[immutable_key] = now + immutable_ttl
             if self._redis is not None:
                 try:
-                    self._redis.setex(immutable_key, ttl, json.dumps(immutable_entry))
+                    ser = json.dumps(immutable_entry)
+                    if len(ser) > 8192:
+                        import base64
+                        import zlib
+                        comp = base64.b64encode(zlib.compress(ser.encode("utf-8"))).decode("ascii")
+                        im_payload = f"zlib:{comp}"
+                    else:
+                        im_payload = ser
+                    self._redis.setex(immutable_key, immutable_ttl, im_payload)
                 except Exception:
                     pass
 

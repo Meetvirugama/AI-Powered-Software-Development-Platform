@@ -16,16 +16,16 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from uuid import UUID, uuid4
+from typing import Any
 
-from .ast_rules import ASTBugAnalyzer, ASTBugFinding
+from .ast_rules import ASTBugAnalyzer
 from .detector import LanguageDetector
 from .extractor import SymbolExtractor
 from .parser import Parser
-from .source_location import ResolutionResult, SourceLocationResolver
+from .source_location import SourceLocationResolver
 from .symbols import FileInfo, ParseResult, SourceRange, Symbol
 
 logger = logging.getLogger(__name__)
@@ -44,11 +44,11 @@ class SymbolSummary:
     kind: str  # "function" | "class" | "method" | "constant" | "import" | "interface"
     start_line: int
     end_line: int
-    signature: Optional[str] = None
-    parent_name: Optional[str] = None
-    qualified_name: Optional[str] = None
+    signature: str | None = None
+    parent_name: str | None = None
+    qualified_name: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -56,16 +56,16 @@ class SymbolSummary:
 class HunkASTContext:
     """Syntactic and structural AST context for a changed hunk."""
 
-    node_types: List[str] = field(default_factory=list)
+    node_types: list[str] = field(default_factory=list)
     scope_path: str = ""
-    symbol_signature: Optional[str] = None
-    symbol_snippet: Optional[str] = None
-    surrounding_snippet: Optional[str] = None
-    structural_defects: List[Dict[str, Any]] = field(default_factory=list)
+    symbol_signature: str | None = None
+    symbol_snippet: str | None = None
+    surrounding_snippet: str | None = None
+    structural_defects: list[dict[str, Any]] = field(default_factory=list)
     has_syntax_errors: bool = False
-    syntax_error_message: Optional[str] = None
+    syntax_error_message: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -80,10 +80,10 @@ class MappingLimitation:
     # "EMPTY_DIFF" | "MALFORMED_DIFF"
     file_path: str
     description: str
-    line_range: Optional[Tuple[int, int]] = None
-    remediation: Optional[str] = None
+    line_range: tuple[int, int] | None = None
+    remediation: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -97,19 +97,19 @@ class HunkMapping:
     new_start_line: int
     new_line_count: int
     header: str = ""
-    changed_line_numbers: List[int] = field(default_factory=list)
-    enclosing_symbol: Optional[SymbolSummary] = None
-    enclosing_class: Optional[str] = None
-    qualified_symbol_name: Optional[str] = None
-    symbol_range: Optional[SourceRange] = None
+    changed_line_numbers: list[int] = field(default_factory=list)
+    enclosing_symbol: SymbolSummary | None = None
+    enclosing_class: str | None = None
+    qualified_symbol_name: str | None = None
+    symbol_range: SourceRange | None = None
     change_scope: str = "module_level"
     # Scopes:
     # "inside_symbol" | "spans_symbols" | "signature_change" | "module_level" | "new_symbol" | "deleted_symbol"
-    overlapping_symbols: List[SymbolSummary] = field(default_factory=list)
-    ast_context: Optional[HunkASTContext] = None
-    limitations: List[MappingLimitation] = field(default_factory=list)
+    overlapping_symbols: list[SymbolSummary] = field(default_factory=list)
+    ast_context: HunkASTContext | None = None
+    limitations: list[MappingLimitation] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "hunk_index": self.hunk_index,
             "old_start_line": self.old_start_line,
@@ -141,21 +141,21 @@ class FileSourceMapping:
 
     file_path: str
     change_type: str = "modified"  # "modified" | "added" | "deleted" | "renamed"
-    old_file_path: Optional[str] = None
+    old_file_path: str | None = None
     is_binary: bool = False
     is_supported: bool = True
     language: str = "unknown"
     total_lines: int = 0
-    hunks: List[HunkMapping] = field(default_factory=list)
-    modified_line_ranges: List[Tuple[int, int]] = field(default_factory=list)
-    affected_symbols: List[SymbolSummary] = field(default_factory=list)
+    hunks: list[HunkMapping] = field(default_factory=list)
+    modified_line_ranges: list[tuple[int, int]] = field(default_factory=list)
+    affected_symbols: list[SymbolSummary] = field(default_factory=list)
     has_syntax_errors: bool = False
-    syntax_errors: List[str] = field(default_factory=list)
-    limitations: List[MappingLimitation] = field(default_factory=list)
-    base_revision: Optional[str] = None
-    head_revision: Optional[str] = None
+    syntax_errors: list[str] = field(default_factory=list)
+    limitations: list[MappingLimitation] = field(default_factory=list)
+    base_revision: str | None = None
+    head_revision: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "file_path": self.file_path,
             "change_type": self.change_type,
@@ -181,18 +181,18 @@ class ReviewSourceMapResult:
     """Root deliverable returned by ReviewSourceMapper."""
 
     success: bool
-    files: List[FileSourceMapping] = field(default_factory=list)
+    files: list[FileSourceMapping] = field(default_factory=list)
     total_files: int = 0
     total_hunks: int = 0
     total_changed_lines: int = 0
     affected_symbols_count: int = 0
-    base_revision: Optional[str] = None
-    head_revision: Optional[str] = None
-    commit_sha: Optional[str] = None
-    pr_number: Optional[int] = None
-    limitations: List[MappingLimitation] = field(default_factory=list)
+    base_revision: str | None = None
+    head_revision: str | None = None
+    commit_sha: str | None = None
+    pr_number: int | None = None
+    limitations: list[MappingLimitation] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "success": self.success,
             "total_files": self.total_files,
@@ -207,9 +207,9 @@ class ReviewSourceMapResult:
             "limitations": [l.to_dict() for l in self.limitations],
         }
 
-    def to_source_references(self) -> List[Any]:
+    def to_source_references(self) -> list[Any]:
         """Convert mapped symbols and hunks to AnalysisSourceReference objects."""
-        refs: List[Any] = []
+        refs: list[Any] = []
         try:
             from app.schemas.analysis import AnalysisSourceReference
             has_schema = True
@@ -252,9 +252,9 @@ class ReviewSourceMapResult:
                     )
         return refs
 
-    def to_modified_files(self) -> List[Any]:
+    def to_modified_files(self) -> list[Any]:
         """Convert mapped files directly into Meet's ModifiedFile dataclasses."""
-        mod_files: List[Any] = []
+        mod_files: list[Any] = []
         try:
             from ai.context.review_context import ModifiedFile
             has_mod = True
@@ -296,18 +296,18 @@ class _RawDiffHunk:
     new_start: int
     new_count: int
     header: str
-    lines: List[str]
-    added_line_numbers: List[int]
-    deleted_line_numbers: List[int]
+    lines: list[str]
+    added_line_numbers: list[int]
+    deleted_line_numbers: list[int]
 
 
 @dataclass
 class _RawDiffFile:
-    old_path: Optional[str]
-    new_path: Optional[str]
+    old_path: str | None
+    new_path: str | None
     change_type: str  # "modified" | "added" | "deleted" | "renamed"
     is_binary: bool
-    hunks: List[_RawDiffHunk]
+    hunks: list[_RawDiffHunk]
 
 
 # ---------------------------------------------------------------------------
@@ -328,11 +328,11 @@ class ReviewSourceMapper:
 
     def __init__(
         self,
-        parser: Optional[Parser] = None,
-        resolver: Optional[SourceLocationResolver] = None,
-        extractor: Optional[SymbolExtractor] = None,
-        analyzer: Optional[ASTBugAnalyzer] = None,
-        detector: Optional[LanguageDetector] = None,
+        parser: Parser | None = None,
+        resolver: SourceLocationResolver | None = None,
+        extractor: SymbolExtractor | None = None,
+        analyzer: ASTBugAnalyzer | None = None,
+        detector: LanguageDetector | None = None,
     ):
         self.parser = parser or Parser()
         self.resolver = resolver or SourceLocationResolver(self.parser)
@@ -371,16 +371,16 @@ class ReviewSourceMapper:
         }
         return mapping.get(ext, "unknown")
 
-    def parse_unified_diff(self, diff_text: str) -> List[_RawDiffFile]:
+    def parse_unified_diff(self, diff_text: str) -> list[_RawDiffFile]:
         """Parse unified diff text into structured file and hunk representations."""
         if not diff_text or not diff_text.strip():
             return []
 
-        raw_files: List[_RawDiffFile] = []
+        raw_files: list[_RawDiffFile] = []
         lines = diff_text.splitlines()
 
-        current_file: Optional[_RawDiffFile] = None
-        current_hunk: Optional[_RawDiffHunk] = None
+        current_file: _RawDiffFile | None = None
+        current_hunk: _RawDiffHunk | None = None
         current_new_line = 0
         current_old_line = 0
 
@@ -432,8 +432,7 @@ class ReviewSourceMapper:
             # Standard unified diff file path headers
             if line.startswith("--- "):
                 p = line[4:].strip()
-                if p.startswith("a/"):
-                    p = p[2:]
+                p = p.removeprefix("a/")
                 old_p = p if p != "/dev/null" else None
 
                 if current_file is not None and current_file.hunks:
@@ -456,8 +455,7 @@ class ReviewSourceMapper:
 
             elif line.startswith("+++ "):
                 p = line[4:].strip()
-                if p.startswith("b/"):
-                    p = p[2:]
+                p = p.removeprefix("b/")
                 new_p = p if p != "/dev/null" else None
 
                 if current_file is None:
@@ -543,14 +541,14 @@ class ReviewSourceMapper:
         self,
         file_path: str,
         content: str,
-        modified_ranges: Optional[Sequence[Tuple[int, int]]] = None,
-        diff_hunk_text: Optional[str] = None,
-        old_content: Optional[str] = None,
-        language: Optional[str] = None,
+        modified_ranges: Sequence[tuple[int, int]] | None = None,
+        diff_hunk_text: str | None = None,
+        old_content: str | None = None,
+        language: str | None = None,
         change_type: str = "modified",
-        old_file_path: Optional[str] = None,
-        base_revision: Optional[str] = None,
-        head_revision: Optional[str] = None,
+        old_file_path: str | None = None,
+        base_revision: str | None = None,
+        head_revision: str | None = None,
     ) -> FileSourceMapping:
         """Map changed lines for a single file into exact source ranges, symbols, and AST context."""
         norm_path = file_path.replace("\\", "/").lstrip("/")
@@ -597,7 +595,7 @@ class ReviewSourceMapper:
             return file_mapping
 
         # Determine modified line ranges and hunks
-        hunks_to_process: List[HunkMapping] = []
+        hunks_to_process: list[HunkMapping] = []
         if diff_hunk_text:
             raw_diff_files = self.parse_unified_diff(diff_hunk_text)
             target_raw = [
@@ -644,7 +642,7 @@ class ReviewSourceMapper:
                 )
 
         # Collect normalized modified line ranges
-        collected_ranges: List[Tuple[int, int]] = []
+        collected_ranges: list[tuple[int, int]] = []
         for h in hunks_to_process:
             if h.changed_line_numbers:
                 collected_ranges.append((min(h.changed_line_numbers), max(h.changed_line_numbers)))
@@ -717,7 +715,7 @@ class ReviewSourceMapper:
                 )
 
             # Find overlapping structural symbols
-            overlapping: List[SymbolSummary] = []
+            overlapping: list[SymbolSummary] = []
             for s_sum in structural_symbols:
                 if not (s_sum.end_line < hunk_start or s_sum.start_line > hunk_end):
                     overlapping.append(s_sum)
@@ -789,12 +787,12 @@ class ReviewSourceMapper:
     def map_unified_diff(
         self,
         diff_text: str,
-        repo_files: Optional[Dict[str, str]] = None,
-        repo_root: Optional[str] = None,
-        base_revision: Optional[str] = None,
-        head_revision: Optional[str] = None,
-        commit_sha: Optional[str] = None,
-        pr_number: Optional[int] = None,
+        repo_files: dict[str, str] | None = None,
+        repo_root: str | None = None,
+        base_revision: str | None = None,
+        head_revision: str | None = None,
+        commit_sha: str | None = None,
+        pr_number: int | None = None,
     ) -> ReviewSourceMapResult:
         """Parse unified diff text and map all changed files against repository content."""
         if not diff_text or not diff_text.strip():
@@ -818,8 +816,8 @@ class ReviewSourceMapper:
             )
 
         raw_diff_files = self.parse_unified_diff(diff_text)
-        file_mappings: List[FileSourceMapping] = []
-        global_limitations: List[MappingLimitation] = []
+        file_mappings: list[FileSourceMapping] = []
+        global_limitations: list[MappingLimitation] = []
 
         total_changed_lines = 0
         total_hunks = 0
@@ -862,7 +860,7 @@ class ReviewSourceMapper:
                         logger.warning(f"Error reading {disk_file}: {exc}")
 
             # Reconstruct single file diff text for mapping
-            single_diff_lines: List[str] = []
+            single_diff_lines: list[str] = []
             for h in rdf.hunks:
                 single_diff_lines.extend(h.lines)
             single_diff_text = "\n".join(single_diff_lines)
@@ -901,12 +899,12 @@ class ReviewSourceMapper:
     def map_commit_changes(
         self,
         commit_files: Sequence[Any],
-        repo_files: Optional[Dict[str, str]] = None,
-        repo_root: Optional[str] = None,
-        commit_sha: Optional[str] = None,
+        repo_files: dict[str, str] | None = None,
+        repo_root: str | None = None,
+        commit_sha: str | None = None,
     ) -> ReviewSourceMapResult:
         """Map a list of commit or pull request file changes (compatible with Parth's CommitFileChange)."""
-        combined_diff_parts: List[str] = []
+        combined_diff_parts: list[str] = []
 
         for cf in commit_files:
             # Handle CommitFileChange or dict
@@ -937,8 +935,8 @@ class ReviewSourceMapper:
         file_path: str,
         line_number: int,
         content: str,
-        language: Optional[str] = None,
-    ) -> Tuple[Optional[SymbolSummary], Optional[SourceRange], List[str]]:
+        language: str | None = None,
+    ) -> tuple[SymbolSummary | None, SourceRange | None, list[str]]:
         """Map a specific line number to its enclosing symbol and line range."""
         norm_path = file_path.replace("\\", "/").lstrip("/")
         detected_lang = language or self._detect_language(norm_path)
@@ -994,8 +992,8 @@ class ReviewSourceMapper:
         if language in ("Python", "python"):
             try:
                 tree = ast.parse(content)
-                node_types: List[str] = []
-                scope_parts: List[str] = ["module"]
+                node_types: list[str] = []
+                scope_parts: list[str] = ["module"]
 
                 for node in ast.walk(tree):
                     if hasattr(node, "lineno") and hasattr(node, "end_lineno"):
@@ -1041,7 +1039,7 @@ class ReviewSourceMapper:
     # -----------------------------------------------------------------------
 
     def _to_symbol_summary(self, s: Symbol, all_symbols: Sequence[Symbol]) -> SymbolSummary:
-        parent_name: Optional[str] = None
+        parent_name: str | None = None
         if s.parent_id is not None:
             parents = [p for p in all_symbols if p.id == s.parent_id]
             if parents:
@@ -1063,7 +1061,7 @@ class ReviewSourceMapper:
         symbols: Sequence[SymbolSummary],
         start_line: int,
         end_line: int,
-    ) -> Optional[SymbolSummary]:
+    ) -> SymbolSummary | None:
         """Find the tightest enclosing symbol (smallest line span enclosing start_line or overlapping range)."""
         if not symbols:
             return None
@@ -1100,12 +1098,12 @@ class ReviewSourceMapper:
         )
         return enclosing[0]
 
-    def _merge_line_ranges(self, ranges: Sequence[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    def _merge_line_ranges(self, ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
         """Merge overlapping or adjacent 1-indexed inclusive line ranges."""
         if not ranges:
             return []
         sorted_ranges = sorted(ranges, key=lambda r: (r[0], r[1]))
-        merged: List[Tuple[int, int]] = [sorted_ranges[0]]
+        merged: list[tuple[int, int]] = [sorted_ranges[0]]
 
         for current in sorted_ranges[1:]:
             prev_start, prev_end = merged[-1]

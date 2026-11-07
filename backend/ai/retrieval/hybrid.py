@@ -40,8 +40,8 @@ class HybridRetriever(Retriever):
 
     def __init__(
         self,
-        vector_retriever: Retriever,
-        lexical_retriever: Retriever,
+        vector_retriever: Retriever | None = None,
+        lexical_retriever: Retriever | None = None,
         fusion: RRFFusion | None = None,
         reranker: CrossEncoderReranker | None = None,
         vector_top_k: int = _DEFAULT_CANDIDATE_TOP_K,
@@ -55,12 +55,12 @@ class HybridRetriever(Retriever):
         self._lexical_top_k = lexical_top_k
 
     @property
-    def vector_retriever(self) -> Retriever:
+    def vector_retriever(self) -> Retriever | None:
         """Configured vector search retriever."""
         return self._vector_retriever
 
     @property
-    def lexical_retriever(self) -> Retriever:
+    def lexical_retriever(self) -> Retriever | None:
         """Configured lexical search retriever."""
         return self._lexical_retriever
 
@@ -88,46 +88,61 @@ class HybridRetriever(Retriever):
         )
 
         # Step 1: Run vector and lexical retrieval concurrently
-        vector_task = self._vector_retriever.retrieve(
-            query=query,
-            repository_id=repo_uuid,
-            top_k=self._vector_top_k,
-        )
-        lexical_task = self._lexical_retriever.retrieve(
-            query=query,
-            repository_id=repo_uuid,
-            top_k=self._lexical_top_k,
-        )
-
-        vector_res, lexical_res = await asyncio.gather(
-            vector_task, lexical_task, return_exceptions=True
-        )
-
         vector_chunks: list[CodeChunk] = []
-        vector_failed = False
-        vector_err_str: str | None = None
-        if isinstance(vector_res, Exception):
-            vector_failed = True
-            vector_err_str = str(vector_res)
-            logger.error(
-                "hybrid_retrieval_vector_failed",
-                extra={"error": vector_err_str, "repo_id": str(repo_uuid)},
-            )
-        else:
-            vector_chunks = vector_res or []
-
         lexical_chunks: list[CodeChunk] = []
+        vector_failed = False
         lexical_failed = False
+        vector_exc: Exception | None = None
+        lexical_exc: Exception | None = None
+        vector_err_str: str | None = None
         lexical_err_str: str | None = None
-        if isinstance(lexical_res, Exception):
-            lexical_failed = True
-            lexical_err_str = str(lexical_res)
-            logger.error(
-                "hybrid_retrieval_lexical_failed",
-                extra={"error": lexical_err_str, "repo_id": str(repo_uuid)},
-            )
+
+        tasks = []
+        if self._vector_retriever is not None:
+            tasks.append(("vector", self._vector_retriever.retrieve(
+                query=query,
+                repository_id=repo_uuid,
+                top_k=self._vector_top_k,
+            )))
         else:
-            lexical_chunks = lexical_res or []
+            vector_failed = True
+            vector_err_str = "Vector retriever not configured."
+
+        if self._lexical_retriever is not None:
+            tasks.append(("lexical", self._lexical_retriever.retrieve(
+                query=query,
+                repository_id=repo_uuid,
+                top_k=self._lexical_top_k,
+            )))
+        else:
+            lexical_failed = True
+            lexical_err_str = "Lexical retriever not configured."
+
+        if tasks:
+            results = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
+            for (kind, _), res in zip(tasks, results):
+                if kind == "vector":
+                    if isinstance(res, Exception):
+                        vector_failed = True
+                        vector_exc = res
+                        vector_err_str = str(res)
+                        logger.error(
+                            "hybrid_retrieval_vector_failed",
+                            extra={"error": vector_err_str, "repo_id": str(repo_uuid)},
+                        )
+                    else:
+                        vector_chunks = res or []
+                elif kind == "lexical":
+                    if isinstance(res, Exception):
+                        lexical_failed = True
+                        lexical_exc = res
+                        lexical_err_str = str(res)
+                        logger.error(
+                            "hybrid_retrieval_lexical_failed",
+                            extra={"error": lexical_err_str, "repo_id": str(repo_uuid)},
+                        )
+                    else:
+                        lexical_chunks = res or []
 
         # If both retrievers failed, this is an infrastructure outage, NOT zero matching code.
         if vector_failed and lexical_failed:
@@ -141,8 +156,8 @@ class HybridRetriever(Retriever):
             )
             raise RetrievalUnavailableError(
                 message=f"Hybrid retrieval failed for repo {repo_uuid}: both vector and lexical search failed.",
-                vector_error=vector_res if isinstance(vector_res, Exception) else None,
-                lexical_error=lexical_res if isinstance(lexical_res, Exception) else None,
+                vector_error=vector_exc,
+                lexical_error=lexical_exc,
                 repo_id=str(repo_uuid),
             )
 
@@ -197,9 +212,18 @@ class HybridRetriever(Retriever):
         return fused[:top_k]
 
     async def aclose(self) -> None:
-        """Close child retriever resources."""
-        await self._vector_retriever.aclose()
-        await self._lexical_retriever.aclose()
+        """Close child retriever resources safely."""
+        first_err: Exception | None = None
+        for retriever in (self._vector_retriever, self._lexical_retriever):
+            if retriever is not None and hasattr(retriever, "aclose") and callable(retriever.aclose):
+                try:
+                    await retriever.aclose()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("hybrid_retriever_child_close_error", extra={"error": str(exc)})
+                    if first_err is None:
+                        first_err = exc
+        if first_err is not None:
+            raise first_err
 
     async def __aenter__(self: Self) -> Self:
         return self

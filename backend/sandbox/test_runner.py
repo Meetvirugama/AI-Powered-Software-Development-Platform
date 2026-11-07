@@ -26,11 +26,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import subprocess
 import time
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Mapping, Sequence
 
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
@@ -41,6 +40,8 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionRequest,
     WorkspaceTestExecutionResult,
 )
+from scanner.framework_detector import FrameworkDetectionResult, FrameworkDetector
+
 from sandbox.command_runner import WorkspaceCommandRunner
 from sandbox.constants import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
@@ -54,10 +55,8 @@ from sandbox.exceptions import (
     WorkspacePolicyViolationError,
     WorkspaceRepairBudgetExhaustedError,
     WorkspaceTestExecutionError,
-    WorkspaceUnsupportedFrameworkError,
 )
 from sandbox.path_guard import WorkspacePathGuard
-from scanner.framework_detector import FrameworkDetectionResult, FrameworkDetector
 
 logger = logging.getLogger(__name__)
 
@@ -691,7 +690,7 @@ class WorkspaceTestRunner:
         record = RepairAttemptRecord(
             attempt_number=attempt_number,
             task_id=task_id,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             patch_summary=patch_summary,
             patch_hash=patch_hash,
             workspace_revision=workspace_revision,

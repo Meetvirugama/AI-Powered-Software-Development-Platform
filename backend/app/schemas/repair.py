@@ -13,11 +13,10 @@ Responsibilities:
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 

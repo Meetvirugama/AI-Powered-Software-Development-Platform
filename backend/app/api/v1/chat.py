@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Protocol
 from uuid import UUID
 
+from ai.schemas.output import RepositoryAnswer
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from ai.schemas.output import RepositoryAnswer
+from app.api.v1.dependencies import (
+    get_owned_repository,
+)
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
-from app.api.v1.dependencies import (
-    get_owned_repository,
-    get_request_user_id as _request_user_id,
-)
 from app.models.repository import Repository
 from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.repository import ChatHistoryMessage, RepositoryChatRequest
@@ -63,7 +63,7 @@ async def chat_with_repository(
     db: Session = Depends(get_db),
 ) -> RepositoryAnswer:
     """Return a source-cited answer only for a repository owned by the caller (F-03)."""
-    _owned_repository(repository_id, request, db)
+    await asyncio.to_thread(_owned_repository, repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
     answer = await pipeline.chat(payload.question, repository_id, payload.history)
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.

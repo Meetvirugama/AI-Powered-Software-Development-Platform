@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 
 from app.core.config import get_settings
 from app.core.errors import APIError, ErrorCode
@@ -17,9 +18,9 @@ def create_access_token(user_id: str) -> tuple[str, int]:
     if not settings.jwt_secret:
         raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "JWT signing is not configured.")
 
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expire_minutes)
+    expires_at = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
     token = jwt.encode(
-        {"sub": str(user_id), "jti": str(uuid4()), "exp": expires_at, "iat": datetime.now(timezone.utc)},
+        {"sub": str(user_id), "jti": str(uuid4()), "exp": expires_at, "iat": datetime.now(UTC)},
         settings.jwt_secret,
         algorithm=settings.jwt_algorithm,
     )
@@ -33,7 +34,7 @@ def decode_access_token(token: str) -> dict[str, object]:
         raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "JWT signing is not configured.")
     try:
         claims = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
-    except JWTError as exc:
+    except PyJWTError as exc:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid or expired access token.") from exc
     if not claims.get("sub") or not claims.get("jti"):
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid access token.")

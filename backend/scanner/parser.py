@@ -1,7 +1,7 @@
 import ast
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
 try:
     import tree_sitter
@@ -43,10 +43,6 @@ class Parser:
     def is_language_supported(self, language: str) -> bool:
         """Return True if language is in the recognized grammar mapping."""
         return language in self.language_map
-
-    def get_supported_languages(self) -> list[str]:
-        """Return the list of all supported language names."""
-        return list(self.language_map.keys())
 
     def parse_with_status(self, file_info: FileInfo, content: str) -> ParseResult:
         """Parse source content and return a structured ParseResult with explicit status."""
@@ -149,7 +145,7 @@ class Parser:
             error_message=f"Could not load parser grammar for {ts_lang_name}",
         )
 
-    def parse(self, file_info: FileInfo, content: str) -> Optional[Any]:
+    def parse(self, file_info: FileInfo, content: str) -> Any | None:
         """Parse source content into a concrete syntax tree, returning None on failure."""
         result = self.parse_with_status(file_info, content)
         if not result.success:

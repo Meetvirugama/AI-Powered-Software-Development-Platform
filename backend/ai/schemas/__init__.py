@@ -1,6 +1,10 @@
-# AI output schemas — Dev
-# Week 1: SourceReference, RepositoryAnswer, ErrorResponse, LLMError hierarchy, OutputValidator, PromptBuilder, GroundingValidator
-# Week 2: AnalysisSourceReference, CodeExplanation, BugFinding, TestGenerationResult, ReviewFinding, ReviewReport
+"""AI output and prompt contracts — Dev.
+
+Week 1: SourceReference, RepositoryAnswer, ErrorResponse, LLMError hierarchy, OutputValidator, PromptBuilder, GroundingValidator
+Week 2: AnalysisSourceReference, CodeExplanation, BugFinding, TestGenerationResult, ReviewFinding, ReviewReport
+"""
+
+from __future__ import annotations
 
 from app.schemas.analysis import (
     AnalysisSourceReference,

@@ -42,15 +42,20 @@ export function RepositoryChat() {
     useRepositoryChat(id);
 
   const fileParam = searchParams.get('file');
+  const promptParam = searchParams.get('prompt');
 
-  // Input state — initialized with ?file= query parameter if present.
+  // Input state — initialized with ?prompt= or ?file= query parameter if present.
   const [draft, setDraft] = useState(() => {
+    if (promptParam) return promptParam;
     return fileParam ? `Can you explain the structure and logic of \`${fileParam}\`?` : '';
   });
-  const [prevFileParam, setPrevFileParam] = useState(fileParam);
-  if (fileParam !== prevFileParam) {
-    setPrevFileParam(fileParam);
-    if (fileParam) {
+  const [prevParamsKey, setPrevParamsKey] = useState(`${fileParam ?? ''}::${promptParam ?? ''}`);
+  const currentParamsKey = `${fileParam ?? ''}::${promptParam ?? ''}`;
+  if (currentParamsKey !== prevParamsKey) {
+    setPrevParamsKey(currentParamsKey);
+    if (promptParam) {
+      setDraft(promptParam);
+    } else if (fileParam) {
       setDraft(`Can you explain the structure and logic of \`${fileParam}\`?`);
     }
   }
@@ -61,10 +66,10 @@ export function RepositoryChat() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (fileParam) {
+    if (promptParam || fileParam) {
       textareaRef.current?.focus();
     }
-  }, [fileParam]);
+  }, [promptParam, fileParam]);
 
 
 

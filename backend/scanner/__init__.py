@@ -1,5 +1,11 @@
 # Initialize the scanner module
-from .ast_rules import ASTBugAnalyzer, ASTBugFinding, ASTRuleAnalysisResult, BaseASTRule, DEFAULT_RULES
+from .ast_rules import (
+    DEFAULT_RULES,
+    ASTBugAnalyzer,
+    ASTBugFinding,
+    ASTRuleAnalysisResult,
+    BaseASTRule,
+)
 from .detector import LanguageDetector
 from .extractor import SymbolExtractor
 from .framework_detector import FrameworkDetectionResult, FrameworkDetector
@@ -16,7 +22,6 @@ from .source_mapper import (
     ReviewSourceMapResult,
     SymbolSummary,
 )
-from .symbol_blast_radius import SymbolBlastRadiusEngine
 from .symbols import FileInfo, ParseResult, ScanResult, SourceRange, Symbol, SymbolEdge
 from .target_selector import TargetSelectionResult, TargetSelector
 from .task_test_planner import TaskTestPlanner
@@ -25,14 +30,14 @@ from .walker import FileWalker
 from .workspace_preflight import WorkspaceBaseValidator, WorkspacePreflightResult
 
 __all__ = [
+    "DEFAULT_RULES",
     "ASTBugAnalyzer",
     "ASTBugFinding",
     "ASTRuleAnalysisResult",
     "BaseASTRule",
-    "DEFAULT_RULES",
     "DependencyGraphBuilder",
-    "FileInfo",
     "FileImportMap",
+    "FileInfo",
     "FileSourceMapping",
     "FileTestMapper",
     "FileWalker",
@@ -53,7 +58,6 @@ __all__ = [
     "SourceLocationResolver",
     "SourceRange",
     "Symbol",
-    "SymbolBlastRadiusEngine",
     "SymbolEdge",
     "SymbolExtractor",
     "SymbolSummary",

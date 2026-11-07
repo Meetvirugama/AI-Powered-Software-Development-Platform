@@ -25,8 +25,10 @@ from ai.context.bug_context import (
     extract_bug_context,
 )
 from ai.context.explanation import (
+    CallerResolution,
     ExplanationContextEnricher,
     enrich_explanation_context,
+    resolve_caller_status,
 )
 from ai.context.review_context import (
     ModifiedFile,
@@ -44,11 +46,23 @@ from ai.context.test_context import (
     TestContextBuilder,
     build_test_generation_context,
 )
+from ai.context.task_context import (
+    TaskContextBuilder,
+    TaskContextManifest,
+)
+from ai.context.intelligence_context import (
+    build_intelligence_context,
+)
+from ai.context.chat_context import (
+    build_chat_context,
+    dedup_memory,
+)
 
 __all__ = [
     "ALLOWED_AI_PROVIDERS",
     "AgentContext",
     "BugContextExtractor",
+    "CallerResolution",
     "ChatMessage",
     "ContextBuilder",
     "ContextLimits",
@@ -67,11 +81,17 @@ __all__ = [
     "RevisionDriftError",
     "SymbolContext",
     "TargetSnippet",
+    "TaskContextBuilder",
+    "TaskContextManifest",
     "TestContextBuilder",
     "count_tokens",
+    "build_chat_context",
+    "build_intelligence_context",
     "build_multi_file_review_context",
     "build_test_generation_context",
+    "dedup_memory",
     "enrich_explanation_context",
     "extract_bug_context",
+    "resolve_caller_status",
     "shared_context_service",
 ]

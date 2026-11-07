@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class EmbeddingError(Exception):

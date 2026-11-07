@@ -16,26 +16,22 @@ from __future__ import annotations
 
 import logging
 import re
-import time
-from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from app.core.errors import APIError, ErrorCode
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.core.secret_redaction import redact, redact_secrets
+from app.core.secret_redaction import redact_secrets
 from app.schemas.repair import MAX_DIFF_CHARS
-from app.schemas.task import TaskConstraint, TaskIntakePayload
+from app.schemas.task import TaskConstraint
 from app.schemas.verification import (
     VerificationCheckItem,
-    VerificationCheckStatus,
     VerificationContext,
     VerificationFinding,
     VerificationOverallStatus,
     VerificationResult,
 )
+from app.schemas.task import RestrictedExecutionResult
 from app.services.repair_service import extract_modified_files_from_diff
-from app.services.test_runner import RestrictedExecutionResult
 
 logger = logging.getLogger(__name__)
 
@@ -301,7 +297,6 @@ class IndependentVerifier:
         - We generate a nice Markdown PR description.
         - We return the official VerificationResult.
         """
-        start_time = time.perf_counter()
         checks: list[VerificationCheckItem] = []
         blocking_findings: list[VerificationFinding] = []
         warnings: list[VerificationFinding] = []

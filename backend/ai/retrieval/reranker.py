@@ -17,6 +17,8 @@ import logging
 
 from .base import CodeChunk
 
+__all__ = ["CrossEncoderReranker"]
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TOP_N = 8

@@ -18,8 +18,6 @@ from typing import Any
 from uuid import UUID
 
 from app.core.errors import APIError, ErrorCode
-from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.models.repository import Repository
 from app.schemas.task import TaskStatus, can_transition
 
 logger = logging.getLogger(__name__)

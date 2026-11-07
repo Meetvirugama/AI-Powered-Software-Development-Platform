@@ -9,7 +9,6 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
@@ -92,7 +91,6 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
     try:
         from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
-        from ai.embeddings.service import EmbeddingService
         from ai.pipeline import RAGPipeline
         from ai.retrieval.hybrid import HybridRetriever
         from ai.retrieval.lexical import LexicalRetriever
@@ -110,25 +108,42 @@ def init_rag_pipeline(app: FastAPI) -> bool:
 
         retriever = None
         gemini_keys = settings.all_gemini_keys
+        lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
+        vector_retriever = None
+        reranker = None
+
         if gemini_keys:
-            embedding_provider = GeminiEmbeddingProvider(
-                api_keys=gemini_keys,
-                dimensions=settings.embedding_dimensions,
-            )
-            embedding_service = EmbeddingService(provider=embedding_provider)
-            app.state.embedding_service = embedding_service
-            vector_retriever = VectorRetriever(
-                db=AsyncSessionLocal,
-                embedding_service=embedding_service,
-            )
-            lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
-            from ai.retrieval.reranker import CrossEncoderReranker
-            reranker = CrossEncoderReranker()
-            retriever = HybridRetriever(
-                vector_retriever=vector_retriever,
-                lexical_retriever=lexical_retriever,
-                reranker=reranker,
-            )
+            try:
+                embedding_provider = GeminiEmbeddingProvider(
+                    api_keys=gemini_keys,
+                    dimensions=settings.embedding_dimensions,
+                )
+                from ai.embeddings.service import CachedEmbeddingService
+                from app.core.redis import get_async_redis_client
+                redis_client = None
+                try:
+                    redis_client = get_async_redis_client()
+                except Exception:
+                    pass
+                embedding_service = CachedEmbeddingService(
+                    provider=embedding_provider,
+                    redis_client=redis_client,
+                )
+                app.state.embedding_service = embedding_service
+                vector_retriever = VectorRetriever(
+                    db=AsyncSessionLocal,
+                    embedding_service=embedding_service,
+                )
+                from ai.retrieval.reranker import CrossEncoderReranker
+                reranker = CrossEncoderReranker()
+            except Exception as emb_exc:
+                logger.warning("vector_retriever_init_failed_falling_back_to_lexical", extra={"error": str(emb_exc)})
+
+        retriever = HybridRetriever(
+            vector_retriever=vector_retriever,
+            lexical_retriever=lexical_retriever,
+            reranker=reranker,
+        )
 
         grounding_validator = GroundingValidator(db_session=AsyncSessionLocal)
 
@@ -251,6 +266,25 @@ def init_intelligence_services(app: FastAPI) -> bool:
         app.state.code_review_service = None
         app.state.service_readiness["code_review_service"] = False
         success = False
+
+    # Static Reviewer & Static Bug Scanner (Audit A1.3)
+    try:
+        if getattr(app.state, "static_reviewer", None) is None:
+            from review.static_reviewer import StaticReviewer
+            app.state.static_reviewer = StaticReviewer()
+            logger.info("static_reviewer_ready")
+    except Exception as exc:
+        logger.warning("static_reviewer_init_failed", extra={"error": str(exc)})
+        app.state.static_reviewer = None
+
+    try:
+        if getattr(app.state, "static_bug_scanner", None) is None:
+            from scanner.static_bug_scanner import StaticBugScanner
+            app.state.static_bug_scanner = StaticBugScanner()
+            logger.info("static_bug_scanner_ready")
+    except Exception as exc:
+        logger.warning("static_bug_scanner_init_failed", extra={"error": str(exc)})
+        app.state.static_bug_scanner = None
 
     # Task Planner (Week 3 F32)
     try:

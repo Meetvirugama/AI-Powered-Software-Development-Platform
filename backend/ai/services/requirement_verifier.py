@@ -19,22 +19,20 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
 
-from app.core.secret_redaction import redact
-from app.schemas.plan import PlanStep, StructuredPlan
+from app.schemas.plan import StructuredPlan
+from app.schemas.planner_context import FileDiffRange, TaskDiffRanges
 from app.schemas.task import (
     TaskConstraint,
     TaskRequirement,
-    TaskSourceReference,
 )
 from app.schemas.verification import (
-    FindingSeverity,
     VerificationFinding,
     VerificationOverallStatus,
 )
-from app.schemas.planner_context import FileDiffRange, TaskDiffRanges
 from app.schemas.workspace import WorkspaceDiffResult
 
 logger = logging.getLogger(__name__)
@@ -221,19 +219,21 @@ class RequirementToCodeVerifier:
         out_of_scope_files: list[str] = []
         for mod_file in modified_files:
             # Allow new test files or documentation files
-            if mod_file not in all_allowed_targets:
-                if not (mod_file.startswith("tests/") or mod_file.startswith("test/") or mod_file.endswith(".md")):
-                    out_of_scope_files.append(mod_file)
-                    findings.append(
-                        VerificationFinding(
-                            id=f"scope-warn-{len(findings)+1}",
-                            severity="MEDIUM",
-                            category="policy",
-                            message=f"File '{mod_file}' was modified but was not listed in plan expected files.",
-                            file_path=mod_file,
-                            blocking=False,
-                        )
+            if (
+                mod_file not in all_allowed_targets
+                and not (mod_file.startswith(("tests/", "test/")) or mod_file.endswith(".md"))
+            ):
+                out_of_scope_files.append(mod_file)
+                findings.append(
+                    VerificationFinding(
+                        id=f"scope-warn-{len(findings)+1}",
+                        severity="MEDIUM",
+                        category="policy",
+                        message=f"File '{mod_file}' was modified but was not listed in plan expected files.",
+                        file_path=mod_file,
+                        blocking=False,
                     )
+                )
 
         # 7. Requirement Alignment & Criterion-Level Verification
         compliance_items: list[RequirementComplianceItem] = []

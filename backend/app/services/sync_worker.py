@@ -349,6 +349,8 @@ async def sync_worker_loop(app_or_service: Any = None) -> None:
             try:
                 if hasattr(redis, "brpoplpush"):
                     raw_data = await redis.brpoplpush("sync_jobs", "sync_jobs:processing", timeout=1)
+                elif hasattr(redis, "blmove"):
+                    raw_data = await redis.blmove("sync_jobs", "sync_jobs:processing", 1, "RIGHT", "LEFT")
                 elif hasattr(redis, "rpoplpush"):
                     raw_data = await redis.rpoplpush("sync_jobs", "sync_jobs:processing")
                     if not raw_data:

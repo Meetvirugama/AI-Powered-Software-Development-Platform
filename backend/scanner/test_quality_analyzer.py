@@ -10,13 +10,14 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
 
 from app.schemas.analysis import (
     TestQualityReport,
     TestRequirement,
 )
+
 from scanner.test_coverage_analyzer import TestCoverageResult
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,6 @@ class TestQualityAnalyzer:
                 notes.extend(inspection.flaky_indicators[:2])
 
         # Requirement Coverage
-        total_reqs = len(requirements)
         applicable_reqs = [r for r in requirements if r.status != "NOT_APPLICABLE"]
         covered_reqs = [r for r in applicable_reqs if r.status == "COVERED"]
         partial_reqs = [r for r in applicable_reqs if r.status == "PARTIAL"]

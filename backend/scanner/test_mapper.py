@@ -16,8 +16,9 @@ from __future__ import annotations
 import ast
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Sequence, Set
+from typing import Any
 from uuid import UUID
 
 from .symbols import Symbol, SymbolEdge
@@ -54,7 +55,7 @@ class TestEvidenceLevel:
 class FileTestMapper:
     """Maps existing test files and symbols to source files with multi-level verification."""
 
-    def __init__(self, symbols: List[Symbol], edges: List[SymbolEdge], file_paths: Dict[UUID, str]):
+    def __init__(self, symbols: list[Symbol], edges: list[SymbolEdge], file_paths: dict[UUID, str]):
         self.symbols = symbols
         self.edges = edges
         self.file_paths = {fid: p.replace("\\", "/").lstrip("/") for fid, p in file_paths.items()}
@@ -113,7 +114,7 @@ class FileTestMapper:
         clean_path = f"{dir_part}/{clean_name}" if dir_part else clean_name
         return clean_path
 
-    def map_tests(self) -> Dict[str, str]:
+    def map_tests(self) -> dict[str, str]:
         """Backward-compatible map from test_file_path -> primary_source_file_path."""
         mapping: dict[str, str] = {}
 
