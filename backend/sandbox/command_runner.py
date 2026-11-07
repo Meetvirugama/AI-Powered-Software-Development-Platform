@@ -44,7 +44,7 @@ from sandbox.exceptions import (
 logger = logging.getLogger(__name__)
 
 
-def kill_process_tree(pid: int, sig: int = signal.SIGKILL) -> None:
+def kill_process_tree(pid: int, sig: int = getattr(signal, "SIGKILL", getattr(signal, "SIGTERM", 9))) -> None:
     """Terminate a process and all its child processes in its process group.
 
     Guarantees that when a subprocess times out, all background jobs,

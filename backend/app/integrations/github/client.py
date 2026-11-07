@@ -340,6 +340,25 @@ class GitHubClient:
             payload["state"] = state
         return await self._request("PATCH", f"/repos/{owner}/{repo}/pulls/{pr_number}", json_body=payload)
 
+    async def create_pull_request_review(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        body: str,
+        event: str = "COMMENT",
+        comments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Create a review on a pull request with an overall comment."""
+        payload: dict[str, Any] = {"body": body, "event": event}
+        if comments:
+            payload["comments"] = comments
+        return await self._request(
+            "POST",
+            f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
+            json_body=payload,
+        )
+
     # ----- Week 3 F31 & F-23: Issues ---------------------------------------
 
     async def create_issue(

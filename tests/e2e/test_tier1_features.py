@@ -587,9 +587,9 @@ class TestFeature10WebhookHMACAndReplay:
             "X-Hub-Signature-256": sig,
         }
 
-        # First delivery processed or handled
+        # First delivery processed or handled (returns 200 or 202 Accepted when queued)
         resp1 = e2e_client.post("/api/v1/github/webhook", content=payload, headers=headers)
-        assert resp1.status_code == 200
+        assert resp1.status_code in (200, 202)
 
         # Duplicate delivery with identical ID -> deduplicated
         resp2 = e2e_client.post("/api/v1/github/webhook", content=payload, headers=headers)

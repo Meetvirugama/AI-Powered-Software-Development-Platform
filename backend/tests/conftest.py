@@ -78,6 +78,8 @@ class FakeRedis:
         return self.store.get(key)
 
     def set(self, key: str, value: str, *args, **kwargs) -> bool:
+        if kwargs.get("nx", False) and key in self.store:
+            return False
         self.store[key] = str(value)
         return True
 
@@ -178,7 +180,7 @@ def test_engine():
 
     Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(bind=engine, checkfirst=True)
     engine.dispose()
 
     # Clean up local SQLite test file if one was created
