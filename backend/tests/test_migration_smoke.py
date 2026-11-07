@@ -171,6 +171,14 @@ def test_zero_schema_drift_against_database() -> None:
     """Verify that ORM models (Base.metadata) and Alembic migrations have zero schema drift (B-21)."""
     settings = get_settings()
     try:
+        probe_engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
+        with probe_engine.connect() as conn:
+            pass
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL database not available for schema drift test: {exc}")
+        return
+
+    try:
         ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
         cfg = Config(str(ini_path))
         cfg.set_main_option("sqlalchemy.url", settings.database_url)
