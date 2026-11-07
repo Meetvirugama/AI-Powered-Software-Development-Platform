@@ -365,6 +365,104 @@ class RAGPipeline:
 
         return validated
 
+    async def finalize_agent_chat(
+        self,
+        question: str,
+        repository_id: UUID | str,
+        evidence_chunks: list[Any],
+        history: list[Any] | None = None,
+        memory: list[MemoryEntry] | None = None,
+        model: str | None = None,
+        agent_metadata: dict[str, Any] | None = None,
+    ) -> RepositoryAnswer:
+        """
+        Produce a grounded final RepositoryAnswer from agent-accumulated evidence.
+
+        Reuses ContextBuilder, PromptBuilder, JSON repair loop, GroundingValidator,
+        and secret redaction to ensure that agent-generated answers strictly adhere
+        to the exact same citation and grounding standards as normal chat.
+        """
+        start_time = time.monotonic()
+        cleaned_question = (question or "").strip()
+        repo_uuid = self._coerce_uuid(repository_id)
+        memory = memory or []
+        chat_history = self._normalise_history(history)
+        selected_model = model or self._model
+
+        # Guard against empty query
+        if not cleaned_question:
+            return RepositoryAnswer(
+                answer="Please provide a valid question about the repository.",
+                sources=[],
+                confidence="low",
+                status="invalid_output",
+                agent_metadata=agent_metadata,
+            )
+
+        # Retrieve related files for repository overview context
+        related_files = await self._get_repository_files(repo_uuid)
+
+        if not evidence_chunks and not related_files:
+            return RepositoryAnswer(
+                answer="No relevant code found in this repository for your question.",
+                sources=[],
+                confidence="low",
+                status="no_match",
+                agent_metadata=agent_metadata,
+            )
+
+        # Context assembly
+        ctx: AgentContext = self.context_builder.build(
+            chunks=evidence_chunks,
+            memory=memory,
+            history=chat_history,
+            related_files=related_files,
+        )
+
+        # Prompt construction
+        rendered_data = redact(self.context_builder.render_repository_data(ctx))
+        messages = self.prompt_builder.build_chat_prompt(
+            context=rendered_data,
+            question=cleaned_question,
+        )
+
+        # LLM call with JSON repair loop
+        raw_answer = await self._generate_with_repair(
+            messages=messages,
+            original_question=cleaned_question,
+            model=selected_model,
+        )
+
+        # Grounding validation & secret redaction
+        try:
+            validated = await self.grounding_validator.validate_sources(
+                raw_answer, repo_uuid, retrieved_chunks=ctx.code_chunks
+            )
+        except TypeError:
+            validated = await self.grounding_validator.validate_sources(
+                raw_answer, repo_uuid
+            )
+
+        validated = validated.model_copy(
+            update={
+                "answer": redact(validated.answer),
+                "agent_metadata": agent_metadata,
+            }
+        )
+
+        total_latency_ms = (time.monotonic() - start_time) * 1000.0
+        logger.info(
+            "rag_agent_finalize_complete",
+            extra={
+                "repo_id": str(repo_uuid),
+                "evidence_chunks": len(evidence_chunks),
+                "sources_after": len(validated.sources),
+                "confidence": validated.confidence,
+                "total_latency_ms": round(total_latency_ms, 2),
+            },
+        )
+        return validated
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Self
 
-from .schemas import LLMRequest, LLMResponse
+from .schemas import LLMRequest, LLMResponse, LLMToolRequest, LLMToolResponse
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -47,6 +47,26 @@ class LLMProvider(ABC):
             LLMValidationError: If structured schema output fails validation.
         """
         ...
+
+    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
+        """
+        Execute chat completion with tool calling support.
+
+        Args:
+            request: Fully constructed LLMToolRequest containing tool definitions and conversation turns.
+
+        Returns:
+            LLMToolResponse containing generated content or tool calls with usage metadata.
+
+        Raises:
+            LLMTimeoutError: If the provider call exceeds the configured deadline.
+            LLMRateLimitError: If provider rate limits are exhausted.
+            LLMUnavailableError: If provider returns 5xx errors or connection drops.
+            LLMAuthenticationError: If API credentials are rejected.
+            LLMValidationError: If the model returns malformed tool arguments or structure.
+            NotImplementedError: If the provider does not support function/tool calling.
+        """
+        raise NotImplementedError(f"Provider {self.provider_name} does not implement generate_with_tools.")
 
     @property
     @abstractmethod

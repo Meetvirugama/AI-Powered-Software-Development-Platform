@@ -159,6 +159,20 @@ def init_rag_pipeline(app: FastAPI) -> bool:
         has_llm = llm_gateway is not None
         is_ready = has_retriever and has_llm
         app.state.service_readiness["rag_pipeline"] = is_ready
+
+        if settings.agentic_chat_enabled and llm_gateway is not None:
+            try:
+                from ai.agent.orchestrator import AgentOrchestrator
+                app.state.agent_orchestrator = AgentOrchestrator(
+                    llm_gateway=llm_gateway,
+                    rag_pipeline=app.state.rag_pipeline,
+                    model=settings.agent_model,
+                    primary_provider=settings.agent_primary_provider,
+                    fallback_provider=settings.agent_fallback_provider,
+                )
+            except Exception as a_exc:
+                logger.warning("agent_orchestrator_init_failed", extra={"error": str(a_exc)})
+
         logger.info(
             "rag_pipeline_init",
             extra={"has_retriever": has_retriever, "has_llm": has_llm, "is_ready": is_ready},

@@ -156,6 +156,8 @@ class GroundingValidator:
                     answer=answer.answer,
                     sources=[],
                     confidence="low",
+                    status=answer.status,
+                    agent_metadata=getattr(answer, "agent_metadata", None),
                 )
 
         results: list[GroundingResult] = []
@@ -223,6 +225,8 @@ class GroundingValidator:
             answer=answer.answer,
             sources=[r.source for r in grounded],
             confidence=new_confidence,
+            status=answer.status,
+            agent_metadata=getattr(answer, "agent_metadata", None),
         )
 
     # ------------------------------------------------------------------

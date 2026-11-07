@@ -142,6 +142,10 @@ class RepositoryChatRequest(BaseModel):
 
     question: str = Field(min_length=1, max_length=4_000)
     history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=50)
+    mode: Literal["normal", "agentic"] = Field(
+        default="normal",
+        description="Chat execution mode: 'normal' for fast standard RAG, 'agentic' for multi-step bounded investigation.",
+    )
 
     @field_validator("question")
     @classmethod
