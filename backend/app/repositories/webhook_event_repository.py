@@ -11,6 +11,7 @@ from typing import Any, Optional
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.secret_redaction import redact
 from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,28 @@ def _as_utc(dt: datetime | None) -> datetime | None:
         return dt.replace(tzinfo=timezone.utc)
     return dt
 
+
+def _sanitize_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Recursively redact secrets and omit sensitive keys from webhook payload before DB storage."""
+    if not payload:
+        return {}
+    sanitized: dict[str, Any] = {}
+    for k, v in payload.items():
+        if k in ("token", "access_token", "secret", "client_secret", "private_key", "password"):
+            sanitized[k] = "[REDACTED]"
+        elif isinstance(v, dict):
+            sanitized[k] = _sanitize_payload(v)
+        elif isinstance(v, list):
+            sanitized[k] = [
+                _sanitize_payload(item) if isinstance(item, dict)
+                else (redact(item) if isinstance(item, str) else item)
+                for item in v
+            ]
+        elif isinstance(v, str):
+            sanitized[k] = redact(v)
+        else:
+            sanitized[k] = v
+    return sanitized
 
 
 def compute_backoff_seconds(attempts: int, base: float = 5.0, max_backoff: float = 3600.0) -> int:
@@ -62,6 +85,7 @@ class WebhookEventRepository:
             return existing, False
 
         now = datetime.now(timezone.utc)
+        safe_payload = _sanitize_payload(payload)
         event = GitHubWebhookEvent(
             id=uuid.uuid4(),
             delivery_id=delivery_id,
@@ -70,7 +94,7 @@ class WebhookEventRepository:
             installation_id=installation_id,
             repository_id=repository_id,
             github_repo_id=github_repo_id,
-            payload=payload,
+            payload=safe_payload,
             status=WebhookEventStatus.PENDING,
             attempts=0,
             max_attempts=max_attempts,
@@ -93,7 +117,8 @@ class WebhookEventRepository:
             select(GitHubWebhookEvent)
             .where(
                 or_(
-                    GitHubWebhookEvent.status == WebhookEventStatus.PENDING,
+                    (GitHubWebhookEvent.status == WebhookEventStatus.PENDING)
+                    & (GitHubWebhookEvent.available_at <= now),
                     (GitHubWebhookEvent.status == WebhookEventStatus.RETRY)
                     & (GitHubWebhookEvent.available_at <= now),
                     (GitHubWebhookEvent.status == WebhookEventStatus.PROCESSING)
@@ -106,8 +131,11 @@ class WebhookEventRepository:
         )
 
         # Support FOR UPDATE SKIP LOCKED if supported by database dialect
-        bind = getattr(self.session, "bind", None)
-        dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+        try:
+            bind = self.session.get_bind()
+            dialect_name = getattr(getattr(bind, "dialect", None), "name", "")
+        except Exception:
+            dialect_name = ""
         if dialect_name == "postgresql":
             stmt = stmt.with_for_update(skip_locked=True)
 
@@ -147,15 +175,16 @@ class WebhookEventRepository:
         if not event:
             return None
         now = datetime.now(timezone.utc)
+        safe_error = redact(str(error_message))[:2000]
         if event.attempts >= event.max_attempts:
-            return self.mark_dead_letter(event_id, f"Exhausted max retries ({event.max_attempts}): {error_message}")
+            return self.mark_dead_letter(event_id, f"Exhausted max retries ({event.max_attempts}): {safe_error}")
 
         eff_backoff = backoff_seconds if backoff_seconds is not None else base_backoff_seconds
         delay = eff_backoff if eff_backoff is not None else compute_backoff_seconds(event.attempts)
         event.status = WebhookEventStatus.RETRY
         event.available_at = now + timedelta(seconds=delay)
         event.lease_expires_at = None
-        event.last_error = error_message[:2000]
+        event.last_error = safe_error
         event.updated_at = now
         self.session.commit()
         return event
@@ -168,7 +197,7 @@ class WebhookEventRepository:
         event.status = WebhookEventStatus.DEAD_LETTER
         event.processed_at = now
         event.lease_expires_at = None
-        event.last_error = error_message[:2000]
+        event.last_error = redact(str(error_message))[:2000]
         event.updated_at = now
         self.session.commit()
         return event
