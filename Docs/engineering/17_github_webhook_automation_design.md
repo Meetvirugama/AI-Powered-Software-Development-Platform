@@ -247,3 +247,111 @@ Before publishing comments to GitHub:
   - `Installation`
   - `Installation repositories`
   - `Issues`
+
+---
+
+## 11. Deployment & Operations Runbook
+
+### 11.1 Database Migration
+Run database schema migration to head revision (`e1f2a3b4c5d6`):
+```bash
+cd backend
+alembic upgrade head
+```
+
+Rollback verification (if required):
+```bash
+alembic downgrade -1
+alembic upgrade head
+```
+
+### 11.2 Background Worker Startup & Management
+The worker can be run either as an embedded background task inside FastAPI (default via `backend/app/core/lifespan.py`) or as a dedicated standalone service process in production:
+```bash
+# Standalone worker execution:
+cd backend
+python -m app.workers.webhook_worker
+```
+
+Kubernetes Pod / Deployment Spec snippet:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-webhook-worker
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: worker
+          image: ai-platform-backend:latest
+          command: ["python", "-m", "app.workers.webhook_worker"]
+          envFrom:
+            - secretRef:
+                name: github-app-secrets
+            - configMapRef:
+                name: backend-config
+```
+
+### 11.3 Required Environment Variables
+| Variable | Required | Description |
+|---|---|---|
+| `DATABASE_URL` | Yes | PostgreSQL connection string with pgvector support |
+| `REDIS_URL` | Yes | Redis connection string for in-flight delivery deduplication |
+| `GITHUB_WEBHOOK_SECRET` | Yes | HMAC-SHA256 secret configured in GitHub App settings |
+| `GITHUB_APP_ID` | Yes | Numerical GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | Yes | PEM-formatted private key for GitHub App JWT signing |
+| `JWT_SECRET` | Yes | Authentication signing secret for operational API endpoints |
+
+### 11.4 Operational Verification Steps
+1. Verify endpoint health and HMAC verification:
+   ```bash
+   curl -X POST https://api.yourdomain.com/api/v1/github/webhook \
+     -H "Content-Type: application/json" \
+     -H "X-GitHub-Event: ping" \
+     -H "X-GitHub-Delivery: $(uuidgen)" \
+     -H "X-Hub-Signature-256: sha256=..." \
+     -d '{"zen": "testing"}'
+   # Expected response: {"status": "pong"}
+   ```
+2. Verify durable event persistence:
+   Send test push or PR event and verify HTTP `202 Accepted` response with `delivery_id` and `event_id`.
+3. Check worker processing status:
+   ```bash
+   curl -X GET https://api.yourdomain.com/api/v1/github/events?page_size=5 \
+     -H "Authorization: Bearer <ADMIN_OR_USER_JWT>"
+   ```
+
+### 11.5 Secret Rotation Procedures
+1. Generate new GitHub Webhook Secret in GitHub App Settings.
+2. Update Kubernetes / cloud secret:
+   ```bash
+   kubectl create secret generic github-app-secrets \
+     --from-literal=GITHUB_WEBHOOK_SECRET="<NEW_SECRET>" \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+3. Restart backend API pods:
+   ```bash
+   kubectl rollout restart deployment/backend-api
+   ```
+4. Update webhook secret in GitHub App developer settings.
+5. Ingest a test event to verify HMAC verification succeeds with the new secret.
+
+### 11.6 Dead-Letter Event Inspection & Replay Instructions
+1. Inspect dead-lettered events:
+   ```bash
+   curl -X GET "https://api.yourdomain.com/api/v1/github/events?status=dead_letter" \
+     -H "Authorization: Bearer <ADMIN_JWT>"
+   ```
+2. Inspect individual event error trace:
+   ```bash
+   curl -X GET "https://api.yourdomain.com/api/v1/github/events/<EVENT_ID>" \
+     -H "Authorization: Bearer <ADMIN_JWT>"
+   ```
+3. Replay dead-lettered event once underlying issue (network, rate-limit, permissions) is resolved:
+   ```bash
+   curl -X POST "https://api.yourdomain.com/api/v1/github/events/<EVENT_ID>/replay" \
+     -H "Authorization: Bearer <ADMIN_JWT>"
+   # Expected response: {"status": "replayed", "event_id": "<EVENT_ID>", "replay_count": 1}
+   ```
