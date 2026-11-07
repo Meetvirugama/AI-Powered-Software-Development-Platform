@@ -74,6 +74,7 @@ async def process_single_webhook_event(
             return True
 
         except FatalWebhookError as fatal_err:
+            db.rollback()
             logger.error(
                 "webhook_worker_fatal_error",
                 extra={"event_id": str(event.id), "error": str(fatal_err)},
@@ -82,6 +83,7 @@ async def process_single_webhook_event(
             return False
 
         except RetryableWebhookError as retry_err:
+            db.rollback()
             logger.warning(
                 "webhook_worker_retryable_error",
                 extra={"event_id": str(event.id), "attempt": event.attempts, "error": str(retry_err)},
@@ -100,6 +102,7 @@ async def process_single_webhook_event(
             return False
 
         except Exception as unhandled_err:
+            db.rollback()
             logger.exception(
                 "webhook_worker_unhandled_error",
                 extra={"event_id": str(event.id), "error": str(unhandled_err)},
