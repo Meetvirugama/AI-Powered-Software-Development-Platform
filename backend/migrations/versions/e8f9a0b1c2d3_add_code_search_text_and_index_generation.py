@@ -1,7 +1,7 @@
 """Add code_search_text to code_chunks and index generation tracking to repositories (R01, R04)
 
 Revision ID: e8f9a0b1c2d3
-Revises: d5e6f7a8b9c0
+Revises: e1f2a3b4c5d6
 Create Date: 2026-11-07 18:10:00.000000
 """
 
@@ -10,7 +10,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = "e8f9a0b1c2d3"
-down_revision: Union[str, Sequence[str], None] = "d5e6f7a8b9c0"
+down_revision: Union[str, Sequence[str], None] = "e1f2a3b4c5d6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

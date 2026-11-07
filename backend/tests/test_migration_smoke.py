@@ -72,6 +72,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "c94e1f8a2d73",  # week3 github_issues, tasks, task_plans, task_approvals, task_events
     "d5e6f7a8b9c0",  # fix constraints and add indexes
     "e1f2a3b4c5d6",  # durable github webhook events and repo automation (Issue #182)
+    "e8f9a0b1c2d3",  # code search text and index generation tracking (Issue #187)
 )
 
 
