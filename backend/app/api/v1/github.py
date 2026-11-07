@@ -21,13 +21,19 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis, get_redis_async
+from app.models.github_installation import GitHubInstallation
+from app.models.repository import Repository
+from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.schemas.repository import (
     AvailableRepository,
     ConnectRepositoryResponse,
     PaginatedAvailableRepositoryResponse,
+    RepositoryAutomationSettingsResponse,
+    UpdateRepositoryAutomationSettingsRequest,
 )
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 
@@ -41,6 +47,20 @@ def _request_user_id(request: Request) -> UUID:
         return UUID(request.state.user_id)
     except (AttributeError, ValueError) as exc:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
+
+
+def _verify_event_access(event: GitHubWebhookEvent, user_id: UUID, db: Session) -> None:
+    has_access = False
+    if event.repository_id:
+        r = RepositoryRepository(db).get_for_user(event.repository_id, user_id)
+        if r:
+            has_access = True
+    if not has_access and event.installation_id:
+        inst = GitHubInstallationRepository(db).get_by_installation_id(event.installation_id)
+        if inst and inst.user_id == user_id:
+            has_access = True
+    if not has_access:
+        raise APIError(403, ErrorCode.FORBIDDEN, "Access denied to this event.")
 
 
 @router.get(
@@ -409,18 +429,30 @@ async def github_installation_callback(
     )
 
 
+SUPPORTED_WEBHOOK_EVENTS = {
+    "push",
+    "pull_request",
+    "installation",
+    "installation_repositories",
+    "issues",
+}
+
+
 @router.post("/webhook", summary="GitHub App webhook handler")
 async def github_webhook(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Process incoming GitHub App webhook events with HMAC signature verification, size checks, and deduplication."""
+    """Process incoming GitHub App webhook events with HMAC signature verification, size checks, delivery deduplication, and durable event persistence."""
     import hashlib
     import hmac
     import json
     import re
+    import uuid
 
     from app.core.redis import get_redis
+    from app.models.repository import Repository
+    from app.repositories.webhook_event_repository import WebhookEventRepository
 
     MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024  # 5 MB
 
@@ -486,25 +518,297 @@ async def github_webhook(
     if not isinstance(payload, dict):
         return {"status": "ignored_bad_payload"}
 
+    if event not in SUPPORTED_WEBHOOK_EVENTS:
+        logger.info("github_webhook_unsupported_event_ignored", extra={"event": event})
+        return {"status": "ignored_unsupported_event", "event": event}
+
     action = payload.get("action")
-    installation = payload.get("installation", {})
-    inst_id = str(installation.get("id", ""))
-    acc_login = installation.get("account", {}).get("login", "")
+    installation = payload.get("installation") or {}
+    inst_id = str(installation.get("id", "")) if installation.get("id") else None
+    repo_data = payload.get("repository") or {}
+    github_repo_id = str(repo_data.get("id", "")) if repo_data.get("id") else None
 
-    inst_repo = GitHubInstallationRepository(db)
+    # Resolve linked repository
+    linked_repo_id = None
+    if github_repo_id:
+        found_repo = db.query(Repository).filter(Repository.github_repo_id == github_repo_id).first()
+        if found_repo:
+            linked_repo_id = found_repo.id
 
-    if event == "installation":
-        if action in ("created", "added"):
-            user = UserRepository(db).get_by_login(acc_login)
-            if user and inst_id:
-                inst_repo.upsert(
-                    user_id=user.id,
-                    installation_id=inst_id,
-                    account_login=acc_login,
-                    permissions=installation.get("permissions", {}),
-                )
-        elif action in ("deleted", "removed"):
-            if inst_id:
-                inst_repo.delete_by_installation_id(inst_id)
+    effective_delivery_id = delivery_id or f"auto-{uuid.uuid4().hex}"
 
-    return {"status": "ok", "event": event, "action": action}
+    event_repo = WebhookEventRepository(db)
+    try:
+        event_record, created = event_repo.create_event(
+            delivery_id=effective_delivery_id,
+            event_type=event,
+            action=action,
+            installation_id=inst_id,
+            repository_id=linked_repo_id,
+            github_repo_id=github_repo_id,
+            payload=payload,
+        )
+        if not created:
+            logger.info("github_webhook_db_duplicate_delivery", extra={"delivery_id": effective_delivery_id, "event": event})
+            return {"status": "duplicate_delivery_ignored", "delivery_id": effective_delivery_id}
+    except Exception as db_exc:
+        db.rollback()
+        logger.error("github_webhook_persistence_failed", extra={"error": str(db_exc)})
+        if delivery_id:
+            try:
+                r_clean = await get_redis_async()
+                if r_clean is not None:
+                    await r_clean.delete(f"webhook_delivery:{delivery_id}")
+                else:
+                    get_redis().delete(f"webhook_delivery:{delivery_id}")
+            except Exception:
+                logger.warning("webhook_dedup_key_release_failed", extra={"delivery_id": delivery_id})
+        raise APIError(
+            500,
+            ErrorCode.INTERNAL_SERVER_ERROR,
+            "Failed to persist webhook event durably.",
+            retryable=True,
+        ) from db_exc
+
+    # Notify background worker via Redis
+    try:
+        r_async = await get_redis_async()
+        if hasattr(r_async, "rpush"):
+            push_res = r_async.rpush("webhook_events:queue", str(event_record.id))
+            if inspect.isawaitable(push_res):
+                await push_res
+    except Exception as queue_exc:
+        logger.warning("webhook_queue_notify_failed", extra={"error": str(queue_exc)})
+
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "accepted",
+            "delivery_id": effective_delivery_id,
+            "event_id": str(event_record.id),
+            "event": event,
+            "action": action,
+        },
+    )
+
+
+@router.get("/events", summary="List durably persisted GitHub webhook events")
+async def list_webhook_events(
+    request: Request,
+    status: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    repository_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    """Inspect durably persisted webhook events with status and event_type filters."""
+    user_id = _request_user_id(request)
+
+    user_repo_ids = None
+    user_install_ids = None
+    repo_uuid = None
+    if repository_id:
+        try:
+            repo_uuid = UUID(repository_id)
+        except ValueError:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid repository UUID.")
+        repo_item = RepositoryRepository(db).get_for_user(repo_uuid, user_id)
+        if not repo_item:
+            raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository not found or access denied.")
+    else:
+        user_repo_ids = [r.id for r in db.query(Repository.id).filter(Repository.user_id == user_id).all()]
+        user_install_ids = [
+            str(i.installation_id)
+            for i in db.query(GitHubInstallation.installation_id).filter(GitHubInstallation.user_id == user_id).all()
+        ]
+
+    status_filter = None
+    if status:
+        try:
+            status_filter = WebhookEventStatus(status.upper())
+        except ValueError:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, f"Invalid event status '{status}'.")
+
+    offset = (page - 1) * page_size
+    repo = WebhookEventRepository(db)
+    events, total = repo.list_events(
+        status=status_filter,
+        event_type=event_type,
+        repository_id=repo_uuid,
+        repository_ids=user_repo_ids,
+        installation_ids=user_install_ids,
+        limit=page_size,
+        offset=offset,
+    )
+
+    items = [
+        {
+            "id": str(e.id),
+            "delivery_id": e.delivery_id,
+            "event_type": e.event_type,
+            "action": e.action,
+            "installation_id": e.installation_id,
+            "repository_id": str(e.repository_id) if e.repository_id else None,
+            "status": e.status.value if hasattr(e.status, "value") else str(e.status),
+            "attempts": e.attempts,
+            "max_attempts": e.max_attempts,
+            "available_at": e.available_at.isoformat() if e.available_at else None,
+            "processed_at": e.processed_at.isoformat() if e.processed_at else None,
+            "last_error": e.last_error,
+            "replay_count": getattr(e, "replay_count", 0),
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in events
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": max(1, (total + page_size - 1) // page_size),
+    }
+
+
+@router.get("/events/{event_id}", summary="Get detailed status of a webhook event")
+async def get_webhook_event(
+    event_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Retrieve details and sanitized metadata for a specific webhook event."""
+    user_id = _request_user_id(request)
+    try:
+        event_uuid = UUID(event_id)
+    except ValueError:
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid event UUID.")
+
+    repo = WebhookEventRepository(db)
+    event = repo.get_by_id(event_uuid)
+    if not event:
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Webhook event not found.")
+
+    _verify_event_access(event, user_id, db)
+
+    return {
+        "id": str(event.id),
+        "delivery_id": event.delivery_id,
+        "event_type": event.event_type,
+        "action": event.action,
+        "installation_id": event.installation_id,
+        "repository_id": str(event.repository_id) if event.repository_id else None,
+        "status": event.status.value if hasattr(event.status, "value") else str(event.status),
+        "attempts": event.attempts,
+        "max_attempts": event.max_attempts,
+        "available_at": event.available_at.isoformat() if event.available_at else None,
+        "processed_at": event.processed_at.isoformat() if event.processed_at else None,
+        "last_error": event.last_error,
+        "replay_count": getattr(event, "replay_count", 0),
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+@router.post("/events/{event_id}/replay", summary="Safely replay a failed or dead-letter webhook event")
+async def replay_webhook_event(
+    event_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Replay a failed or dead-letter webhook event. Actively processing events cannot be replayed."""
+    user_id = _request_user_id(request)
+    try:
+        event_uuid = UUID(event_id)
+    except ValueError:
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid event UUID.")
+
+    repo = WebhookEventRepository(db)
+    event = repo.get_by_id(event_uuid)
+    if not event:
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Webhook event not found.")
+
+    _verify_event_access(event, user_id, db)
+
+    try:
+        replayed = repo.replay_event(event_uuid)
+    except ValueError as val_err:
+        raise APIError(409, ErrorCode.CONFLICT, str(val_err))
+
+    # Notify background worker
+    try:
+        r_async = await get_redis_async()
+        if hasattr(r_async, "rpush"):
+            p_res = r_async.rpush("webhook_events:queue", str(replayed.id))
+            if inspect.isawaitable(p_res):
+                await p_res
+    except Exception:
+        pass
+
+    return {
+        "status": "replayed",
+        "event_id": str(replayed.id),
+        "replay_count": getattr(replayed, "replay_count", 1),
+    }
+
+
+@router.get(
+    "/repositories/{github_repo_id}/automation",
+    response_model=RepositoryAutomationSettingsResponse,
+    summary="Get repository automation settings",
+)
+async def get_repository_automation(
+    github_repo_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RepositoryAutomationSettingsResponse:
+    """Retrieve opt-in automation configuration for a connected repository."""
+    user_id = _request_user_id(request)
+    repo = RepositoryRepository(db).get_by_github_id_and_user(github_repo_id, user_id)
+    if not repo:
+        raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository not found or access denied.")
+
+    return RepositoryAutomationSettingsResponse(
+        github_repo_id=github_repo_id,
+        auto_sync_enabled=getattr(repo, "auto_sync_enabled", True),
+        pr_review_enabled=getattr(repo, "pr_review_enabled", False),
+        pr_review_drafts=getattr(repo, "pr_review_drafts", False),
+        last_indexed_commit_sha=getattr(repo, "last_indexed_commit_sha", None),
+    )
+
+
+@router.patch(
+    "/repositories/{github_repo_id}/automation",
+    response_model=RepositoryAutomationSettingsResponse,
+    summary="Update repository automation settings",
+)
+async def update_repository_automation(
+    github_repo_id: str,
+    body: UpdateRepositoryAutomationSettingsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RepositoryAutomationSettingsResponse:
+    """Update opt-in automation settings (push-sync, PR review, draft review) for a repository."""
+    user_id = _request_user_id(request)
+    repo = RepositoryRepository(db).get_by_github_id_and_user(github_repo_id, user_id)
+    if not repo:
+        raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository not found or access denied.")
+
+    if body.auto_sync_enabled is not None:
+        repo.auto_sync_enabled = body.auto_sync_enabled
+    if body.pr_review_enabled is not None:
+        repo.pr_review_enabled = body.pr_review_enabled
+    if body.pr_review_drafts is not None:
+        repo.pr_review_drafts = body.pr_review_drafts
+
+    db.commit()
+    db.refresh(repo)
+
+    return RepositoryAutomationSettingsResponse(
+        github_repo_id=github_repo_id,
+        auto_sync_enabled=getattr(repo, "auto_sync_enabled", True),
+        pr_review_enabled=getattr(repo, "pr_review_enabled", False),
+        pr_review_drafts=getattr(repo, "pr_review_drafts", False),
+        last_indexed_commit_sha=getattr(repo, "last_indexed_commit_sha", None),
+    )

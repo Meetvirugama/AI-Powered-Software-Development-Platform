@@ -420,32 +420,44 @@ async def lifespan(app: FastAPI):
     await init_github_service(app)
 
     # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks on Startup ──────
-    try:
-        from app.core.database import SessionLocal
-        from app.repositories.task_repository import TaskRepository
-        from app.services.repository_sync import reconcile_stale_sync_jobs
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        try:
+            from app.core.database import SessionLocal
+            from app.repositories.task_repository import TaskRepository
+            from app.services.repository_sync import reconcile_stale_sync_jobs
 
-        with SessionLocal() as db_session:
-            reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
-            if reconciled:
-                logger.info(
-                    "startup_stale_sync_jobs_reconciled",
-                    extra={"count": len(reconciled), "job_ids": [str(jid) for jid in reconciled]},
-                )
+            with SessionLocal() as db_session:
+                reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+                if reconciled:
+                    logger.info(
+                        "startup_stale_sync_jobs_reconciled",
+                        extra={"count": len(reconciled), "job_ids": [str(jid) for jid in reconciled]},
+                    )
 
-            task_repo = TaskRepository(db_session)
-            interrupted_tasks = task_repo.reconcile_interrupted_tasks()
-            if interrupted_tasks:
-                logger.info(
-                    "startup_interrupted_tasks_reconciled",
-                    extra={"count": len(interrupted_tasks), "task_ids": [str(tid) for tid in interrupted_tasks]},
-                )
+                task_repo = TaskRepository(db_session)
+                interrupted_tasks = task_repo.reconcile_interrupted_tasks()
+                if interrupted_tasks:
+                    logger.info(
+                        "startup_interrupted_tasks_reconciled",
+                        extra={"count": len(interrupted_tasks), "task_ids": [str(tid) for tid in interrupted_tasks]},
+                    )
 
-        orch = getattr(app.state, "task_execution_orchestrator", None)
-        if orch is not None:
-            orch.workspace_manager.recover_workspaces(auto_reconcile=True)
-    except Exception as exc:
-        logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
+            orch = getattr(app.state, "task_execution_orchestrator", None)
+            if orch is not None:
+                orch.workspace_manager.recover_workspaces(auto_reconcile=True)
+        except Exception as exc:
+            logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
+
+    # ── Background Webhook Worker Task ───────────────────────────────────────
+    webhook_worker_task = None
+    if "PYTEST_CURRENT_TEST" not in os.environ and not getattr(settings, "disable_embedded_webhook_worker", False):
+        try:
+            from app.services.webhook_worker import webhook_worker_loop
+
+            webhook_worker_task = asyncio.create_task(webhook_worker_loop(app))
+            logger.info("webhook_worker_task_started")
+        except Exception as exc:
+            logger.warning("webhook_worker_task_failed", extra={"error": str(exc)})
 
     # ── Background Sync Worker Task ──────────────────────────────────────────
     sync_worker_task = None
@@ -459,6 +471,13 @@ async def lifespan(app: FastAPI):
             logger.warning("sync_worker_task_failed", extra={"error": str(exc)})
 
     yield
+
+    if webhook_worker_task:
+        webhook_worker_task.cancel()
+        try:
+            await webhook_worker_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     if sync_worker_task:
         sync_worker_task.cancel()

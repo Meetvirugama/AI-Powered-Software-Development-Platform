@@ -183,3 +183,17 @@ class ConnectRepositoryResponse(BaseModel):
 
     repository_id: str
     job_id: str
+
+
+class RepositoryAutomationSettingsResponse(BaseModel):
+    github_repo_id: str
+    auto_sync_enabled: bool = True
+    pr_review_enabled: bool = False
+    pr_review_drafts: bool = False
+    last_indexed_commit_sha: str | None = None
+
+
+class UpdateRepositoryAutomationSettingsRequest(BaseModel):
+    auto_sync_enabled: bool | None = None
+    pr_review_enabled: bool | None = None
+    pr_review_drafts: bool | None = None

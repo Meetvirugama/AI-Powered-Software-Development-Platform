@@ -57,6 +57,7 @@ EXPECTED_TABLES = frozenset({
     "task_checkpoints",
     "task_events",
     "task_pull_requests",
+    "github_webhook_events",
 })
 
 EXPECTED_MILESTONE_REVISIONS = (
@@ -69,6 +70,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "b627460d74e0",  # pull_requests
     "b3c4d5e6f7a8",  # workflow automation & tasks
     "c94e1f8a2d73",  # week3 github_issues, tasks, task_plans, task_approvals, task_events
+    "d5e6f7a8b9c0",  # fix constraints and add indexes
+    "e1f2a3b4c5d6",  # durable github webhook events and repo automation (Issue #182)
 )
 
 
@@ -78,7 +81,7 @@ def clean_schema_name() -> Generator[str, None, None]:
     settings = get_settings()
     schema = f"smoke_{uuid.uuid4().hex[:10]}"
     try:
-        engine = create_engine(settings.database_url)
+        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
         with engine.begin() as conn:
             conn.execute(text(f"CREATE SCHEMA {schema};"))
     except Exception as exc:
@@ -138,19 +141,21 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         pr_fks = insp.get_foreign_keys("pull_requests", schema=clean_schema_name)
         assert any(fk.get("options", {}).get("ondelete") == "CASCADE" or fk.get("name") == "pull_requests_repository_id_fkey" for fk in pr_fks)
 
-        # 2. Downgrade -1 (rolls back Week 3 Day 2 extension)
+        # 2. Downgrade -1 (rolls back durable github webhook events e1f2a3b4c5d6)
         command.downgrade(cfg, "-1")
         insp_downgraded = inspect(_make_engine())
         tables_after_downgrade = set(insp_downgraded.get_table_names(schema=clean_schema_name))
-        assert "github_issues" not in tables_after_downgrade, "github_issues table should be dropped after downgrade -1"
-        assert "tasks" in tables_after_downgrade, "tasks table should remain after downgrade -1 (belongs to b3c4d5e6f7a8)"
+        assert "github_webhook_events" not in tables_after_downgrade, "github_webhook_events table should be dropped after downgrade -1"
+        assert "github_issues" in tables_after_downgrade, "github_issues table should remain after downgrade -1"
+        assert "tasks" in tables_after_downgrade, "tasks table should remain after downgrade -1"
         assert "pull_requests" in tables_after_downgrade, "pull_requests should remain after downgrade -1"
 
-        # 3. Downgrade -1 again (rolls back b3c4d5e6f7a8 to Week 2 head b627460d74e0)
-        command.downgrade(cfg, "-1")
+        # 3. Downgrade to Week 2 head b627460d74e0
+        command.downgrade(cfg, "b627460d74e0")
         insp_w2 = inspect(_make_engine())
         tables_w2 = set(insp_w2.get_table_names(schema=clean_schema_name))
-        assert "tasks" not in tables_w2, "tasks table should be dropped after rolling back b3c4d5e6f7a8"
+        assert "tasks" not in tables_w2, "tasks table should be dropped after rolling back to b627460d74e0"
+        assert "github_issues" not in tables_w2, "github_issues table should be dropped after rolling back to b627460d74e0"
         assert "pull_requests" in tables_w2, "pull_requests should remain at b627460d74e0"
 
         # 4. Re-upgrade to head (idempotent re-creation)
@@ -159,6 +164,7 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         tables_reupgraded = set(insp_reupgraded.get_table_names(schema=clean_schema_name))
         assert "tasks" in tables_reupgraded, "tasks must be restored after re-upgrade head"
         assert "github_issues" in tables_reupgraded, "github_issues must be restored after re-upgrade head"
+        assert "github_webhook_events" in tables_reupgraded, "github_webhook_events must be restored after re-upgrade head"
 
     finally:
         engine.dispose()
@@ -168,12 +174,20 @@ def test_zero_schema_drift_against_database() -> None:
     """Verify that ORM models (Base.metadata) and Alembic migrations have zero schema drift (B-21)."""
     settings = get_settings()
     try:
+        probe_engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
+        with probe_engine.connect() as conn:
+            pass
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL database not available for schema drift test: {exc}")
+        return
+
+    try:
         ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
         cfg = Config(str(ini_path))
         cfg.set_main_option("sqlalchemy.url", settings.database_url)
         command.upgrade(cfg, "head")
 
-        engine = create_engine(settings.database_url)
+        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 3})
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn, opts={"compare_type": True})
             diffs = compare_metadata(ctx, Base.metadata)
