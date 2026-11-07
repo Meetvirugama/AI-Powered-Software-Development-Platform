@@ -345,3 +345,30 @@ Autonomous agents operating on codebases risk unreviewed changes, infinite loops
 2. **Bounded Repair Ceiling:** In the event of test failures, the self-repair loop is restricted to a maximum of **3 task-level attempts**. If the budget is exhausted, execution terminates in a safe failure state requiring human escalation.
 3. **No Automatic Merge:** The agent creates a GitHub Draft Pull Request only; merging and production deployment remain exclusively human actions.
 
+---
+
+## ADR-011: Cryptographic JWT Consolidation and Fail-Closed OAuth Security
+
+| Field | Value |
+|---|---|
+| **Title** | PyJWT consolidation, claim hardening, dual trust-domain separation, and fail-closed OAuth state |
+| **Date** | 2026-11-07 |
+| **Status** | Accepted |
+| **Owner** | Dharmraj / Security Architecture |
+
+**Context:**
+Issue #181 identified dual JWT dependencies (`python-jose` and `PyJWT`), missing platform token claims (`iss`, `aud`, `token_type`, `jti`), potential fail-open behavior if Redis was offline during revocation checks, and non-atomic OAuth state consumption.
+
+**Decision:**
+1. **PyJWT Consolidation:** Fully retire `python-jose` across the backend. Standardize all JWT operations on `PyJWT`.
+2. **Dual Trust-Domain Separation:** Isolate platform user tokens (symmetric `HS256`, `jwt_secret`, `agent-platform` issuer) from GitHub App integration tokens (asymmetric `RS256`, RSA private key PEM, GitHub App numeric ID issuer). Key material and validation algorithms are mutually exclusive.
+3. **Platform Token Hardening:** Require strict algorithm allowlist (`HS256`, `HS384`, `HS512`), mandatory claims (`sub`, `jti`, `iss`, `aud`, `token_type="access"`, `iat`, `exp`), and safe error abstraction behind standard 401 envelopes.
+4. **Fail-Closed Redis Operations:** If Redis is down, times out, or missing during token blocklist checks or OAuth state creation/consumption, fail closed immediately with HTTP 503 (`SERVICE_UNAVAILABLE`).
+5. **Atomic OAuth State & PKCE S256:** Enforce RFC 7636 PKCE (`code_verifier` + `code_challenge` S256), bind OAuth state to browser via HTTP-only cookie, and atomically consume state using Redis `GETDEL` (with Lua script fallback) to prevent replay and race conditions. Clear state cookies on both success and failure paths.
+6. **Redirect and CSRF Protection:** Reject untrusted open redirects by strictly validating callback URLs against configured CORS origins and `frontend_url`. Require valid `Origin` or `Referer` headers on cookie-authenticated state-changing endpoints in production.
+
+**Consequences:**
+- Zero dependence on `python-jose`.
+- Full compliance with modern OAuth 2.0 PKCE and JWT best practices.
+- Legacy unhardened tokens expire naturally and cleanly prompt re-authentication via GitHub OAuth.
+

@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 15
+    jwt_issuer: str = "agent-platform"
+    jwt_audience: str = "agent-platform-web"
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
@@ -213,6 +215,14 @@ class Settings(BaseSettings):
             if any(dummy in self.jwt_secret.lower() for dummy in insecure_dummies) or self.jwt_secret.lower().strip() == "secret":
                 raise ValueError(
                     "Production configuration error: Insecure default JWT_SECRET detected in production."
+                )
+            if not self.jwt_issuer or not self.jwt_issuer.strip():
+                raise ValueError(
+                    "Production configuration error: JWT_ISSUER must be configured in production."
+                )
+            if not self.jwt_audience or not self.jwt_audience.strip():
+                raise ValueError(
+                    "Production configuration error: JWT_AUDIENCE must be configured in production."
                 )
             if not self.cookie_secure:
                 raise ValueError(
