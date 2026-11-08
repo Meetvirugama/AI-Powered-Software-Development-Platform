@@ -1,0 +1,20 @@
+flowchart TD
+    Start["Start Iteration Loop (Round = 1)"] --> GenInitial["Generate Initial Tests (LLM)"]
+    GenInitial --> SandboxExec["Execute in Isolated Workspace"]
+    SandboxExec --> MeasureCov["Collect Runtime Coverage & Uncovered Lines"]
+    MeasureCov --> CheckStop{"Should Continue Iteration?<br>(Uncovered > 0 AND Gain > 0 AND Round < 3)"}
+    
+    CheckStop -->|No: 100% Covered| StopSuccess["Stop: 100% Executable Line Coverage"]
+    CheckStop -->|No: Gain Plateau| StopPlateau["Stop: Coverage Plateau (No improvement)"]
+    CheckStop -->|No: Round >= 3| StopMax["Stop: Maximum Rounds Reached (3/3)"]
+    
+    CheckStop -->|Yes| ExtractCtx["Extract Code Window for Uncovered Lines"]
+    ExtractCtx --> PromptLLM["Targeted Prompt with Uncovered Lines & Gaps"]
+    PromptLLM --> GenAdditional["Generate Additional Tests Only"]
+    GenAdditional --> MergeTests["Intelligently Merge New Functions & Deduplicate Scenarios"]
+    MergeTests --> IncRound["Increment Round (Round = Round + 1)"]
+    IncRound --> SandboxExec
+    
+    StopSuccess --> FinalRep["Generate Final IterationReport & Final Result"]
+    StopPlateau --> FinalRep
+    StopMax --> FinalRep

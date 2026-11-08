@@ -551,7 +551,7 @@ class FrameworkDetector:
         config_details: dict[str, Any] = {}
         setup_files: list[str] = []
 
-        # Find jest config files
+        # Find jest or vitest config files
         for jc in (
             "jest.config.js",
             "jest.config.ts",
@@ -561,6 +561,20 @@ class FrameworkDetector:
             if jc in files:
                 config_file = jc
                 candidate_frameworks.append("jest")
+                break
+
+        for vc in (
+            "vitest.config.ts",
+            "vitest.config.js",
+            "vitest.config.mjs",
+            "vite.config.ts",
+            "vite.config.js",
+            "vite.config.mjs",
+        ):
+            if vc in files:
+                if not config_file:
+                    config_file = vc
+                candidate_frameworks.append("vitest")
                 break
 
         # Find setup files

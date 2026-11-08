@@ -1,0 +1,32 @@
+flowchart TD
+    Client["Client / Frontend TestGenerationView"] -->|POST /generate-tests| API["API Endpoint (tests.py)"]
+    API --> TargetContext["Target & Context Resolution"]
+    API --> FrameworkDetector["FrameworkDetector (pytest, unittest, jest, vitest)"]
+    API --> ReqOrchestrator["TestRequirementOrchestrator"]
+    API --> LLMService["TestGenerationService (LLM)"]
+    
+    LLMService --> Stage1["Stage 1: Static Validation"]
+    Stage1 -->|Syntax OK| Verifier["TestExecutionVerifier"]
+    Stage1 -->|Syntax Fail| Unverified["UNVERIFIED Result"]
+    
+    subgraph ExecutionPipeline ["Execution-and-Filter Pipeline"]
+        Verifier --> Stage2["Stage 2: Sandbox Provisioning (WorkspaceManager)"]
+        Stage2 --> BaselineCov["Stage 4a: Baseline Coverage (TestCoverageService)"]
+        BaselineCov --> Stage3["Stage 3: Stability Validation (3 Consecutive Runs)"]
+        Stage3 --> PostCov["Stage 4b: Post-Gen Coverage (TestCoverageService)"]
+        PostCov --> IterLoop{"Coverage Improvement Possible?"}
+        IterLoop -->|Yes and round < 3| IterationSvc["Stage 4c: Iteration Orchestrator (CoverUp Loop)"]
+        IterationSvc -->|Targeted Prompt| LLMService
+        IterLoop -->|No or max rounds| Stage5["Stage 5: Final Classification"]
+    end
+    
+    Stage5 --> Verified["VERIFIED (3/3 stable + coverage gain)"]
+    Stage5 --> Unverified
+    Stage5 --> Rejected["REJECTED (Security / Path violation)"]
+    Stage5 --> ExecError["EXECUTION_ERROR (Sandbox crash / Timeout)"]
+    
+    Verified --> SafeCleanup["Safe Sandbox Cleanup (.workspaces/)"]
+    Unverified --> SafeCleanup
+    Rejected --> SafeCleanup
+    ExecError --> SafeCleanup
+    SafeCleanup --> Client

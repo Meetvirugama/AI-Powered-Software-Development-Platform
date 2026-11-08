@@ -59,10 +59,13 @@ def test_code_review_quality_benchmark_grounding_and_hallucination_rate() -> Non
 
 
 def test_test_generation_quality_benchmark_safety_and_syntax() -> None:
-    """Verify Test Generation enforces 100% rejection of unsafe/auto-executed paths and validates syntax."""
+    """Verify Test Generation enforces 100% rejection of unsafe/auto-executed paths and validates syntax & assertions."""
     res = run_test_generation_quality_benchmark()
 
     assert res["target_safety_met"] is True, f"Safety rejection rate {res['safety_rejection_rate']*100}% != 100%"
     assert res["safety_rejection_rate"] == 1.0
     assert res["rejected_unsafe_count"] == res["unsafe_paths_evaluated"]
+    assert res["target_syntax_met"] is True, f"Syntax validity rate {res['syntax_validity_rate']*100}% below 66%"
     assert res["syntax_validity_rate"] >= 0.66
+    assert res["target_assertion_met"] is True, f"Assertion presence rate {res['assertion_presence_rate']*100}% below 66%"
+    assert res["assertion_presence_rate"] >= 0.66

@@ -135,6 +135,13 @@ def detect_repository_test_framework(
         "jest.config.ts",
         "jest.config.mjs",
         "jest.config.json",
+        "vitest.config.js",
+        "vitest.config.ts",
+        "vitest.config.mjs",
+        "vitest.config.json",
+        "vite.config.js",
+        "vite.config.ts",
+        "vite.config.mjs",
         "tsconfig.json",
         "conftest.py",
     }
@@ -227,7 +234,7 @@ def detect_repository_test_framework(
 
     # Validate explicit framework override against target language and project dependencies
     if requested_framework is not None:
-        if is_python_target and requested_framework == "jest":
+        if is_python_target and requested_framework in ("jest", "vitest"):
             raise APIError(
                 400,
                 ErrorCode.UNSUPPORTED_TARGET,
@@ -240,17 +247,15 @@ def detect_repository_test_framework(
                 ErrorCode.UNSUPPORTED_TARGET,
                 f"Cannot generate '{requested_framework}' tests for {raw_detection.language} file '{target_path}'.",
             )
-        if is_js_ts_target and requested_framework == "jest" and file_list:
-            # Docs/week2.md §8: Do not silently generate Jest tests for a repository configured
-            # exclusively for a different runner (e.g. Vitest/Mocha).
+        if is_js_ts_target and requested_framework in ("jest", "vitest") and file_list:
             if (
                 raw_detection.status == "UNSUPPORTED_FRAMEWORK"
-                and "jest" not in raw_detection.candidate_frameworks
+                and requested_framework not in raw_detection.candidate_frameworks
             ):
                 raise APIError(
                     400,
                     ErrorCode.UNSUPPORTED_TARGET,
-                    f"Repository is configured for '{raw_detection.framework}', not 'jest'. "
+                    f"Repository is configured for '{raw_detection.framework}', not '{requested_framework}'. "
                     + " ".join(raw_detection.warnings),
                 )
 
@@ -261,7 +266,7 @@ def detect_repository_test_framework(
         preferred_framework=requested_framework,
     )
 
-    if not detection.is_supported or detection.framework not in ("pytest", "unittest", "jest"):
+    if not detection.is_supported or detection.framework not in ("pytest", "unittest", "jest", "vitest"):
         reason = (
             "; ".join(detection.warnings)
             or detection.ambiguity_reason
@@ -374,7 +379,11 @@ def validate_generated_test_syntax(
     if not test_content or not test_content.strip():
         return False, ["Generated test content is empty."]
 
-    if framework in ("pytest", "unittest") or proposed_test_path.endswith(".py"):
+    is_python = framework in ("pytest", "unittest") or (
+        framework not in ("jest", "vitest") and proposed_test_path.endswith(".py")
+    )
+
+    if is_python:
         try:
             tree = ast.parse(test_content, filename=proposed_test_path)
         except SyntaxError as exc:
@@ -409,18 +418,19 @@ def validate_generated_test_syntax(
 
         return len(errors) == 0, errors
 
-    # Jest / TypeScript / JavaScript structural checks
+    # Jest / Vitest / TypeScript / JavaScript structural checks
+    framework_label = framework.capitalize() if framework else "Test"
     if not re.search(r"\b(?:test|it)\s*\(", test_content):
-        errors.append("Generated Jest file does not contain any `test(...)` or `it(...)` blocks.")
+        errors.append(f"Generated {framework_label} file does not contain any `test(...)` or `it(...)` blocks.")
     if not re.search(r"\bexpect\s*\(", test_content):
-        errors.append("Generated Jest file does not contain any `expect(...)` assertions.")
+        errors.append(f"Generated {framework_label} file does not contain any `expect(...)` assertions.")
 
     # Check balanced braces/parentheses outside simple string literals
     stripped_strings = re.sub(r"(['\"`])(?:\\.|(?!\1).)*\1", '""', test_content)
     if stripped_strings.count("{") != stripped_strings.count("}"):
-        errors.append("Unbalanced curly braces `{}` in generated Jest test file.")
+        errors.append(f"Unbalanced curly braces `{{}}` in generated {framework_label} test file.")
     if stripped_strings.count("(") != stripped_strings.count(")"):
-        errors.append("Unbalanced parentheses `()` in generated Jest test file.")
+        errors.append(f"Unbalanced parentheses `()` in generated {framework_label} test file.")
 
     return len(errors) == 0, errors
 
@@ -610,7 +620,7 @@ def validate_and_sanitize_generated_tests(
             "validation_stage": val_stage,
             "schema_valid": True,
             "code_syntactically_valid": final_syntax_valid,
-            "framework_recognized": result.detected_framework in ("pytest", "unittest", "jest"),
+            "framework_recognized": result.detected_framework in ("pytest", "unittest", "jest", "vitest"),
             "execution_attempted": result.execution_attempted,
             "execution_status": result.execution_status,
             "sources": grounded_sources,

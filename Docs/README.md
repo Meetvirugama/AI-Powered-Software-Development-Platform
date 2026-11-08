@@ -11,7 +11,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | **Week 1** | [Week 1 — Repository Intelligence Foundation](./week1.md) | GitHub App integration, shallow clone, tree-sitter AST parsing, symbol graph, pgvector indexing, hybrid RAG pipeline (vector + lexical + RRF + reranking), grounded chat API, and React 19 Workbench UI. | 🟢 **COMPLETE** (369 tests passing, 71.3% coverage) |
 | **Week 2** | [Week 2 — Developer Intelligence Suite](./week2.md) | Four standalone developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with strict schema validation and persistence. | 🟢 **COMPLETE** (100% test pass, verified schemas) |
 | **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | 🟢 **COMPLETE** (17-step autonomous workflow verified) |
-| **Post-Week 3** | [Retrieval](./retrieval/README.md) & [Agentic Chat](./agentic-chat/README.md) | Enterprise hardening & advanced intelligence: Timing-safe JWT/OAuth auth (#181), durable webhook event worker & auto-sync/review (#182), multi-stage hybrid retrieval with adaptive HNSW & Redis caching (#187), and bounded agentic repository chat (#188). | 🟢 **COMPLETE** (206+ tests passing, zero conflicts) |
+| **Post-Week 3** | [Retrieval](./retrieval/README.md), [Agentic Chat](./agentic-chat/README.md), & [Test Generation](./test-generation/README.md) | Enterprise hardening & advanced intelligence: Timing-safe JWT/OAuth auth (#181), durable webhook event worker (#182), multi-stage hybrid retrieval (#187), bounded agentic chat (#188), and execution-verified, coverage-guided test generation with Vitest support (#193). | 🟢 **COMPLETE** (All suites passing, 100% verified) |
 
 ---
 
@@ -23,6 +23,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | [Database Migrations Workflow](./db_migrations.md) | Alembic migration guides, current migration inventory (12 migrations), and table-to-migration map. | Om |
 | [Multi-Stage Code Retrieval Engine](./retrieval/README.md) | 7-step hybrid retrieval architecture, adaptive HNSW profiles, lexical code FTS, graph expansion, Redis cache, and benchmarks. | Meet |
 | [Bounded Agentic Repository Chat](./agentic-chat/README.md) | Multi-turn repository investigation loop, tool registry, execution policy, budget control, and UI integration. | Meet |
+| [Execution-Verified Test Generation](./test-generation/README.md) | 5-stage verification pipeline, 3-run stability, runtime coverage delta & attribution, iterative loop, and Vitest support. | Dev & Meet |
 | [GitHub App Setup Guide](./github_app_setup.md) | Setup instructions for GitHub App registration, permissions, webhooks, and private key storage. | Parth |
 | [Product Vision & Specification](./project_idea.md) | Foundational product thesis, architecture diagrams, user personas, and differentiation. | Meet |
 | [Prompt Architecture](./prompt_architecture.md) | System/data separation rules, prompt-injection defense guidelines, and placeholder specifications. | Dev |

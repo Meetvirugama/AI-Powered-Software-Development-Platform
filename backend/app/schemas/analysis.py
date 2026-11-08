@@ -41,7 +41,69 @@ AnalysisStatus = Literal["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED
 FindingSeverity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
 FindingSourceType = Literal["STATIC", "AI", "COMBINED", "HYBRID"]
 ConfidenceLevel = Literal["high", "medium", "low"]
-SupportedTestFramework = Literal["pytest", "unittest", "jest"]
+SupportedTestFramework = Literal["pytest", "unittest", "jest", "vitest"]
+TestVerificationStatus = Literal["VERIFIED", "UNVERIFIED", "REJECTED", "EXECUTION_ERROR"]
+StabilityClassification = Literal["STABLE", "UNSTABLE", "FAILED"]
+
+
+class StabilityRunResult(BaseModel):
+    """Detailed result for an individual stability execution run (Phase 3)."""
+
+    run_number: int = Field(..., ge=1, le=10)
+    passed: bool = Field(...)
+    exit_code: int = Field(default=0)
+    duration_seconds: float = Field(default=0.0, ge=0.0)
+    passed_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    error_message: str | None = Field(default=None)
+
+
+class StabilityReport(BaseModel):
+    """Three-run stability report for flakiness filtering (task.md §4.6)."""
+
+    total_runs: int = Field(default=3, ge=1)
+    passed_runs: int = Field(default=0, ge=0)
+    classification: StabilityClassification = Field(default="FAILED")
+    is_stable: bool = Field(default=False)
+    runs: list[StabilityRunResult] = Field(default_factory=list)
+
+
+class CoverageReport(BaseModel):
+    """Runtime coverage delta report (task.md §5)."""
+
+    baseline_line_coverage: float | None = Field(default=None, ge=0.0, le=100.0)
+    final_line_coverage: float | None = Field(default=None, ge=0.0, le=100.0)
+    line_coverage_gain: float | None = Field(default=None)
+    baseline_branch_coverage: float | None = Field(default=None, ge=0.0, le=100.0)
+    final_branch_coverage: float | None = Field(default=None, ge=0.0, le=100.0)
+    branch_coverage_gain: float | None = Field(default=None)
+    newly_covered_lines: list[int] = Field(default_factory=list)
+    newly_covered_branches: list[list[int]] = Field(default_factory=list)
+    coverage_attributable_to_generated_tests: bool = Field(default=False)
+    collection_status: Literal["SUCCESS", "PARTIAL", "FAILED", "NOT_CONFIGURED"] = Field(
+        default="NOT_CONFIGURED"
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
+class IterationRound(BaseModel):
+    """Information about a single iteration round in coverage-guided feedback (task.md §6)."""
+
+    round_number: int = Field(..., ge=1, le=10)
+    scenarios_targeted: list[str] = Field(default_factory=list)
+    uncovered_lines_addressed: list[int] = Field(default_factory=list)
+    tests_added: int = Field(default=0, ge=0)
+    line_coverage_after: float | None = Field(default=None)
+    tokens_used: int | None = Field(default=None)
+
+
+class IterationReport(BaseModel):
+    """Report on coverage-guided iterative test generation rounds (task.md §6)."""
+
+    total_rounds: int = Field(default=1, ge=1)
+    rounds: list[IterationRound] = Field(default_factory=list)
+    stopping_reason: str = Field(default="Initial generation complete")
+    final_coverage_achieved: float | None = Field(default=None)
 
 BugCategory = Literal[
     "off_by_one",
@@ -923,6 +985,30 @@ class TestGenerationResult(BaseModel):
     execution_summary: dict[str, Any] = Field(
         default_factory=dict,
         description="Detailed execution statistics from restricted test runner.",
+    )
+    verification_status: TestVerificationStatus = Field(
+        default="UNVERIFIED",
+        description="Execution-verified status: 'VERIFIED', 'UNVERIFIED', 'REJECTED', or 'EXECUTION_ERROR'.",
+    )
+    verification_reasons: list[str] = Field(
+        default_factory=list,
+        description="Specific reasons explaining the verification classification.",
+    )
+    stability_report: StabilityReport | None = Field(
+        default=None,
+        description="Three-consecutive-run stability and flakiness report (task.md §4.6).",
+    )
+    coverage_report: CoverageReport | None = Field(
+        default=None,
+        description="Runtime coverage delta report comparing baseline to post-generation (task.md §5).",
+    )
+    iteration_report: IterationReport | None = Field(
+        default=None,
+        description="Report on coverage-guided iterative test generation rounds (task.md §6).",
+    )
+    raw_execution_output: str | None = Field(
+        default=None,
+        description="Sanitized and redacted terminal output from sandboxed test execution.",
     )
 
     @field_validator("proposed_test_path")

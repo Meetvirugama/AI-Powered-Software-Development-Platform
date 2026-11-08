@@ -76,3 +76,4 @@
 | F-35 | Durable Webhook Processing & Automation (Issue #182 / PR #219) | P0 | 🟢 Done | Parth / Om / Yug | Webhook state machine, atomic lease workers, push-to-sync, PR review auto-trigger |
 | F-36 | Multi-Stage Code Retrieval Engine (Issue #187 / PR #220) | P0 | 🟢 Done | Meet / Prit / Om | Code-aware lexical search, adaptive HNSW savepoints, 1-hop graph expansion, Redis caching |
 | F-37 | Bounded Agentic Repository Chat (Issue #188 / PR #220) | P0 | 🟢 Done | Meet / Dev / Dhramraj | Normalized tool calling, read-only tools, budget control, dual-mode chat API & UI badges |
+| F-38 | Execution-Verified, Coverage-Guided Test Generation (Issue #193) | P0 | 🟢 Done | Meet / Dev / Dhramraj | 5-stage verification pipeline, 3-run stability, runtime coverage attribution, CoverUp iterative loop, Vitest |

@@ -1,0 +1,24 @@
+stateDiagram-v2
+    [*] --> StaticValidation: Synthesized Test Code
+    
+    StaticValidation --> REJECTED: Unsafe Path / Protected File / Disallowed Tokens
+    StaticValidation --> UNVERIFIED: Syntax Error (AST parse / Delimiter mismatch)
+    StaticValidation --> SandboxProvisioning: Syntax & Path Valid
+    
+    SandboxProvisioning --> EXECUTION_ERROR: Workspace Provisioning / Disk Quota Failure
+    SandboxProvisioning --> BaselineCoverage: Workspace Ready
+    
+    BaselineCoverage --> StabilityExecution: Baseline Recorded
+    StabilityExecution --> UNVERIFIED: Execution Failed (<= 1/3 Passed)
+    StabilityExecution --> UNVERIFIED: Flakiness Detected (2/3 Passed - UNSTABLE)
+    StabilityExecution --> PostGenCoverage: All 3 Runs Passed (3/3 - STABLE)
+    
+    PostGenCoverage --> UNVERIFIED: 0% Coverage Gain (No attributed lines)
+    PostGenCoverage --> VERIFIED: Coverage Attributed (Gain > 0% or New Lines)
+    
+    VERIFIED --> WorkspaceCleanup: Finally Block
+    UNVERIFIED --> WorkspaceCleanup: Finally Block
+    REJECTED --> WorkspaceCleanup: Finally Block
+    EXECUTION_ERROR --> WorkspaceCleanup: Finally Block
+    
+    WorkspaceCleanup --> [*]: Return TestGenerationResult

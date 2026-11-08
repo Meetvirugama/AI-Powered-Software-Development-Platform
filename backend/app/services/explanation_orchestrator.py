@@ -674,6 +674,14 @@ def record_analysis_run(
                     pass
             logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
+    # Forward to analysis_run_service if configured on app_state
+    run_service = getattr(app_state, "analysis_run_service", None)
+    if run_service is not None and hasattr(run_service, "record_run"):
+        try:
+            run_service.record_run(record)
+        except Exception:
+            pass
+
     # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(
         app_state, "_analysis_run_history", None

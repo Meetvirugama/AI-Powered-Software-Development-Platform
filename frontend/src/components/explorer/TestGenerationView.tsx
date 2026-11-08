@@ -17,6 +17,9 @@ import {
   HelpCircle,
   Activity,
   ListChecks,
+  PlayCircle,
+  Gauge,
+  Repeat,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type {
@@ -27,6 +30,7 @@ import type {
   SourceReference,
   TestRequirement,
   TestQualityReport,
+  TestVerificationStatus,
 } from '../../types/analysis';
 
 export interface TestGenerationViewProps {
@@ -73,6 +77,7 @@ const FRAMEWORK_COMMANDS: Record<SupportedTestFramework, string> = {
   pytest: 'pytest <path>',
   unittest: 'python -m unittest <path>',
   jest: 'npm test -- <path>',
+  vitest: 'npm test -- --run <path>',
 };
 
 export function TestGenerationView({
@@ -101,6 +106,10 @@ export function TestGenerationView({
   const [showRequirements, setShowRequirements] = useState(true);
   const [showQualityReport, setShowQualityReport] = useState(true);
   const [reqFilter, setReqFilter] = useState<'ALL' | 'MISSING' | 'COVERED' | 'CRITICAL'>('ALL');
+  const [showStabilityDetails, setShowStabilityDetails] = useState(true);
+  const [showCoverageDetails, setShowCoverageDetails] = useState(true);
+  const [showIterationDetails, setShowIterationDetails] = useState(true);
+  const [showRawOutput, setShowRawOutput] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
@@ -282,8 +291,279 @@ export function TestGenerationView({
   const effectiveFramework = selectedFrameworkOverride || detected_framework;
   const runnerCommand = FRAMEWORK_COMMANDS[effectiveFramework] || 'pytest <path>';
 
+  const verificationStatus: TestVerificationStatus = result.verification_status || 'UNVERIFIED';
+  const stabilityReport = result.stability_report;
+  const coverageReport = result.coverage_report;
+  const iterationReport = result.iteration_report;
+  const rawOutput = result.raw_execution_output;
+
   return (
     <div className={cn('space-y-4 text-xs', className)}>
+      {/* -------------------------------------------------------------- */}
+      {/* 0. Execution Verification Status Banner (task.md §4, §10)       */}
+      {/* -------------------------------------------------------------- */}
+      <div
+        className={cn(
+          'rounded-xl border p-3.5 space-y-2.5 shadow-xs transition-colors',
+          verificationStatus === 'VERIFIED'
+            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+            : verificationStatus === 'REJECTED'
+            ? 'border-rose-500/40 bg-rose-500/10 text-rose-300'
+            : verificationStatus === 'EXECUTION_ERROR'
+            ? 'border-zinc-500/40 bg-zinc-500/10 text-zinc-300'
+            : 'border-amber-500/40 bg-amber-500/10 text-amber-300'
+        )}
+      >
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            {verificationStatus === 'VERIFIED' ? (
+              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+            ) : verificationStatus === 'REJECTED' ? (
+              <XCircle className="h-4 w-4 text-rose-400 shrink-0" />
+            ) : verificationStatus === 'EXECUTION_ERROR' ? (
+              <AlertTriangle className="h-4 w-4 text-zinc-400 shrink-0" />
+            ) : (
+              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+            )}
+            <div>
+              <div className="text-[10px] font-mono uppercase tracking-wider opacity-80">
+                Verification Pipeline Status
+              </div>
+              <div className="text-xs font-bold font-mono tracking-tight flex items-center gap-1.5">
+                <span>{verificationStatus}</span>
+                {verificationStatus === 'VERIFIED' && (
+                  <span className="text-[10px] font-sans font-normal opacity-90">
+                    (Passed static checks, 3/3 stability runs, and attributed coverage)
+                  </span>
+                )}
+                {verificationStatus === 'UNVERIFIED' && (
+                  <span className="text-[10px] font-sans font-normal opacity-90">
+                    (Pending sandbox execution or verification conditions unmet)
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <span
+            className={cn(
+              'px-2 py-0.5 rounded-full text-[10px] font-mono uppercase font-semibold border',
+              verificationStatus === 'VERIFIED'
+                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                : verificationStatus === 'REJECTED'
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                : verificationStatus === 'EXECUTION_ERROR'
+                ? 'bg-zinc-500/20 text-zinc-300 border-zinc-500/40'
+                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+            )}
+          >
+            {verificationStatus}
+          </span>
+        </div>
+
+        {result.verification_reasons && result.verification_reasons.length > 0 && (
+          <div className="pt-2 border-t border-current/15 space-y-1">
+            <div className="text-[10px] font-mono uppercase tracking-wider opacity-80">
+              Verification Details:
+            </div>
+            {result.verification_reasons.map((reason, idx) => (
+              <div key={idx} className="flex items-start gap-1.5 text-[11px] leading-relaxed">
+                <span className="font-mono text-[10px] mt-0.5">•</span>
+                <span>{reason}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* -------------------------------------------------------------- */}
+      {/* 0.1. Stability Validation Report (task.md §4.6)                 */}
+      {/* -------------------------------------------------------------- */}
+      {stabilityReport && (
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 space-y-2.5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+              <PlayCircle className="h-3.5 w-3.5 text-primary" />
+              <span>Three-Run Stability Validation</span>
+              <span
+                className={cn(
+                  'px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border',
+                  stabilityReport.classification === 'STABLE'
+                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                    : stabilityReport.classification === 'UNSTABLE'
+                    ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+                    : 'bg-rose-500/15 text-rose-400 border-rose-500/30'
+                )}
+              >
+                {stabilityReport.passed_runs}/{stabilityReport.total_runs} PASSED ({stabilityReport.classification})
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowStabilityDetails(!showStabilityDetails)}
+              className="p-1 rounded hover:bg-muted/40 text-muted-foreground cursor-pointer"
+            >
+              {showStabilityDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showStabilityDetails && stabilityReport.runs && (
+            <div className="space-y-1.5 pt-1 border-t border-border/40">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {stabilityReport.runs.map((run) => (
+                  <div
+                    key={run.run_number}
+                    className={cn(
+                      'p-2 rounded-lg border font-mono text-[11px] space-y-1',
+                      run.passed
+                        ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-400'
+                        : 'bg-rose-500/5 border-rose-500/20 text-rose-400'
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold">Run #{run.run_number}</span>
+                      <span className="text-[10px]">{run.passed ? 'PASS' : 'FAIL'}</span>
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {run.duration_seconds}s • exit {run.exit_code}
+                    </div>
+                    {run.error_message && (
+                      <div className="text-[9px] text-rose-300 truncate" title={run.error_message}>
+                        {run.error_message}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* 0.2. Runtime Coverage Delta & Attribution (task.md §5)          */}
+      {/* -------------------------------------------------------------- */}
+      {coverageReport && (
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 space-y-2.5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+              <Gauge className="h-3.5 w-3.5 text-primary" />
+              <span>Runtime Coverage Attribution</span>
+              {coverageReport.coverage_attributable_to_generated_tests && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  Attributed
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCoverageDetails(!showCoverageDetails)}
+              className="p-1 rounded hover:bg-muted/40 text-muted-foreground cursor-pointer"
+            >
+              {showCoverageDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showCoverageDetails && (
+            <div className="space-y-2.5 pt-1 border-t border-border/40">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Baseline Line Cov</div>
+                  <div className="text-sm font-semibold text-foreground">
+                    {coverageReport.baseline_line_coverage !== null && coverageReport.baseline_line_coverage !== undefined
+                      ? `${coverageReport.baseline_line_coverage}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Final Line Cov</div>
+                  <div className="text-sm font-semibold text-emerald-400">
+                    {coverageReport.final_line_coverage !== null && coverageReport.final_line_coverage !== undefined
+                      ? `${coverageReport.final_line_coverage}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">Line Gain</div>
+                  <div className="text-sm font-semibold text-primary">
+                    {coverageReport.line_coverage_gain !== null && coverageReport.line_coverage_gain !== undefined
+                      ? `${coverageReport.line_coverage_gain > 0 ? '+' : ''}${coverageReport.line_coverage_gain}%`
+                      : 'N/A'}
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
+                  <div className="text-[10px] text-muted-foreground uppercase">New Lines Covered</div>
+                  <div className="text-sm font-semibold text-blue-400">
+                    {coverageReport.newly_covered_lines ? coverageReport.newly_covered_lines.length : 0}
+                  </div>
+                </div>
+              </div>
+
+              {coverageReport.newly_covered_lines && coverageReport.newly_covered_lines.length > 0 && (
+                <div className="p-2 rounded-lg bg-muted/15 border border-border/40 font-mono text-[10px] text-muted-foreground space-y-1">
+                  <span className="font-semibold text-foreground">Exercised Source Lines: </span>
+                  <span>{coverageReport.newly_covered_lines.join(', ')}</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* 0.3. Iterative Feedback Rounds (task.md §6)                    */}
+      {/* -------------------------------------------------------------- */}
+      {iterationReport && (
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 space-y-2.5 shadow-xs">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-foreground text-xs">
+              <Repeat className="h-3.5 w-3.5 text-primary" />
+              <span>Coverage-Guided Iterative Rounds ({iterationReport.total_rounds}/3)</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowIterationDetails(!showIterationDetails)}
+              className="p-1 rounded hover:bg-muted/40 text-muted-foreground cursor-pointer"
+            >
+              {showIterationDetails ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+
+          {showIterationDetails && (
+            <div className="space-y-1.5 pt-1 border-t border-border/40 text-[11px]">
+              <div className="text-muted-foreground">
+                <span className="font-semibold text-foreground">Stopping Reason: </span>
+                <span>{iterationReport.stopping_reason}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* 0.4. Raw Execution Terminal Console (Collapsible)               */}
+      {/* -------------------------------------------------------------- */}
+      {rawOutput && (
+        <div className="rounded-xl border border-border/80 bg-background/60 overflow-hidden shadow-xs">
+          <button
+            type="button"
+            onClick={() => setShowRawOutput(!showRawOutput)}
+            className="w-full p-3 bg-muted/20 flex items-center justify-between text-left text-xs font-semibold text-foreground cursor-pointer hover:bg-muted/30 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <Terminal className="h-3.5 w-3.5 text-primary" />
+              <span>Sandboxed Execution Logs</span>
+            </div>
+            {showRawOutput ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+          {showRawOutput && (
+            <div className="p-3 bg-black/80 font-mono text-[11px] text-zinc-300 whitespace-pre-wrap overflow-x-auto max-h-48 border-t border-border/40">
+              {rawOutput}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* -------------------------------------------------------------- */}
       {/* 1. Framework Banner & Runner Command                            */}
       {/* -------------------------------------------------------------- */}

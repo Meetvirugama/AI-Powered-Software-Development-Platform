@@ -745,7 +745,7 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 
 ### POST `/api/v1/repositories/{repository_id}/generate-tests`
 
-**Purpose:** Generate a complete, previewable test file matching the repository's supported test framework (`pytest`, `unittest`, or `jest`).
+**Purpose:** Generate a complete, execution-verified test file matching the repository's supported test framework (`pytest`, `unittest`, `jest`, or `vitest`) with 3-run stability validation and runtime coverage attribution.
 
 **Authentication:** Required
 
@@ -778,7 +778,7 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
   "result": {
     "detected_framework": "pytest",
     "proposed_test_path": "backend/tests/test_pagination.py",
-    "test_content": "def test_slice_page_empty():\\n    assert slice_page([], 1, 10) == []\\n",
+    "test_content": "def test_slice_page_empty():\n    assert slice_page([], 1, 10) == []\n",
     "covered_scenarios": [
       {
         "name": "test_slice_page_empty",
@@ -789,6 +789,34 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
     "assumptions_and_warnings": [],
     "syntax_valid": true,
     "validation_errors": [],
+    "verification_status": "VERIFIED",
+    "verification_reasons": [
+      "Static validation passed, 3/3 stability runs passed, and coverage gained."
+    ],
+    "stability_report": {
+      "total_runs": 3,
+      "passed_runs": 3,
+      "classification": "STABLE",
+      "is_stable": true,
+      "runs": [
+        {"run_number": 1, "passed": true, "duration_seconds": 0.05, "exit_code": 0},
+        {"run_number": 2, "passed": true, "duration_seconds": 0.04, "exit_code": 0},
+        {"run_number": 3, "passed": true, "duration_seconds": 0.05, "exit_code": 0}
+      ]
+    },
+    "coverage_report": {
+      "baseline_line_coverage": 40.0,
+      "final_line_coverage": 75.0,
+      "line_coverage_gain": 35.0,
+      "newly_covered_lines": [12, 14, 15],
+      "coverage_attributable_to_generated_tests": true,
+      "collection_status": "SUCCESS"
+    },
+    "iteration_report": {
+      "total_rounds": 1,
+      "stopping_reason": "Initial generation complete",
+      "final_coverage_achieved": 75.0
+    },
     "sources": [
       {
         "repository_id": null,

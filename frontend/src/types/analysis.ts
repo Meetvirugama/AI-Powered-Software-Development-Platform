@@ -217,7 +217,58 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
-export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
+export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest' | 'vitest';
+
+export type TestVerificationStatus = 'VERIFIED' | 'UNVERIFIED' | 'REJECTED' | 'EXECUTION_ERROR';
+export type StabilityClassification = 'STABLE' | 'UNSTABLE' | 'FAILED';
+
+export interface StabilityRunResult {
+  run_number: number;
+  passed: boolean;
+  exit_code: number;
+  duration_seconds: number;
+  passed_count: number;
+  failed_count: number;
+  error_message?: string | null;
+}
+
+export interface StabilityReport {
+  total_runs: number;
+  passed_runs: number;
+  classification: StabilityClassification;
+  is_stable: boolean;
+  runs: StabilityRunResult[];
+}
+
+export interface CoverageReport {
+  baseline_line_coverage?: number | null;
+  final_line_coverage?: number | null;
+  line_coverage_gain?: number | null;
+  baseline_branch_coverage?: number | null;
+  final_branch_coverage?: number | null;
+  branch_coverage_gain?: number | null;
+  newly_covered_lines: number[];
+  newly_covered_branches: number[][];
+  coverage_attributable_to_generated_tests: boolean;
+  collection_status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'NOT_CONFIGURED';
+  warnings: string[];
+}
+
+export interface IterationRound {
+  round_number: number;
+  scenarios_targeted: string[];
+  uncovered_lines_addressed: number[];
+  tests_added: number;
+  line_coverage_after?: number | null;
+  tokens_used?: number | null;
+}
+
+export interface IterationReport {
+  total_rounds: number;
+  rounds: IterationRound[];
+  stopping_reason: string;
+  final_coverage_achieved?: number | null;
+}
 
 export type TestScenarioCategory = 'normal' | 'edge_case' | 'failure_path';
 
@@ -308,6 +359,12 @@ export interface TestGenerationResult {
   execution_summary?: Record<string, any>;
   execution_status?: string;
   execution_attempted?: boolean;
+  verification_status?: TestVerificationStatus;
+  verification_reasons?: string[];
+  stability_report?: StabilityReport | null;
+  coverage_report?: CoverageReport | null;
+  iteration_report?: IterationReport | null;
+  raw_execution_output?: string | null;
 }
 
 export interface TestGenerationResponse {

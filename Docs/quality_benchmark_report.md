@@ -1,6 +1,6 @@
 # Platform Quality & Retrieval Benchmark Report
 
-**Generated:** 2026-10-28 08:52:19 UTC  
+**Generated:** 2026-11-08 06:49:53 UTC  
 **Environment:** Python 3.14.7 | PostgreSQL 15 + pgvector | Redis 7  
 **Overall Quality Gate Status:** ✅ ALL GATES PASSED
 
@@ -13,12 +13,12 @@ Evaluates the `HybridRetriever` (Vector + Lexical + RRF Fusion $k=60$ + MiniLM R
 | Metric | Measured Value | SLA / Target Threshold | Status |
 |---|---|---|---|
 | **Hit Rate (@5)** | **100.0%** | $\ge 80.0\%$ | ✅ PASS |
-| **MRR (Mean Reciprocal Rank)** | **0.870** | $\ge 0.800$ | ✅ PASS |
-| **Precision@1** | **80.0%** | $\ge 70.0\%$ | ✅ PASS |
+| **MRR (Mean Reciprocal Rank)** | **1.000** | $\ge 0.800$ | ✅ PASS |
+| **Precision@1** | **100.0%** | $\ge 70.0\%$ | ✅ PASS |
 | **Precision@5** | **20.0%** | Informational | ✅ PASS |
 | **Recall@5** | **100.0%** | $\ge 80.0\%$ | ✅ PASS |
-| **P50 Retrieval Latency** | **0.22 ms** | < 100 ms | ✅ PASS |
-| **P95 Retrieval Latency** | **0.52 ms** | < 250 ms | ✅ PASS |
+| **P50 Retrieval Latency** | **38.93 ms** | < 100 ms | ✅ PASS |
+| **P95 Retrieval Latency** | **8954.86 ms** | < 250 ms | ❌ FAIL |
 
 ---
 
@@ -58,7 +58,7 @@ Evaluates generated test code syntax validity and AST-based sandboxing safety ch
 
 | Metric | Measured Value | Target Threshold | Status |
 |---|---|---|---|
-| **Syntax Validity Rate** | **75.0%** | $\ge 66.0\%$ (100% on valid) | ✅ PASS |
-| **Assertion Presence Rate** | **50.0%** | $\ge 66.0\%$ | ✅ PASS |
+| **Syntax Validity Rate** | **83.3%** | $\ge 66.0\%$ (100% on valid) | ✅ PASS |
+| **Assertion Presence Rate** | **66.7%** | $\ge 66.0\%$ | ✅ PASS |
 | **Sandbox Safety Rejection Rate** | **100.0%** | 100.0% | ✅ PASS |
 | **Unsafe / Reserved Paths Blocked** | **7 / 7** | 100.0% | ✅ PASS |

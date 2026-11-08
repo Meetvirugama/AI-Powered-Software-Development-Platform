@@ -1103,3 +1103,41 @@ ecover_interrupted_tasks.
 **Impact:** Provides developers with an interactive, autonomous, yet strictly bounded agent for interactive repository exploration, fully verified across both Gemini and Groq providers.
 
 **Related Docs:** `Docs/agentic-chat/`, `Docs/engineering/08_api_documentation.md`, `frontend/README.md`
+
+---
+
+### [Post-Week3-Batch5] 2026-11-08 — Execution-Verified, Coverage-Guided Automated Test Generation (Issue #193)
+**Type:** Feature / Test Automation / Security  
+**Developer:** Meet / Dev / Dhramraj / Keval  
+**Changes:**
+- `backend/app/services/`:
+  - `test_stability_service.py`: `TestStabilityValidator` with 3-consecutive-run stability validation (`MAX_STABILITY_RUNS = 3`), classifying 3/3 `STABLE`, 2/3 `UNSTABLE`, $\le 1/3$ `FAILED`.
+  - `test_coverage_service.py`: `TestCoverageService` calculating baseline vs post-gen coverage deltas and attributing newly exercised source lines specifically to generated tests.
+  - `test_iteration_service.py`: `TestIterationOrchestrator` implementing CoverUp (P-11) iterative feedback loop (up to 3 rounds) targeting uncovered lines.
+  - `test_mutation_service.py`: `MutationTestingService` implementing offline AST mutant synthesis (MuTAP P-12) and mutation kill score calculations.
+  - `test_execution_verifier.py`: 5-stage pipeline coordinator linking static validation, isolated sandbox execution, 3 stability runs, and coverage attribution.
+- `backend/scanner/framework_detector.py`:
+  - Added full detection for Vitest configs (`vitest.config.ts`, `vitest.config.js`, `vite.config.ts`).
+- `backend/scripts/benchmark_quality_suite.py`:
+  - Corrected benchmark evaluator gate (`evaluate_metric`) to dynamically evaluate thresholds and fail on below-target metrics.
+- `frontend/src/components/explorer/TestGenerationView.tsx`:
+  - Added Verification Pipeline Status banner (`VERIFIED`, `UNVERIFIED`, `REJECTED`, `EXECUTION_ERROR`).
+  - Added 3-run Stability Validation summary card.
+  - Added Runtime Coverage Attribution comparison card.
+  - Added Coverage-Guided Iteration rounds indicator.
+  - Added collapsible Sandboxed Execution Logs console.
+- `backend/tests/`:
+  - `test_test_stability_service.py`: 7 tests.
+  - `test_test_coverage_service.py`: 6 tests.
+  - `test_test_mutation_service.py`: 4 tests.
+  - `test_test_iteration_service.py`: 5 tests.
+  - `test_test_execution_verifier.py`: 5 tests.
+  - `test_test_generation_vitest.py`: 6 tests.
+  - `test_test_generation_execution_verified.py`: 22 tests validating Scenarios A through V.
+  - `test_benchmark_gate_evaluator.py`: 8 tests.
+- `Docs/test-generation/`:
+  - Authored complete 22-part documentation suite, 6 Mermaid diagrams, and 5 research/tool evaluations.
+
+**Impact:** Generated test files are no longer unverified syntax previews; they are execution-verified, flakiness-tested, and coverage-attributed in isolated sandboxes with end-to-end Vitest support.
+
+**Related Docs:** `Docs/test-generation/`, `Docs/README.md`, `Docs/quality_benchmark_report.md`
