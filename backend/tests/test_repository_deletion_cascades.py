@@ -410,6 +410,7 @@ def test_repository_delete_isolation_leaves_other_repositories_untouched(sqlite_
 
 def test_cleanup_filesystem_resources_removes_snapshots_and_clones(tmp_path: Path, monkeypatch):
     """Verifies physical directory cleanup for intelligence snapshots, clones, and task workspaces."""
+    monkeypatch.chdir(tmp_path)
     repo_id = uuid.uuid4()
     intel_base = tmp_path / "intel_root"
     intel_base.mkdir(parents=True)
@@ -445,8 +446,10 @@ def test_cleanup_filesystem_resources_removes_snapshots_and_clones(tmp_path: Pat
         shutil.rmtree(task_ws, ignore_errors=True)
 
 
-def test_cleanup_filesystem_path_traversal_guard():
+def test_cleanup_filesystem_path_traversal_guard(tmp_path: Path, monkeypatch):
     """Attempts to pass path traversal in workspace_paths are blocked without deleting root."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".workspaces").mkdir(parents=True, exist_ok=True)
     repo_id = uuid.uuid4()
     # Traversal attempting to target root or parent
     malicious_paths = [
@@ -526,9 +529,11 @@ async def test_incremental_indexer_aborts_when_repository_deleted_before_indexin
 
 
 @pytest.mark.asyncio
-async def test_incremental_indexer_rolls_back_when_repository_deleted_before_commit():
-    """IncrementalIndexer rolls back and aborts if repository is deleted right before commit."""
+async def test_incremental_indexer_rolls_back_when_repository_deleted_before_snapshot():
+    """IncrementalIndexer rolls back and aborts before publishing snapshot if repository is deleted."""
     mock_session = AsyncMock()
+    # Check 1: start of sync -> (1,)
+    # Check 2: before snapshot -> None (deleted)
     repo_checks = [(1,), None]
 
     async def _mock_execute(stmt, params=None):
@@ -548,16 +553,59 @@ async def test_incremental_indexer_rolls_back_when_repository_deleted_before_com
     indexer = IncrementalIndexer(db_session=lambda: mock_session, embedding_service=AsyncMock())
     repo_id = uuid.uuid4()
 
-    res = await indexer._run_sync(
-        session=mock_session,
-        repository_id=repo_id,
-        scanned_files=[],
-    )
+    with patch("ai.intelligence.snapshot_manager.RepositoryIntelligenceSnapshotManager.publish_snapshot") as mock_pub:
+        res = await indexer._run_sync(
+            session=mock_session,
+            repository_id=repo_id,
+            scanned_files=[],
+        )
 
-    assert res == {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
-    # Transaction must be rolled back cleanly
-    mock_session.rollback.assert_called_once()
-    assert not mock_session.commit.called
+        assert res == {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
+        # Snapshot publish must NOT have been called
+        assert not mock_pub.called
+        # Transaction must be rolled back cleanly
+        mock_session.rollback.assert_called_once()
+        assert not mock_session.commit.called
+
+
+@pytest.mark.asyncio
+async def test_incremental_indexer_cleans_up_snapshot_and_rolls_back_if_deleted_before_commit():
+    """IncrementalIndexer cleans up snapshot and rolls back if repository is deleted before final commit."""
+    mock_session = AsyncMock()
+    # Check 1: start of sync -> (1,)
+    # Check 2: before snapshot -> (1,)
+    # Check 3: before final commit -> None (deleted)
+    repo_checks = [(1,), (1,), None]
+
+    async def _mock_execute(stmt, params=None):
+        sql = str(stmt).lower()
+        if "select 1 from repositories" in sql:
+            val = repo_checks.pop(0) if repo_checks else None
+            m = MagicMock()
+            m.first.return_value = val
+            return m
+        m = MagicMock()
+        m.fetchall.return_value = []
+        m.first.return_value = None
+        return m
+
+    mock_session.execute = AsyncMock(side_effect=_mock_execute)
+
+    indexer = IncrementalIndexer(db_session=lambda: mock_session, embedding_service=AsyncMock())
+    repo_id = uuid.uuid4()
+
+    with patch("app.repositories.repository_repository.cleanup_repository_filesystem_resources") as mock_cleanup:
+        res = await indexer._run_sync(
+            session=mock_session,
+            repository_id=repo_id,
+            scanned_files=[],
+        )
+
+        assert res == {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
+        # cleanup_repository_filesystem_resources must be called for the deleted repo
+        mock_cleanup.assert_called_once_with(repo_id)
+        mock_session.rollback.assert_called_once()
+        assert not mock_session.commit.called
 
 
 @pytest.mark.asyncio

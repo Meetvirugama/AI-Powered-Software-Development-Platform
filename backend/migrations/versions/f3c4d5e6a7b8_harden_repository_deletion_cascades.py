@@ -46,14 +46,26 @@ def _update_fk_constraint(
                 op.drop_constraint(fk["name"], table_name, type_="foreignkey")
             break
 
-    op.create_foreign_key(
-        new_constraint_name,
-        table_name,
-        ref_table,
-        local_cols,
-        ref_cols,
-        ondelete=ondelete,
-    )
+    if dialect_name == "postgresql":
+        op.create_foreign_key(
+            new_constraint_name,
+            table_name,
+            ref_table,
+            local_cols,
+            ref_cols,
+            ondelete=ondelete,
+            postgresql_not_valid=True,
+        )
+        op.execute(sa.text(f"ALTER TABLE {table_name} VALIDATE CONSTRAINT {new_constraint_name}"))
+    else:
+        op.create_foreign_key(
+            new_constraint_name,
+            table_name,
+            ref_table,
+            local_cols,
+            ref_cols,
+            ondelete=ondelete,
+        )
 
 
 def upgrade() -> None:
