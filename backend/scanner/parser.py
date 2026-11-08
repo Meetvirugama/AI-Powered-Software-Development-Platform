@@ -59,35 +59,44 @@ class Parser:
 
         if HAS_TREE_SITTER:
             try:
-                language = None
+                parser = None
                 is_tsx_file = file_info.path.lower().endswith((".tsx", ".jsx"))
                 if tree_sitter_languages is not None and not is_tsx_file:
                     try:
-                        language = tree_sitter_languages.get_language(ts_lang_name)
+                        parser = tree_sitter_languages.get_parser(ts_lang_name)
                     except Exception:
-                        pass
+                        parser = None
 
-                if language is None:
-                    if ts_lang_name == "python":
-                        import tree_sitter_python
-                        language = tree_sitter.Language(tree_sitter_python.language())
-                    elif ts_lang_name == "javascript":
-                        import tree_sitter_javascript
-                        language = tree_sitter.Language(tree_sitter_javascript.language())
-                    elif ts_lang_name == "typescript":
-                        import tree_sitter_typescript
-                        if is_tsx_file and hasattr(tree_sitter_typescript, "language_tsx"):
-                            language = tree_sitter.Language(tree_sitter_typescript.language_tsx())
-                        else:
-                            language = tree_sitter.Language(tree_sitter_typescript.language_typescript())
+                if parser is None:
+                    language = None
+                    if tree_sitter_languages is not None and not is_tsx_file:
+                        try:
+                            language = tree_sitter_languages.get_language(ts_lang_name)
+                        except Exception:
+                            pass
 
-                if language is not None:
-                    try:
-                        parser = tree_sitter.Parser(language)
-                    except TypeError:
-                        parser = tree_sitter.Parser()
-                        parser.set_language(language)
+                    if language is None:
+                        if ts_lang_name == "python":
+                            import tree_sitter_python
+                            language = tree_sitter.Language(tree_sitter_python.language())
+                        elif ts_lang_name == "javascript":
+                            import tree_sitter_javascript
+                            language = tree_sitter.Language(tree_sitter_javascript.language())
+                        elif ts_lang_name == "typescript":
+                            import tree_sitter_typescript
+                            if is_tsx_file and hasattr(tree_sitter_typescript, "language_tsx"):
+                                language = tree_sitter.Language(tree_sitter_typescript.language_tsx())
+                            else:
+                                language = tree_sitter.Language(tree_sitter_typescript.language_typescript())
 
+                    if language is not None:
+                        try:
+                            parser = tree_sitter.Parser(language)
+                        except TypeError:
+                            parser = tree_sitter.Parser()
+                            parser.set_language(language)
+
+                if parser is not None:
                     tree = parser.parse(safe_content.encode("utf-8", errors="replace"))
                     has_syntax_errors = bool(tree.root_node.has_error)
                     return ParseResult(

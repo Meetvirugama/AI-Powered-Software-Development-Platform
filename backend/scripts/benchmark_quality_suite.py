@@ -50,6 +50,11 @@ from app.services.test_generation_orchestrator import (
     validate_generated_test_syntax,
 )
 from scanner.ast_rules import ASTBugAnalyzer
+from scanner.gitleaks_runner import GitleaksRunner
+from scanner.multilang_security_scanner import MultiLangSecurityScanner
+from scanner.osv_runner import OSVScannerRunner
+from scanner.semgrep_runner import SemgrepRunner
+from scanner.taint_analyzer import TaintAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +398,405 @@ def run_bug_detection_quality_benchmark() -> dict[str, Any]:
         "recall": round(recall, 4),
         "f1_score": round(f1, 4),
         "false_positive_rate": round(fpr, 4),
+        "target_precision_met": precision >= 0.85,
+        "target_recall_met": recall >= 0.85,
+        "target_fpr_met": fpr <= 0.05,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 2B. Expanded Multi-Language, SCA, & Secret Security Benchmark (Issue #191)
+# ---------------------------------------------------------------------------
+
+EXPANDED_SECURITY_BENCHMARK_CASES: list[dict[str, Any]] = [
+    # --- JavaScript ---
+    {
+        "id": "js_command_injection",
+        "file": "server.js",
+        "language": "javascript",
+        "code": "const { exec } = require('child_process');\nfunction run(cmd) {\n    exec(`ls ${cmd}`);\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-78",
+        "expected_category": "security",
+    },
+    {
+        "id": "js_sql_injection",
+        "file": "user_repo.js",
+        "language": "javascript",
+        "code": "function getUser(id) {\n    return db.query(`SELECT * FROM users WHERE id = ${id}`);\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-89",
+        "expected_category": "security",
+    },
+    {
+        "id": "js_stored_xss",
+        "file": "render.js",
+        "language": "javascript",
+        "code": "function render(content) {\n    document.getElementById('app').innerHTML = content;\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-79",
+        "expected_category": "security",
+    },
+    {
+        "id": "js_weak_crypto_md5",
+        "file": "hash.js",
+        "language": "javascript",
+        "code": "const crypto = require('crypto');\nfunction getChecksum(data) {\n    return crypto.createHash('md5').update(data).digest('hex');\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-327",
+        "expected_category": "security",
+    },
+    # --- TypeScript ---
+    {
+        "id": "ts_sql_injection",
+        "file": "account.ts",
+        "language": "typescript",
+        "code": "export async function queryAccount(name: string) {\n    return pool.query(\"SELECT * FROM accounts WHERE name = '\" + name + \"'\");\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-89",
+        "expected_category": "security",
+    },
+    {
+        "id": "ts_ssrf",
+        "file": "proxy.ts",
+        "language": "typescript",
+        "code": "import axios from 'axios';\nexport async function proxyFetch(userUrl: string) {\n    return await axios.get(userUrl);\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-918",
+        "expected_category": "security",
+    },
+    # --- Go ---
+    {
+        "id": "go_command_injection",
+        "file": "exec.go",
+        "language": "go",
+        "code": "package main\nimport (\n    \"fmt\"\n    \"os/exec\"\n)\nfunc runCmd(cmd string) {\n    exec.Command(\"sh\", \"-c\", fmt.Sprintf(\"echo %s\", cmd)).Run()\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-78",
+        "expected_category": "security",
+    },
+    {
+        "id": "go_sql_injection",
+        "file": "db.go",
+        "language": "go",
+        "code": "package main\nimport (\n    \"fmt\"\n    \"database/sql\"\n)\nfunc getUser(db *sql.DB, uid string) {\n    db.Query(fmt.Sprintf(\"SELECT * FROM users WHERE id = %s\", uid))\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-89",
+        "expected_category": "security",
+    },
+    {
+        "id": "go_insecure_tls",
+        "file": "client.go",
+        "language": "go",
+        "code": "package main\nimport \"crypto/tls\"\nfunc getClient() {\n    cfg := &tls.Config{InsecureSkipVerify: true}\n    _ = cfg\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-295",
+        "expected_category": "security",
+    },
+    {
+        "id": "go_weak_hash",
+        "file": "crypto.go",
+        "language": "go",
+        "code": "package main\nimport \"crypto/md5\"\nfunc hash(data []byte) {\n    h := md5.New()\n    h.Write(data)\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-327",
+        "expected_category": "security",
+    },
+    # --- Java ---
+    {
+        "id": "java_command_injection",
+        "file": "CommandRunner.java",
+        "language": "java",
+        "code": "public class CommandRunner {\n    public void execute(String param) throws Exception {\n        Runtime.getRuntime().exec(\"sh -c \" + param);\n    }\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-78",
+        "expected_category": "security",
+    },
+    {
+        "id": "java_sql_injection",
+        "file": "UserDao.java",
+        "language": "java",
+        "code": "public class UserDao {\n    public void findUser(java.sql.Statement stmt, String id) throws Exception {\n        stmt.executeQuery(\"SELECT * FROM users WHERE id = \" + id);\n    }\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-89",
+        "expected_category": "security",
+    },
+    {
+        "id": "java_insecure_deserialization",
+        "file": "Deserializer.java",
+        "language": "java",
+        "code": "public class Deserializer {\n    public Object read(java.io.InputStream is) throws Exception {\n        return new java.io.ObjectInputStream(is).readObject();\n    }\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-502",
+        "expected_category": "security",
+    },
+    {
+        "id": "java_xxe_factory",
+        "file": "XmlParser.java",
+        "language": "java",
+        "code": "public class XmlParser {\n    public void parse() throws Exception {\n        javax.xml.parsers.DocumentBuilderFactory.newInstance();\n    }\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-611",
+        "expected_category": "security",
+    },
+    {
+        "id": "java_weak_crypto_md5",
+        "file": "Hasher.java",
+        "language": "java",
+        "code": "public class Hasher {\n    public void hash() throws Exception {\n        java.security.MessageDigest.getInstance(\"MD5\");\n    }\n}\n",
+        "has_defect": True,
+        "cwe": "CWE-327",
+        "expected_category": "security",
+    },
+    # --- OSV-Scanner (Software Composition Analysis) ---
+    {
+        "id": "sca_vulnerable_npm_lodash",
+        "file": "package-lock.json",
+        "language": "json",
+        "code": '{\n  "name": "app",\n  "version": "1.0.0",\n  "dependencies": {\n    "lodash": {\n      "version": "4.17.15"\n    }\n  }\n}\n',
+        "has_defect": True,
+        "cwe": "CWE-1395",
+        "expected_category": "supply_chain",
+    },
+    {
+        "id": "sca_vulnerable_pypi_requests",
+        "file": "requirements.txt",
+        "language": "requirements",
+        "code": "requests==2.20.0\nurllib3==2.0.6\n",
+        "has_defect": True,
+        "cwe": "CWE-1395",
+        "expected_category": "supply_chain",
+    },
+    {
+        "id": "sca_vulnerable_maven_log4j",
+        "file": "pom.xml",
+        "language": "xml",
+        "code": '<project>\n  <dependencies>\n    <dependency>\n      <groupId>org.apache.logging.log4j</groupId>\n      <artifactId>log4j-core</artifactId>\n      <version>2.14.1</version>\n    </dependency>\n  </dependencies>\n</project>\n',
+        "has_defect": True,
+        "cwe": "CWE-1395",
+        "expected_category": "supply_chain",
+    },
+    # --- Gitleaks (Secret Detection) ---
+    {
+        "id": "secret_openai_api_key",
+        "file": "config.py",
+        "language": "python",
+        "code": "OPENAI_SECRET = 'sk-proj-9876543210abcdefghij1234567890'\n",
+        "has_defect": True,
+        "cwe": "CWE-798",
+        "expected_category": "secrets",
+    },
+    {
+        "id": "secret_github_pat",
+        "file": "deploy.sh",
+        "language": "bash",
+        "code": "GITHUB_TOKEN=\"ghp_1234567890abcdefghijklmnopqrstuvwxyz\"\n",
+        "has_defect": True,
+        "cwe": "CWE-798",
+        "expected_category": "secrets",
+    },
+    {
+        "id": "secret_aws_access_key",
+        "file": "aws_creds.py",
+        "language": "python",
+        "code": "AWS_KEY = 'AKIA1111222233334444'\n",
+        "has_defect": True,
+        "cwe": "CWE-798",
+        "expected_category": "secrets",
+    },
+]
+
+EXPANDED_SECURITY_CLEAN_CASES: list[dict[str, Any]] = [
+    {
+        "id": "clean_js_safe_exec",
+        "file": "safe_exec.js",
+        "language": "javascript",
+        "code": "const path = require('path');\nfunction sanitizeName(name) {\n    return path.basename(name);\n}\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_ts_param_query",
+        "file": "safe_query.ts",
+        "language": "typescript",
+        "code": "export async function getSafeUser(id: number) {\n    return pool.query('SELECT * FROM users WHERE id = $1', [id]);\n}\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_go_safe_exec",
+        "file": "safe_go.go",
+        "language": "go",
+        "code": "package main\nimport \"os/exec\"\nfunc listFiles(dir string) {\n    exec.Command(\"ls\", \"-la\", dir).Run()\n}\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_java_prepared_statement",
+        "file": "SafeUserDao.java",
+        "language": "java",
+        "code": "public class SafeUserDao {\n    public void getUser(java.sql.Connection conn, String id) throws Exception {\n        java.sql.PreparedStatement ps = conn.prepareStatement(\"SELECT * FROM users WHERE id = ?\");\n        ps.setString(1, id);\n    }\n}\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_package_lock",
+        "file": "package-lock.json",
+        "language": "json",
+        "code": '{\n  "name": "safe-app",\n  "version": "1.0.0",\n  "dependencies": {\n    "lodash": {\n      "version": "4.17.21"\n    }\n  }\n}\n',
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_requirements",
+        "file": "requirements.txt",
+        "language": "requirements",
+        "code": "requests==2.31.0\nurllib3==2.0.7\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+    {
+        "id": "clean_env_secrets",
+        "file": "safe_env.py",
+        "language": "python",
+        "code": "import os\napi_key = os.environ.get('OPENAI_API_KEY', '')\ntoken = '[REDACTED]'\n",
+        "has_defect": False,
+        "cwe": "CLEAN",
+    },
+]
+
+
+def run_expanded_security_benchmark() -> dict[str, Any]:
+    """Execute expanded multi-language security, SCA, and secret detection benchmark.
+
+    Evaluates:
+    - MultiLangSecurityScanner
+    - OSVScannerRunner
+    - GitleaksRunner
+    - BuiltinStaticBugScanner / ASTBugAnalyzer
+
+    Tracks:
+    - True Positives, False Positives, False Negatives, True Negatives
+    - Precision = TP / (TP + FP)
+    - Recall = TP / (TP + FN)
+    - Metrics segmented per CWE and per programming language.
+    """
+    multilang = MultiLangSecurityScanner()
+    osv = OSVScannerRunner()
+    gitleaks = GitleaksRunner()
+    ast_scanner = BuiltinStaticBugScanner()
+    ast_analyzer = ASTBugAnalyzer()
+
+    # Per-CWE tracking
+    cwe_stats: dict[str, dict[str, int]] = {}
+    lang_stats: dict[str, dict[str, int]] = {}
+
+    def _get_cwe_counter(cwe_id: str) -> dict[str, int]:
+        if cwe_id not in cwe_stats:
+            cwe_stats[cwe_id] = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
+        return cwe_stats[cwe_id]
+
+    def _get_lang_counter(lang_id: str) -> dict[str, int]:
+        if lang_id not in lang_stats:
+            lang_stats[lang_id] = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
+        return lang_stats[lang_id]
+
+    tp = 0
+    fn = 0
+
+    def _scan_all_engines(case_file: str, case_code: str, case_lang: str) -> list[Any]:
+        findings: list[Any] = []
+        # Multi-language rules
+        findings.extend(multilang.scan_code(case_code, file_path=case_file, language=case_lang))
+        # OSV lockfiles
+        findings.extend(osv.scan_lockfile_content(file_path=case_file, content=case_code))
+        # Gitleaks
+        findings.extend(gitleaks.scan_text(case_code, file_path=case_file))
+        # Python static scanner
+        if case_lang == "python" or case_file.endswith(".py"):
+            f_ast, _ = ast_scanner.scan(file_path=case_file, code_content=case_code)
+            findings.extend(f_ast)
+        return findings
+
+    # Evaluate positive defect cases
+    for case in EXPANDED_SECURITY_BENCHMARK_CASES:
+        cwe_counter = _get_cwe_counter(case["cwe"])
+        lang_counter = _get_lang_counter(case["language"])
+        findings = _scan_all_engines(case["file"], case["code"], case["language"])
+
+        if len(findings) >= 1:
+            tp += 1
+            cwe_counter["tp"] += 1
+            lang_counter["tp"] += 1
+        else:
+            fn += 1
+            cwe_counter["fn"] += 1
+            lang_counter["fn"] += 1
+
+    # Evaluate clean control cases
+    fp = 0
+    tn = 0
+    for case in EXPANDED_SECURITY_CLEAN_CASES:
+        lang_counter = _get_lang_counter(case["language"])
+        findings = _scan_all_engines(case["file"], case["code"], case["language"])
+
+        if len(findings) > 0:
+            fp += 1
+            lang_counter["fp"] += 1
+        else:
+            tn += 1
+            lang_counter["tn"] += 1
+
+    # Precision & recall formulas with explicit zero-denominator safety
+    precision = tp / (tp + fp) if (tp + fp) > 0 else (1.0 if tp == 0 and fp == 0 else 0.0)
+    recall = tp / (tp + fn) if (tp + fn) > 0 else (1.0 if tp == 0 and fn == 0 else 0.0)
+    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+
+    # Format per-CWE results
+    cwe_results: dict[str, dict[str, Any]] = {}
+    for cwe_id, stats in cwe_stats.items():
+        c_tp, c_fp, c_fn, c_tn = stats["tp"], stats["fp"], stats["fn"], stats["tn"]
+        c_prec = c_tp / (c_tp + c_fp) if (c_tp + c_fp) > 0 else (1.0 if c_tp == 0 and c_fp == 0 else 0.0)
+        c_rec = c_tp / (c_tp + c_fn) if (c_tp + c_fn) > 0 else (1.0 if c_tp == 0 and c_fn == 0 else 0.0)
+        cwe_results[cwe_id] = {
+            "true_positives": c_tp,
+            "false_positives": c_fp,
+            "false_negatives": c_fn,
+            "precision": round(c_prec, 4),
+            "recall": round(c_rec, 4),
+        }
+
+    # Format per-language results
+    lang_results: dict[str, dict[str, Any]] = {}
+    for lang_id, stats in lang_stats.items():
+        l_tp, l_fp, l_fn, l_tn = stats["tp"], stats["fp"], stats["fn"], stats["tn"]
+        l_prec = l_tp / (l_tp + l_fp) if (l_tp + l_fp) > 0 else (1.0 if l_tp == 0 and l_fp == 0 else 0.0)
+        l_rec = l_tp / (l_tp + l_fn) if (l_tp + l_fn) > 0 else (1.0 if l_tp == 0 and l_fn == 0 else 0.0)
+        lang_results[lang_id] = {
+            "true_positives": l_tp,
+            "false_positives": l_fp,
+            "false_negatives": l_fn,
+            "true_negatives": l_tn,
+            "precision": round(l_prec, 4),
+            "recall": round(l_rec, 4),
+        }
+
+    return {
+        "dataset_name": "Expanded Multi-Language, SCA & Secrets Security Benchmark",
+        "sample_size": len(EXPANDED_SECURITY_BENCHMARK_CASES) + len(EXPANDED_SECURITY_CLEAN_CASES),
+        "total_defect_cases": len(EXPANDED_SECURITY_BENCHMARK_CASES),
+        "total_clean_cases": len(EXPANDED_SECURITY_CLEAN_CASES),
+        "true_positives": tp,
+        "false_positives": fp,
+        "true_negatives": tn,
+        "false_negatives": fn,
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1_score": round(f1, 4),
+        "false_positive_rate": round(fpr, 4),
+        "per_cwe_metrics": cwe_results,
+        "per_language_metrics": lang_results,
         "target_precision_met": precision >= 0.85,
         "target_recall_met": recall >= 0.85,
         "target_fpr_met": fpr <= 0.05,

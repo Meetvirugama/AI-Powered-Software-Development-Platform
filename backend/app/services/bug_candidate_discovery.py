@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 from uuid import UUID
 
+from scanner.gitleaks_runner import GitleaksRunner
+from scanner.multilang_security_scanner import MultiLangSecurityScanner
+from scanner.osv_runner import OSVScannerRunner
 from scanner.rule_registry import RuleRegistry
+from scanner.semgrep_runner import SemgrepRunner
 from scanner.static_bug_scanner import StaticBugScanner
 from scanner.taint_analyzer import TaintAnalyzer
 
@@ -54,17 +58,26 @@ class BugCandidate:
 
 
 class BugCandidateDiscoveryService:
-    """Combines deterministic AST rules, taint analyzer, config checks, and change-risk analysis."""
+    """Combines deterministic AST rules, taint analyzer, multi-language security rules,
+    Semgrep CE, OSV dependency analysis, Gitleaks secrets, config checks, and change-risk analysis."""
 
     def __init__(
         self,
         static_scanner: StaticBugScanner | None = None,
         taint_analyzer: TaintAnalyzer | None = None,
         rule_registry: RuleRegistry | None = None,
+        semgrep_runner: SemgrepRunner | None = None,
+        multilang_scanner: MultiLangSecurityScanner | None = None,
+        osv_runner: OSVScannerRunner | None = None,
+        gitleaks_runner: GitleaksRunner | None = None,
     ) -> None:
         self.static_scanner = static_scanner or StaticBugScanner()
         self.taint_analyzer = taint_analyzer or TaintAnalyzer()
         self.rule_registry = rule_registry or RuleRegistry.get_instance()
+        self.semgrep_runner = semgrep_runner or SemgrepRunner()
+        self.multilang_scanner = multilang_scanner or MultiLangSecurityScanner()
+        self.osv_runner = osv_runner or OSVScannerRunner()
+        self.gitleaks_runner = gitleaks_runner or GitleaksRunner()
 
     def discover_candidates(
         self,
@@ -75,6 +88,7 @@ class BugCandidateDiscoveryService:
         scan_mode: str = "standard",  # "quick" | "standard" | "deep" | "change"
         changed_files: Sequence[str] | None = None,
         repository_id: UUID | None = None,
+        workspace_root: str | None = None,
     ) -> list[BugCandidate]:
         """Run multi-detector discovery and normalize candidates."""
         if not code_content or not code_content.strip():
@@ -82,16 +96,28 @@ class BugCandidateDiscoveryService:
 
         candidates: list[BugCandidate] = []
 
-        # 1. Deterministic AST Bug Scanning
+        # 1. Deterministic AST Bug Scanning (Python)
         candidates.extend(self._discover_ast_candidates(code_content, file_path))
 
         # 2. Source-to-Sink Taint Analysis (Security)
         candidates.extend(self._discover_taint_candidates(code_content, file_path, language))
 
-        # 3. Insecure Configuration & Secret Checks
+        # 3. Multi-Language Security Scanning (JS/TS, Go, Java)
+        candidates.extend(self._discover_multilang_candidates(code_content, file_path, language))
+
+        # 4. Semgrep CE Deterministic Security Engine
+        candidates.extend(self._discover_semgrep_candidates(code_content, file_path, workspace_root))
+
+        # 5. OSV-Scanner Dependency Analysis (for lockfiles / dependency manifests)
+        candidates.extend(self._discover_osv_candidates(code_content, file_path))
+
+        # 6. Gitleaks Secret Detection with strict redaction
+        candidates.extend(self._discover_secret_candidates(code_content, file_path))
+
+        # 7. Insecure Configuration & Secret Checks
         candidates.extend(self._discover_config_candidates(code_content, file_path))
 
-        # 4. Change-risk and Regression Heuristics (for "change" or "deep" modes)
+        # 8. Change-risk and Regression Heuristics (for "change" or "deep" modes)
         if scan_mode in ("change", "deep") or changed_files:
             candidates.extend(
                 self._discover_change_risk_candidates(
@@ -101,7 +127,7 @@ class BugCandidateDiscoveryService:
                 )
             )
 
-        # 5. Deduplicate and normalize
+        # 9. Deduplicate and normalize
         return self._deduplicate_candidates(candidates)
 
     def _discover_ast_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
@@ -173,6 +199,115 @@ class BugCandidateDiscoveryService:
                         "vulnerability_type": t.vulnerability_type,
                         "sanitizers_found": [s.name for s in t.sanitizers_found],
                     },
+                )
+            )
+        return candidates
+
+    def _discover_multilang_candidates(
+        self,
+        code: str,
+        file_path: str,
+        language: str,
+    ) -> list[BugCandidate]:
+        """Extract security defect candidates using multi-language deterministic rules."""
+        ml_findings = self.multilang_scanner.scan_code(code, file_path=file_path, language=language)
+        candidates: list[BugCandidate] = []
+        for f in ml_findings:
+            cand_dict = f.to_candidate_dict()
+            candidates.append(
+                BugCandidate(
+                    candidate_id=cand_dict["candidate_id"],
+                    rule_id=cand_dict["rule_id"],
+                    file_path=cand_dict["file_path"],
+                    start_line=cand_dict["start_line"],
+                    end_line=cand_dict["end_line"],
+                    category=cand_dict["category"],
+                    severity=cand_dict["severity"],
+                    evidence=cand_dict["evidence"],
+                    source_type=cand_dict["source_type"],
+                    confidence=cand_dict["confidence"],
+                    remediation=cand_dict["remediation"],
+                    metadata=cand_dict["metadata"],
+                )
+            )
+        return candidates
+
+    def _discover_semgrep_candidates(
+        self,
+        code: str,
+        file_path: str,
+        workspace_root: str | None = None,
+    ) -> list[BugCandidate]:
+        """Extract candidates using Semgrep CE engine when available."""
+        if not self.semgrep_runner.is_available():
+            return []
+
+        res = self.semgrep_runner.scan_path(target_path=file_path, workspace_root=workspace_root)
+        candidates: list[BugCandidate] = []
+        for f in res.findings:
+            cand_dict = f.to_candidate_dict()
+            candidates.append(
+                BugCandidate(
+                    candidate_id=cand_dict["candidate_id"],
+                    rule_id=cand_dict["rule_id"],
+                    file_path=cand_dict["file_path"],
+                    start_line=cand_dict["start_line"],
+                    end_line=cand_dict["end_line"],
+                    category=cand_dict["category"],
+                    severity=cand_dict["severity"],
+                    evidence=cand_dict["evidence"],
+                    source_type=cand_dict["source_type"],
+                    confidence=cand_dict["confidence"],
+                    remediation=cand_dict["remediation"],
+                    metadata=cand_dict["metadata"],
+                )
+            )
+        return candidates
+
+    def _discover_osv_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
+        """Extract supply-chain vulnerability candidates from lockfile content."""
+        osv_findings = self.osv_runner.scan_lockfile_content(file_path=file_path, content=code)
+        candidates: list[BugCandidate] = []
+        for f in osv_findings:
+            cand_dict = f.to_candidate_dict()
+            candidates.append(
+                BugCandidate(
+                    candidate_id=cand_dict["candidate_id"],
+                    rule_id=cand_dict["rule_id"],
+                    file_path=cand_dict["file_path"],
+                    start_line=cand_dict["start_line"],
+                    end_line=cand_dict["end_line"],
+                    category=cand_dict["category"],
+                    severity=cand_dict["severity"],
+                    evidence=cand_dict["evidence"],
+                    source_type=cand_dict["source_type"],
+                    confidence=cand_dict["confidence"],
+                    remediation=cand_dict["remediation"],
+                    metadata=cand_dict["metadata"],
+                )
+            )
+        return candidates
+
+    def _discover_secret_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
+        """Extract hardcoded secrets using Gitleaks scanner with strict value redaction."""
+        secret_findings = self.gitleaks_runner.scan_text(content=code, file_path=file_path)
+        candidates: list[BugCandidate] = []
+        for f in secret_findings:
+            cand_dict = f.to_candidate_dict()
+            candidates.append(
+                BugCandidate(
+                    candidate_id=cand_dict["candidate_id"],
+                    rule_id=cand_dict["rule_id"],
+                    file_path=cand_dict["file_path"],
+                    start_line=cand_dict["start_line"],
+                    end_line=cand_dict["end_line"],
+                    category=cand_dict["category"],
+                    severity=cand_dict["severity"],
+                    evidence=cand_dict["evidence"],
+                    source_type=cand_dict["source_type"],
+                    confidence=cand_dict["confidence"],
+                    remediation=cand_dict["remediation"],
+                    metadata=cand_dict["metadata"],
                 )
             )
         return candidates
@@ -258,12 +393,13 @@ class BugCandidateDiscoveryService:
         return candidates
 
     def _deduplicate_candidates(self, candidates: list[BugCandidate]) -> list[BugCandidate]:
-        """Deduplicate candidates on (file_path, start_line, category) keeping highest severity."""
+        """Deduplicate candidates on (file_path, start_line, category, rule_id) keeping highest severity."""
         severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
-        seen: dict[tuple[str, int, str], BugCandidate] = {}
+        seen: dict[tuple[str, int, str, str], BugCandidate] = {}
 
         for cand in candidates:
-            key = (cand.file_path, cand.start_line, cand.category)
+            # Group by file_path, start_line, category, and normalized rule_id to avoid clobbering distinct checks
+            key = (cand.file_path, cand.start_line, cand.category, cand.rule_id)
             if key not in seen:
                 seen[key] = cand
             else:

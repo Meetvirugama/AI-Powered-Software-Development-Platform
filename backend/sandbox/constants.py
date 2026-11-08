@@ -75,6 +75,9 @@ ALLOWED_COMMAND_TEMPLATES: tuple[str, ...] = (
     "dir",
     "cat",
     "echo",
+    "semgrep",
+    "osv-scanner",
+    "gitleaks",
 )
 
 DISALLOWED_COMMAND_TOKENS: tuple[str, ...] = (

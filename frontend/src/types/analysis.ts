@@ -111,6 +111,8 @@ export type BugCategory =
   | 'race_condition'
   | 'logic_error'
   | 'security'
+  | 'supply_chain'
+  | 'secrets'
   | 'other'
   | (string & {});
 
