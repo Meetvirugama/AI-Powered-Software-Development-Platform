@@ -1,0 +1,16 @@
+flowchart TD
+    Client["Client / Frontend TestGenerationView"] -->|POST /generate-tests| API["API Endpoint (tests.py)"]
+    API -->|Resolve Target| TargetContext["Target & Context Resolution"]
+    API -->|Detect Runner| FrameworkDetector["FrameworkDetector"]
+    API -->|Discover Gaps| ReqOrchestrator["TestRequirementOrchestrator"]
+    API -->|Invoke Model| LLMService["TestGenerationService (LLM)"]
+    LLMService -->|Raw Result| StaticValidator["Static Syntax Validation (ast.parse / braces)"]
+    StaticValidator -->|Sanitize & Redact| Sanitizer["validate_and_sanitize_generated_tests"]
+    Sanitizer -->|No Execution| Client
+    
+    subgraph Limitations ["Existing Limitations (Before Upgrade)"]
+        NoExecution["No Test Execution in Sandbox"]
+        NoStability["No Flakiness Detection (Single Pass / Fail)"]
+        NoCoverage["No Runtime Coverage Delta Measurement"]
+        NoIteration["Single-Shot LLM Output (No Feedback Loop)"]
+    end

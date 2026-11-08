@@ -1,5 +1,5 @@
 # 08. API Documentation
-> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Status:** Live
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Status:** Live & Production Ready
 
 ---
 
@@ -22,6 +22,7 @@
 | GET | `/health` | Health Check | No | 🟢 Done |
 | GET | `/api/v1/auth/github/login` | GitHub OAuth Login | No | 🟢 Done |
 | GET | `/api/v1/auth/github/callback` | OAuth Callback | No | 🟢 Done |
+| POST | `/api/v1/auth/dev-login` | Local Developer Token Issuance | No | 🟢 Done |
 | GET | `/api/v1/auth/me` | Current User Profile | Yes | 🟢 Done |
 | POST | `/api/v1/auth/logout` | Logout & Blocklist JWT | Yes | 🟢 Done |
 | GET | `/api/v1/github/repositories` | List Repositories via GitHub App | Yes | 🟢 Done |
@@ -33,7 +34,7 @@
 | GET | `/api/v1/repositories/{id}/search` | Hybrid Vector + Lexical Search (GET query params) | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/files` | List Indexed Files | Yes | 🟢 Done |
 | GET | `/api/v1/repositories/{id}/symbols` | List Extracted AST Symbols | Yes | 🟢 Done |
-| POST | `/api/v1/repositories/{id}/chat` | Grounded Repository Chat | Yes | 🟢 Done |
+| POST | `/api/v1/repositories/{id}/chat` | Grounded Repository Chat (Dual-Mode: Normal & Bounded Agentic) | Yes | 🟢 Done |
 
 ### Developer Intelligence Suite (Week 2 — Active)
 
@@ -65,6 +66,17 @@
 | GET | `/api/v1/tasks/{id}/events` | Task Event Log & Audit Trail | Yes | 🟢 Done (Implemented & Verified) |
 | GET | `/api/v1/tasks/{id}/stream` | Real-Time SSE Status & Execution Stream | Yes | 🟢 Done (Implemented & Verified) |
 | GET | `/api/v1/events/stream` | Server-Sent Events (SSE) Real-Time Stream | Yes | 🟢 Done (Implemented & Verified) |
+
+### Enterprise Hardening & Durable Webhooks (Post-Week 3 — Live)
+
+| Method | Endpoint | Feature | Auth Required | Status |
+|---|---|---|---|---|
+| POST | `/api/v1/github/webhook` | GitHub App Webhook Ingestion & Durable State Machine | HMAC (X-Hub-Signature-256) | 🟢 Done |
+| GET | `/api/v1/github/events` | List Persisted Webhook Events (filter by type, status, pagination) | Yes | 🟢 Done |
+| GET | `/api/v1/github/events/{event_id}` | Detailed Status & Payload of Webhook Event | Yes | 🟢 Done |
+| POST | `/api/v1/github/events/{event_id}/replay` | Replay Failed or Dead-Letter Webhook Event | Yes | 🟢 Done |
+| GET | `/api/v1/github/repositories/{github_repo_id}/automation` | Get Repository Automation Settings | Yes | 🟢 Done |
+| PATCH | `/api/v1/github/repositories/{github_repo_id}/automation` | Update Repository Automation Settings (push-sync, PR review, drafts) | Yes | 🟢 Done |
 
 
 ---
@@ -443,7 +455,7 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 
 ### POST `/api/v1/repositories/{repository_id}/chat`
 
-**Purpose:** Send a question about a repository and receive a grounded answer with file + line sources.
+**Purpose:** Send a question about a repository and receive a grounded answer with file + line sources. Supports two modes: standard RAG (`normal`) and multi-round tool-augmented repository exploration (`agentic`).
 
 **Authentication:** Required
 
@@ -455,15 +467,17 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 **Request Body:**
 ```json
 {
-  "question": "Where is authentication implemented?",
+  "question": "Where is authentication implemented and how does it validate JWTs?",
   "history": [
     { "role": "user", "content": "previous question" },
     { "role": "assistant", "content": "previous answer" }
-  ]
+  ],
+  "mode": "agentic"
 }
 ```
+*Note: `mode` defaults to `"normal"` if omitted.*
 
-**Response:**
+**Response (Normal Mode):**
 ```json
 {
   "answer": "Authentication is handled in backend/app/core/auth.py via the JWTMiddleware class...",
@@ -475,7 +489,53 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
       "symbol": "JWTMiddleware"
     }
   ],
-  "confidence": "high"
+  "confidence": "high",
+  "agent_metadata": null
+}
+```
+
+**Response (Agentic Mode):**
+```json
+{
+  "answer": "Authentication uses timing-safe HMAC verification in `backend/app/core/security.py`...",
+  "sources": [
+    {
+      "file": "backend/app/core/security.py",
+      "start_line": 15,
+      "end_line": 65,
+      "symbol": "verify_token"
+    }
+  ],
+  "confidence": "high",
+  "agent_metadata": {
+    "mode": "agentic",
+    "provider": "gemini",
+    "model": "gemini-flash-lite-latest",
+    "rounds": 2,
+    "model_calls": 2,
+    "tool_calls": 2,
+    "tools_called": 2,
+    "stop_reason": "completed",
+    "total_input_tokens": 1420,
+    "total_output_tokens": 310,
+    "execution_time_ms": 1150,
+    "duration_ms": 1150,
+    "evidence_count": 2,
+    "tool_summary": [
+      {
+        "tool": "search_code",
+        "input": { "query": "verify_token" },
+        "is_error": false,
+        "duration_ms": 120.5
+      },
+      {
+        "tool": "read_file_range",
+        "input": { "path": "backend/app/core/security.py", "start_line": 15, "end_line": 65 },
+        "is_error": false,
+        "duration_ms": 85.2
+      }
+    ]
+  }
 }
 ```
 
@@ -485,24 +545,35 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 | Code | Meaning |
 |---|---|
 | 200 | Answer returned |
-| 400 | Invalid request body |
+| 400 | Invalid request body or agentic chat disabled in configuration |
 | 401 | Not authenticated |
 | 403 | Access denied |
 | 404 | Repository not found |
-| 503 | LLM unavailable or RAG pipeline not configured |
+| 503 | LLM unavailable or RAG pipeline/agent orchestrator not configured |
 
 **Internal Flow:**
-```
-Chat API → RAGPipeline.chat()
-  → HybridRetriever.retrieve() (vector + lexical)
-  → RRFFusion.fuse()
-  → CrossEncoderReranker.rerank()
-  → ContextBuilder.build()
-  → PromptBuilder.build_chat_prompt()
-  → LLMGateway.generate() [+ JSON repair loop]
-  → GroundingValidator.validate_sources()
-  → RepositoryAnswer
-```
+- **Normal Mode:**
+  ```
+  Chat API → RAGPipeline.chat()
+    → HybridRetriever.retrieve() (vector + code_search_text lexical FTS)
+    → RRFFusion.fuse()
+    → CrossEncoderReranker.rerank()
+    → ContextBuilder.build()
+    → PromptBuilder.build_chat_prompt()
+    → LLMGateway.generate() [+ JSON repair loop]
+    → GroundingValidator.validate_sources()
+    → RepositoryAnswer
+  ```
+- **Agentic Mode:**
+  ```
+  Chat API → AgentOrchestrator.run()
+    → BudgetManager check (tokens <= 8,000, rounds <= 5, timeout <= 30s)
+    → Normalized LLM Tool Loop (Gemini / Groq)
+    → ToolRegistry execution (search_code, read_file_range, find_symbol, list_directory)
+    → ExecutionPolicy sandbox checks (read-only enforcement, path traversal defense)
+    → Synthesize answer + format agent_metadata
+    → RepositoryAnswer
+  ```
 
 **Error Codes:**
 | Code | Description | Retryable |
@@ -677,7 +748,13 @@ Chat API → RAGPipeline.chat()
 
 ### POST `/api/v1/repositories/{repository_id}/generate-tests`
 
-**Purpose:** Generate a complete, previewable test file matching the repository's supported test framework (`pytest`, `unittest`, or `jest`).
+**Purpose:** Generate a test file matching the repository's supported test framework (`pytest`, `unittest`, `jest`, or `vitest`) and run isolated sandbox verification with 3-run stability validation and runtime coverage attribution.
+
+> **Verification Outcomes:** Test generation does not guarantee that every test suite is `VERIFIED`. Clients must inspect `result.verification_status`:
+> - `VERIFIED`: Static validation passed, 3/3 stability runs passed, and measurable coverage gain was attributed to the generated tests.
+> - `UNVERIFIED`: Static validation succeeded, but execution failed, exhibited flakiness (e.g. 2/3 passed), produced 0% coverage gain, or coverage tools were not configured in the repository environment.
+> - `REJECTED`: The generated test attempted an unsafe file path or violated safety policies.
+> - `EXECUTION_ERROR`: An infrastructure or workspace sandbox error prevented test execution.
 
 **Authentication:** Required
 
@@ -710,7 +787,7 @@ Chat API → RAGPipeline.chat()
   "result": {
     "detected_framework": "pytest",
     "proposed_test_path": "backend/tests/test_pagination.py",
-    "test_content": "def test_slice_page_empty():\\n    assert slice_page([], 1, 10) == []\\n",
+    "test_content": "def test_slice_page_empty():\n    assert slice_page([], 1, 10) == []\n",
     "covered_scenarios": [
       {
         "name": "test_slice_page_empty",
@@ -721,6 +798,34 @@ Chat API → RAGPipeline.chat()
     "assumptions_and_warnings": [],
     "syntax_valid": true,
     "validation_errors": [],
+    "verification_status": "VERIFIED",
+    "verification_reasons": [
+      "Static validation passed, 3/3 stability runs passed, and coverage gained."
+    ],
+    "stability_report": {
+      "total_runs": 3,
+      "passed_runs": 3,
+      "classification": "STABLE",
+      "is_stable": true,
+      "runs": [
+        {"run_number": 1, "passed": true, "duration_seconds": 0.05, "exit_code": 0},
+        {"run_number": 2, "passed": true, "duration_seconds": 0.04, "exit_code": 0},
+        {"run_number": 3, "passed": true, "duration_seconds": 0.05, "exit_code": 0}
+      ]
+    },
+    "coverage_report": {
+      "baseline_line_coverage": 40.0,
+      "final_line_coverage": 75.0,
+      "line_coverage_gain": 35.0,
+      "newly_covered_lines": [12, 14, 15],
+      "coverage_attributable_to_generated_tests": true,
+      "collection_status": "SUCCESS"
+    },
+    "iteration_report": {
+      "total_rounds": 1,
+      "stopping_reason": "Initial generation complete",
+      "final_coverage_achieved": 75.0
+    },
     "sources": [
       {
         "repository_id": null,
@@ -933,6 +1038,144 @@ Chat API → RAGPipeline.chat()
 
 ---
 
+### POST `/api/v1/github/webhook`
+
+**Purpose:** Ingest raw GitHub webhook deliveries with HMAC-SHA256 signature verification, idempotency checking, and durable state machine persistence.
+**Authentication:** Secret-based HMAC signature via `X-Hub-Signature-256` header.
+**Headers Required:**
+- `X-GitHub-Event`: Event type (e.g., `push`, `pull_request`, `installation`)
+- `X-GitHub-Delivery`: Unique UUID delivery ID for idempotency deduplication
+- `X-Hub-Signature-256`: `sha256=<hex_hmac>` calculated with `GITHUB_WEBHOOK_SECRET`
+
+**Response (200 OK / 202 Accepted):**
+```json
+{
+  "status": "enqueued",
+  "event_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc09d2",
+  "event_type": "push"
+}
+```
+
+---
+
+### GET `/api/v1/github/events`
+
+**Purpose:** Query durably persisted GitHub webhook events with filtering and pagination.
+**Authentication:** Required
+**Query Parameters:**
+| Param | Type | Description |
+|---|---|---|
+| `event_type` | string | Filter by event type (`push`, `pull_request`, etc.) |
+| `status` | string | Filter by state (`PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`) |
+| `repository_id` | string | Filter by mapped repository UUID |
+| `page` | int | Page number (default: 1, min: 1) |
+| `page_size` | int | Results per page (default: 20, min: 1, max: 100) |
+
+**Response (200 OK):**
+```json
+{
+  "total": 1,
+  "page": 1,
+  "page_size": 20,
+  "items": [
+    {
+      "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+      "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc09d2",
+      "event_type": "push",
+      "action": null,
+      "installation_id": "171308854",
+      "repository_id": "uuid",
+      "status": "SUCCEEDED",
+      "attempts": 1,
+      "max_attempts": 5,
+      "available_at": "2026-11-08T10:00:00Z",
+      "processed_at": "2026-11-08T10:00:02Z",
+      "last_error": null,
+      "replay_count": 0,
+      "created_at": "2026-11-08T10:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### GET `/api/v1/github/events/{event_id}`
+
+**Purpose:** Retrieve complete details of a specific webhook event including payload and failure diagnosis.
+**Authentication:** Required
+**Response (200 OK):**
+```json
+{
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc09d2",
+  "event_type": "push",
+  "action": null,
+  "installation_id": "171308854",
+  "repository_id": "uuid",
+  "status": "SUCCEEDED",
+  "attempts": 1,
+  "max_attempts": 5,
+  "available_at": "2026-11-08T10:00:00Z",
+  "processed_at": "2026-11-08T10:00:02Z",
+  "last_error": null,
+  "replay_count": 0,
+  "payload": { "...": "..." },
+  "created_at": "2026-11-08T10:00:00Z"
+}
+```
+
+---
+
+### POST `/api/v1/github/events/{event_id}/replay`
+
+**Purpose:** Reset a failed or dead-letter webhook event to `pending` status with refreshed lease to re-trigger worker processing.
+**Authentication:** Required
+**Response (200 OK):**
+```json
+{
+  "status": "replayed",
+  "event_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "replay_count": 1
+}
+```
+
+---
+
+### GET `/api/v1/github/repositories/{github_repo_id}/automation`
+
+**Purpose:** Retrieve opt-in automation configuration for a connected repository.
+**Authentication:** Required
+**Response (200 OK):**
+```json
+{
+  "github_repo_id": "12345678",
+  "auto_sync_enabled": true,
+  "pr_review_enabled": true,
+  "pr_review_drafts": false,
+  "last_indexed_commit_sha": "a1b2c3d4e5f6"
+}
+```
+
+---
+
+### PATCH `/api/v1/github/repositories/{github_repo_id}/automation`
+
+**Purpose:** Update repository automation settings for automatic push re-indexing and automated PR code reviews.
+**Authentication:** Required
+**Request Body:**
+```json
+{
+  "auto_sync_enabled": true,
+  "pr_review_enabled": true,
+  "pr_review_drafts": false
+}
+```
+**Response (200 OK):** Updated `RepositoryAutomationSettingsResponse` object.
+
+---
+
 ## Standard Error Format
 
 All error responses follow this envelope:
@@ -975,14 +1218,16 @@ All error responses follow this envelope:
 
 | Aspect | Implementation |
 |---|---|
-| Method | GitHub OAuth 2.0 → JWT |
-| JWT Algorithm | Configured via `JWT_ALGORITHM` env var |
-| JWT Secret | `JWT_SECRET` env var (required, never committed) |
-| Token storage | httpOnly cookie (set by backend on callback) |
-| Frontend access | Cookie sent automatically via `withCredentials: true` |
-| Session invalidation | JWT JTI added to Redis blocklist on logout with remaining TTL |
-| Route protection | `JWTMiddleware` validates all non-auth routes |
-| CSRF protection | `oauth_state` cookie + `secrets.compare_digest` during OAuth callback |
+| Method | GitHub OAuth 2.0 → JWT (HS256) |
+| JWT Algorithm | Configured via `JWT_ALGORITHM` env var (HS256 default) |
+| JWT Secret | `JWT_SECRET` env var — enforced >= 32 characters on startup in `production`/`prod` environments |
+| Secret Validation | Startup checks reject weak, default, or short secrets (`SecurityError`) |
+| Timing Attack Defense | Cryptographic verification uses `hmac.compare_digest` for timing safety |
+| CSRF State Nonce | Cryptographically random `oauth_state` stored in Redis (`oauth_state:{state}`) with 10-minute TTL, atomically consumed via `GETDEL` |
+| Token Storage | httpOnly, secure, SameSite=Lax cookie (set by backend on OAuth callback) |
+| Frontend Access | Cookie sent automatically via `withCredentials: true` |
+| Session Invalidation | JWT JTI added to Redis blocklist (`jwt_blocklist:{jti}`) on logout with remaining TTL |
+| Route Protection | `JWTMiddleware` validates all non-auth routes and sets `request.state.user_id` |
 
 ---
 

@@ -849,6 +849,7 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         body: str,
         event: str = "COMMENT",
         comments: list[dict[str, Any]] | None = None,
+        commit_id: str | None = None,
         installation_id: UUID | str | None = None,
     ) -> dict[str, Any]:
         """Create a review on a pull request with an overall comment."""
@@ -861,7 +862,32 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             body=body,
             event=event,
             comments=comments,
+            commit_id=commit_id,
         )
+
+    async def list_pull_request_reviews(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        installation_id: UUID | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List reviews on a pull request."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        return await client.list_pull_request_reviews(owner=owner, repo=repo, pr_number=pr_number)
+
+    async def list_pull_request_review_comments(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        installation_id: UUID | str | None = None,
+    ) -> list[dict[str, Any]]:
+        """List review comments on a pull request."""
+        token = await self._resolve_token(installation_id)
+        client = GitHubClient(token)
+        return await client.list_pull_request_review_comments(owner=owner, repo=repo, pr_number=pr_number)
 
     async def get_pull_request_files(
         self,

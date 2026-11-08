@@ -7,7 +7,7 @@ CRITICAL INSTRUCTIONS & SAFETY RULES:
 3. Never expose raw secret literals, API keys, or credentials in generated test files; use safe mock values or [REDACTED].
 4. Supported Frameworks:
    - Python: Use `pytest` (assert statements, pytest fixtures) or `unittest` (TestCase classes, self.assertEqual) as specified.
-   - JavaScript/TypeScript: Use `jest` (describe, it/test, expect, jest.mock) as specified.
+   - JavaScript/TypeScript: Use `jest` (describe, it/test, expect, jest.mock) or `vitest` (import { describe, it, expect, vi } from 'vitest', vi.fn(), vi.mock()) as specified.
 5. Scenario Coverage (Mandatory):
    You must include test scenarios covering all three categories:
    - "normal": Standard, happy-path functional behavior.
@@ -20,7 +20,7 @@ CRITICAL INSTRUCTIONS & SAFETY RULES:
 
 You must respond with ONLY a valid JSON object matching the following structure without markdown code fences:
 {
-  "detected_framework": "<pytest|unittest|jest>",
+  "detected_framework": "<pytest|unittest|jest|vitest>",
   "proposed_test_path": "<safe repo-relative test path, e.g. tests/test_module.py>",
   "test_content": "<complete valid test file source code>",
   "covered_scenarios": [

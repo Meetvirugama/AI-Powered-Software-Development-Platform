@@ -1,5 +1,5 @@
 # 01. Project Overview
-> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28 | **Owner:** Team | **Status:** Approved
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Owner:** Team | **Status:** 100% Complete (Weeks 1–3 + Post-Week 3 Enterprise Hardening)
 
 ---
 
@@ -18,12 +18,13 @@ Additionally, giving an autonomous agent free rein over a codebase is unsafe. Wi
 ## Objective
 
 Build an AI-powered **Agentic Software Engineering Platform** that integrates with GitHub to:
-1. Understand a project's codebase structurally (AST + dependency graph)
-2. Remember engineering context across sessions (project memory)
-3. Analyze changes for correctness, security, and impact
-4. Execute development tasks safely inside sandboxes
-5. Validate results independently before human review
+1. Understand a project's codebase structurally (AST + dependency graph + symbol graph)
+2. Remember engineering context across sessions (context continuity + project memory)
+3. Analyze changes for correctness, security, and impact (code review, bug detection, blast radius)
+4. Execute development tasks safely inside sandboxes (workspace sandbox, bounded test repair)
+5. Validate results independently before human review (independent verifier)
 6. Prepare draft pull requests with full traceability evidence
+7. Deliver high-precision code retrieval and interactive agentic repository chat with strict budget & execution bounds
 
 ---
 
@@ -33,10 +34,10 @@ Build an AI-powered **Agentic Software Engineering Platform** that integrates wi
 flowchart TD
     USER[Developer submits Task or Issue] --> CTX[Context Continuity Engine\nLoads project memory + RAG context]
     CTX --> PLN[Agent Planner\nGenerates step-by-step plan]
-    PLN --> APR[Human Approval\nReview + approve plan before execution]
-    APR --> EXEC[Agent Executes in Sandbox\nReads + writes files in isolated workspace]
+    PLN --> APR[Human Approval Gate\nReview + approve plan before execution]
+    APR --> EXEC[Agent Executes in Workspace Sandbox\nReads + writes files in isolated workspace]
     EXEC --> TST[Test Runner\nRuns generated + existing tests]
-    TST -- fail --> FIX[Self-Diagnosis + Fix Loop\nmax 3 retries]
+    TST -- fail --> FIX[Bounded Self-Repair Loop\nmax 3 iterations]
     FIX --> TST
     TST -- pass --> VER[Independent Verifier\nSeparate LLM call — checks requirement match]
     VER --> REV[Code Review Engine\nStatic + LLM review + blast radius]
@@ -50,33 +51,29 @@ flowchart TD
 
 ## Scope
 
-### Included (Current Scope — Weeks 1–3)
+### Included (Current Scope — Weeks 1–3 + Post-Week 3 Enterprise Hardening)
 
-| Area | What's In Scope |
-|---|---|
-| GitHub Integration | OAuth login, repository listing, cloning, webhook events, draft PR creation |
-| Repository Engine | File walking, language detection, AST parsing (tree-sitter), symbol extraction, dependency graph |
-| AI/ML Pipeline | LLM gateway, embeddings, vector search (pgvector), lexical search, RRF fusion, reranking, RAG |
-| AI Analysis | Code review, bug detection, security analysis, blast radius, code explanation |
-| Memory System | Project memory, decision memory, task memory, failure memory, context checkpoints |
-| Agentic System | Task planning, sandbox execution, test generation+run, self-verification, draft PR |
-| Testing | Test generation, test execution, CI failure diagnosis |
-| Safety | Permission engine, budget limits, human approval gates, kill switch, rollback |
-| Frontend | Dashboard, repository list, repository detail, repository-aware chat |
-| Infrastructure | PostgreSQL 15 + pgvector, Redis, Docker Compose |
+| Area | What's In Scope | Status |
+|---|---|---|
+| GitHub Integration | OAuth login, repository listing, cloning, durable webhooks (`github_webhook_events`), lease workers, auto-sync, automated PR review, draft PR creation | 🟢 Done |
+| Repository Engine | File walking, language detection, AST parsing (tree-sitter), symbol extraction, 1-hop symbol graph expansion | 🟢 Done |
+| Multi-Stage Retrieval | 7-stage pipeline: intent detection, simple GIN lexical FTS (`code_search_text`), dense vector search, RRF fusion, symbol graph expansion, ONNX cross-encoder reranking, Redis cache | 🟢 Done |
+| AI Analysis Suite | Code review, bug detection, security analysis, blast radius, code explanation, test generation | 🟢 Done |
+| Memory System | Project memory, decision memory, task memory, failure memory, context checkpoints | 🟢 Done |
+| Agentic Workflow | Task planning, workspace sandbox execution, bounded repair loop, test generation+run, self-verification, draft PR | 🟢 Done |
+| Bounded Agentic Chat | Dual-mode chat (`normal` \| `agentic`), normalized Gemini & Groq tool calling, read-only repo tools, execution policy, token/round/time ceilings | 🟢 Done |
+| Security & Safety | Timing-safe HMAC JWT, 32-byte secret validation, state nonces in Redis, token rotation, permission tiers, human approval gates, kill switch | 🟢 Done |
+| Frontend | Dashboard, repository list, repository detail, task planner/executor studio, bug/explain/test/review studios, dual-mode agentic chat UI | 🟢 Done |
+| Infrastructure | PostgreSQL 15 + pgvector (12 linear Alembic migrations), Redis 7 (caching + locks + nonces), Docker Compose | 🟢 Done |
 
-### Excluded (Future Scope — Post Week 3)
+### Excluded (Future Scope)
 
 | Excluded | Reason |
 |---|---|
 | Multi-agent parallelism | Cross-agent handoff is P2 — deferred |
-| Agent task queue | P2 — deferred |
-| Agent analytics dashboard | P2 — deferred |
-| Memory dashboard UI | P1 — Week 3 or shortly after |
-| Full billing/metering | Out of scope for project |
-| Self-hosted LLM | Current approved providers: Google Gemini & Groq only |
-| Support for non-GitHub VCS | GitHub only for now |
-
+| Full billing/metering | Out of scope for enterprise engineering pilot |
+| Self-hosted LLM | Current approved providers: Google Gemini & Groq with normalized tool calling |
+| Non-GitHub VCS | GitHub primary focus |
 
 ---
 
@@ -84,92 +81,93 @@ flowchart TD
 
 | User Type | Description |
 |---|---|
-| **Developer** | Primary user: submits tasks, reviews agent output, approves plans, merges PRs |
-| **Team Lead** | Reviews agent analytics, manages project rules, oversees memory |
-| **Platform Admin** | TBD — manages installations, billing (future scope) |
-
-> **Note:** No separate "Admin" role has been implemented in the current codebase. Role distinction is TBD.
+| **Developer** | Primary user: submits tasks, reviews agent output, approves plans, interacts via dual-mode chat, merges PRs |
+| **Team Lead / Maintainer** | Reviews agent analytics, manages repository automation settings, oversees project memory and automated reviews |
+| **Platform Administrator** | Manages system configuration, webhook replay, and audit logs |
 
 ---
 
 ## Core Features
 
-### F-01: GitHub Integration
+### F-01: GitHub Integration & Durable Automation
 | Field | Value |
 |---|---|
-| **Purpose** | Connect the platform to GitHub for auth, repos, webhooks, PRs |
-| **User** | Developer |
+| **Purpose** | Connect platform to GitHub for auth, repos, durable webhooks, push auto-sync, PR review comments, and draft PRs |
+| **User** | Developer & System |
 | **Priority** | P0 |
-| **Status** | 🟢 Auth API Done; GitHub App + webhooks In Progress |
-| **Dependencies** | GitHub App credentials in `.env` |
-| **Related APIs** | `GET /api/v1/auth/github/login`, `GET /api/v1/auth/github/callback`, `GET /api/v1/auth/me`, `POST /api/v1/auth/logout` |
-| **Related DB Tables** | `users`, `github_installations`, `repositories` (all implemented) |
+| **Status** | 🟢 Done (Batch 1 & Batch 2 Hardened) |
+| **Dependencies** | GitHub App credentials in `.env`, Redis |
+| **Related APIs** | `/api/v1/auth/github/*`, `/api/v1/auth/refresh`, `/api/v1/github/webhooks`, `/api/v1/github/webhooks/events/*`, `/api/v1/repositories/{id}/automation` |
+| **Related DB Tables** | `users`, `github_installations`, `repositories`, `github_webhook_events` |
 
-### F-02: Repository Engine (Scanner)
+### F-02: Repository Engine (Scanner & Symbol Graph)
 | Field | Value |
 |---|---|
-| **Purpose** | Structural code understanding — file tree, AST, symbols, dependency graph |
+| **Purpose** | Structural code understanding — file tree, AST parsing (tree-sitter), symbol extraction, 1-hop symbol graph expansion |
 | **User** | System (background) |
 | **Priority** | P0 |
-| **Status** | 🔵 In Progress (Walker done; Parser/Graph TBD) |
-| **Dependencies** | tree-sitter, `repository_files` DB table |
-| **Related Modules** | `backend/scanner/` |
+| **Status** | 🟢 Done |
+| **Dependencies** | tree-sitter, `repository_files`, `code_chunks` |
+| **Related Modules** | `backend/app/scanner/`, `backend/app/indexer/symbol_graph.py` |
 
-### F-03: Code Indexing
+### F-03: Code Indexing & Lexical Search
 | Field | Value |
 |---|---|
-| **Purpose** | Convert parsed symbols into vector-indexed chunks for RAG |
+| **Purpose** | Convert parsed symbols into vector-indexed chunks + code-aware lexical FTS (`code_search_text`) with adaptive HNSW savepoints |
 | **User** | System (background) |
 | **Priority** | P0 |
-| **Status** | 🟢 Chunker done; embedding queue TBD |
-| **Dependencies** | `code_chunks` DB table (Om), EmbeddingService |
-| **Related Modules** | `backend/indexer/` |
+| **Status** | 🟢 Done |
+| **Dependencies** | `code_chunks` DB table, `repositories.active_index_generation`, EmbeddingService |
+| **Related Modules** | `backend/app/indexer/`, `backend/app/retrieval/adaptive_hnsw.py` |
 
-### F-04: RAG Pipeline (Repository-Aware Chat)
+### F-04: Multi-Stage Code Retrieval Engine
 | Field | Value |
 |---|---|
-| **Purpose** | Answer developer questions about their codebase with grounded sources |
-| **User** | Developer |
-| **Priority** | P1 |
-| **Status** | 🟢 Done — full RAG pipeline (hybrid retrieval + reranking + LLM + grounding) |
-| **Dependencies** | `code_chunks` DB table, EmbeddingService, LLMGateway |
-| **Related Modules** | `backend/ai/retrieval/`, `backend/ai/context/`, `backend/ai/llm/`, `backend/ai/pipeline.py` |
+| **Purpose** | 7-stage retrieval: intent detection, simple GIN FTS, dense vector, RRF fusion, graph expansion, ONNX cross-encoder reranker, Redis cache |
+| **User** | Developer & AI Subsystems |
+| **Priority** | P0 |
+| **Status** | 🟢 Done (150-query benchmark verified) |
+| **Dependencies** | `code_chunks`, Redis, ONNX runtime (`ms-marco-MiniLM-L-6-v2`) |
+| **Related Modules** | `backend/app/retrieval/`, `backend/app/ai/pipeline.py` |
 | **Related APIs** | `POST /api/v1/repositories/{id}/chat`, `POST /api/v1/repositories/{id}/search` |
 
-### F-05: LLM Gateway
+### F-05: LLM Gateway & Tool Calling
 | Field | Value |
 |---|---|
-| **Purpose** | Single, centralized, logged, retry-capable LLM call entry point |
+| **Purpose** | Centralized, normalized LLM gateway supporting Google Gemini and Groq with native tool-calling abstractions |
 | **User** | System (all AI features) |
 | **Priority** | P0 |
 | **Status** | 🟢 Done |
-| **Related Modules** | `backend/ai/llm/client.py`, `backend/ai/llm/openai_provider.py` |
+| **Related Modules** | `backend/app/ai/llm/client.py`, `backend/app/ai/agent/llm_client.py` |
 
-### F-06: Agentic System
+### F-06: Agentic Workflow & Bounded Repository Chat
 | Field | Value |
 |---|---|
-| **Purpose** | Autonomous task execution: plan → execute → test → verify → PR |
+| **Purpose** | Task planning, workspace sandbox execution, bounded repair loop, draft PR creation, and interactive bounded agentic chat |
 | **User** | Developer |
 | **Priority** | P0 |
-| **Status** | ⚪ Todo (Week 2) |
-| **Dependencies** | All W1 components, sandbox, policy engine |
+| **Status** | 🟢 Done |
+| **Dependencies** | Workspace sandbox, tool registry, execution policy, memory system |
+| **Related Modules** | `backend/app/tasks/`, `backend/app/sandbox/`, `backend/app/ai/agent/` |
 
 ### F-07: Context Continuity Engine (Memory)
 | Field | Value |
 |---|---|
-| **Purpose** | Persist project knowledge across sessions |
+| **Purpose** | Persist project knowledge, decisions, task checkpoints, and failure learnings across sessions |
 | **User** | System (agent) |
 | **Priority** | P0 |
-| **Status** | ⚪ Todo (Week 2) |
+| **Status** | 🟢 Done |
 | **Dependencies** | PostgreSQL, Redis, LLM Gateway |
+| **Related Modules** | `backend/app/memory/` |
 
-### F-08: Agent Safety System
+### F-08: Agent Safety & Security System
 | Field | Value |
 |---|---|
-| **Purpose** | Permission engine, budget limits, human approval gates |
-| **User** | Developer |
+| **Purpose** | Timing-safe auth, state nonces, permission engine, budget limits (tokens, rounds, execution time), human approval gates |
+| **User** | Developer & System |
 | **Priority** | P0 |
-| **Status** | ⚪ Todo (skeleton exists in `backend/agent/policy/`) |
+| **Status** | 🟢 Done |
+| **Related Modules** | `backend/app/core/security.py`, `backend/app/ai/agent/execution_policy.py`, `backend/app/ai/agent/budget_manager.py` |
 
 ---
 
@@ -180,20 +178,20 @@ flowchart TD
 | **Backend Framework** | FastAPI 0.115 |
 | **Language (Backend)** | Python 3.11+ |
 | **ORM** | SQLAlchemy 2.0 |
-| **Migrations** | Alembic 1.13 |
+| **Migrations** | Alembic 1.13 (12 linear revisions) |
 | **Primary DB** | PostgreSQL 15 with pgvector extension |
-| **Cache / Queue** | Redis 7 |
-| **LLM Provider** | OpenAI (Chat Completions + Embeddings) |
-| **Embedding Model** | `text-embedding-3-small` (TBD via config) |
-| **Reranker Model** | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| **Cache / Queue / Locks** | Redis 7 |
+| **LLM Providers** | Google Gemini (`gemini-1.5-pro` / `gemini-1.5-flash`), Groq (`llama-3.3-70b-versatile`) |
+| **Embeddings** | HuggingFace `all-MiniLM-L6-v2` / Gemini embeddings |
+| **Reranker** | ONNX Runtime `ms-marco-MiniLM-L-6-v2` with PyTorch fallback |
 | **AST Parser** | tree-sitter |
 | **Frontend Framework** | Vite + React 19 + TypeScript |
 | **Frontend State** | Zustand 5 |
 | **Server State** | TanStack Query 5 |
 | **HTTP Client (FE)** | Axios |
-| **Auth** | GitHub OAuth + JWT (HS256) |
+| **Auth** | GitHub OAuth + JWT (timing-safe HMAC-SHA256, 32-byte secret, Redis nonces) |
 | **Containerization** | Docker Compose |
-| **Testing** | pytest, pytest-asyncio, httpx |
+| **Testing** | pytest, pytest-asyncio, httpx, Vitest |
 
 ---
 
@@ -201,7 +199,9 @@ flowchart TD
 
 | Differentiator | Implementation |
 |---|---|
-| **It remembers** | Context Continuity Engine — project memory persisted in PostgreSQL |
-| **It acts, not just advises** | Agent executes in sandbox, generates PRs |
-| **It stays safe** | Permission tiers, budget limits, mandatory human checkpoints |
-| **It stays traceable** | Requirement → task → files → tests → PR → memory chain |
+| **It remembers** | Context Continuity Engine — project memory, decisions, and failure learnings persisted in PostgreSQL |
+| **It acts, not just advises** | Workspace sandbox execution, bounded test-repair loop, and automated draft PR creation |
+| **It stays safe** | Permission tiers, token/round/time budgets, timing-safe auth, mandatory human approval gates |
+| **Multi-stage precision** | 7-stage retrieval with code-aware lexical FTS, dense vector, symbol graph expansion, ONNX reranking, and Redis caching |
+| **Dual-mode interactive chat** | Standard RAG chat alongside tool-augmented bounded agentic repo exploration |
+| **It stays traceable** | Requirement → plan approval → sandbox execution → tests → independent verification → PR → memory |

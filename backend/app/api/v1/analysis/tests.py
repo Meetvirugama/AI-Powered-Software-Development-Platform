@@ -269,6 +269,37 @@ async def generate_tests(
             if update_fields:
                 sanitized_result = sanitized_result.model_copy(update=update_fields)
 
+    with timer.measure("execution_and_verification"):
+        if payload.run_isolated_execution:
+            if (
+                sanitized_result.verification_status in (None, "UNVERIFIED")
+                and not sanitized_result.execution_attempted
+            ):
+                try:
+                    verifier = getattr(request.app.state, "test_execution_verifier", None)
+                    if verifier is None:
+                        from app.services.test_execution_verifier import TestExecutionVerifier
+
+                        verifier = TestExecutionVerifier()
+
+                    verified_result = verifier.verify_generated_test(
+                        result=sanitized_result,
+                        target_path=resolved.target.path or "",
+                        target_source_code=resolved.code_content or "",
+                        repository_id=str(repository_id),
+                        base_revision=resolved.revision,
+                        existing_files=manifest_contents,
+                    )
+                    sanitized_result = verified_result
+                except Exception as verif_exc:
+                    logger.warning(f"Test verification pipeline error: {verif_exc}")
+                    sanitized_result = sanitized_result.model_copy(
+                        update={
+                            "verification_status": "EXECUTION_ERROR",
+                            "verification_reasons": [f"Verification runner error: {verif_exc}"],
+                        }
+                    )
+
     ctx_tokens = getattr(test_context, "total_tokens", None) if test_context else None
     prompt_tokens = getattr(raw_result, "input_tokens", None) or (ctx_tokens or 0)
     completion_tokens = getattr(raw_result, "output_tokens", None) or len((sanitized_result.test_content or "").split())

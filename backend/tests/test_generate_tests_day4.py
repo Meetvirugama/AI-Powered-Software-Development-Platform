@@ -242,12 +242,12 @@ def test_detect_framework_identifies_jest_for_typescript_repo() -> None:
     assert detection.is_supported is True
 
 
-def test_detect_framework_rejects_vitest_only_repository() -> None:
+def test_detect_framework_rejects_unsupported_framework_repository() -> None:
     repo_id = uuid4()
     f1, c1 = _make_repo_file_and_chunk(
         repo_id,
         path="package.json",
-        content='{"name": "vite-app", "devDependencies": {"vitest": "^1.0.0"}}',
+        content='{"name": "mocha-app", "devDependencies": {"mocha": "^10.0.0"}}',
         language="JSON",
     )
     f2, c2 = _make_repo_file_and_chunk(
@@ -584,7 +584,7 @@ def test_generate_tests_endpoint_end_to_end_and_persists_test_output(
     assert recorded_runs[0]["result_payload"]["test_content"] == body["result"]["test_content"]
 
 
-def test_generate_tests_endpoint_rejects_vitest_repository_with_400(
+def test_generate_tests_endpoint_rejects_unsupported_runner_repository_with_400(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token, _ = _configure_auth(monkeypatch)
@@ -594,7 +594,7 @@ def test_generate_tests_endpoint_rejects_vitest_repository_with_400(
     f_pkg, c_pkg = _make_repo_file_and_chunk(
         repo_id,
         path="package.json",
-        content='{"name": "frontend", "devDependencies": {"vitest": "^1.2.0"}}',
+        content='{"name": "frontend", "devDependencies": {"mocha": "^10.0.0"}}',
         language="JSON",
     )
     f_target, c_target = _make_repo_file_and_chunk(

@@ -661,11 +661,13 @@ def record_analysis_run(
     }
 
     # 1. Direct persistence to AnalysisRunRepository when database session is available
+    persisted_direct = False
     if db is not None:
         try:
             from app.repositories.analysis_run_repository import AnalysisRunRepository
 
             AnalysisRunRepository(db).create_run(**record)
+            persisted_direct = True
         except Exception as exc:
             if hasattr(db, "rollback"):
                 try:
@@ -673,6 +675,15 @@ def record_analysis_run(
                 except Exception:
                     pass
             logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
+
+    # Forward to analysis_run_service if configured on app_state and not already persisted directly
+    if not persisted_direct:
+        run_service = getattr(app_state, "analysis_run_service", None)
+        if run_service is not None and hasattr(run_service, "record_run"):
+            try:
+                run_service.record_run(record)
+            except Exception:
+                pass
 
     # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(

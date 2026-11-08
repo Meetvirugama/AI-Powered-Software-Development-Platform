@@ -527,6 +527,46 @@ def run_code_review_grounding_benchmark() -> dict[str, Any]:
     }
 
 
+def evaluate_metric(value: float | int | None, threshold: float | int, operator: str = ">=") -> dict[str, Any]:
+    """Dynamically evaluate a quality metric against a threshold.
+    
+    Guarantees that:
+    - Below threshold strictly produces 'FAIL' (when operator is '>=')
+    - At or above threshold produces 'PASS'
+    - None / missing values strictly produce 'FAIL'
+    """
+    if value is None:
+        return {
+            "value": None,
+            "threshold": threshold,
+            "operator": operator,
+            "status": "FAIL",
+            "passed": False,
+            "error": "Missing measurement value",
+        }
+
+    if operator == ">=":
+        passed = value >= threshold
+    elif operator == "<=":
+        passed = value <= threshold
+    elif operator == "==":
+        passed = value == threshold
+    elif operator == ">":
+        passed = value > threshold
+    elif operator == "<":
+        passed = value < threshold
+    else:
+        raise ValueError(f"Unsupported operator: {operator}")
+
+    return {
+        "value": value,
+        "threshold": threshold,
+        "operator": operator,
+        "status": "PASS" if passed else "FAIL",
+        "passed": passed,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 4. Test Generation Quality Benchmark
 # ---------------------------------------------------------------------------
@@ -544,6 +584,7 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
                 "    assert len(h) == 64\n"
             ),
             "framework": "pytest",
+            "path": "tests/test_hash.py",
             "expected_valid": True,
         },
         # Valid unittest
@@ -555,6 +596,35 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
                 "        self.assertTrue(True)\n"
             ),
             "framework": "unittest",
+            "path": "tests/test_auth.py",
+            "expected_valid": True,
+        },
+        # Valid Jest
+        {
+            "code": (
+                "describe('AuthService', () => {\n"
+                "    it('generates token', () => {\n"
+                "        const token = generateToken('user-1');\n"
+                "        expect(token).toBeDefined();\n"
+                "    });\n"
+                "});\n"
+            ),
+            "framework": "jest",
+            "path": "tests/auth.test.js",
+            "expected_valid": True,
+        },
+        # Valid Vitest
+        {
+            "code": (
+                "import { describe, it, expect } from 'vitest';\n"
+                "describe('Calculator', () => {\n"
+                "    it('adds numbers correctly', () => {\n"
+                "        expect(1 + 2).toBe(3);\n"
+                "    });\n"
+                "});\n"
+            ),
+            "framework": "vitest",
+            "path": "tests/calc.test.ts",
             "expected_valid": True,
         },
         # Missing assertion
@@ -564,6 +634,7 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
                 "    x = 1 + 1\n"
             ),
             "framework": "pytest",
+            "path": "tests/test_no_assert.py",
             "expected_valid": False,
         },
         # Malformed syntax test
@@ -573,6 +644,7 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
                 "    assert 1 == 1\n"
             ),
             "framework": "pytest",
+            "path": "tests/test_broken.py",
             "expected_valid": False,
         },
     ]
@@ -592,7 +664,11 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
     total_evaluated = len(candidate_tests)
 
     for case in candidate_tests:
-        valid, errors = validate_generated_test_syntax(case["code"], framework=case["framework"])
+        valid, errors = validate_generated_test_syntax(
+            case["code"],
+            framework=case["framework"],
+            proposed_test_path=case["path"],
+        )
         if valid:
             syntax_valid_count += 1
             assertion_valid_count += 1
@@ -608,17 +684,27 @@ def run_test_generation_quality_benchmark() -> dict[str, Any]:
             rejected_unsafe += 1
 
     syntax_validity_rate = syntax_valid_count / total_evaluated
+    assertion_presence_rate = assertion_valid_count / total_evaluated
     safety_rejection_rate = rejected_unsafe / len(unsafe_paths)
+
+    syntax_eval = evaluate_metric(syntax_validity_rate, 0.66, ">=")
+    assertion_eval = evaluate_metric(assertion_presence_rate, 0.66, ">=")
+    safety_eval = evaluate_metric(safety_rejection_rate, 1.0, "==")
 
     return {
         "candidate_tests_evaluated": total_evaluated,
         "valid_syntax_count": syntax_valid_count,
         "syntax_validity_rate": round(syntax_validity_rate, 4),
-        "assertion_presence_rate": round(assertion_valid_count / total_evaluated, 4),
+        "assertion_presence_rate": round(assertion_presence_rate, 4),
         "unsafe_paths_evaluated": len(unsafe_paths),
         "rejected_unsafe_count": rejected_unsafe,
         "safety_rejection_rate": round(safety_rejection_rate, 4),
-        "target_safety_met": safety_rejection_rate == 1.0,
+        "target_syntax_met": syntax_eval["passed"],
+        "target_assertion_met": assertion_eval["passed"],
+        "target_safety_met": safety_eval["passed"],
+        "syntax_status": syntax_eval["status"],
+        "assertion_status": assertion_eval["status"],
+        "safety_status": safety_eval["status"],
     }
 
 
@@ -642,6 +728,8 @@ async def run_all_benchmarks() -> dict[str, Any]:
         and review_res["target_accuracy_met"]
         and review_res["target_zero_hallucination_met"]
         and test_res["target_safety_met"]
+        and test_res["target_syntax_met"]
+        and test_res["target_assertion_met"]
     )
 
     return {
@@ -676,11 +764,11 @@ Evaluates the `HybridRetriever` (Vector + Lexical + RRF Fusion $k=60$ + MiniLM R
 |---|---|---|---|
 | **Hit Rate (@5)** | **{rag['hit_rate_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | {'✅ PASS' if rag['target_hit_rate_met'] else '❌ FAIL'} |
 | **MRR (Mean Reciprocal Rank)** | **{rag['mrr']:.3f}** | $\\ge 0.800$ | {'✅ PASS' if rag['target_mrr_met'] else '❌ FAIL'} |
-| **Precision@1** | **{rag['precision_at_1']*100:.1f}%** | $\\ge 70.0\\%$ | ✅ PASS |
+| **Precision@1** | **{rag['precision_at_1']*100:.1f}%** | $\\ge 70.0\\%$ | {'✅ PASS' if rag['precision_at_1'] >= 0.70 else '❌ FAIL'} |
 | **Precision@5** | **{rag['precision_at_5']*100:.1f}%** | Informational | ✅ PASS |
-| **Recall@5** | **{rag['recall_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | ✅ PASS |
-| **P50 Retrieval Latency** | **{rag['latency_p50_ms']} ms** | < 100 ms | ✅ PASS |
-| **P95 Retrieval Latency** | **{rag['latency_p95_ms']} ms** | < 250 ms | ✅ PASS |
+| **Recall@5** | **{rag['recall_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | {'✅ PASS' if rag['recall_at_5'] >= 0.80 else '❌ FAIL'} |
+| **P50 Retrieval Latency** | **{rag['latency_p50_ms']} ms** | < 100 ms | {'✅ PASS' if rag['latency_p50_ms'] < 100 else '❌ FAIL'} |
+| **P95 Retrieval Latency** | **{rag['latency_p95_ms']} ms** | < 250 ms | {'✅ PASS' if rag['latency_p95_ms'] < 250 else '❌ FAIL'} |
 
 ---
 
@@ -692,7 +780,7 @@ Evaluates `BuiltinStaticBugScanner` + `ASTBugAnalyzer` across 8 positive defect 
 |---|---|---|---|
 | **Precision** | **{bug['precision']*100:.1f}%** | $\\ge 85.0\\%$ | {'✅ PASS' if bug['target_precision_met'] else '❌ FAIL'} |
 | **Recall** | **{bug['recall']*100:.1f}%** | $\\ge 85.0\\%$ | {'✅ PASS' if bug['target_recall_met'] else '❌ FAIL'} |
-| **F1 Score** | **{bug['f1_score']:.3f}** | $\\ge 0.850$ | ✅ PASS |
+| **F1 Score** | **{bug['f1_score']:.3f}** | $\\ge 0.850$ | {'✅ PASS' if bug['f1_score'] >= 0.850 else '❌ FAIL'} |
 | **False Positive Rate (FPR)** | **{bug['false_positive_rate']*100:.1f}%** | $\\le 5.0\\%$ | {'✅ PASS' if bug['target_fpr_met'] else '❌ FAIL'} |
 | **True Positives (TP)** | **{bug['true_positives']}** | Defect count: 8 | ✅ |
 | **True Negatives (TN)** | **{bug['true_negatives']}** | Clean count: 4 | ✅ |
@@ -720,10 +808,10 @@ Evaluates generated test code syntax validity and AST-based sandboxing safety ch
 
 | Metric | Measured Value | Target Threshold | Status |
 |---|---|---|---|
-| **Syntax Validity Rate** | **{test_gen['syntax_validity_rate']*100:.1f}%** | $\\ge 66.0\\%$ (100% on valid) | ✅ PASS |
-| **Assertion Presence Rate** | **{test_gen['assertion_presence_rate']*100:.1f}%** | $\\ge 66.0\\%$ | ✅ PASS |
+| **Syntax Validity Rate** | **{test_gen['syntax_validity_rate']*100:.1f}%** | $\\ge 66.0\\%$ (100% on valid) | {'✅ PASS' if test_gen['target_syntax_met'] else '❌ FAIL'} |
+| **Assertion Presence Rate** | **{test_gen['assertion_presence_rate']*100:.1f}%** | $\\ge 66.0\\%$ | {'✅ PASS' if test_gen['target_assertion_met'] else '❌ FAIL'} |
 | **Sandbox Safety Rejection Rate** | **{test_gen['safety_rejection_rate']*100:.1f}%** | 100.0% | {'✅ PASS' if test_gen['target_safety_met'] else '❌ FAIL'} |
-| **Unsafe / Reserved Paths Blocked** | **{test_gen['rejected_unsafe_count']} / {test_gen['unsafe_paths_evaluated']}** | 100.0% | ✅ PASS |
+| **Unsafe / Reserved Paths Blocked** | **{test_gen['rejected_unsafe_count']} / {test_gen['unsafe_paths_evaluated']}** | 100.0% | {'✅ PASS' if test_gen['target_safety_met'] else '❌ FAIL'} |
 """
     output_path.write_text(content, encoding="utf-8")
     print(f"Benchmark report written to: {output_path}")

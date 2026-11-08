@@ -28,8 +28,14 @@ from app.core.telemetry import StageExecutionTimer
 from app.schemas.analysis import (
     AnalysisTarget,
     CodeReviewRequest,
+    ReviewFeedbackRequest,
+    ReviewFeedbackResponse,
+    ReviewPublicationRequest,
+    ReviewPublicationResponse,
     ReviewReport,
     ReviewReportResponse,
+    ReviewSettingsResponse,
+    UpdateReviewSettingsRequest,
 )
 from app.services.code_review_orchestrator import (
     build_grounded_review_report,
@@ -308,4 +314,245 @@ async def review_code(
         )
 
     return response
+
+
+# ---------------------------------------------------------------------------
+# Code Review Publication, Feedback & Settings Endpoints (F14)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/repositories/{repository_id}/review/publish",
+    response_model=ReviewPublicationResponse,
+    summary="Publish review findings as inline GitHub PR comments",
+)
+async def publish_review_to_github(
+    repository_id: UUID,
+    payload: ReviewPublicationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ReviewPublicationResponse:
+    """Manually publish qualified findings from an analysis run as inline PR comments."""
+    from app.models.analysis_run import AnalysisRun
+    from app.services.review_publication_service import ReviewPublicationService
+
+    user_id = _request_user_id(request)
+    repo = await _owned_repository_async(repository_id, request, db)
+
+    findings_data = []
+    commit_sha = payload.commit_sha
+    run_record = None
+
+    if payload.run_id:
+        try:
+            r_uuid = UUID(payload.run_id)
+            run_record = (
+                db.query(AnalysisRun)
+                .filter(AnalysisRun.id == r_uuid, AnalysisRun.repository_id == repository_id)
+                .first()
+            )
+        except ValueError:
+            pass
+
+    if not run_record:
+        run_record = (
+            db.query(AnalysisRun)
+            .filter(
+                AnalysisRun.repository_id == repository_id,
+                AnalysisRun.feature_type == "review",
+                AnalysisRun.status == "COMPLETED",
+            )
+            .order_by(AnalysisRun.created_at.desc())
+            .first()
+        )
+
+    if run_record:
+        commit_sha = commit_sha or run_record.source_revision
+        if run_record.findings:
+            findings_data = [
+                {
+                    "id": str(f.id),
+                    "category": f.category,
+                    "severity": f.severity,
+                    "confidence": f.confidence,
+                    "title": f.title,
+                    "description": f.description,
+                    "evidence": f.evidence,
+                    "suggested_fix": f.suggested_fix,
+                    "source_reference": f.source_reference,
+                }
+                for f in run_record.findings
+            ]
+        elif run_record.result_payload and "report" in run_record.result_payload:
+            findings_data = run_record.result_payload["report"].get("findings", [])
+
+    github_service = getattr(request.app.state, "github_service", None)
+    if not github_service:
+        from app.integrations.github.service import GitHubService
+        github_service = GitHubService(db)
+
+    gh_installation_id = None
+    if getattr(repo, "installation_id", None):
+        from app.models.github_installation import GitHubInstallation
+        inst = db.get(GitHubInstallation, repo.installation_id)
+        if inst and inst.installation_id:
+            try:
+                gh_installation_id = int(inst.installation_id)
+            except (ValueError, TypeError):
+                gh_installation_id = inst.installation_id
+
+    pub_service = ReviewPublicationService()
+    res = await pub_service.publish_pull_request_review(
+        owner=repo.owner,
+        repo_name=repo.name,
+        pr_number=payload.pr_number,
+        commit_sha=commit_sha or "HEAD",
+        findings=findings_data,
+        github_service=github_service,
+        repository=repo,
+        installation_id=gh_installation_id,
+        force_publish=payload.force_publish,
+        max_comments=payload.max_comments,
+        min_confidence=payload.min_confidence,
+        changed_lines_only=payload.changed_lines_only,
+    )
+
+    if run_record and run_record.result_payload:
+        payload_dict = dict(run_record.result_payload)
+        payload_dict["review_publication"] = res.to_dict()
+        run_record.result_payload = payload_dict
+        db.commit()
+
+    return ReviewPublicationResponse(
+        status=res.status,
+        review_id=res.review_id,
+        pr_number=res.pr_number,
+        commit_sha=res.commit_sha,
+        published_comments_count=res.published_comments_count,
+        skipped_reason=res.skipped_reason,
+        error_message=res.error_message,
+        published_at=res.published_at,
+    )
+
+
+@router.post(
+    "/analysis-runs/{run_id}/findings/{finding_id}/feedback",
+    response_model=ReviewFeedbackResponse,
+    summary="Submit developer feedback on an AI code review finding",
+)
+async def submit_finding_feedback(
+    run_id: str,
+    finding_id: str,
+    payload: ReviewFeedbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ReviewFeedbackResponse:
+    """Submit useful/not_useful/false_positive feedback on a code review finding."""
+    from app.models.analysis_finding import AnalysisFinding
+    from app.services.review_feedback_service import ReviewFeedbackService
+
+    user_id = _request_user_id(request)
+    try:
+        f_uuid = UUID(finding_id)
+        r_uuid = UUID(run_id)
+    except ValueError:
+        raise APIError(400, ErrorCode.INVALID_PARAMETER, f"Invalid finding_id or run_id")
+
+    finding = (
+        db.query(AnalysisFinding)
+        .filter(
+            AnalysisFinding.id == f_uuid,
+            AnalysisFinding.analysis_run_id == r_uuid,
+        )
+        .first()
+    )
+    if not finding:
+        raise APIError(404, ErrorCode.NOT_FOUND, "Finding not found")
+
+    await _owned_repository_async(finding.repository_id, request, db)
+
+    feedback_svc = ReviewFeedbackService()
+    feedback_entry = feedback_svc.record_feedback(
+        db,
+        finding_id=f_uuid,
+        feedback_type=payload.feedback_type,
+        user_id=user_id,
+        comment=payload.comment,
+    )
+
+    stats = feedback_svc.compute_repository_feedback_stats(db, finding.repository_id)
+
+    return ReviewFeedbackResponse(
+        finding_id=finding_id,
+        feedback_type=feedback_entry["feedback_type"],
+        user_id=feedback_entry["user_id"],
+        comment=feedback_entry["comment"],
+        updated_at=feedback_entry["updated_at"],
+        repository_stats=stats.to_dict(),
+    )
+
+
+@router.get(
+    "/repositories/{repository_id}/review/settings",
+    response_model=ReviewSettingsResponse,
+    summary="Get repository code review settings",
+)
+async def get_repository_review_settings(
+    repository_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ReviewSettingsResponse:
+    """Retrieve repository code review and PR publication settings."""
+    from app.services.review_settings_service import get_repo_review_settings
+
+    repo = await _owned_repository_async(repository_id, request, db)
+    settings = get_repo_review_settings(repository_id)
+    return ReviewSettingsResponse(
+        repository_id=str(repository_id),
+        pr_review_enabled=getattr(repo, "pr_review_enabled", False),
+        pr_review_drafts=getattr(repo, "pr_review_drafts", False),
+        min_confidence=settings.get("min_confidence", "medium"),
+        max_comments=settings.get("max_comments", 15),
+        changed_lines_only=settings.get("changed_lines_only", True),
+    )
+
+
+@router.patch(
+    "/repositories/{repository_id}/review/settings",
+    response_model=ReviewSettingsResponse,
+    summary="Update repository code review settings",
+)
+async def update_repository_review_settings(
+    repository_id: UUID,
+    payload: UpdateReviewSettingsRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ReviewSettingsResponse:
+    """Update repository code review and PR publication settings."""
+    from app.services.review_settings_service import set_repo_review_settings
+
+    repo = await _owned_repository_async(repository_id, request, db)
+    if payload.pr_review_enabled is not None:
+        repo.pr_review_enabled = payload.pr_review_enabled
+    if payload.pr_review_drafts is not None:
+        repo.pr_review_drafts = payload.pr_review_drafts
+    db.commit()
+    db.refresh(repo)
+
+    updated_settings = set_repo_review_settings(
+        repository_id,
+        {
+            "min_confidence": payload.min_confidence,
+            "max_comments": payload.max_comments,
+            "changed_lines_only": payload.changed_lines_only,
+        },
+    )
+
+    return ReviewSettingsResponse(
+        repository_id=str(repository_id),
+        pr_review_enabled=getattr(repo, "pr_review_enabled", False),
+        pr_review_drafts=getattr(repo, "pr_review_drafts", False),
+        min_confidence=updated_settings["min_confidence"],
+        max_comments=updated_settings["max_comments"],
+        changed_lines_only=updated_settings["changed_lines_only"],
+    )
 

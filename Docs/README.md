@@ -11,6 +11,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | **Week 1** | [Week 1 — Repository Intelligence Foundation](./week1.md) | GitHub App integration, shallow clone, tree-sitter AST parsing, symbol graph, pgvector indexing, hybrid RAG pipeline (vector + lexical + RRF + reranking), grounded chat API, and React 19 Workbench UI. | 🟢 **COMPLETE** (369 tests passing, 71.3% coverage) |
 | **Week 2** | [Week 2 — Developer Intelligence Suite](./week2.md) | Four standalone developer-intelligence features: Code Explanation, Bug Detection, Framework-Aware Test Generation, and Standalone AI Code Review with strict schema validation and persistence. | 🟢 **COMPLETE** (100% test pass, verified schemas) |
 | **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | 🟢 **COMPLETE** (17-step autonomous workflow verified) |
+| **Post-Week 3** | [Retrieval](./retrieval/README.md), [Agentic Chat](./agentic-chat/README.md), [Test Generation](./test-generation/README.md), & [Code Review Intelligence](./code-review/README.md) | Enterprise hardening & advanced intelligence: Timing-safe JWT/OAuth auth (#181), durable webhook event worker (#182), multi-stage hybrid retrieval (#187), bounded agentic chat (#188), execution-verified test generation (#193), and production AI code review with inline GitHub PR reviews, precision gating, ESLint/Biome analysis, and feedback lifecycle (#194). | 🟢 **COMPLETE** (All suites passing, 100% verified) |
 
 ---
 
@@ -19,13 +20,18 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | Document | Description | Primary Owner |
 |---|---|---|
 | [Daily Task Breakdown](./daily_tasks.md) | Master checklist tracking daily atomic tasks for all 10 team members. | All Leads |
-| [Database Migrations Workflow](./db_migrations.md) | Alembic migration guides, current migration inventory (5 migrations), and table-to-migration map. | Om |
+| [Database Migrations Workflow](./db_migrations.md) | Alembic migration guides, current migration inventory (12 migrations), and table-to-migration map. | Om |
+| [Multi-Stage Code Retrieval Engine](./retrieval/README.md) | 7-step hybrid retrieval architecture, adaptive HNSW profiles, lexical code FTS, graph expansion, Redis cache, and benchmarks. | Meet |
+| [Bounded Agentic Repository Chat](./agentic-chat/README.md) | Multi-turn repository investigation loop, tool registry, execution policy, budget control, and UI integration. | Meet |
+| [Execution-Verified Test Generation](./test-generation/README.md) | 5-stage verification pipeline, 3-run stability, runtime coverage delta & attribution, iterative loop, and Vitest support. | Dev & Meet |
+| [AI-Powered Code Review Intelligence](./code-review/README.md) | Inline GitHub PR review comments, precision quality gate, ESLint/Biome static analysis, multi-commit lifecycle tracking, and developer feedback loop. | Meet |
 | [GitHub App Setup Guide](./github_app_setup.md) | Setup instructions for GitHub App registration, permissions, webhooks, and private key storage. | Parth |
 | [Product Vision & Specification](./project_idea.md) | Foundational product thesis, architecture diagrams, user personas, and differentiation. | Meet |
 | [Prompt Architecture](./prompt_architecture.md) | System/data separation rules, prompt-injection defense guidelines, and placeholder specifications. | Dev |
 | [RAG Quality Benchmark](./rag_benchmark_results.md) | Grounded retrieval benchmark suite testing against sample multi-file codebases. | Keval |
 | [Team Rules & Boundaries](./team_rules.md) | Directory ownership map, branch protection rules, anti-clash guidelines, and PR workflow. | All Leads |
 | [Week 1 Security Report](./security/week1_security_report.md) | Comprehensive security audit covering multi-tenant isolation, prompt injection, and credential scrubbers. | Sukun |
+| [Week 3 Threat Model & Security Report](./security/week3_security_report.md) | Attack matrix, sandbox boundary isolation, secret redaction, and release checklist. | Sukun |
 
 ---
 
@@ -43,11 +49,15 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [07. Database Documentation](./engineering/07_database_documentation.md) — PostgreSQL + pgvector schema, ER diagrams, and indexes.
 - [08. API Documentation](./engineering/08_api_documentation.md) — REST API catalog, schemas, and error conventions.
 - [09. Feature Documentation](./engineering/09_feature_documentation.md) — Technical designs for RAG, scanner, chunker, and chat.
-- [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, and Week 3.
+- [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, Week 3, and Post-Week 3.
 - [11. Testing & QA](./engineering/11_testing_qa.md) — Test strategies, fixture suites, and coverage policies.
 - [12. Deployment & DevOps](./engineering/12_deployment_devops.md) — Local setup, Docker Compose, and environment variables.
 - [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-010).
 - [14. Changelog](./engineering/14_changelog.md) — Chronological log of major codebase milestones.
+- [15. Authentication & Authorization Security Audit](./engineering/15_authentication_authorization_audit.md) — Timing-safe HMAC, secret validation, and token rotation audit.
+- [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
+- [17. GitHub Webhook Automation Design](./engineering/17_github_webhook_automation_design.md) — Durable webhook queue, lease worker, and event state machine.
+- [17. JWT & OAuth Hardening Architecture](./engineering/17_jwt_oauth_hardening.md) — Comprehensive reference for token rotation and security contracts.
 
 ---
 

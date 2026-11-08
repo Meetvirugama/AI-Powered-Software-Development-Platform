@@ -1,5 +1,5 @@
 # 05. System Architecture
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Synchronized & Live
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Status:** 100% Implemented & Synchronized
 
 ---
 
@@ -102,9 +102,12 @@ flowchart TD
 | Grounding Validator | `backend/ai/schemas/grounding.py` | Dev | 🟢 Done | Verifies citations against database files & lines |
 | Scanner Engine | `backend/scanner/` | Prit | 🟢 Done | Walker, detector, tree-sitter parser, graph |
 | Indexer Subsystem | `backend/indexer/` | Devu | 🟢 Done | SymbolChunker, embedding queue |
-| Developer Intelligence (W2) | `backend/ai/` | Dev / Meet | 🔵 In Progress | Explanation, Bug Detection, TestGen, Review |
-| Workflow Automation (W3) | `backend/agent/` | Meet / Parth / Prit | ⚪ Todo | TaskPlanner, Approval Gate, Workspace, PR |
-| Test Suite | `backend/tests/` | Keval | 🟢 Done | 369 passed tests, 71.31% code coverage |
+| Developer Intelligence (W2) | `backend/ai/` | Dev / Meet | 🟢 Done | Explanation, Bug Detection, TestGen, Review |
+| Workflow Automation (W3) | `backend/agent/`, `backend/sandbox/` | Meet / Prit / Parth | 🟢 Done | TaskPlanner, Approval Gate, Workspace, Bounded Repair, Draft PR |
+| Multi-Stage Retrieval (PW3) | `backend/app/retrieval/` | Meet | 🟢 Done | 7-stage engine, lexical FTS, adaptive HNSW, graph expansion, ONNX reranker, Redis cache |
+| Bounded Agentic Chat (PW3) | `backend/app/ai/agent/` | Meet / Dhramraj | 🟢 Done | Orchestrator, normalized tool calling, read-only tools, execution policy, budget manager |
+| Durable Webhook Worker (PW3) | `backend/app/workers/webhook_worker.py` | Meet / Parth | 🟢 Done | Lease worker, automatic push re-indexing, PR review bot |
+| Test Suite | `backend/tests/`, `frontend/tests/` | Keval / All | 🟢 Done | 500+ backend tests, 329 frontend tests across 27 suites |
 
 ---
 

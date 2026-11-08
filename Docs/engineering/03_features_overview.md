@@ -32,24 +32,24 @@
 
 ---
 
-## 2. Developer Intelligence Suite (Week 2 — ACTIVE)
+## 2. Developer Intelligence Suite (Week 2 — COMPLETE)
 
 | ID | Feature | Priority | Status | Owner | Deliverable & Contract |
 |---|---|---|---|---|---|
 | F-12 | Shared `IntelligenceContext` & Symbol Resolution | P0 | 🟢 Done | Meet / Prit | `TargetSnippet`, `SymbolContext`, caller references |
-| F-13 | Code Explanation Service | P0 | 🔵 In Progress | Dev / Meet | Purpose, logic flow, key symbols, limitations |
-| F-14 | Dedicated Bug Detection (Static + AI) | P0 | 🔵 In Progress | Dev / Devu | Off-by-one, null safety, resource leak, Ruff/Bandit |
-| F-15 | Framework-Aware Test Generation | P0 | 🔵 In Progress | Dev / Prit | `pytest`, `unittest`, `jest` compatible test files |
-| F-16 | Standalone AI Code Review | P0 | 🔵 In Progress | Dev / Parth | Correctness, security, performance, maintainability diff review |
-| F-17 | Analysis Run & Finding Persistence | P0 | 🔵 In Progress | Om | `analysis_runs` and `code_findings` models |
-| F-18 | Workbench Code Drawers & Actions | P0 | 🔵 In Progress | Dhramraj | Code explanation drawer, bug inspector, test preview |
-| F-19 | Analysis API Routing | P0 | 🔵 In Progress | Yug | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
-| F-20 | Prompt-Injection Shields & Sanitization | P0 | 🔵 In Progress | Sukun | Tagged boundaries, secret redaction in findings |
-| F-21 | Defect Fixtures & Acceptance Suite | P0 | 🔵 In Progress | Keval | Acceptance scenarios A through E verification |
+| F-13 | Code Explanation Service | P0 | 🟢 Done | Dev / Meet | Purpose, logic flow, key symbols, limitations |
+| F-14 | Dedicated Bug Detection (Static + AI) | P0 | 🟢 Done | Dev / Devu | Off-by-one, null safety, resource leak, Ruff/Bandit |
+| F-15 | Framework-Aware Test Generation | P0 | 🟢 Done | Dev / Prit | `pytest`, `unittest`, `jest` compatible test files |
+| F-16 | Standalone AI Code Review | P0 | 🟢 Done | Dev / Parth | Correctness, security, performance, maintainability diff review |
+| F-17 | Analysis Run & Finding Persistence | P0 | 🟢 Done | Om | `analysis_runs` and `code_findings` models |
+| F-18 | Workbench Code Drawers & Actions | P0 | 🟢 Done | Dhramraj | Code explanation drawer, bug inspector, test preview |
+| F-19 | Analysis API Routing | P0 | 🟢 Done | Yug | `/explain`, `/detect-bugs`, `/generate-tests`, `/review` |
+| F-20 | Prompt-Injection Shields & Sanitization | P0 | 🟢 Done | Sukun | Tagged boundaries, secret redaction in findings |
+| F-21 | Defect Fixtures & Acceptance Suite | P0 | 🟢 Done | Keval | Acceptance scenarios A through E verification |
 
 ---
 
-## 3. Workflow Automation & GitHub Ecosystem (Week 3 — Implemented & Verified)
+## 3. Workflow Automation & GitHub Ecosystem (Week 3 — COMPLETE)
 
 | ID | Feature | Priority | Status | Owner | Implemented Capability |
 |---|---|---|---|---|---|
@@ -65,3 +65,15 @@
 | F-31 | Task Dashboard & Execution Timeline (F38) | P0 | 🟢 Done | Dhramraj | Live task execution progress, timeline events, SSE streaming |
 | F-32 | Checkpoints & Crash Recovery (F39) | P0 | 🟢 Done | Om / Yug | Task recovery state, idempotent operations, crash reconciliation |
 | F-33 | Security Attack Matrix & Release Gate (F40) | P0 | 🟢 Done | Sukun / Keval | Process-tree killpg, tenant isolation, diff tampering defense, release sign-off |
+
+---
+
+## 4. Enterprise Hardening & Advanced Intelligence (Post-Week 3 — COMPLETE)
+
+| ID | Feature | Priority | Status | Owner | Implemented Capability |
+|---|---|---|---|---|---|
+| F-34 | JWT & OAuth Security Hardening (Issue #181 / PR #202) | P0 | 🟢 Done | Sukun / Yug | Timing-safe HMAC, 32-byte secret validation, Redis state nonces, token rotation |
+| F-35 | Durable Webhook Processing & Automation (Issue #182 / PR #219) | P0 | 🟢 Done | Parth / Om / Yug | Webhook state machine, atomic lease workers, push-to-sync, PR review auto-trigger |
+| F-36 | Multi-Stage Code Retrieval Engine (Issue #187 / PR #220) | P0 | 🟢 Done | Meet / Prit / Om | Code-aware lexical search, adaptive HNSW savepoints, 1-hop graph expansion, Redis caching |
+| F-37 | Bounded Agentic Repository Chat (Issue #188 / PR #220) | P0 | 🟢 Done | Meet / Dev / Dhramraj | Normalized tool calling, read-only tools, budget control, dual-mode chat API & UI badges |
+| F-38 | Execution-Verified, Coverage-Guided Test Generation (Issue #193) | P0 | 🟢 Done | Meet / Dev / Dhramraj | 5-stage verification pipeline, 3-run stability, runtime coverage attribution, CoverUp iterative loop, Vitest |

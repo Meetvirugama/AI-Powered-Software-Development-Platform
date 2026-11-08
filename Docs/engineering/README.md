@@ -25,7 +25,10 @@
 | [14](./14_changelog.md) | **Changelog** | All significant changes by date | Active |
 | [15](./15_authentication_authorization_audit.md) | **Auth & Authorization Audit** | Complete security audit of auth implementation | Active |
 | [16](./16_issue181_implementation_plan.md) | **Issue #181 Implementation Plan** | Multi-batch implementation roadmap for auth hardening | Active |
-| [17](./17_jwt_oauth_hardening.md) | **JWT & OAuth Security Hardening** | Batch 1 technical specification & policies | Active |
+| [17a](./17_jwt_oauth_hardening.md) | **JWT & OAuth Security Hardening** | Batch 1 technical specification & policies | Active |
+| [17b](./17_github_webhook_automation_design.md) | **GitHub Webhook Automation Design** | Batch 2 durable webhook state machine & lease worker design | Active |
+| [Retrieval](../retrieval/README.md) | **Multi-Stage Code Retrieval Engine** | 7-stage retrieval, lexical search, adaptive HNSW, ONNX reranker, Redis cache | Active |
+| [Agentic Chat](../agentic-chat/README.md) | **Bounded Agentic Repository Chat** | Normalized tool calling, read-only repo tools, sandbox policy, budget manager | Active |
 
 ---
 
