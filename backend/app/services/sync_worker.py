@@ -130,6 +130,14 @@ async def process_sync_job(
             max_concurrency=1,
         )
 
+        # Re-check repository existence before running indexer (Issue #183)
+        with SessionLocal() as db:
+            if not db.get(Repository, repository_id):
+                logger.warning("sync_worker_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
+                if clone_dir and clone_dir.exists():
+                    shutil.rmtree(clone_dir, ignore_errors=True)
+                return
+
         try:
             if not gemini_keys and not hasattr(embedding_service, "_mock_name") and embedding_provider is None:
                 raise ValueError("No GEMINI_API_KEYS configured for embeddings.")
@@ -148,15 +156,20 @@ async def process_sync_job(
         finally:
             await embedding_service.aclose()
 
-        # Mark completed
+        # Mark completed only if repository and job still exist
         with SessionLocal() as db:
             repo = db.get(Repository, repository_id)
             job = db.get(SyncJob, job_id)
-            if repo and job:
-                job.status = SyncJobStatus.COMPLETED
-                repo.sync_status = SyncStatus.SYNCED
-                repo.last_synced_at = datetime.now(timezone.utc)
-                db.commit()
+            if not repo or not job:
+                logger.warning("sync_job_discarded_repository_deleted", extra={"repo_id": str(repository_id), "job_id": str(job_id)})
+                if clone_dir and clone_dir.exists():
+                    shutil.rmtree(clone_dir, ignore_errors=True)
+                return
+
+            job.status = SyncJobStatus.COMPLETED
+            repo.sync_status = SyncStatus.SYNCED
+            repo.last_synced_at = datetime.now(timezone.utc)
+            db.commit()
 
         # Notify connected frontend clients via Redis pub/sub
         try:

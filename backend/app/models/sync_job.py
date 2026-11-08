@@ -20,6 +20,6 @@ class SyncJobStatus(str, enum.Enum):
 class SyncJob(TimestampedModel, Base):
     __tablename__ = "sync_jobs"
 
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True)
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     status: Mapped[SyncJobStatus] = mapped_column(Enum(SyncJobStatus), default=SyncJobStatus.QUEUED)

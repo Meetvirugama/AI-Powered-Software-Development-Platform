@@ -25,7 +25,7 @@ class MemoryStatus(str, enum.Enum):
 class MemoryEntry(TimestampedModel, Base):
     __tablename__ = "memory_entries"
 
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True)
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
     type_: Mapped[MemoryType] = mapped_column("type", Enum(MemoryType))
     content: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String)
