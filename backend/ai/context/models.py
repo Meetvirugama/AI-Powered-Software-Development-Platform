@@ -192,6 +192,18 @@ class ContextLimits:
     max_files: int = 50
     max_rules: int = 10
     target_budget_ratio: float = 0.5
+    safety_factor: float | None = None
+    provider: str | None = None
+
+    @property
+    def effective_max_tokens(self) -> int:
+        """Return the effective token budget scaled down by the safety factor."""
+        from .token_budget import calculate_effective_budget
+        return calculate_effective_budget(
+            self.max_tokens,
+            safety_factor=self.safety_factor,
+            provider=self.provider,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -205,6 +217,8 @@ class ContextLimits:
             max_files=data.get("max_files", 50),
             max_rules=data.get("max_rules", 10),
             target_budget_ratio=data.get("target_budget_ratio", 0.5),
+            safety_factor=data.get("safety_factor"),
+            provider=data.get("provider"),
         )
 
 

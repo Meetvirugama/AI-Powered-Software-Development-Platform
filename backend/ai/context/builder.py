@@ -44,12 +44,25 @@ from .renderers import (
     render_repository_data,
 )
 from .token_budget import (
+    DEFAULT_SAFETY_FACTOR,
+    MODEL_ENCODINGS,
+    PROVIDER_ENCODINGS,
+    PROVIDER_SAFETY_FACTORS,
+    TokenCalibrationSample,
+    TokenCalibrationTracker,
     _ENCODING_NAME,
     _OVERHEAD_TOKENS,
     _get_encoder,
+    calculate_calibration_ratio,
+    calculate_effective_budget,
     count_tokens,
+    estimate_messages_tokens,
+    estimate_tokens,
     fit_history as _fit_history_budget,
     fit_items as _fit_items_budget,
+    get_calibration_tracker,
+    get_encoding_for_model,
+    get_safety_factor,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,21 +73,34 @@ __all__ = [
     "ContextBuilder",
     "ContextLimits",
     "ContextStatus",
+    "DEFAULT_SAFETY_FACTOR",
     "IntelligenceContext",
     "IntelligenceContextRequest",
     "IntelligenceContextResponse",
+    "MODEL_ENCODINGS",
     "MemoryEntry",
     "MissingContextInfo",
+    "PROVIDER_ENCODINGS",
+    "PROVIDER_SAFETY_FACTORS",
     "RepositoryFile",
     "SymbolContext",
     "TargetSnippet",
+    "TokenCalibrationSample",
+    "TokenCalibrationTracker",
     "_ENCODING_NAME",
     "_OVERHEAD_TOKENS",
     "_format_chunk",
     "_format_history_message",
     "_format_memory",
     "_get_encoder",
+    "calculate_calibration_ratio",
+    "calculate_effective_budget",
     "count_tokens",
+    "estimate_messages_tokens",
+    "estimate_tokens",
+    "get_calibration_tracker",
+    "get_encoding_for_model",
+    "get_safety_factor",
     "render_history_section",
     "render_intelligence_data",
     "render_related_files_section",
@@ -100,6 +126,8 @@ class ContextBuilder:
         max_context_tokens: int = 100_000,
         overhead_tokens: int = _OVERHEAD_TOKENS,
         encoding_name: str = _ENCODING_NAME,
+        provider: str | None = None,
+        safety_factor: float | None = None,
     ) -> None:
         if max_context_tokens <= 0:
             raise ValueError(f"max_context_tokens must be positive, got {max_context_tokens}")
@@ -109,6 +137,22 @@ class ContextBuilder:
         self._max_tokens = max_context_tokens
         self._overhead_tokens = overhead_tokens
         self._encoding_name = encoding_name
+        self._provider = provider
+        self._safety_factor = safety_factor
+
+    @property
+    def safety_factor(self) -> float:
+        """Effective safety factor for token budget calculation."""
+        return get_safety_factor(provider=self._provider, custom_factor=self._safety_factor)
+
+    @property
+    def effective_max_tokens(self) -> int:
+        """Configured budget scaled down by the provider safety factor."""
+        return calculate_effective_budget(
+            self._max_tokens,
+            safety_factor=self._safety_factor,
+            provider=self._provider,
+        )
 
     @property
     def max_tokens(self) -> int:
