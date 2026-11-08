@@ -1,0 +1,27 @@
+graph TD
+    subgraph ControlPlane["API Control Plane (Azure App Service)"]
+        User["User / Webhook"] --> API["FastAPI API Server"]
+        API --> Orchestrator["AI Task Orchestrator"]
+        Orchestrator --> WSManager["WorkspaceManager"]
+        WSManager --> CmdRunner["WorkspaceCommandRunner"]
+        CmdRunner --> Factory["SandboxFactory"]
+        Factory -. "APP_ENV=development" .-> LocalBackend["LocalSubprocessBackend"]
+        Factory -. "APP_ENV=production" .-> RunnerClient["RunnerClient"]
+    end
+
+    subgraph RunnerHost["Dedicated Linux Runner VM"]
+        RunnerClient -->|Mutual Auth Token| RunnerAPI["Runner Service (FastAPI)"]
+        RunnerAPI --> ContainerMgr["Container Lifecycle Manager"]
+        ContainerMgr --> Docker["Docker Engine (cgroups v2)"]
+        Docker --> gVisor["gVisor OCI Runtime (runsc)"]
+        
+        subgraph Sandboxes["Isolated Task Sandboxes"]
+            gVisor --> Container1["Task-101 Container<br/>--network=none<br/>--read-only<br/>--user=10001:10001"]
+            gVisor --> Container2["Task-102 Container<br/>--network=none<br/>--read-only<br/>--user=10001:10001"]
+        end
+    end
+
+    subgraph Storage["Host Storage"]
+        WS1["/sandbox/workspaces/task-101"] -.->|Bind Mount| Container1
+        WS2["/sandbox/workspaces/task-102"] -.->|Bind Mount| Container2
+    end

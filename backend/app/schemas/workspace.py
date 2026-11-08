@@ -420,6 +420,8 @@ class WorkspaceCommandResult(BaseModel):
     duration_ms: float = 0.0
     timed_out: bool = False
     error: str | None = None
+    resource_metrics: dict[str, Any] | None = None
+    sandbox_status: str | None = None
 
 
 class WorkspaceToolPolicyRequest(BaseModel):

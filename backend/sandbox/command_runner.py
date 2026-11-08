@@ -23,10 +23,14 @@ import threading
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from app.core.config import settings
 from app.core.secret_redaction import redact
 from app.schemas.workspace import WorkspaceCommandResult
+
+if TYPE_CHECKING:
+    from sandbox.backend import SandboxBackend
 
 from sandbox.constants import (
     ALLOWED_COMMAND_TEMPLATES,
@@ -135,6 +139,7 @@ class WorkspaceCommandRunner:
         disallowed_tokens: Sequence[str] | None = None,
         max_output_bytes: int = MAX_COMMAND_OUTPUT_BYTES,
         default_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        backend: SandboxBackend | None = None,
     ) -> None:
         self._allowed_commands = frozenset(
             cmd.lower() for cmd in (allowed_commands or ALLOWED_COMMAND_TEMPLATES)
@@ -142,6 +147,16 @@ class WorkspaceCommandRunner:
         self._disallowed_tokens = tuple(disallowed_tokens or DISALLOWED_COMMAND_TOKENS)
         self._max_output_bytes = max_output_bytes
         self._default_timeout_seconds = default_timeout_seconds
+        self._backend = backend
+
+    @property
+    def backend(self) -> SandboxBackend | None:
+        """Return the bound sandbox execution backend, if configured."""
+        return self._backend
+
+    @backend.setter
+    def backend(self, value: SandboxBackend | None) -> None:
+        self._backend = value
 
     def validate_command(self, command: str, arguments: Sequence[str] | None = None) -> None:
         """Validate command executable and arguments against security policies.
@@ -261,6 +276,28 @@ class WorkspaceCommandRunner:
             timeout_seconds or self._default_timeout_seconds,
             MAX_TIMEOUT_SECONDS,
         )
+
+        # Delegate to isolated sandbox backend if bound or in production/container mode
+        backend = self._backend
+        if backend is None:
+            app_env = getattr(settings, "app_env", "development").strip().lower()
+            is_prod = getattr(settings, "is_production", False) or app_env in ("production", "prod")
+            sandbox_setting = getattr(settings, "sandbox_backend", "local").strip().lower()
+            if is_prod or sandbox_setting in ("container", "runner"):
+                from sandbox.factory import SandboxFactory
+                backend = SandboxFactory.get_backend()
+
+        if backend is not None:
+            task_id = workspace_root.name
+            return backend.execute(
+                task_id=task_id,
+                command=command,
+                arguments=args,
+                cwd=workspace_root,
+                timeout_seconds=timeout,
+                custom_env=custom_env,
+                network_enabled=False,
+            )
 
         env = self.sanitize_environment(custom_env)
         ws_str = str(workspace_root.resolve())

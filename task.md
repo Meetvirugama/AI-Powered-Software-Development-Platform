@@ -1,1679 +1,2015 @@
-# TASK: Upgrade Test Generation into an Execution-Verified, Coverage-Guided Automated Testing System
+# MASTER IMPLEMENTATION PROMPT — Secure Sandbox Execution Architecture
+## Project: AI-Powered Software Development Platform
+### Target Agent: Antigravity 3.8 Flash
 
-## 1. YOUR ROLE
+---
 
-Act as a Senior Software Architect, Senior Python Backend Engineer, AI/LLM Engineer, Test Automation Engineer, Application Security Engineer and QA Engineer.
+# 0. YOUR ROLE
+
+Act as a Senior Backend Engineer, Application Security Engineer, DevSecOps Architect, and Software Infrastructure Engineer.
 
 You are working on my existing project:
 
 **AI-Powered Software Development Platform**
 
-Your task is to upgrade the existing Test Generation feature into a reliable, execution-verified, coverage-guided automated testing system.
+Your responsibility is to research, audit, design, implement, test, and document a production-grade secure execution architecture for untrusted GitHub repositories.
 
-You must work directly inside the existing repository.
+This is an existing project. Do not create a separate demonstration application or replace the existing architecture unnecessarily.
 
-Do not create a separate demo project.
-Do not create duplicate implementations.
-Do not unnecessarily rewrite existing architecture.
-Do not remove existing working functionality.
-Do not assume that features are missing without inspecting the actual implementation.
+You must understand the current codebase before making modifications.
 
-I am using Antigravity 3.8 Flash. Therefore:
+## Primary objective
 
-- Work in small, clearly defined phases.
-- Inspect the code before modifying it.
-- Keep changes modular.
-- Avoid unnecessary token consumption.
-- Reuse existing utilities and infrastructure.
-- Run targeted tests after each implementation phase.
-- Document all architectural and implementation decisions.
-- Never report a feature as completed without testing it.
+Currently, our platform can execute commands, run tests, install dependencies, and perform AI-assisted code modifications.
 
-Your goal is production-quality implementation, not just a prototype.
+However, repository code is currently executed directly on the API host.
 
----
+We need to replace this unsafe execution architecture with an isolated sandbox architecture using:
 
-# 2. PRIMARY OBJECTIVE
+- SandboxBackend abstraction.
+- Docker-based execution.
+- gVisor runtime support.
+- Dedicated Runner Service.
+- CPU, RAM, PID, disk and execution-time restrictions.
+- Network isolation.
+- Filesystem isolation.
+- Secure workspace lifecycle management.
+- Dependency installation and offline execution phases.
 
-Currently, our Test Generation system performs:
+The API server must never directly execute untrusted repository code in production.
 
-1. Framework detection.
-2. Test requirement discovery.
-3. Test scenario planning.
-4. LLM-based test generation.
-5. Syntax validation.
-6. Reserved-file and safety checks.
-
-However, generated tests are not sufficiently verified.
-
-We want to introduce:
-
-1. Actual test execution in an isolated sandbox.
-2. Three-consecutive-run stability validation.
-3. Baseline and post-generation coverage measurement.
-4. Coverage-guided iterative test generation.
-5. Mutation testing for offline quality evaluation.
-6. Complete Vitest support.
-7. Correct benchmark gates.
-8. Detailed test verification reports.
-9. Comprehensive documentation inside the existing Docs directory.
-
-The final workflow should be:
-
-Repository Analysis
-→ Framework Detection
-→ Requirement Discovery
-→ Test Generation
-→ Static Validation
-→ Sandbox Execution
-→ Stability Validation
-→ Coverage Analysis
-→ Coverage-Guided Iteration
-→ Final Verification
-→ Quality Report
-
-Mutation testing should be an additional offline evaluation workflow, not a mandatory step for every user request.
+**This is a P0 security task. Prioritize security and correctness over implementation speed.**
 
 ---
 
-# 3. MANDATORY FIRST STEP: COMPLETE EXISTING CODEBASE AUDIT
+# 1. IMPORTANT DEVELOPMENT RULES
 
-Before implementing anything, inspect the actual repository.
+Follow these rules throughout the task.
 
-Do not immediately start writing code.
+## 1.1 Audit before implementation
 
-## 3.1 Inspect these existing files
+Before modifying anything:
 
-### Test generation
+1. Explore the entire repository.
+2. Understand the existing backend architecture.
+3. Locate all command execution entry points.
+4. Find every place that executes Python, Node.js, pytest, npm, npx, git or shell commands.
+5. Identify every component that interacts with workspaces.
+6. Identify all agents that use CommandRunner.
+7. Identify existing security controls.
+8. Understand how task IDs, repository IDs and user IDs are managed.
+9. Understand existing authentication and authorization.
+10. Identify deployment architecture.
 
-- backend/app/services/test_generation_orchestrator.py
-- backend/ai/services/test_generation_service.py
-- backend/app/services/test_generation_report.py
-- backend/app/services/test_requirement_orchestrator.py
-- backend/scanner/test_requirement_discovery.py
-- backend/scanner/framework_detector.py
-- backend/ai/prompts/test_generation_system.txt
+Do not assume the architecture described in this prompt perfectly matches the current source code.
 
-### Sandbox infrastructure
+The actual repository is the source of truth.
 
-- backend/sandbox/__init__.py
-- backend/sandbox/workspace_manager.py
-- backend/sandbox/test_runner.py
-- backend/sandbox/command_runner.py
-- backend/sandbox/path_guard.py
-- backend/sandbox/resource_monitor.py
-- backend/sandbox/constants.py
-- backend/sandbox/exceptions.py
-- backend/sandbox/tool_policy_bridge.py
-- backend/sandbox/diff_verifier.py
+If a component already exists, extend it instead of creating a duplicate.
 
-### Existing tests
+## 1.2 Preserve existing functionality
 
-Inspect all relevant tests, especially:
+Do not break:
 
-- backend/tests/test_framework_detector.py
-- backend/tests/test_test_generation_comprehensive.py
-- backend/tests/test_test_generation_day4.py
-- backend/tests/test_test_generation_plan_matrix.py
-- backend/tests/test_feature_quality_benchmarks.py
-- backend/tests/test_adversarial_sandbox.py
+- GitHub repository integration.
+- Repository cloning.
+- Git worktrees.
+- WorkspaceManager.
+- Code review agent.
+- Bug detection agent.
+- Test generation agent.
+- AI orchestrator.
+- Code modification workflows.
+- Diff generation.
+- File reading and writing.
+- Existing task lifecycle.
+- Existing authentication.
+- Existing API contracts unless changes are necessary.
 
-### Frontend
+All existing agents should continue working through the new secure execution architecture.
 
-Inspect:
+## 1.3 No fake implementation
 
-- frontend/src/components/explorer/TestGenerationView.tsx
-- Related API clients.
-- Test generation response schemas.
-- Existing report and history components.
+Never:
 
-### Documentation
+- Create a Docker backend that internally uses host subprocess.
+- Claim gVisor support without actually verifying the runtime.
+- Claim network isolation based only on environment variables.
+- Claim CPU/RAM protection based only on application monitoring.
+- Silently fall back to local subprocess in production.
+- Hardcode Docker credentials.
+- Expose the Docker socket through an unrestricted API.
+- Use unverified container image digests.
+- Mark security tests as passed without running them.
+- Create documentation describing features that do not exist.
 
-Inspect:
+If infrastructure is unavailable, implement the code that can safely be implemented, document the infrastructure dependency, and clearly mark the relevant functionality as unverified or blocked.
 
-- Docs/quality_benchmark_report.md
-- Docs/testing/test_generation_feature_testing_result.md
-- Docs/workspace_sandbox_architecture_audit.md
-- Docs/engineering/11_testing_qa.md
-- Docs/engineering/05_system_architecture.md
-- Docs/README.md
+## 1.4 Documentation is mandatory
 
-## 3.2 Verify existing implementation
+Every major implementation decision must be documented.
 
-There are potentially outdated assumptions in earlier audits.
+I want to maintain long-term technical documentation for this project.
 
-For example:
+Do not put all documentation into one short README.
 
-- framework_detector.py already declares Vitest as a supported framework.
-- backend/sandbox/ already contains a substantial execution and workspace infrastructure.
-- The existing quality report has a benchmark-gate inconsistency.
+Create a structured documentation system with architecture diagrams, sequence diagrams, component responsibilities, security decisions, APIs, configuration, testing, deployment and troubleshooting.
 
-Verify these facts against the actual code.
+## 1.5 Work in manageable stages
 
-For each capability, classify it as:
+Do not attempt a blind large-scale rewrite.
 
-- FULLY IMPLEMENTED
-- PARTIALLY IMPLEMENTED
-- IMPLEMENTED BUT NOT INTEGRATED
-- MISSING
-- IMPLEMENTED BUT INCORRECT
-- NEEDS SECURITY IMPROVEMENT
+Work in the following order:
 
-Do not implement an already-working capability again.
+Audit → Research → Architecture → Design → Implementation → Testing → Documentation → Final Verification.
 
-## 3.3 Create the initial audit document
+Maintain a progress document so that work can continue without losing decisions.
+
+---
+
+# 2. PHASE 1 — COMPLETE EXISTING CODEBASE AUDIT
+
+First, analyze the actual source code.
+
+## 2.1 Components to investigate
+
+Find and inspect the actual implementations of:
+
+### A. WorkspaceManager
+
+Reported existing responsibility:
+
+- Creates task-specific workspaces.
+- Uses Git worktrees.
+- Creates task branches.
+- Has directory-copy fallback.
+- Manages workspace paths.
+- Handles workspace cleanup.
+
+Investigate:
+
+- How task workspaces are created.
+- Whether different users can access each other's workspaces.
+- Whether worktrees share Git metadata.
+- How fallback copying works.
+- Whether symbolic links can escape the workspace.
+- How workspace deletion works.
+- Whether concurrent tasks create race conditions.
+- Whether workspaces are persisted or recreated.
+
+### B. WorkspacePathGuard
+
+Investigate:
+
+- Path traversal protection.
+- Absolute path handling.
+- Symbolic links.
+- Hard links where applicable.
+- `.git` restrictions.
+- `.env` restrictions.
+- Private key restrictions.
+- File read/write operations.
+- Whether every file access passes through the guard.
+
+Identify bypass opportunities.
+
+### C. WorkspaceResourceMonitor
+
+Reported existing limits:
+
+- Disk: 500 MB.
+- Individual file: 5 MB.
+- Files modified: 50.
+
+Investigate:
+
+- How these limits are enforced.
+- Whether limits are checked before or after writes.
+- Whether directory copies bypass them.
+- Whether temporary files count toward disk usage.
+- Whether symlinks affect calculations.
+- Whether concurrent writes can bypass limits.
+
+Identify which limits are application-level and which can be enforced by the OS.
+
+### D. CommandRunner
+
+Investigate:
+
+- Command allowlist.
+- Argument validation.
+- Shell injection protection.
+- Dangerous flags.
+- Environment sanitization.
+- Timeout handling.
+- Process-group handling.
+- Output limits.
+- Python execution.
+- Pytest execution.
+- npm execution.
+- Node.js execution.
+- Git operations.
+
+Specifically identify:
+
+- Every direct subprocess call.
+- Every use of `sys.executable`.
+- Every command that executes repository-controlled code.
+- Every package installation path.
+- Every indirect execution path.
+
+### E. Other execution entry points
+
+Search the entire backend for:
+
+- subprocess.Popen
+- subprocess.run
+- subprocess.call
+- os.system
+- os.popen
+- asyncio.create_subprocess_exec
+- asyncio.create_subprocess_shell
+- shell=True
+- exec
+- eval
+- pytest invocation
+- npm install
+- npm test
+- pip install
+- setup.py
+- build backend execution
+
+Do not assume that all execution happens through CommandRunner.
+
+Find every entry point.
+
+## 2.2 Existing security risk analysis
+
+For every identified issue, document:
+
+1. Vulnerability.
+2. Root cause.
+3. Exploitation scenario.
+4. Potential impact.
+5. Existing mitigation.
+6. Missing mitigation.
+7. Required solution.
+8. Priority.
+9. Files affected.
+10. Acceptance criteria.
+
+Classify issues as:
+
+- Critical
+- High
+- Medium
+- Low
+
+## 2.3 Audit output
 
 Create:
 
-Docs/test-generation/00_EXISTING_IMPLEMENTATION_AUDIT.md
-
-Include:
-
-1. Existing architecture.
-2. Existing file responsibilities.
-3. Current execution flow.
-4. Existing sandbox capabilities.
-5. Existing framework support.
-6. Existing coverage capabilities.
-7. Existing benchmark logic.
-8. Existing frontend behavior.
-9. Missing capabilities.
-10. Security gaps.
-11. Integration dependencies.
-12. Exact files requiring modifications.
-13. New files required.
-14. Risks and compatibility concerns.
-15. Implementation roadmap.
-
-For every identified issue, include the actual file path and relevant function/class.
-
-Do not fabricate implementation details.
-
-After creating the audit, use it as the implementation reference.
-
----
-
-# 4. FEATURE 1: EXECUTION-VERIFIED TEST GENERATION
-
-Priority: HIGH
-
-This is the most important improvement.
-
-## 4.1 Existing problem
-
-Currently, generated test files can pass syntax validation without actually working.
-
-Examples of undetected problems:
-
-- Incorrect imports.
-- Invalid module paths.
-- Incorrect fixtures.
-- Wrong assertions.
-- Missing dependencies.
-- Runtime exceptions.
-- Tests that do not exercise intended functionality.
-
-Syntax validation is not sufficient.
-
-## 4.2 Required implementation
-
-Implement an execution-and-filter pipeline.
-
-Every generated test must go through:
-
-Stage 1: Static validation.
-Stage 2: Sandbox execution.
-Stage 3: Stability validation.
-Stage 4: Coverage validation.
-Stage 5: Final classification.
-
-Only tests satisfying all mandatory verification conditions should be labelled VERIFIED.
-
-## 4.3 Stage 1: Static validation
-
-Preserve existing validations.
-
-Python:
-- AST parsing.
-- Import and syntax checks where practical.
-- Existing reserved-file checks.
-- Existing dangerous-pattern checks.
-
-JavaScript/TypeScript:
-- Actual parser/compiler validation.
-- TypeScript compatibility where configured.
-- Framework-specific validation.
-
-Do not rely only on bracket or delimiter balance for JavaScript.
-
-Never generate or overwrite:
-
-- conftest.py
-- pytest.ini
-- Existing framework configuration.
-- Startup files.
-- Existing test configuration.
-- Other protected files.
-
-Preserve existing safety policies and extend them when necessary.
-
-## 4.4 Stage 2: Sandbox execution
-
-Reuse the existing backend/sandbox infrastructure.
-
-Do not create another sandbox manager if the current one can safely support this workflow.
-
-Inspect whether the current test_runner.py and command_runner.py can execute generated tests safely.
-
-If changes are necessary, extend existing components.
-
-Requirements:
-
-- Execute only inside an isolated temporary workspace.
-- Never execute generated tests directly on the main backend server.
-- Never modify the original repository.
-- Capture stdout and stderr.
-- Capture exit codes.
-- Capture execution duration.
-- Capture passed, failed, skipped and errored test counts.
-- Capture timeout information.
-- Preserve execution logs for reporting.
-- Clean temporary workspaces after execution.
-- Handle cleanup failures safely.
-
-Use the repository's existing workspace lifecycle and path validation mechanisms.
-
-## 4.5 Sandbox security requirements
-
-Generated test code is untrusted executable code.
-
-Implement or verify the following:
-
-1. No access to production secrets.
-2. No access to backend environment variables containing credentials.
-3. Network disabled by default.
-4. CPU limits.
-5. Memory limits.
-6. Disk limits.
-7. Execution timeouts.
-8. Process count limits where supported.
-9. Filesystem isolation.
-10. Path traversal protection.
-11. Symlink escape protection.
-12. Safe temporary file handling.
-13. No privileged container execution.
-14. Safe cleanup.
-15. Dependency installation restrictions.
-
-Do not allow generated tests to access:
-
-- Production databases.
-- Production Redis.
-- Cloud credentials.
-- GitHub tokens.
-- API keys.
-- SSH credentials.
-- Host filesystem secrets.
-
-Do not automatically install arbitrary packages requested by generated tests.
-
-Prefer already-installed and locked repository dependencies.
-
-If installation is required, use a controlled dependency policy.
-
-Do not enable unrestricted network access to make a failing test pass.
-
-Evaluate whether existing Docker isolation is sufficient for the threat model. Consider gVisor or Firecracker if stronger isolation is necessary.
-
-Document the actual security guarantees and limitations.
-
-## 4.6 Stage 3: Stability validation
-
-Run the generated test suite three consecutive times.
-
-Configuration:
-
-MAX_STABILITY_RUNS = 3
-
-Expected classification:
-
-3/3 PASS:
-- Stable candidate.
-
-2/3 PASS:
-- Unstable candidate.
-
-1/3 or 0/3 PASS:
-- Failed candidate.
-
-Capture:
-
-- Each run's result.
-- Duration.
-- Failure information.
-- Error messages.
-- Timeout information.
-
-Do not silently retry failures and then mark the test verified.
-
-Do not confuse stability retries with LLM generation iterations.
-
-Keep these as separate configurations.
-
-Example:
-
-MAX_STABILITY_RUNS = 3
-MAX_GENERATION_ROUNDS = 3
-
-Generation rounds mean initial generation plus two additional rounds.
-
-Stability runs mean repeated execution of the same generated test set.
-
-Where practical, control randomness, environment state and test ordering to improve reproducibility.
-
-Do not claim that three successful runs mathematically prove non-flakiness.
-
-## 4.7 Stage 4: Final classification
-
-Implement clear result categories:
-
-VERIFIED:
-- Static validation passed.
-- Execution passed.
-- All three stability runs passed.
-- Coverage requirement satisfied.
-
-UNVERIFIED:
-- Test generated successfully.
-- But one or more verification conditions were not satisfied.
-
-REJECTED:
-- Unsafe test.
-- Protected file modification.
-- Invalid or prohibited execution behavior.
-
-EXECUTION_ERROR:
-- Infrastructure failure prevented reliable verification.
-
-Important:
-
-Do not classify an infrastructure error as a failed test assertion.
-
-Differentiate between:
-- Actual test failure.
-- Sandbox failure.
-- Dependency failure.
-- Execution timeout.
-- Infrastructure error.
-
-Do not silently discard unverified tests. Preserve them in a separate result section with reasons and warnings.
-
----
-
-# 5. FEATURE 2: COVERAGE MEASUREMENT
-
-Priority: HIGH
-
-## 5.1 Problem
-
-A passing test does not necessarily test meaningful functionality.
-
-We need to know whether generated tests increase coverage.
-
-## 5.2 Required implementation
-
-Implement a dedicated coverage service.
-
-Suggested file:
-
-backend/app/services/test_coverage_service.py
-
-Modify this name if an existing architecture convention is better.
-
-The service should support:
-
-Python:
-- coverage.py
-- pytest-cov where compatible.
-
-JavaScript:
-- Jest coverage.
-- Vitest coverage.
-
-Support:
-- Line coverage.
-- Branch coverage.
-- Function coverage where available.
-- Targeted source-file coverage.
-
-Do not assume every repository has the same coverage configuration.
-
-Respect existing coverage settings and source exclusions.
-
-## 5.3 Baseline measurement
-
-Before adding generated tests:
-
-1. Create an isolated repository workspace.
-2. Execute the appropriate existing baseline test suite.
-3. Collect coverage.
-4. Record the baseline.
-5. Record pre-existing test failures separately.
-
-Then add generated tests in the isolated workspace.
-
-Execute the combined suite.
-
-Collect post-generation coverage.
-
-Calculate:
-
-Coverage Gain = Post-generation Coverage - Baseline Coverage
-
-Example:
-
-Baseline line coverage: 40%
-Post-generation line coverage: 65%
-
-Coverage gain: +25 percentage points.
-
-## 5.4 Critical correctness requirement
-
-Coverage must be attributable to generated tests.
-
-Do not allow existing tests to make generated tests appear more useful than they actually are.
-
-Where possible, implement coverage comparison using:
-
-- Baseline execution.
-- Generated-test-only execution.
-- Combined execution.
-
-Track which new lines and branches were exercised by generated tests.
-
-Account for existing test failures and coverage collection errors.
-
-A generated test that does not increase coverage should not automatically be called useless.
-
-For example, it may add a valuable assertion to already-covered code.
-
-However, under the initial strict verification policy, it must remain UNVERIFIED if the mandatory coverage-gain condition is not met.
-
-Expose the reason in the report.
-
-## 5.5 Coverage reporting
-
-Return structured metrics:
-
-- Baseline line coverage.
-- Final line coverage.
-- Line coverage gain.
-- Baseline branch coverage.
-- Final branch coverage.
-- Branch coverage gain.
-- Newly covered lines.
-- Newly covered branches.
-- Coverage collection status.
-- Unsupported coverage capabilities.
-
-Never invent coverage values.
-
-Never treat missing coverage data as 0% without distinguishing collection failure.
-
----
-
-# 6. FEATURE 3: COVERAGE-GUIDED ITERATIVE GENERATION
-
-Priority: MEDIUM-HIGH
-
-Research inspiration: CoverUp (P-11).
-
-## 6.1 Problem
-
-The current system generates tests in a single attempt.
-
-This can miss important branches and edge cases.
-
-## 6.2 Required implementation
-
-Introduce a feedback loop.
-
-Flow:
-
-1. Generate initial tests.
-2. Execute generated tests.
-3. Collect coverage.
-4. Identify uncovered executable lines and branches.
-5. Map uncovered code to source functions/classes.
-6. Convert uncovered code into missing test requirements.
-7. Send only relevant uncovered context to the LLM.
-8. Generate additional targeted tests.
-9. Execute and verify the additional tests.
-10. Merge valid results.
-11. Produce final report.
-
-## 6.3 Iteration limits
-
-Use:
-
-MAX_GENERATION_ROUNDS = 3
-
-This means:
-
-- Round 1: Initial generation.
-- Round 2: First improvement.
-- Round 3: Second improvement.
-
-Do not exceed this limit.
-
-## 6.4 LLM prompt improvements
-
-The LLM must receive:
-
-- Relevant source code.
-- Existing generated tests.
-- Existing repository tests when relevant.
-- Uncovered lines.
-- Uncovered branches.
-- Existing fixtures.
-- Detected framework.
-- Existing imports.
-- Previously failed test information.
-- Already-covered scenarios.
-
-The LLM must generate only missing tests.
-
-Do not regenerate the entire test suite unnecessarily.
-
-Prevent duplicate test cases.
-
-Preserve traceability between:
-
-Requirement → Generated Test → Source Function → Coverage Result.
-
-## 6.5 Stop conditions
-
-Stop iterative generation when:
-
-- No meaningful uncovered target remains.
-- Coverage stops improving.
-- Maximum rounds are reached.
-- Generation budget is exhausted.
-- Sandbox execution fails due infrastructure issues.
-- The framework cannot provide reliable coverage data.
-
-Do not continue spending LLM tokens without a clear improvement opportunity.
-
----
-
-# 7. FEATURE 4: MUTATION TESTING
-
-Priority: MEDIUM / OPTIONAL FOR USER REQUESTS
-
-Research inspiration: MuTAP (P-12).
-
-Mutation testing should initially be implemented as an offline evaluation and benchmarking capability.
-
-Do not run mutation testing on every user request.
-
-## 7.1 Purpose
-
-Coverage tells us whether code was executed.
-
-Mutation testing helps evaluate whether tests detect intentional code changes.
-
-Example:
-
-Original:
-
-def is_adult(age):
-    return age >= 18
-
-Mutation:
-
-def is_adult(age):
-    return age > 18
-
-A test that only checks age 20 will not detect this mutation.
-
-A test checking age 18 should detect it.
-
-## 7.2 Python
-
-Investigate and integrate mutmut.
-
-## 7.3 JavaScript/TypeScript
-
-Investigate and integrate Stryker.
-
-## 7.4 Required metrics
-
-Track:
-
-- Total mutants.
-- Killed mutants.
-- Survived mutants.
-- Equivalent mutants where identified.
-- Timeout mutants.
-- Mutation score.
-- Execution duration.
-
-Formula:
-
-Mutation Score =
-Killed Mutants / Valid Non-Equivalent Mutants × 100
-
-Do not count equivalent or invalid mutants in the denominator.
-
-Document limitations.
-
-## 7.5 Evaluation strategy
-
-Use a controlled benchmark repository or fixture suite.
-
-Compare:
-
-- Existing tests.
-- Generated tests.
-- Combined tests.
-
-This will help determine whether generated tests improve defect detection.
-
-Keep mutation execution separate from the normal user workflow.
-
----
-
-# 8. FEATURE 5: COMPLETE VITEST SUPPORT
-
-Priority: HIGH
-
-Important: The existing framework detector already declares Vitest in its supported framework set.
-
-Do not blindly add Vitest again.
-
-Audit the entire end-to-end implementation.
-
-Verify:
-
-1. Framework detection.
-2. Manifest parsing.
-3. Config-file discovery.
-4. Test command selection.
-5. Test file naming.
-6. Test requirement discovery.
-7. LLM generation prompts.
-8. Imports and mocking APIs.
-9. Test execution.
-10. Coverage collection.
-11. Frontend response rendering.
-
-Vitest support is complete only when all these stages work.
-
-## 8.1 Detection
-
-Inspect:
-
-- package.json
-- vitest.config.js
-- vitest.config.ts
-- vitest.config.mjs
-- Existing Vitest imports.
-- Existing test files.
-- Relevant workspace configuration.
-
-Handle ambiguous configurations carefully.
-
-Do not incorrectly identify Jest and Vitest when both are installed.
-
-Use actual project scripts and configurations where appropriate.
-
-## 8.2 Generation
-
-Generate framework-appropriate code using:
-
-- describe()
-- it()
-- test()
-- expect()
-- vi.fn()
-- vi.mock()
-- beforeEach()
-- afterEach()
-
-Use the repository's existing conventions.
-
-Do not blindly reuse Jest-specific mocking APIs.
-
-## 8.3 Execution
-
-Support the configured Vitest command.
-
-Typical example:
-
-npx vitest run
-
-But prefer the repository's actual package-manager and script configuration.
-
-Support:
-
-- npm.
-- pnpm.
-- yarn.
-- Existing lockfiles.
-
-Do not arbitrarily change package managers.
-
-## 8.4 Coverage
-
-Use the repository's configured Vitest coverage provider.
-
-Support V8 or Istanbul where compatible.
-
-Do not overwrite the user's existing coverage configuration.
-
----
-
-# 9. FEATURE 6: BENCHMARK GATE CORRECTION
-
-Priority: P0
-
-Inspect:
-
-Docs/quality_benchmark_report.md
-
-backend/tests/test_feature_quality_benchmarks.py
-
-Existing benchmark implementation.
-
-The existing report shows:
-
-Syntax validity: 75%
-Target: >=66%
-
-Assertion presence: 50%
-Target: >=66%
-
-Yet both are marked PASS.
-
-This is inconsistent.
-
-## 9.1 Required correction
-
-Implement a reliable threshold evaluator.
-
-Example:
-
-def evaluate_metric(value, threshold):
-    return {
-        "value": value,
-        "threshold": threshold,
-        "status": "PASS" if value >= threshold else "FAIL"
-    }
-
-Overall mandatory quality gate:
-
-overall_pass = all(
-    mandatory_metric.status == "PASS"
-    for mandatory_metric in mandatory_metrics
-)
-
-## 9.2 Requirements
-
-- Below target must FAIL.
-- At target must PASS.
-- Above target must PASS.
-- Missing measurements must not silently PASS.
-- Invalid benchmark data must be reported.
-- Optional metrics must not accidentally become mandatory.
-- Report generation must use actual evaluation results.
-
-Distinguish:
-
-HARD GATES:
-Mandatory requirements.
-
-QUALITY METRICS:
-Measurements used to compare improvements.
-
-Do not consider assertion presence sufficient proof of assertion correctness.
-
-Update the benchmark report only using newly measured results.
-
-Do not change historical results to make them appear successful.
-
----
-
-# 10. FEATURE 7: TEST QUALITY REPORTING
-
-Priority: HIGH
-
-Improve the backend report and frontend TestGenerationView.tsx.
-
-The user should clearly understand what happened to each generated test.
-
-## 10.1 Required report information
-
-### Summary
-
-- Total generated tests.
-- Verified tests.
-- Unverified tests.
-- Rejected tests.
-- Execution errors.
-
-### Framework
-
-- Detected language.
-- Detected framework.
-- Package manager.
-- Execution command.
-
-### Static validation
-
-- Syntax result.
-- Import validation.
-- Safety validation.
-
-### Execution
-
-- Total execution count.
-- Passed.
-- Failed.
-- Skipped.
-- Errors.
-- Execution time.
-
-### Stability
-
-- Run 1.
-- Run 2.
-- Run 3.
-- Final stability classification.
-
-### Coverage
-
-- Baseline line coverage.
-- Final line coverage.
-- Coverage improvement.
-- Branch coverage.
-- Newly covered lines and branches.
-
-### Iterative generation
-
-- Generation round count.
-- Additional tests generated.
-- Uncovered branches addressed.
-- Stopping reason.
-
-### Failure details
-
-For every failed or unverified test:
-
-- Test name.
-- File path.
-- Failure reason.
-- Relevant error output.
-- Suggested remediation.
-
-## 10.2 Frontend requirements
-
-Improve the existing TestGenerationView.tsx.
-
-Do not redesign the entire platform.
-
-Maintain the existing design system.
-
-Add:
-
-- Verification status.
-- Execution summary.
-- Stability indicator.
-- Coverage comparison.
-- Generation-round information.
-- Expandable failure details.
-- Separate VERIFIED and UNVERIFIED sections.
-
-Never show an unverified test as verified.
-
-Do not expose secrets or internal sensitive paths in user-visible logs.
-
-Maintain compatibility with existing API consumers where possible.
-
----
-
-# 11. FEATURE 8: EVALUATION AND TESTING
-
-Priority: CRITICAL
-
-Do not consider implementation complete just because the code compiles.
-
-Build a comprehensive testing strategy.
-
-## 11.1 Unit tests
-
-Test:
-
-- Framework detection.
-- Vitest configuration detection.
-- Static validation.
-- Execution service.
-- Stability validation.
-- Coverage calculation.
-- Coverage comparison.
-- Iteration stopping conditions.
-- Mutation metric calculation.
-- Benchmark threshold evaluation.
-- Final classification.
-
-## 11.2 Integration tests
-
-Test complete workflows:
-
-Scenario A:
-Valid Python pytest repository.
-
-Scenario B:
-Python unittest repository.
-
-Scenario C:
-JavaScript Jest repository.
-
-Scenario D:
-TypeScript Vitest repository.
-
-Scenario E:
-Repository with both Jest and Vitest dependencies.
-
-Scenario F:
-Repository with no existing test framework.
-
-Scenario G:
-Invalid generated syntax.
-
-Scenario H:
-Incorrect imports.
-
-Scenario I:
-Test with failing assertion.
-
-Scenario J:
-Flaky generated test.
-
-Scenario K:
-Passing test with no coverage improvement.
-
-Scenario L:
-Passing test with additional coverage.
-
-Scenario M:
-Sandbox timeout.
-
-Scenario N:
-Memory limit exceeded.
-
-Scenario O:
-Unsafe file access attempt.
-
-Scenario P:
-Path traversal attempt.
-
-Scenario Q:
-Attempt to access environment secrets.
-
-Scenario R:
-Existing baseline test failures.
-
-Scenario S:
-Coverage collection failure.
-
-Scenario T:
-Generation budget exhausted.
-
-Scenario U:
-Maximum iteration limit reached.
-
-Scenario V:
-Temporary workspace cleanup failure.
-
-## 11.3 Regression tests
-
-Run all relevant existing tests.
-
-Do not delete existing tests just because they fail after your modifications.
-
-Investigate whether the failure is:
-
-- A regression.
-- An existing failure.
-- An environment issue.
-- An outdated expectation.
-
-Document the actual outcome.
-
-## 11.4 Adversarial security tests
-
-Specifically verify:
-
-- ../ path traversal.
-- Symlink escapes.
-- Unauthorized file modifications.
-- Secret access.
-- Network access.
-- Resource exhaustion.
-- Command injection.
-- Unsafe dependency installation.
-- Background process persistence.
-- Sandbox cleanup.
-
-Never execute an adversarial test outside the isolated environment.
-
----
-
-# 12. LLM COST AND PERFORMANCE CONTROL
-
-We use limited/free LLM inference resources.
-
-Do not introduce unnecessary API calls.
-
-Implement:
-
-1. Initial generation only once.
-2. Maximum two additional generation rounds.
-3. Targeted uncovered-code context.
-4. Avoid duplicate generation.
-5. Avoid resending the entire repository.
-6. Reuse existing repository context.
-7. Reuse existing cached analysis when valid.
-8. Limit prompt size.
-9. Track token usage.
-10. Stop when no meaningful coverage improvement occurs.
-
-Use the existing LLM provider architecture.
-
-Do not introduce a new paid inference provider.
-
-Do not hardcode Gemini API keys or model names in business logic.
-
-Use the existing configuration and provider abstraction.
-
-Track:
-
-- Input tokens.
-- Output tokens.
-- Generation rounds.
-- Estimated generation cost when provider data permits.
-- Execution time separately from LLM time.
-
-Do not confuse test execution retries with LLM generation retries.
-
----
-
-# 13. ARCHITECTURAL DESIGN REQUIREMENTS
-
-Keep the implementation modular.
-
-Do not put every responsibility inside test_generation_orchestrator.py.
-
-Inspect existing architecture before deciding final file names.
-
-Potential responsibilities:
-
-Framework adapters:
-- Detection.
-- Framework-specific execution.
-- Framework-specific coverage.
-
-Validation:
-- Static validation.
-- Execution validation.
-- Stability validation.
-- Coverage validation.
-
-Services:
-- Test execution.
-- Coverage collection.
-- Coverage comparison.
-- Iterative generation.
-- Quality reporting.
-
-Evaluation:
-- Mutation testing.
-- Benchmark evaluation.
-
-The orchestrator should coordinate these services rather than implement all their internal logic.
-
-Use:
-
-- Existing Pydantic schemas.
-- Existing API conventions.
-- Existing dependency injection.
-- Existing logging.
-- Existing error handling.
-- Existing workspace lifecycle.
-- Existing security policies.
-
-Use typed interfaces.
-
-Avoid circular imports.
-
-Avoid duplicated execution logic.
-
-Ensure backward compatibility with existing test-generation APIs.
-
-Introduce schema changes carefully and document them.
-
----
-
-# 14. DOCUMENTATION REQUIREMENTS — VERY IMPORTANT
-
-I want ALL implementation documentation inside the existing:
-
-Docs/
-
-Create a dedicated documentation directory:
-
-Docs/test-generation/
-
-Do not create another documentation folder elsewhere.
-
-Do not put major documentation files in the project root.
-
-Keep existing Docs content intact.
-
-Create the following documentation structure:
-
-Docs/
-└── test-generation/
-    ├── README.md
-    ├── 00_EXISTING_IMPLEMENTATION_AUDIT.md
-    ├── 01_REQUIREMENTS_AND_SCOPE.md
-    ├── 02_EXISTING_VS_PROPOSED_ARCHITECTURE.md
-    ├── 03_SYSTEM_ARCHITECTURE.md
-    ├── 04_EXECUTION_AND_VERIFICATION_FLOW.md
-    ├── 05_SANDBOX_SECURITY_DESIGN.md
-    ├── 06_FRAMEWORK_ADAPTERS.md
-    ├── 07_COVERAGE_MEASUREMENT.md
-    ├── 08_COVERAGE_GUIDED_ITERATION.md
-    ├── 09_MUTATION_TESTING.md
-    ├── 10_BENCHMARK_AND_EVALUATION.md
-    ├── 11_API_AND_DATABASE_CHANGES.md
-    ├── 12_FRONTEND_INTEGRATION.md
-    ├── 13_IMPLEMENTATION_PLAN.md
-    ├── 14_TESTING_STRATEGY.md
-    ├── 15_SECURITY_AND_THREAT_MODEL.md
-    ├── 16_PERFORMANCE_AND_COST_CONTROL.md
-    ├── 17_DEPLOYMENT_AND_CONFIGURATION.md
-    ├── 18_TROUBLESHOOTING.md
-    ├── 19_IMPLEMENTATION_CHANGELOG.md
-    ├── 20_IMPLEMENTATION_TEST_REPORT.md
-    ├── 21_KNOWN_LIMITATIONS.md
-    ├── diagrams/
-    │   ├── existing_architecture.mmd
-    │   ├── proposed_architecture.mmd
-    │   ├── execution_sequence.mmd
-    │   ├── coverage_iteration.mmd
-    │   ├── sandbox_security.mmd
-    │   └── verification_state_machine.mmd
-    └── research/
-        ├── README.md
-        ├── P10_TESTGEN_LLM.md
-        ├── P11_COVERUP.md
-        ├── P12_MUTAP.md
-        ├── P13_TESTPILOT.md
-        └── TOOLS_AND_LICENSES.md
-
-Adjust this structure if some existing documentation already covers the same subject. Avoid duplicate or contradictory documents.
-
-## 14.1 Documentation content
-
-### README.md
-
-Explain:
-
-- Feature purpose.
-- Architecture.
-- Supported frameworks.
-- Execution workflow.
-- Verification statuses.
-- Coverage measurement.
-- Iterative generation.
-- Mutation evaluation.
-- Security boundaries.
-- How to run tests.
-- Links to all documentation.
-
-### Existing implementation audit
-
-Document what existed before modifications.
-
-### Requirements and scope
-
-Document:
-
-- Functional requirements.
-- Non-functional requirements.
-- Acceptance criteria.
-- Dependencies.
-- Out-of-scope items.
-
-### Architecture
+Docs/security/sandbox/01-existing-architecture-audit.md
 
 Include:
 
 - Existing architecture.
-- Proposed architecture.
-- Component responsibilities.
-- Data flow.
-- Service boundaries.
-- Integration points.
+- Existing components.
+- Actual file paths.
+- Actual class and function names.
+- Existing execution flow.
+- Security gaps.
+- Vulnerability scenarios.
+- Existing protections.
+- Limitations.
+- Recommended changes.
+- Implementation dependencies.
 
-### Execution and verification
+Also create a complete execution-entry-point inventory.
 
-Document every verification stage.
+Do not start major implementation until this audit is completed.
+
+---
+
+# 3. PHASE 2 — RESEARCH AND TECHNICAL DECISIONS
+
+Research the technologies that are relevant to secure execution.
+
+The objective is not to integrate every available technology.
+
+The objective is to select the safest practical architecture for our project.
+
+## 3.1 Docker
+
+Research:
+
+- Docker Engine architecture.
+- Container lifecycle.
+- Linux namespaces.
+- cgroups.
+- seccomp.
+- Linux capabilities.
+- Read-only root filesystem.
+- Bind mounts.
+- tmpfs.
+- Non-root execution.
+- Network isolation.
+- Container resource limits.
+- Container cleanup.
+- Image security.
+- Container escape risks.
+
+Official documentation:
+
+https://docs.docker.com/
+
+https://docs.docker.com/engine/security/
+
+https://docs.docker.com/engine/containers/resource_constraints/
+
+https://docs.docker.com/engine/security/seccomp/
+
+## 3.2 gVisor
+
+Research:
+
+- gVisor architecture.
+- Sentry.
+- Gofer.
+- runsc runtime.
+- Docker integration.
+- Filesystem behavior.
+- Network behavior.
+- Supported system calls.
+- Performance overhead.
+- Compatibility limitations.
+- Deployment requirements.
+- Security boundaries.
+
+Official resources:
+
+https://gvisor.dev/
+
+https://gvisor.dev/docs/
+
+https://gvisor.dev/docs/user_guide/containerd/quick_start/docker/
+
+We prefer gVisor because it adds a userspace-kernel isolation layer without requiring KVM.
+
+Do not claim that gVisor eliminates all container escape risks.
+
+## 3.3 Firecracker
+
+Research:
+
+- MicroVM architecture.
+- KVM requirements.
+- Snapshotting.
+- Isolation boundaries.
+- Performance.
+- Resource overhead.
+- Operational complexity.
+
+Official resources:
+
+https://firecracker-microvm.github.io/
+
+https://github.com/firecracker-microvm/firecracker
+
+Evaluate Firecracker as a future alternative, not an immediate mandatory implementation.
+
+## 3.4 Other projects
+
+Study:
+
+- E2B: https://github.com/e2b-dev
+- OpenHands: https://github.com/All-Hands-AI/OpenHands
+- Daytona: https://github.com/daytonaio/daytona
+- nsjail: https://github.com/google/nsjail
+- bubblewrap: https://github.com/containers/bubblewrap
+- Docker MCP Gateway: https://github.com/docker/mcp-gateway
+
+For each project document:
+
+- Architecture.
+- Main functionality.
+- Isolation technology.
+- Integration approach.
+- Strengths.
+- Weaknesses.
+- Dependencies.
+- Licensing.
+- Whether it is suitable for our platform.
+- What we can learn or reuse.
+- What we should not copy.
+
+Verify current licences and versions from authoritative sources.
+
+Do not assume the entire product and its SDK have the same licence.
+
+## 3.5 Research deliverable
+
+Create:
+
+Docs/security/sandbox/02-technology-research.md
+
+Include a detailed comparison table.
+
+Final expected decision:
+
+- Docker: primary container management.
+- gVisor: additional production isolation.
+- Firecracker: future microVM option.
+- E2B: optional managed alternative.
+- Daytona: architecture reference; evaluate AGPL implications.
+- OpenHands: runtime architecture reference.
+
+Do not introduce unnecessary dependencies.
+
+---
+
+# 4. PHASE 3 — DESIGN THE NEW ARCHITECTURE
+
+Introduce a pluggable sandbox architecture.
+
+The API server should manage tasks, while a separate runner executes untrusted code.
+
+## 4.1 Target architecture
+
+Implement the following logical architecture:
+
+USER
+ |
+ v
+FRONTEND
+ |
+ v
+API SERVER
+ |
+ +---- Authentication
+ |
+ +---- Repository Management
+ |
+ +---- AI Orchestrator
+ |
+ +---- WorkspaceManager
+ |
+ +---- CommandRunner
+          |
+          v
+     SandboxBackend
+          |
+          +-----------------------+
+          |                       |
+          v                       v
+   LocalSubprocessBackend   RunnerClient
+   Development only              |
+                                 v
+                          RUNNER SERVICE
+                                 |
+                                 v
+                            Docker Engine
+                                 |
+                                 v
+                              gVisor
+                                 |
+                    +------------+------------+
+                    |            |            |
+                    v            v            v
+                 Task 123     Task 124     Task 125
+                 Container    Container    Container
+
+Production API server must not execute untrusted repository code locally.
+
+## 4.2 SandboxBackend interface
+
+Create an abstraction based on the existing project architecture.
+
+Suggested location:
+
+backend/execution/sandbox/base.py
+
+Expected logical operations:
+
+- create_workspace()
+- execute()
+- read_file()
+- write_file()
+- get_diff()
+- destroy_workspace()
+- get_status()
+- get_resource_usage()
+
+Use typed interfaces and structured request/response models.
+
+Do not implement empty methods or fake responses.
+
+Each operation must have clear error handling.
+
+Support asynchronous execution if the existing backend uses async architecture.
+
+Do not introduce unnecessary synchronous blocking operations into an async API.
+
+## 4.3 LocalSubprocessBackend
+
+Move the existing subprocess behavior into a dedicated backend.
+
+Rules:
+
+- Allowed only when APP_ENV=development.
+- Must reject production execution.
+- Must not be used as an automatic fallback.
+- Must preserve current development workflows.
+- Must continue enforcing existing command and path guards.
+
+Production initialization must fail closed if the secure runner is unavailable or misconfigured.
+
+Do not infer development mode from missing environment variables.
+
+Require an explicit, validated environment configuration.
+
+## 4.4 ContainerBackend
+
+Implement the production backend.
+
+It should communicate with the Runner Service.
+
+Do not allow arbitrary API requests to construct unrestricted Docker commands.
+
+Use validated configuration and a narrow operation interface.
+
+## 4.5 SandboxFactory
+
+Implement backend selection.
+
+Expected behavior:
+
+APP_ENV=development:
+    LocalSubprocessBackend may be selected explicitly.
+
+APP_ENV=production:
+    ContainerBackend / RunnerClient required.
+
+Unknown APP_ENV:
+    Fail closed.
+
+Missing production runner configuration:
+    Fail closed.
+
+Runner unavailable:
+    Return a controlled execution error.
+
+Never fall back to host execution.
+
+## 4.6 Architecture deliverables
+
+Create:
+
+Docs/security/sandbox/03-target-architecture.md
 
 Include:
-- Static validation.
-- Sandbox execution.
-- Stability checks.
-- Coverage validation.
-- Final classification.
 
-### Sandbox security
+- Architecture diagram.
+- Component responsibilities.
+- Data flow.
+- Trust boundaries.
+- Execution lifecycle.
+- Workspace lifecycle.
+- Backend selection.
+- Authentication.
+- Failure handling.
+- Deployment architecture.
+- Security boundaries.
 
-Document:
-- Threat model.
-- Isolation model.
-- Filesystem restrictions.
-- Network restrictions.
-- Resource limits.
-- Secret protection.
-- Dependency restrictions.
-- Cleanup.
-- Known limitations.
+Create:
 
-### Coverage
+Docs/security/sandbox/diagrams/
 
-Document:
-- Baseline collection.
-- Post-generation collection.
-- Generated-test attribution.
-- Line coverage.
-- Branch coverage.
-- Coverage limitations.
+Include:
 
-### Iteration
-
-Document:
-- Feedback loop.
-- LLM context.
-- Generation limits.
-- Stopping conditions.
-- Token control.
-
-### Mutation testing
-
-Document:
-- Mutant generation.
-- Mutant execution.
-- Mutation score.
-- Equivalent mutants.
-- Evaluation strategy.
-
-### Testing and implementation report
-
-Document:
-- Tests executed.
-- Commands used.
-- Pass/fail counts.
-- Regression results.
-- Security test results.
-- Actual coverage measurements.
-- Known issues.
-
-Never fabricate test results.
-
-If a test has not been executed, clearly label it NOT RUN.
-
-## 14.2 Diagrams
+- architecture.mmd
+- execution-sequence.mmd
+- workspace-lifecycle.mmd
+- dependency-installation-flow.mmd
+- security-boundary.mmd
 
 Use Mermaid diagrams.
 
-Create accurate diagrams based on the actual implementation.
+Keep diagrams synchronized with the actual implementation.
 
-Include:
+---
 
-1. Existing architecture.
-2. Proposed architecture.
-3. Full execution sequence.
-4. Coverage-guided iteration.
-5. Sandbox security boundaries.
-6. Verification state machine.
+# 5. PHASE 4 — IMPLEMENT THE RUNNER SERVICE
 
-Ensure the diagrams agree with the actual code.
+This is a critical infrastructure component.
 
-## 14.3 Research documentation
+Our existing API is deployed on Azure App Service.
+
+Do not assume that Azure App Service can run arbitrary sibling Docker containers.
+
+We need a dedicated Linux runner host.
+
+## 5.1 Runner Service responsibilities
+
+The runner service should handle:
+
+- Sandbox creation.
+- Workspace management.
+- Container creation.
+- Command execution.
+- Resource enforcement.
+- Network policies.
+- File operations.
+- Diff generation.
+- Container termination.
+- Cleanup.
+- Resource monitoring.
+
+The runner should be independent of the AI orchestration logic.
+
+It must not require access to LLM API keys.
+
+## 5.2 Runner API
+
+Create a narrow authenticated API.
+
+Suggested operations:
+
+POST /internal/v1/workspaces
+
+Create a workspace and sandbox.
+
+POST /internal/v1/workspaces/{task_id}/exec
+
+Execute an approved command.
+
+GET /internal/v1/workspaces/{task_id}/files
+
+Read a file.
+
+PUT /internal/v1/workspaces/{task_id}/files
+
+Write a file.
+
+GET /internal/v1/workspaces/{task_id}/diff
+
+Get Git diff.
+
+GET /internal/v1/workspaces/{task_id}/status
+
+Get sandbox status.
+
+DELETE /internal/v1/workspaces/{task_id}
+
+Destroy the sandbox and workspace resources according to retention policy.
+
+Adapt exact paths to existing API conventions.
+
+## 5.3 Authentication and authorization
+
+Implement strong runner authentication.
+
+Requirements:
+
+- Runner is not publicly accessible.
+- Private network access where feasible.
+- Service-to-service authentication.
+- TLS.
+- Short-lived credentials or signed requests.
+- Replay protection where applicable.
+- Task ownership validation.
+- User authorization.
+- Request validation.
+- Rate limits.
+- Audit logs.
+
+Do not trust task_id supplied by the frontend.
+
+The API server must verify ownership before requesting runner operations.
+
+Do not expose:
+
+- Docker socket.
+- Arbitrary Docker API.
+- Unrestricted host filesystem access.
+- Arbitrary host command execution.
+
+The runner must independently validate all requests.
+
+## 5.4 Runner security
+
+Treat API-server requests as untrusted at the runner boundary.
+
+Enforce:
+
+- Command allowlists.
+- Argument validation.
+- Workspace containment.
+- Maximum request sizes.
+- Execution timeout.
+- Resource limits.
+- Container lifecycle restrictions.
+- Output caps.
+- Authentication.
+- Authorization.
+
+The runner must not accept arbitrary image names, mount paths, Docker flags or runtime options from the API client.
+
+Only server-controlled configuration may define those values.
+
+## 5.5 Runner deliverable
+
+Create:
+
+Docs/security/sandbox/04-runner-service-design.md
 
 Document:
 
-P-10: Meta TestGen-LLM.
-P-11: CoverUp.
-P-12: MuTAP.
-P-13: TestPilot.
+- API contracts.
+- Request schemas.
+- Response schemas.
+- Authentication.
+- Authorization.
+- Error handling.
+- Lifecycle.
+- Security controls.
+- Deployment requirements.
 
-For each, include:
+---
 
-- Research problem.
-- Proposed approach.
-- Relevant techniques.
-- How it relates to our project.
-- What we are adopting.
-- What we are not adopting.
+# 6. PHASE 5 — IMPLEMENT DOCKER + GV​​ISOR ISOLATION
+
+This is the most important implementation phase.
+
+Use Docker with gVisor for production sandbox execution.
+
+## 6.1 Container configuration
+
+Initial proposed limits:
+
+CPU: 2 vCPU
+
+Memory: 4 GB
+
+PID limit: 512
+
+Workspace disk: 500 MB
+
+Temporary storage: 512 MB
+
+Individual file size: 5 MB
+
+Output limit: 100 KB
+
+Command timeout: configurable.
+
+These values are starting defaults. Make them configurable through validated server-side settings.
+
+Do not allow normal users to override security-critical limits.
+
+## 6.2 Required security settings
+
+Implement the equivalent of:
+
+--network=none
+
+--pids-limit=512
+
+--memory=4g
+
+--cpus=2
+
+--read-only
+
+--tmpfs /tmp
+
+--cap-drop=ALL
+
+--security-opt=no-new-privileges
+
+--user=10001:10001
+
+--runtime=runsc
+
+Use:
+
+- Non-root execution.
+- Read-only root filesystem.
+- Restricted writable mounts.
+- Secure temporary storage.
+- Default-deny networking.
+- Runtime-enforced resource limits.
+- Appropriate seccomp configuration.
+- No privileged containers.
+- No host PID namespace.
+- No host network.
+- No Docker socket mount.
+- No unnecessary Linux capabilities.
+
+Do not disable seccomp without a documented and justified compatibility requirement.
+
+Do not use --privileged.
+
+## 6.3 Workspace mounting
+
+Each task must have its own workspace.
+
+Example:
+
+Host:
+
+/sandbox/workspaces/task-123
+
+Container:
+
+/workspace
+
+Mount only the assigned task workspace.
+
+Ensure:
+
+- No cross-task workspace access.
+- No host secrets.
+- No application source access.
+- No unrelated host mounts.
+- Correct non-root ownership.
+- Controlled writable directories.
+- No symlink-based escape.
+- Disk quota enforcement.
+
+Remember that a read-only container root does not automatically impose a quota on a writable host bind mount.
+
+Use filesystem quotas or a suitable isolated storage mechanism.
+
+## 6.4 Image management
+
+Create approved language images.
+
+Examples:
+
+- Python.
+- Node.js.
+- Python + Node.js if genuinely required.
+
+Use minimal base images.
+
+Pin exact versions and verified image digests.
+
+Example:
+
+FROM python:3.12-slim@sha256:<verified-digest>
+
+Never invent image digests.
+
+Never use unverified floating tags in production.
+
+Implement:
+
+- Image allowlist.
+- Digest verification.
+- Image scanning.
+- Image update policy.
+- Image caching.
+- Image pull failure handling.
+
+Repository-controlled files must never decide which privileged image or runtime the host executes.
+
+## 6.5 Container lifecycle
+
+Implement:
+
+CREATED
+   |
+   v
+INITIALIZING
+   |
+   v
+READY
+   |
+   v
+INSTALLING_DEPENDENCIES
+   |
+   v
+EXECUTING
+   |
+   v
+COLLECTING_RESULTS
+   |
+   v
+COMPLETED
+   |
+   v
+DESTROYED
+
+Also support:
+
+FAILED
+
+TIMED_OUT
+
+CANCELLED
+
+EXPIRED
+
+Every state transition should be validated.
+
+Implement:
+
+- Maximum lifetime.
+- Idle timeout.
+- Explicit cancellation.
+- Cleanup after failures.
+- Cleanup after API disconnects where appropriate.
+- Periodic orphan-container cleanup.
+- Restart recovery.
+- Resource usage tracking.
+
+Do not depend solely on the API process remaining alive to clean up containers.
+
+## 6.6 Deliverable
+
+Create:
+
+Docs/security/sandbox/05-container-isolation.md
+
+Include all Docker configurations, gVisor setup, resource limits, image policies, mount policies, lifecycle and failure handling.
+
+---
+
+# 7. PHASE 6 — TWO-PHASE DEPENDENCY INSTALLATION
+
+We need separate dependency installation from untrusted test execution.
+
+Do not disable network permanently without considering dependency installation.
+
+## 7.1 Phase A: Dependency installation
+
+Flow:
+
+Repository
+   |
+   v
+Manifest Detection
+   |
+   v
+Python / Node Dependency Detection
+   |
+   v
+Restricted Installation Environment
+   |
+   v
+Dependency Installation
+   |
+   v
+Dependency Artifacts
+
+Support relevant manifests, including:
+
+Python:
+- requirements.txt
+- pyproject.toml
+- poetry.lock
+- Pipfile.lock
+
+Node.js:
+- package.json
+- package-lock.json
+- npm lockfiles.
+
+Only support the package managers that the existing project actually needs.
+
+During installation:
+
+- Run inside a sandbox.
+- Use non-root.
+- Do not expose application secrets.
+- Restrict outbound networking.
+- Prefer approved package registries.
+- Apply download-size limits.
+- Apply timeouts.
+- Record installation logs.
+- Prevent access to host filesystem.
+- Protect against malicious install scripts.
+
+Important:
+
+npm lifecycle scripts and Python build backends can execute arbitrary code.
+
+Dependency installation must be treated as untrusted execution.
+
+Never install dependencies on the API host.
+
+## 7.2 Phase B: Offline testing
+
+After dependency installation:
+
+- Ensure the execution environment has all required dependencies.
+- Start the test phase without external network access.
+- Use --network=none.
+- Execute pytest or npm test.
+- Execute approved static analysis tools.
+- Capture output.
+- Collect exit codes.
+- Collect execution metrics.
+- Preserve relevant logs.
+
+Do not assume Docker networking can be changed in-place between phases.
+
+Design the transition using separate containers or another explicitly verified isolation strategy.
+
+The dependency artifacts shared between phases must be carefully controlled.
+
+Do not introduce shared writable directories between unrelated tasks.
+
+## 7.3 Deliverable
+
+Create:
+
+Docs/security/sandbox/06-dependency-installation.md
+
+Document:
+
+- Manifest detection.
+- Package manager selection.
+- Installation environment.
+- Network policy.
+- Dependency caching.
+- Artifact transfer.
+- Offline execution.
+- Failure cases.
+- Security risks.
+
+---
+
+# 8. PHASE 7 — INTEGRATE WITH EXISTING AGENTS
+
+This project has multiple AI-assisted workflows.
+
+Do not make the sandbox an isolated feature that existing agents cannot use.
+
+Find every agent that invokes CommandRunner or performs repository execution.
+
+Expected integration targets may include:
+
+- Code Review Agent.
+- Bug Detection Agent.
+- Test Generation Agent.
+- AI Orchestrator.
+- Repository Analysis.
+- Automated Code Modification.
+- Validation workflows.
+
+Actual component names must be discovered from the repository.
+
+## 8.1 Integration requirements
+
+All repository-controlled code execution must go through the new execution abstraction.
+
+Example:
+
+AI Agent
+   |
+   v
+CommandRunner
+   |
+   v
+SandboxBackend
+   |
+   v
+Runner Service
+   |
+   v
+Container
+
+Agents should not need to know whether the implementation uses Docker or gVisor.
+
+They should receive a structured result:
+
+- Exit code.
+- Standard output.
+- Standard error.
+- Timeout status.
+- Execution duration.
+- Resource usage.
+- Sandbox status.
+
+Preserve existing agent contracts where possible.
+
+## 8.2 Git operations
+
+Review which Git operations need to execute on the API host and which need to execute inside the runner.
+
+Do not unnecessarily move trusted repository-management operations into the sandbox.
+
+However, any Git operation that processes untrusted repository-controlled content must be reviewed for security.
+
+Treat Git configuration, hooks, filters and submodules as potential execution or network attack surfaces.
+
+Do not allow repository-controlled Git hooks to execute on the API host.
+
+Use controlled Git configuration.
+
+## 8.3 Integration deliverable
+
+Create:
+
+Docs/security/sandbox/07-agent-integration.md
+
+Include:
+
+- Existing agent execution paths.
+- New execution flow.
+- Files changed.
+- Interface changes.
+- Compatibility.
+- Error propagation.
+- Task cancellation.
+- Integration tests.
+
+---
+
+# 9. PHASE 8 — SECURITY HARDENING
+
+Preserve all existing application-level protections.
+
+Sandboxing is an additional layer, not a replacement.
+
+## 9.1 Retain existing protections
+
+Keep:
+
+- WorkspacePathGuard.
+- Command allowlist.
+- Argument validation.
+- Environment sanitization.
+- Secret redaction.
+- Output caps.
+- Timeout handling.
+- WorkspaceResourceMonitor.
+- File modification limits.
+
+Extend them where required.
+
+## 9.2 Additional controls
+
+Implement or document:
+
+- Container-level filesystem isolation.
+- Network isolation.
+- CPU restrictions.
+- Memory restrictions.
+- PID restrictions.
+- Disk quotas.
+- File descriptor limits.
+- Process termination.
+- Task ownership.
+- Runner authentication.
+- Container image verification.
+- Audit logging.
+- Concurrency limits.
+- Container cleanup.
+- Secret isolation.
+- Secure error handling.
+
+## 9.3 Secret protection
+
+The runner and sandbox must never receive:
+
+- Gemini API keys.
+- Groq API keys.
+- Database passwords.
+- JWT signing secrets.
+- Azure credentials.
+- GitHub personal access tokens.
+- Application `.env` contents.
+
+If private repository access is required, use a separate trusted cloning operation with narrowly scoped credentials.
+
+Never expose cloning credentials to repository tests or installation scripts.
+
+## 9.4 Security deliverable
+
+Create:
+
+Docs/security/sandbox/08-security-hardening.md
+
+---
+
+# 10. PHASE 9 — TESTING AND SECURITY VALIDATION
+
+Do not consider implementation complete without testing.
+
+Create automated unit, integration and security tests.
+
+## 10.1 Unit tests
+
+Test:
+
+- SandboxFactory.
+- Backend selection.
+- Environment validation.
+- Production fail-closed behavior.
+- Local backend restrictions.
+- Command validation.
+- Workspace path validation.
+- Request validation.
+- Lifecycle transitions.
+- Error mapping.
+- Resource configuration.
+
+## 10.2 Integration tests
+
+Test:
+
+- Runner authentication.
+- Workspace creation.
+- Container creation.
+- File writing.
+- File reading.
+- Git diff.
+- Command execution.
+- Timeout handling.
+- Container termination.
+- Cleanup.
+- Runner failure.
+- API-runner communication.
+
+## 10.3 Security tests
+
+Create controlled malicious test repositories.
+
+Test the following:
+
+### Test 1: Host secret access
+
+Try reading a known test secret placed outside the workspace.
+
+Expected:
+
+The secret must not be accessible.
+
+### Test 2: Cross-task access
+
+Task A attempts to read Task B's workspace.
+
+Expected:
+
+Access denied.
+
+### Test 3: Network exfiltration
+
+Try opening an external TCP connection during the offline execution phase.
+
+Expected:
+
+Connection blocked.
+
+### Test 4: CPU exhaustion
+
+Run an infinite CPU loop.
+
+Expected:
+
+CPU usage remains within configured limits.
+
+### Test 5: Memory exhaustion
+
+Attempt to allocate excessive memory.
+
+Expected:
+
+Container memory limit enforced.
+
+### Test 6: Process exhaustion
+
+Attempt to create excessive processes.
+
+Expected:
+
+PID limit enforced.
+
+### Test 7: Filesystem writes
+
+Try writing to:
+
+/workspace/test.txt
+
+Expected:
+
+Allowed within quota.
+
+Try writing to:
+
+/usr/test.txt
+
+Expected:
+
+Denied.
+
+### Test 8: Docker socket access
+
+Try accessing:
+
+/var/run/docker.sock
+
+Expected:
+
+Not mounted and inaccessible.
+
+### Test 9: Symbolic link escape
+
+Create a symlink pointing outside the workspace and attempt to access it through file operations.
+
+Expected:
+
+Workspace boundary preserved.
+
+### Test 10: Malicious repository hooks
+
+Test malicious:
+
+- conftest.py
+- setup.py
+- npm lifecycle scripts
+- build backend scripts
+- Git hooks.
+
+Expected:
+
+All untrusted execution occurs inside the sandbox, never on the API host.
+
+### Test 11: Timeout
+
+Start a long-running process and terminate it.
+
+Expected:
+
+The container and its child processes are stopped.
+
+### Test 12: Runner outage
+
+Make the runner unavailable.
+
+Expected:
+
+Production execution fails safely.
+
+No local subprocess fallback.
+
+## 10.4 Test reporting
+
+For each test, record:
+
+- Test ID.
+- Objective.
+- Attack scenario.
+- Execution procedure.
+- Expected result.
+- Actual result.
+- Pass/fail.
+- Evidence.
+- Related source files.
+
+Do not mark an infrastructure-dependent security test as passed if the runner host or gVisor runtime is unavailable.
+
+Use:
+
+PASS
+FAIL
+NOT RUN
+BLOCKED
+
+## 10.5 Testing deliverable
+
+Create:
+
+Docs/security/sandbox/09-security-testing.md
+
+Also create an automated security test suite in the appropriate existing test directory.
+
+---
+
+# 11. PHASE 10 — AZURE DEPLOYMENT ARCHITECTURE
+
+Our current architecture uses:
+
+- Frontend: Vercel.
+- API backend: Azure App Service.
+- Database: Supabase.
+- Redis: Upstash.
+
+We want to retain the existing deployment architecture wherever possible.
+
+## 11.1 Proposed architecture
+
+VERCEL
+  |
+  v
+AZURE APP SERVICE
+  |
+  | Authenticated internal communication
+  |
+  v
+DEDICATED LINUX RUNNER VM
+  |
+  v
+DOCKER ENGINE
+  |
+  v
+GVISOR RUNTIME
+  |
+  v
+ISOLATED TASK CONTAINERS
+
+The existing App Service must not execute repository tests locally.
+
+## 11.2 Hosting research
+
+Evaluate:
+
+1. Dedicated Azure Linux VM.
+2. Azure Container Apps dynamic sessions.
+3. E2B managed cloud sandboxes.
+
+For each, compare:
+
+- Infrastructure requirements.
+- Isolation.
+- Operational complexity.
+- Security.
+- Pricing.
+- Networking.
+- Scaling.
+- Compatibility with Docker/gVisor.
+- Deployment complexity.
 - Limitations.
 
-Also document tools:
+Do not assume that a service supports gVisor or arbitrary Docker runtime configuration without verifying it.
 
-- coverage.py.
-- pytest-cov.
-- mutmut.
-- Stryker.
-- Hypothesis.
-- Jest coverage.
-- Vitest coverage.
+## 11.3 Budget awareness
 
-Verify tool versions, compatibility and licenses before introducing dependencies.
+We have previously used Azure for Students credits.
 
-Distinguish verified research facts from implementation decisions and unverified assumptions.
+Keep infrastructure cost under control.
+
+Research:
+
+- VM pricing.
+- Disk pricing.
+- Network pricing.
+- Idle costs.
+- Container overhead.
+- Concurrent task capacity.
+
+Recommend a minimal practical configuration.
+
+Implement:
+
+- Maximum concurrency.
+- Idle shutdown where practical.
+- Container cleanup.
+- Disk cleanup.
+- Resource monitoring.
+- Cost alerts.
+
+Do not deploy expensive infrastructure automatically.
+
+Do not create cloud resources or spend credits without explicit approval.
+
+## 11.4 Deployment deliverable
+
+Create:
+
+Docs/security/sandbox/10-azure-deployment.md
+
+Include:
+
+- Architecture.
+- Infrastructure requirements.
+- Linux setup.
+- Docker installation.
+- gVisor installation.
+- Runner deployment.
+- Network configuration.
+- TLS and authentication.
+- Environment variables.
+- Monitoring.
+- Scaling.
+- Cost considerations.
+- Rollback procedure.
+
+Also create deployment scripts or configuration files where appropriate.
 
 ---
 
-# 15. IMPLEMENTATION PHASES
+# 12. PHASE 11 — CONFIGURATION AND ENVIRONMENT VARIABLES
 
-Work in this order.
+Create a central validated configuration.
 
-## PHASE 0 — AUDIT
+Suggested settings:
 
-- Inspect all relevant code.
-- Inspect sandbox.
-- Inspect framework support.
-- Inspect benchmark logic.
-- Inspect frontend.
-- Write the existing implementation audit.
-- Prepare exact change plan.
+APP_ENV
 
-Do not modify production code before the audit is complete.
+SANDBOX_BACKEND
 
-## PHASE 1 — BENCHMARK CORRECTION
+RUNNER_BASE_URL
 
-- Correct threshold logic.
-- Add unit tests.
-- Update benchmark reporting.
-- Document the changes.
+RUNNER_AUTH_SECRET or the selected secure credential configuration
 
-This should be independently testable.
+RUNNER_REQUEST_TIMEOUT
 
-## PHASE 2 — SANDBOX READINESS
+SANDBOX_CPU_LIMIT
 
-- Audit existing execution infrastructure.
-- Verify isolation.
-- Verify command restrictions.
-- Verify resource limits.
-- Verify secret protection.
-- Verify cleanup.
-- Extend only missing capabilities.
+SANDBOX_MEMORY_LIMIT
 
-Do not duplicate existing sandbox components.
+SANDBOX_PID_LIMIT
 
-## PHASE 3 — EXECUTION VERIFICATION
+SANDBOX_DISK_LIMIT_MB
 
-- Implement or extend execution service.
-- Capture execution results.
-- Add stability validation.
-- Add final test classification.
-- Add unit and integration tests.
+SANDBOX_FILE_LIMIT_MB
 
-## PHASE 4 — COVERAGE
+SANDBOX_OUTPUT_LIMIT_BYTES
 
-- Implement baseline coverage.
-- Implement post-generation coverage.
-- Add generated-test attribution.
-- Add line and branch metrics.
-- Add framework adapters.
-- Test Python and JavaScript/TypeScript.
+SANDBOX_DEFAULT_TIMEOUT
 
-## PHASE 5 — VITEST
+SANDBOX_MAX_LIFETIME
 
-- Audit current support.
-- Fix missing integration points.
-- Add complete Vitest workflow tests.
-- Validate coverage execution.
+SANDBOX_IDLE_TIMEOUT
 
-## PHASE 6 — ITERATIVE GENERATION
+SANDBOX_MAX_CONCURRENT_TASKS
 
-- Add coverage feedback.
-- Add uncovered branch extraction.
-- Add targeted LLM prompting.
-- Add maximum round limit.
-- Add stopping conditions.
-- Add token tracking.
+SANDBOX_RUNTIME
 
-## PHASE 7 — MUTATION EVALUATION
+SANDBOX_PYTHON_IMAGE
 
-- Integrate mutmut where appropriate.
-- Integrate Stryker where appropriate.
-- Add offline benchmark suite.
-- Compare existing versus generated tests.
-- Report mutation scores.
+SANDBOX_NODE_IMAGE
 
-## PHASE 8 — FRONTEND AND REPORTING
+Use actual project configuration conventions.
 
-- Integrate verification response.
-- Display statuses.
-- Display coverage.
-- Display execution results.
-- Display unverified reasons.
-- Preserve existing UI functionality.
+Requirements:
 
-## PHASE 9 — COMPLETE TESTING
+- Validate settings at startup.
+- Reject invalid configurations.
+- Do not use insecure production defaults.
+- Never expose secrets in API responses.
+- Never log secret values.
+- Update .env.example.
+- Document each setting.
+- Ensure development and production configurations are separate.
 
+Create:
+
+Docs/security/sandbox/11-configuration-reference.md
+
+---
+
+# 13. PHASE 12 — DOCUMENTATION SYSTEM
+
+Documentation is one of the primary deliverables.
+
+I want enough documentation that another developer can understand the entire architecture and continue development without asking me how it works.
+
+Create the following structure, adapting it to the existing Docs folder:
+
+Docs/
+└── security/
+    └── sandbox/
+        │
+        ├── README.md
+        │
+        ├── 01-existing-architecture-audit.md
+        ├── 02-technology-research.md
+        ├── 03-target-architecture.md
+        ├── 04-runner-service-design.md
+        ├── 05-container-isolation.md
+        ├── 06-dependency-installation.md
+        ├── 07-agent-integration.md
+        ├── 08-security-hardening.md
+        ├── 09-security-testing.md
+        ├── 10-azure-deployment.md
+        ├── 11-configuration-reference.md
+        ├── 12-implementation-guide.md
+        ├── 13-operations-and-troubleshooting.md
+        ├── 14-risk-register.md
+        ├── 15-implementation-status.md
+        │
+        └── diagrams/
+            ├── architecture.mmd
+            ├── execution-sequence.mmd
+            ├── workspace-lifecycle.mmd
+            ├── dependency-installation-flow.mmd
+            ├── security-boundary.mmd
+            └── deployment-architecture.mmd
+
+## 13.1 README.md
+
+This should be the starting point.
+
+Explain:
+
+- What sandbox execution means.
+- Why we need it.
+- Existing security problems.
+- New architecture.
+- How components communicate.
+- How to navigate the documentation.
+- Current implementation status.
+
+## 13.2 Technology research
+
+Explain:
+
+- Why Docker.
+- Why gVisor.
+- Why not ordinary subprocess.
+- Why not Docker alone.
+- When Firecracker is useful.
+- E2B alternatives.
+- Open-source project comparisons.
+- Licence considerations.
+- Research sources.
+
+Include authoritative source links.
+
+Clearly distinguish verified facts from engineering assumptions.
+
+## 13.3 Architecture documentation
+
+Include:
+
+- Component diagrams.
+- Class diagrams.
+- Sequence diagrams.
+- Data flow.
+- Trust boundaries.
+- API communication.
+- Error handling.
+- Lifecycle.
+- Network boundaries.
+
+## 13.4 Implementation documentation
+
+For every new module explain:
+
+1. Purpose.
+2. Responsibilities.
+3. Important classes.
+4. Important methods.
+5. Inputs.
+6. Outputs.
+7. Dependencies.
+8. Error handling.
+9. Security considerations.
+10. Integration with other modules.
+
+## 13.5 Operations documentation
+
+Explain:
+
+- How to start the runner.
+- How to check Docker.
+- How to check gVisor.
+- How to create a sandbox.
+- How to inspect logs.
+- How to diagnose failed commands.
+- How to terminate containers.
+- How to clean up orphan containers.
+- How to rotate credentials.
+- How to troubleshoot network restrictions.
+- How to investigate resource exhaustion.
+
+## 13.6 Risk register
+
+Create a table with:
+
+| ID | Risk | Severity | Likelihood | Mitigation | Status |
+|---|---|---|---|---|---|
+
+Include remaining risks and unresolved infrastructure dependencies.
+
+## 13.7 Implementation status
+
+Maintain a checklist of:
+
+- Completed tasks.
+- Partially implemented tasks.
+- Pending tasks.
+- Blocked tasks.
+- Tests executed.
+- Security tests passed.
+- Security tests failed.
+- Infrastructure dependencies.
+- Remaining production blockers.
+
+Update this document whenever implementation status changes.
+
+---
+
+# 14. IMPLEMENTATION ORDER
+
+Follow this exact dependency-aware order.
+
+WEEK / STAGE 1:
+- Repository audit.
+- Execution entry-point inventory.
+- Security gap analysis.
+- Technology research.
+- Architecture documentation.
+
+STAGE 2:
+- SandboxBackend interface.
+- SandboxFactory.
+- LocalSubprocessBackend.
+- Production fail-closed configuration.
 - Unit tests.
-- Integration tests.
-- Regression tests.
-- Security tests.
-- Framework compatibility tests.
-- Benchmark evaluation.
 
-## PHASE 10 — DOCUMENTATION AND FINAL AUDIT
+STAGE 3:
+- Runner Service.
+- Authentication.
+- Authorization.
+- API contracts.
+- RunnerClient.
 
-- Complete all documentation.
-- Validate Mermaid diagrams.
-- Update Docs/README.md with the new documentation section.
-- Update relevant engineering documentation.
-- Update implementation changelog.
-- Produce final testing report.
-- Produce final known limitations report.
+STAGE 4:
+- Docker ContainerBackend.
+- Container lifecycle.
+- Workspace mounting.
+- Resource enforcement.
+- gVisor integration.
 
----
+STAGE 5:
+- Dependency installation.
+- Restricted network phase.
+- Offline execution phase.
+- Python and Node.js support.
 
-# 16. STRICT DEVELOPMENT RULES
+STAGE 6:
+- Existing agent integration.
+- CommandRunner migration.
+- Git integration review.
+- Workspace integration.
 
-Follow these rules throughout implementation.
+STAGE 7:
+- Security testing.
+- Failure handling.
+- Cleanup.
+- Performance testing.
 
-1. Do not rewrite the entire project.
-2. Do not replace existing sandbox infrastructure without a proven reason.
-3. Do not duplicate existing services.
-4. Do not remove working features.
-5. Do not silently change API contracts.
-6. Do not introduce unnecessary dependencies.
-7. Do not introduce paid APIs.
-8. Do not hardcode credentials.
-9. Do not execute generated code on the host backend.
-10. Do not weaken existing security restrictions.
-11. Do not automatically modify the user's original repository.
-12. Do not overwrite existing test files.
-13. Do not generate tests inside protected configuration files.
-14. Do not silently accept failing tests.
-15. Do not mark tests VERIFIED without all mandatory checks.
-16. Do not report coverage improvements without measurements.
-17. Do not report mutation scores without execution.
-18. Do not claim tests passed if they were not executed.
-19. Do not hide infrastructure failures.
-20. Do not create duplicate Docs directories.
-21. Do not put major project documentation outside Docs/.
-22. Update documentation whenever implementation changes.
-23. Preserve existing user-facing functionality.
-24. Prefer small, reviewable changes.
-25. Maintain compatibility with existing deployment architecture.
+STAGE 8:
+- Azure deployment documentation.
+- Infrastructure setup.
+- Production verification.
+- Final documentation.
+
+Do not move to production deployment before the security tests and infrastructure prerequisites are satisfied.
 
 ---
 
-# 17. ACCEPTANCE CRITERIA
+# 15. ACCEPTANCE CRITERIA
 
-The task is complete only when the following are satisfied.
+The task is complete only when the following criteria are addressed.
 
-### Execution
+## Architecture
 
-- [ ] Generated tests execute in an isolated sandbox.
-- [ ] Original repository is protected.
-- [ ] Execution output is captured.
-- [ ] Execution failures are classified correctly.
-- [ ] Three consecutive runs are supported.
-- [ ] Flaky tests are not labelled verified.
+[ ] SandboxBackend abstraction implemented.
 
-### Coverage
+[ ] SandboxFactory implemented.
 
-- [ ] Baseline coverage is collected.
-- [ ] Post-generation coverage is collected.
-- [ ] Line coverage is supported.
-- [ ] Branch coverage is supported where available.
-- [ ] Generated-test contribution is measured.
-- [ ] Missing coverage data is handled correctly.
+[ ] LocalSubprocessBackend restricted to explicit development mode.
 
-### Iteration
+[ ] Production execution fails closed.
 
-- [ ] Maximum three generation rounds.
-- [ ] Uncovered lines and branches are fed back to LLM.
-- [ ] Duplicate tests are prevented.
-- [ ] Token budgets are respected.
-- [ ] Stopping conditions work.
+[ ] ContainerBackend implemented.
 
-### Frameworks
+[ ] RunnerClient implemented.
 
-- [ ] pytest works.
-- [ ] unittest works.
-- [ ] Jest works.
-- [ ] Vitest works end to end.
+[ ] Separate Runner Service implemented.
 
-### Mutation testing
+## Security
 
-- [ ] Offline evaluation is supported.
-- [ ] Mutation score is calculated correctly.
-- [ ] Equivalent mutants are excluded where identified.
-- [ ] Mutation testing is not mandatory for every request.
+[ ] No untrusted repository execution on API host in production.
 
-### Benchmark
+[ ] Container isolation implemented.
 
-- [ ] Threshold violations produce FAIL.
-- [ ] Missing metrics cannot silently PASS.
-- [ ] Actual results are reported.
+[ ] gVisor integration implemented and verified on supported Linux infrastructure.
 
-### Frontend
+[ ] Network restrictions implemented.
 
-- [ ] Verification statuses are visible.
-- [ ] Coverage comparison is visible.
-- [ ] Execution details are visible.
-- [ ] Unverified tests are clearly separated.
-- [ ] Existing functionality remains intact.
+[ ] Filesystem isolation implemented.
 
-### Documentation
+[ ] CPU restrictions implemented.
 
-- [ ] All new documentation is in Docs/test-generation/.
-- [ ] Docs/README.md is updated.
-- [ ] Architecture diagrams are created.
-- [ ] Research references are documented.
-- [ ] Implementation changelog is maintained.
-- [ ] Actual testing report is available.
-- [ ] Known limitations are documented.
+[ ] Memory restrictions implemented.
+
+[ ] PID restrictions implemented.
+
+[ ] Disk restrictions implemented.
+
+[ ] Non-root execution.
+
+[ ] No Docker socket exposed to repository code.
+
+[ ] No application secrets exposed.
+
+[ ] No cross-task workspace access.
+
+[ ] Timeout and process termination verified.
+
+[ ] Automatic cleanup implemented.
+
+## Integration
+
+[ ] Existing agents use the new execution interface.
+
+[ ] Existing workspace functionality preserved.
+
+[ ] Git diff functionality preserved.
+
+[ ] Python execution works.
+
+[ ] Node.js execution works where supported.
+
+[ ] Dependency installation works in the restricted installation phase.
+
+[ ] Tests execute offline.
+
+[ ] Structured execution results returned.
+
+## Testing
+
+[ ] Unit tests.
+
+[ ] Integration tests.
+
+[ ] Security tests.
+
+[ ] Failure tests.
+
+[ ] Resource limit tests.
+
+[ ] Production configuration tests.
+
+[ ] Existing regression tests.
+
+## Documentation
+
+[ ] Existing architecture audit.
+
+[ ] Technology research.
+
+[ ] Target architecture.
+
+[ ] Runner API documentation.
+
+[ ] Docker/gVisor configuration.
+
+[ ] Dependency installation design.
+
+[ ] Agent integration documentation.
+
+[ ] Security testing documentation.
+
+[ ] Deployment documentation.
+
+[ ] Configuration reference.
+
+[ ] Troubleshooting guide.
+
+[ ] Risk register.
+
+[ ] Implementation status.
 
 ---
 
-# 18. FINAL DELIVERABLES
+# 16. IMPORTANT ARCHITECTURAL DECISIONS
 
-At completion, provide:
+Use these decisions as the default unless actual codebase constraints require a documented alternative.
 
-1. Existing implementation audit.
-2. Final architecture.
-3. Complete implementation.
-4. All new and modified file paths.
-5. New dependencies and license details.
-6. Database/API changes, if any.
-7. Unit test results.
-8. Integration test results.
-9. Regression test results.
-10. Security test results.
-11. Framework compatibility results.
-12. Coverage benchmark results.
-13. Mutation evaluation results.
-14. Performance and token usage observations.
-15. Known limitations.
-16. Complete documentation under Docs/test-generation/.
-17. Final implementation summary.
+1. Docker + gVisor is the preferred production sandbox architecture.
+2. A separate Linux runner host is the preferred deployment architecture.
+3. Azure App Service remains responsible for API and AI orchestration.
+4. The runner is responsible for untrusted repository execution.
+5. Local subprocess is development-only.
+6. Production execution must fail closed.
+7. Dependency installation occurs inside an isolated environment.
+8. Test execution happens without external network access.
+9. Existing application-level security controls must be retained.
+10. Container limits must be enforced by the runtime/operating system.
+11. All runner operations must be authenticated and authorized.
+12. Docker and host management interfaces must never be exposed to untrusted workloads.
+13. Future Firecracker support should be possible through the abstraction without implementing it now.
+14. MCP integration is optional and must not bypass runner authorization or security boundaries.
 
-Also provide a clear status for each phase:
+If you change any of these decisions, create an Architecture Decision Record explaining:
 
-- COMPLETED
-- PARTIALLY COMPLETED
-- BLOCKED
-- NOT STARTED
-
-Do not call the task complete if critical acceptance criteria remain unmet.
+- Original decision.
+- New decision.
+- Reason.
+- Advantages.
+- Disadvantages.
+- Security impact.
+- Cost impact.
+- Migration impact.
 
 ---
 
-# 19. HOW TO WORK WITH ME
+# 17. FINAL EXECUTION INSTRUCTIONS
 
-I want actual implementation, not only suggestions.
+Start with repository exploration and audit.
 
-Start with PHASE 0.
+Do not immediately start creating Docker files.
 
-First inspect the repository and produce:
+First understand the existing code.
 
-- Existing architecture audit.
-- Exact gaps.
-- Existing sandbox readiness assessment.
-- Exact files to modify.
-- Exact new files required.
-- Implementation dependency order.
+Then create the audit and research documents.
 
-Then proceed phase by phase.
+After that, implement the architecture incrementally.
 
-For each phase:
+For every implementation stage:
 
-1. Explain what you are changing.
-2. Explain why it is necessary.
-3. Modify the code.
-4. Run relevant tests.
-5. Fix failures.
-6. Update documentation.
-7. Record the result in the implementation changelog.
+1. Explain what you found.
+2. Explain what needs changing.
+3. Identify exact files.
+4. Explain the implementation.
+5. Implement the changes.
+6. Run relevant tests.
+7. Record results.
+8. Update documentation.
+9. Update implementation status.
 
-If a phase depends on missing infrastructure, implement or resolve that dependency first.
+Keep changes minimal, modular, testable and maintainable.
 
-If a security issue is discovered, stop the affected execution workflow until it is resolved.
+Do not rewrite unrelated parts of the platform.
 
-If an implementation decision could break existing APIs or deployment, inspect dependencies and document the migration before changing it.
+Do not delete existing functionality without proving that it is unnecessary.
 
-Do not ask me to approve every small code change. Use engineering judgment within these requirements.
+If you discover additional vulnerabilities during implementation, document and address them when relevant to sandbox security.
 
-However, never make destructive changes, delete existing data, overwrite user files, expose credentials, or weaken security without explicit authorization.
+If you encounter infrastructure limitations:
 
-**FINAL GOAL:**
+- Continue with safe code-level implementation.
+- Document the limitation.
+- Provide exact infrastructure setup instructions.
+- Mark runtime verification as BLOCKED.
+- Never pretend the security feature is production-ready.
 
-Transform the existing Test Generation feature into an execution-verified, coverage-guided, iterative and security-conscious automated testing system.
+## FINAL REPORT REQUIRED
 
-Every generated test should have an honest, traceable verification status.
+At the end, provide a detailed report containing:
 
-Every implementation decision should be documented.
+### A. Existing architecture
+What was present before implementation.
 
-Every claimed improvement should be supported by actual test results.
+### B. Security problems
+What vulnerabilities were identified.
 
-Keep all feature documentation organized inside the existing Docs/ directory.
+### C. Research
+What technologies were evaluated and why the final choices were made.
+
+### D. Implementation
+Every new file and every modified file.
+
+### E. Architecture
+How the new execution flow works.
+
+### F. Security
+Which security boundaries are now enforced and how.
+
+### G. Testing
+Actual commands executed and test results.
+
+### H. Documentation
+All documentation files created or updated.
+
+### I. Deployment
+What is ready for Azure and what still requires infrastructure configuration.
+
+### J. Remaining work
+Incomplete features, blockers, known risks and future improvements.
+
+### K. Production readiness
+
+Give an honest status:
+
+- NOT READY
+- DEVELOPMENT READY
+- STAGING READY
+- PRODUCTION READY
+
+Only select PRODUCTION READY if the actual infrastructure, runtime, isolation controls and required security tests have been verified.
+
+---
+
+# FINAL PRINCIPLE
+
+We are building an AI-powered software development platform that executes code from external GitHub repositories.
+
+Every external repository must be considered untrusted.
+
+The AI agent may inspect, modify, install dependencies and execute tests, but it must never gain access to the API server's secrets, filesystem, other users' workspaces or unrestricted network.
+
+**Security must be enforced at the infrastructure boundary, not merely through prompts, Python validation or command allowlists.**
+
+Build this as a reusable, modular and production-oriented sandbox execution system that can support future AI coding agents, autonomous debugging, test generation, code modification and repository automation.
+
+Prioritize correctness, isolation, maintainability, observability and complete technical documentation.

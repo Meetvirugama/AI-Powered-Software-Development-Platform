@@ -1,0 +1,16 @@
+flowchart TD
+    Repo[Repository Workspace] --> Detect[Detect Dependency Manifests]
+    Detect -->|requirements.txt / pyproject.toml| PyReq[Python Dependencies]
+    Detect -->|package.json / package-lock.json| NodeReq[Node.js Dependencies]
+    Detect -->|No manifests| SkipPhase[Skip to Offline Execution]
+
+    PyReq --> PhaseA_Py["Phase A: Pip Install Sandbox<br/>Restricted Outbound Network (PyPI only)<br/>Timeout: 120s, Non-root 10001"]
+    NodeReq --> PhaseA_Node["Phase A: Npm Install Sandbox<br/>Restricted Outbound Network (npm registry only)<br/>--ignore-scripts recommended<br/>Timeout: 120s, Non-root 10001"]
+
+    PhaseA_Py --> CacheArtifacts[Write packages to /workspace/.cache or venv]
+    PhaseA_Node --> CacheArtifacts
+
+    CacheArtifacts --> Transition[Transition Execution Phase]
+    SkipPhase --> Transition
+
+    Transition --> PhaseB["Phase B: Offline Test Execution<br/>Docker network: --network=none<br/>Read-only rootfs + tmpfs /tmp<br/>Pytest / npm test execution"]

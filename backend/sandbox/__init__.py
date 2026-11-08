@@ -3,7 +3,13 @@
 Owner: Prit Zania — Week 3 Day 1 Deliverable (Docs/week3.md §6 F33, §8 Day 1)
 """
 
+from sandbox.backend import SandboxBackend
 from sandbox.command_runner import WorkspaceCommandRunner, kill_process_tree
+from sandbox.container_backend import ContainerBackend
+from sandbox.factory import SandboxFactory
+from sandbox.local_backend import LocalSubprocessBackend
+from sandbox.runner_client import RunnerClient
+from sandbox.two_phase_pipeline import TwoPhaseExecutionService
 from sandbox.constants import (
     ALLOWED_COMMAND_TEMPLATES,
     CRITICAL_PROJECT_FILES,
@@ -28,6 +34,12 @@ from sandbox.constants import (
 )
 from sandbox.diff_verifier import WorkspaceDiffVerifier
 from sandbox.exceptions import (
+    RunnerAuthenticationError,
+    RunnerUnavailableError,
+    SandboxBackendError,
+    SandboxConfigurationError,
+    SandboxResourceLimitError,
+    SandboxSecurityError,
     WorkspaceAuthorizationError,
     WorkspaceCleanupError,
     WorkspaceCommandError,
@@ -96,6 +108,7 @@ __all__ = [
     "ALLOWED_COMMAND_TEMPLATES",
     "CANONICAL_WORKSPACE_TOOLS",
     "CRITICAL_PROJECT_FILES",
+    "ContainerBackend",
     "DEFAULT_COMMAND_TIMEOUT_SECONDS",
     "DEFAULT_MAX_DISK_BYTES",
     "DEFAULT_MAX_FILES_MODIFIED",
@@ -106,6 +119,7 @@ __all__ = [
     "DEFAULT_WORKSPACE_SUBDIR",
     "DISALLOWED_COMMAND_TOKENS",
     "FORBIDDEN_FILE_PATTERNS",
+    "LocalSubprocessBackend",
     "MAX_COMMAND_OUTPUT_BYTES",
     "MAX_REPAIR_ATTEMPTS",
     "MAX_TASK_LOCK_TIMEOUT_SECONDS",
@@ -113,6 +127,15 @@ __all__ = [
     "PROTECTED_BRANCHES",
     "PROTECTED_SYSTEM_PREFIXES",
     "RECOVERY_STALE_TIMEOUT_SECONDS",
+    "RunnerAuthenticationError",
+    "RunnerClient",
+    "RunnerUnavailableError",
+    "SandboxBackend",
+    "SandboxBackendError",
+    "SandboxConfigurationError",
+    "SandboxFactory",
+    "SandboxResourceLimitError",
+    "SandboxSecurityError",
     "SECRET_SCAN_PATTERNS",
     "SENSITIVE_ENV_VARS",
     "TOOL_CHECK_DISK_BUDGET",
@@ -134,6 +157,7 @@ __all__ = [
     "TOOL_VALIDATE_INVARIANTS",
     "TOOL_VERIFY_DIFF_IMMUTABILITY",
     "TOOL_WRITE_FILE",
+    "TwoPhaseExecutionService",
     "WorkspaceAuthorizationError",
     "WorkspaceCleanupError",
     "WorkspaceCommandError",

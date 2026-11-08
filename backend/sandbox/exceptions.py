@@ -131,3 +131,29 @@ class WorkspaceInvariantViolationError(WorkspaceError):
 class WorkspaceRecoveryError(WorkspaceError):
     """Raised when reconciling or recovering workspace state across worker restarts fails."""
 
+
+# Sandbox Backend & Secure Execution Architecture Exceptions (Issue #200 / F20)
+class SandboxBackendError(WorkspaceError):
+    """Base exception for sandbox backend failures."""
+
+
+class SandboxSecurityError(SandboxBackendError):
+    """Raised when an operation violates sandbox execution or boundary security policy."""
+
+
+class SandboxConfigurationError(SandboxBackendError):
+    """Raised when sandbox configuration is invalid (e.g., local subprocess in production)."""
+
+
+class SandboxResourceLimitError(SandboxBackendError):
+    """Raised when container CPU, RAM, PID, or disk quota limits are exceeded."""
+
+
+class RunnerUnavailableError(SandboxBackendError):
+    """Raised when the dedicated runner service cannot be reached or fails to respond."""
+
+
+class RunnerAuthenticationError(SandboxBackendError):
+    """Raised when runner service authentication or token authorization fails."""
+
+
