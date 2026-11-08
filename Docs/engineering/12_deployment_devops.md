@@ -1,5 +1,5 @@
 # 12. Deployment & DevOps
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Live & Synchronized
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Status:** Live & Production Ready
 
 ---
 
@@ -87,9 +87,10 @@ All configuration is validated via `pydantic-settings` in [`backend/app/core/con
 | `GITHUB_APP_PRIVATE_KEY` | Yes (for auth) | None | GitHub App `.pem` private key content |
 | `GITHUB_CLIENT_ID` | Yes (for auth) | None | GitHub OAuth Client ID |
 | `GITHUB_CLIENT_SECRET` | Yes (for auth) | None | GitHub OAuth Client Secret |
-| `JWT_SECRET` | Yes (for auth) | None | Session signing secret key |
+| `JWT_SECRET` | Yes (for auth) | None | Session signing secret key (strictly enforced >= 32 bytes) |
 | `JWT_ALGORITHM` | No | `HS256` | JWT signing algorithm |
-| `GEMINI_API_KEY` | Yes (for AI) | None | Google Gemini API key (`gemini-flash-lite-latest`) |
+| `GITHUB_WEBHOOK_SECRET` | No | None | Secret for verifying HMAC-SHA256 signatures on webhooks |
+| `GEMINI_API_KEY` | Yes (for AI) | None | Google Gemini API key (`gemini-flash-lite-latest`, `gemini-1.5-pro`) |
 | `GROQ_API_KEY` | Yes (for AI) | None | Groq API key (`llama-3.3-70b-versatile`) |
 
 > [!CAUTION]
@@ -100,7 +101,7 @@ All configuration is validated via `pydantic-settings` in [`backend/app/core/con
 ## Database Migrations
 
 - **Tool:** Alembic 1.13+
-- **Location:** `backend/migrations/versions/` (5 migrations currently applied)
+- **Location:** `backend/migrations/versions/` (12 linear migrations currently applied)
 - **Owner:** Om
 
 ```bash
@@ -117,13 +118,26 @@ alembic downgrade -1
 
 ---
 
+## Background Workers
+
+```bash
+# Start the durable webhook processing worker
+cd backend
+python -m app.workers.webhook_worker
+```
+
+---
+
 ## DevOps & Security Controls
 
 | Control | Status | Verified By |
 |---|---|---|
 | `.gitignore` blocks `.env`, `*.pem`, `*.key` | 🟢 Done | Sukun |
 | `.secrets.baseline` + pre-commit hook active | 🟢 Done | Sukun |
-| Automated backend test suite (369 tests, 71.31% coverage) | 🟢 Done | Keval |
+| Timing-safe HMAC JWT verification + 32-byte secret validation | 🟢 Done | Sukun / Meet |
+| Automated backend test suite (500+ tests, 0 errors) | 🟢 Done | Keval |
+| Automated frontend test suite (Vitest: 329 tests across 27 suites) | 🟢 Done | Dhramraj |
 | Automated frontend linter (`oxlint`) & production build | 🟢 Done | Dhramraj |
 | Multi-tenant repository data isolation in queries | 🟢 Done | Sukun / Keval |
 | Prompt-injection boundary tag enforcement | 🟢 Done | Sukun |
+| Agentic sandbox execution policy (read-only jail, token/round budget manager) | 🟢 Done | Sukun / Meet |

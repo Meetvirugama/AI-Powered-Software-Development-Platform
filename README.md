@@ -13,19 +13,25 @@ An enterprise-grade, repository-aware developer intelligence and autonomous soft
    - Hybrid RAG retrieval combining pgvector dense cosine search with PostgreSQL full-text lexical search, fused via Reciprocal Rank Fusion (RRF) and Cross-Encoder reranking.
    - Grounded repository chat with file and line-range citations.
 
-2. **Developer Intelligence Suite (Week 2 — Active)**:
+2. **Developer Intelligence Suite (Week 2 — Complete)**:
    - **Code Explanation**: Deep context-enriched explanation of files, classes, functions, or custom line ranges.
    - **Bug Detection**: Detection of off-by-one, null safety, resource leaks, and unhandled exceptions harmonizing deterministic static analysis (Ruff/Bandit/ESLint) with grounded AI reasoning.
    - **Test Generation**: Framework-aware test file generation tailored to repository conventions (`pytest`, `unittest`, `jest`).
    - **AI Code Review**: Standalone review of files, commits, and GitHub PR diffs with categorized findings across correctness, security, performance, and reliability.
 
-3. **Workflow Automation & GitHub Ecosystem (Week 3 — Upcoming)**:
+3. **Workflow Automation & GitHub Ecosystem (Week 3 — Complete)**:
    - Converting GitHub issues or user requirements into structured implementation plans.
    - Mandatory **Human Approval Gate** before code execution.
-   - Disposable isolated task workspaces (`agent/task-<id>`) with path traversal guards.
+   - Disposable isolated task workspaces (`.workspaces/task-<id>`) with path traversal guards.
    - Controlled tool router enforcing allowed command templates and sandboxed operations.
-   - Bounded self-repair loop (maximum 3 attempts) for failing tests.
-   - Independent verification and automated GitHub Draft Pull Request creation.
+   - Bounded self-repair loop (maximum 3 attempts) for failing tests with anti-cycling guards.
+   - Independent verification and automated GitHub Draft Pull Request creation with zero credentials leaked.
+
+4. **Enterprise Hardening & Advanced Intelligence (Production Phase — Complete)**:
+   - **Timing-Safe Auth & OAuth Hardening (Batch 1 / Issue #181 / PR #202)**: Timing-safe HMAC validation, strict 32-byte secret enforcement, Redis-persisted OAuth state nonces, and refresh token rotation.
+   - **Durable GitHub Webhook Ingestion & Automation (Batch 2 / Issue #182 / PR #219)**: State-machine driven background webhook worker queue (`github_webhook_events`), lease-based atomic claiming, push-to-sync automation with commit SHA deduplication, and automated consolidated PR reviews.
+   - **Multi-Stage Code Retrieval Engine (Batch 3 / F07 / Issue #187 / PR #220)**: 7-stage retrieval architecture with code-aware lexical search, adaptive HNSW search profiles (40/64/120) with transaction savepoint protection, 1-hop AST symbol graph expansion, Redis retrieval caching with generation-based invalidation, and ONNX cross-encoder evaluation with graceful fallback.
+   - **Bounded Agentic Repository Chat (Batch 4 / F08 / Issue #188 / PR #220)**: Normalized LLM tool calling (Gemini & Groq), read-only repository inspection tools (`search_code`, `read_file_range`, `find_symbol_definition`, `find_symbol_references`), strict execution policy, request-level token & timeout budgets, dual-mode chat API, and React UI inspection badges.
 
 ---
 
@@ -37,18 +43,21 @@ Frontend (React 19 + TypeScript + Vite + Tailwind CSS)
                  HTTP REST / SSE
                        ▼
 Backend Gateway (FastAPI + Pydantic v2 + SQLAlchemy 2.0)
-     ├── API Layer (/api/v1/auth, /repositories, /chat)
-     ├── Security & Middleware (JWT, Rate Limiting, CORS, CSRF)
-     └── Worker Subsystem (Redis Queue + Background Sync Worker)
+     ├── API Layer (/api/v1/auth, /repositories, /chat, /tasks, /github)
+     ├── Security & Middleware (Timing-Safe JWT, Rate Limiting, CORS, CSRF)
+     └── Worker Subsystem (Sync Worker + Durable Webhook Worker)
                        │
         ┌──────────────┴──────────────┐
         ▼                             ▼
 AI & Retrieval Engine         Repository Scanner & Indexer
   ├── LLM Gateway               ├── FileWalker & LanguageDetector
   │   (Gemini & Groq)           ├── tree-sitter AST Parser
-  ├── Embedding Service         ├── Symbol & Edge Extractor
-  ├── Hybrid Vector/Lexical RAG └── SymbolChunker & HNSW Indexer
-  └── ContextBuilder
+  ├── Agent Orchestrator        ├── Symbol & Edge Extractor
+  │   & Tool Registry           ├── SymbolChunker & HNSW Indexer
+  ├── Multi-Stage Retrieval     └── Incremental Cache Invalidation
+  │   (Adaptive HNSW, Graph,
+  │    Lexical FTS, Redis Cache)
+  └── ContextBuilder & Verifier
                        │
                  Infrastructure
         ├── PostgreSQL 15 + pgvector (port 5433/5432)
@@ -132,17 +141,21 @@ cd backend
 ../.venv/bin/pytest tests/test_context_builder.py
 ../.venv/bin/pytest tests/test_rag_pipeline.py
 ```
-*Current test suite status: **369 passed**, 1 skipped, 0 failed (71.31% code coverage).*
+*Current test suite status: **500+ passed**, 0 failed across core, security, adversarial, webhook, and agentic test suites.*
 
-### Frontend Lint & Build
+### Frontend Lint, Test & Build
 ```bash
 cd frontend
 # Run linter
 npm run lint
 
+# Run unit tests
+npm test -- --run
+
 # Build production bundle
 npm run build
 ```
+*Frontend test status: **329 passed across 27 suites**, 0 TypeScript errors (`tsc -b`), production Vite build passing.*
 
 ---
 
@@ -151,6 +164,8 @@ npm run build
 All detailed specifications, architecture diagrams, and milestone plans are maintained in the [`Docs/`](./Docs/README.md) directory:
 
 - [Documentation Master Index](./Docs/README.md)
+- [Multi-Stage Code Retrieval Engine](./Docs/retrieval/README.md)
+- [Bounded Agentic Repository Chat](./Docs/agentic-chat/README.md)
 - [Week 1 — Repository Intelligence Foundation](./Docs/week1.md)
 - [Week 2 — Developer Intelligence Suite](./Docs/week2.md)
 - [Week 3 — Workflow Automation & GitHub Integration](./Docs/week3.md)
@@ -160,6 +175,7 @@ All detailed specifications, architecture diagrams, and milestone plans are main
 - [Prompt Architecture & Safety](./Docs/prompt_architecture.md)
 - [Engineering Architecture Suite](./Docs/engineering/README.md)
 - [Week 1 Security Report](./Docs/security/week1_security_report.md)
+- [Week 3 Threat Model & Security Report](./Docs/security/week3_security_report.md)
 
 ---
 

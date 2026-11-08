@@ -168,7 +168,7 @@ Stores GitHub App installations granting repository permissions.
 ---
 
 ### 3. `repositories`
-Stores connected repositories and their indexing state.
+Stores connected repositories, indexing generations, and webhook automation configurations.
 
 | Column | Type | Nullable | Default | PK | FK | Description |
 |---|---|---|---|---|---|---|
@@ -182,6 +182,12 @@ Stores connected repositories and their indexing state.
 | `language` | VARCHAR | Yes | NULL | — | — | Primary detected language |
 | `sync_status` | ENUM | No | `'NOT_SYNCED'` | — | — | `NOT_SYNCED`, `SYNCING`, `SYNCED`, `FAILED` |
 | `last_synced_at` | TIMESTAMPTZ | Yes | NULL | — | — | Last sync timestamp |
+| `active_index_generation` | VARCHAR | Yes | `'gen_0'` | — | — | Current active index generation token |
+| `active_commit_sha` | VARCHAR | Yes | NULL | — | — | Currently indexed commit SHA |
+| `last_indexed_commit_sha` | VARCHAR(64) | Yes | NULL | — | — | Commit SHA indexed by push automation |
+| `auto_sync_enabled` | BOOLEAN | No | `TRUE` | — | — | Automatically trigger sync on push events |
+| `pr_review_enabled` | BOOLEAN | No | `FALSE` | — | — | Automatically review opened/synchronize PRs |
+| `pr_review_drafts` | BOOLEAN | No | `FALSE` | — | — | Whether automated review applies to draft PRs |
 | `created_at` | TIMESTAMPTZ | No | NOW() | — | — | Creation timestamp |
 | `updated_at` | TIMESTAMPTZ | No | NOW() | — | — | Last update timestamp |
 
@@ -260,13 +266,15 @@ Stores chunked code with pgvector dense embeddings for vector retrieval.
 | `start_line` | INTEGER | No | — | — | — | First line in source file |
 | `end_line` | INTEGER | No | — | — | — | Last line in source file |
 | `content_hash` | VARCHAR | No | — | — | — | Content hash |
-| `embedding` | VECTOR(768) | Yes | NULL | — | — | pgvector embedding (`gemini-embedding-001`, 768 dims per migration `f1a2b3c4d5e6`) |
+| `embedding` | VECTOR(768) | Yes | NULL | — | — | pgvector embedding (`gemini-embedding-001`, 768 dims) |
 | `metadata` | JSONB | Yes | `'{}'` | — | — | Extra context (`file_path`, language) |
+| `code_search_text` | TEXT | Yes | NULL | — | — | Normalized code search text for simple FTS |
 | `created_at` | TIMESTAMPTZ | No | NOW() | — | — | Creation timestamp |
 
 **Indexes:**
 - `CREATE INDEX ON code_chunks USING hnsw (embedding vector_cosine_ops);`
 - `CREATE INDEX ON code_chunks USING gin(to_tsvector('english', content));`
+- `CREATE INDEX ix_code_chunks_code_search_text_gin ON code_chunks USING gin (to_tsvector('simple', COALESCE(code_search_text, content)));`
 - `CREATE INDEX ON code_chunks (repository_id);`
 
 ---
@@ -293,18 +301,42 @@ Stores persisted explain/bug-detection/test-generation/review runs (`analysis_ru
 ### 11. `tasks`, `task_plans`, `task_events`, `verification_results`, `pull_requests`, `github_issues` (Week 3 — Autonomous Workflow)
 Stores bounded task lifecycle records (`tasks`), structured execution plans (`task_plans`), append-only audit timeline events (`task_events`), independent verification gates (`verification_results`), GitHub Draft PR metadata (`pull_requests`), and imported/created GitHub issues (`github_issues`).
 
+### 12. `github_webhook_events` (Durable Webhook Queue — Issue #182)
+Stores asynchronous GitHub webhook deliveries with lease claiming, status progression, and retry backoff.
+
+| Column | Type | Nullable | Default | PK | FK | Description |
+|---|---|---|---|---|---|---|
+| `id` | UUID | No | gen_random_uuid() | ✓ | — | Webhook event ID |
+| `event_type` | VARCHAR(64) | No | — | — | — | GitHub event type (`push`, `pull_request`, etc.) |
+| `action` | VARCHAR(64) | Yes | NULL | — | — | Event action (`opened`, `synchronize`, etc.) |
+| `delivery_id` | VARCHAR(128) | No | — | — | — | GitHub X-GitHub-Delivery ID (Unique Index) |
+| `repository_id` | UUID | Yes | NULL | — | `repositories.id` | Mapped repository ID (if matched) |
+| `status` | ENUM | No | `'PENDING'` | — | — | `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER` |
+| `attempt_count` | INTEGER | No | 0 | — | — | Processing execution attempt counter |
+| `leased_by` | VARCHAR(128) | Yes | NULL | — | — | Worker ID currently holding the event lease |
+| `lease_expires_at`| TIMESTAMPTZ | Yes | NULL | — | — | Lease expiration deadline |
+| `next_retry_at` | TIMESTAMPTZ | Yes | NULL | — | — | Timestamp for next retry backoff execution |
+| `payload` | JSONB | No | — | — | — | Raw JSON delivery payload |
+| `payload_hash` | VARCHAR(64) | No | — | — | — | SHA-256 payload digest |
+| `error_message` | TEXT | Yes | NULL | — | — | Failure error details |
+| `created_at` | TIMESTAMPTZ | No | NOW() | — | — | Ingestion timestamp |
+| `updated_at` | TIMESTAMPTZ | No | NOW() | — | — | Last status change timestamp |
+
 ---
 
-## Applied Alembic Migrations
+## Applied Alembic Migrations (12 Total — Acyclic Linear Chain)
 
-| Revision | Name | Description |
+| Revision | File | Description |
 |---|---|---|
 | `24498ac67b3e` | `24498ac67b3e_add_pgvector_extension.py` | Installs `pgvector` extension in PostgreSQL |
 | `5f6dc031921b` | `5f6dc031921b_identity_schema.py` | Creates `users`, `github_installations`, `repositories` |
 | `aef3bb17eb34` | `aef3bb17eb34_content_tables.py` | Creates `repository_files`, `code_symbols`, `symbol_edges`, `code_chunks` |
 | `cb4e2a7d0f31` | `cb4e2a7d0f31_add_sync_jobs.py` | Creates `sync_jobs` table |
 | `e7b8c9d0f1a2` | `e7b8c9d0f1a2_add_code_chunks_and_memory.py` | Creates `memory_entries` table and pgvector chunk enhancements |
-| `f1a2b3c4d5e6` | `f1a2b3c4d5e6_resize_embedding_to_768.py` | Resizes `code_chunks.embedding` from `VECTOR(1536)` to `VECTOR(768)` |
-| `a9b8c7d6e5f4` | `a9b8c7d6e5f4_add_week2_analysis_tables.py` | Creates `analysis_runs` and `code_findings` tables |
-| `b2c3d4e5f6a7` | `b2c3d4e5f6a7_add_week3_task_and_issue_tables.py` | Creates `tasks`, `task_plans`, `task_events`, `verification_results`, and `github_issues` |
-| `a1b2c3d4e5f6` | `a1b2c3d4e5f6_add_pull_requests_table.py` | Creates `pull_requests` table for GitHub Draft PR persistence |
+| `f1c2d3e4b5a6` | `f1c2d3e4b5a6_add_analysis_runs_and_findings.py` | Creates `analysis_runs` and `code_findings` tables |
+| `b627460d74e0` | `b627460d74e0_add_pull_requests_table.py` | Creates `pull_requests` table for GitHub Draft PR persistence |
+| `b3c4d5e6f7a8` | `b3c4d5e6f7a8_add_workflow_automation_tables.py` | Creates `tasks`, `task_plans`, `workspaces`, `test_runs`, etc. |
+| `c94e1f8a2d73` | `c94e1f8a2d73_add_week3_task_and_issue_tables.py` | Creates `github_issues` and task relationship enhancements |
+| `d5e6f7a8b9c0` | `d5e6f7a8b9c0_fix_constraints_and_add_indexes.py` | Fixes foreign key constraints and creates compound performance indexes |
+| `e1f2a3b4c5d6` | `e1f2a3b4c5d6_add_github_webhook_events_and_repo_automation.py` | Creates `github_webhook_events` table and repository automation settings |
+| `e8f9a0b1c2d3` | `e8f9a0b1c2d3_add_code_search_text_and_index_generation.py` | Adds `code_search_text` to `code_chunks` and active index generation tracking |

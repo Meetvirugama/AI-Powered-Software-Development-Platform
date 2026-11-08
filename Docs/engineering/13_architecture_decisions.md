@@ -1,5 +1,5 @@
 # 13. Architecture Decision Records
-> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08
 
 ---
 
@@ -371,4 +371,74 @@ Issue #181 identified dual JWT dependencies (`python-jose` and `PyJWT`), missing
 - Zero dependence on `python-jose`.
 - Full compliance with modern OAuth 2.0 PKCE and JWT best practices.
 - Legacy unhardened tokens expire naturally and cleanly prompt re-authentication via GitHub OAuth.
+
+---
+
+## ADR-012: Durable Webhook State Machine & Lease Worker Pattern
+
+| Field | Value |
+|---|---|
+| **Title** | Durable Webhook State Machine & Lease-Based Worker Execution |
+| **Date** | 2026-11-04 |
+| **Status** | Accepted |
+| **Owner** | Meet / Parth |
+
+**Context:**
+GitHub webhooks arrive asynchronously and must never be lost due to server crashes, cold starts, or transient network partitions. In-memory queues fail when workers restart. Furthermore, multiple workers must not process the same webhook delivery concurrently.
+
+**Decision:**
+1. **Durable Ingestion Table:** Store incoming webhooks immediately in PostgreSQL `github_webhook_events` with status `pending` upon HMAC validation, returning HTTP 202 Accepted.
+2. **Lease-Based Worker:** Background workers acquire events using atomic lease tokens (`lease_token`, `lease_expires_at = now() + 30s`) to ensure mutual exclusion across distributed replicas without centralized orchestrators.
+3. **Dead-Letter Queue:** If an event fails after 3 retry attempts, it transitions to `dead_letter` for operator inspection and replay via `POST /api/v1/github/events/{id}/replay`.
+4. **Autonomous Event Automation:** `push` events to the default branch trigger automatic repository re-indexing; `pull_request` events automatically post AI code review findings as comments when enabled.
+
+---
+
+## ADR-013: 7-Stage Code Retrieval Engine with Active Generation Invalidation
+
+| Field | Value |
+|---|---|
+| **Title** | Multi-Stage Hybrid Code Retrieval with Graph Expansion and Generation Caching |
+| **Date** | 2026-11-06 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+Dense vector search alone suffers on exact identifier lookups (e.g. `UserRepository.get_by_id`), while lexical FTS misses conceptual semantic matches. Furthermore, naive cache invalidation on Git pushes is either over-aggressive (flushing entire caches) or under-invalidating (serving stale snippets).
+
+**Decision:**
+1. **7-Stage Retrieval Pipeline:**
+   - Stage 1: Query Intent Detection (`SYMBOL_LOOKUP`, `CONCEPTUAL`, `HYBRID`)
+   - Stage 2: Code-Aware Lexical FTS (`code_search_text` GIN index with CamelCase/snake_case tokenization)
+   - Stage 3: Dense Vector Search (pgvector cosine `<=>` with adaptive `hnsw.ef_search`)
+   - Stage 4: Reciprocal Rank Fusion ($k=60$)
+   - Stage 5: 1-Hop Symbol Graph Expansion (AST caller/callee context injection)
+   - Stage 6: Cross-Encoder Reranking (`ms-marco-MiniLM-L-6-v2` in ONNX with PyTorch fallback)
+   - Stage 7: Shared Redis Cache with Generation Invalidation
+2. **Active Generation Keying:** Cache entries are keyed by `(repo_id, active_index_generation, query_hash)`. When a repository sync completes, incrementing `active_index_generation` instantly invalidates all cached queries for that repository without expensive wildcard cache deletes.
+
+---
+
+## ADR-014: Normalized LLM Tool Calling & Bounded Agentic Chat Architecture
+
+| Field | Value |
+|---|---|
+| **Title** | Normalized Multi-Provider Tool Calling and Strictly Bounded Agentic Repository Chat |
+| **Date** | 2026-11-08 |
+| **Status** | Accepted |
+| **Owner** | Meet / Dhramraj |
+
+**Context:**
+Developers require an interactive assistant capable of iteratively discovering, inspecting, and navigating repository files to answer complex architectural questions. However, agentic loops risk runaway token usage, infinite tool calling loops, and filesystem tampering if unconstrained.
+
+**Decision:**
+1. **Normalized Tool-Calling Abstraction:** Implement a vendor-neutral tool calling layer normalizing Google Gemini Function Calling and Groq/OpenAI tool formats, isolating application code from proprietary LLM schemas.
+2. **Read-Only Tool Registry:** Restrict the agent's repository tools strictly to read-only operations: `search_code`, `read_file_range`, `find_symbol`, and `list_directory`. Write operations are forbidden in chat mode.
+3. **Execution Policy & Directory Jail:** Sandboxed execution via `ExecutionPolicy` strictly confines file access to the designated repository path and blocks sensitive files (`.env`, secrets, `.git`, credentials).
+4. **Three-Tiered Budget Ceilings:** `BudgetManager` enforces hard stops:
+   - Maximum 8,000 total tokens per invocation
+   - Maximum 5 tool-calling rounds per query
+   - Maximum 30-second execution timeout
+   When budgets are exhausted, the agent halts tool invocation and synthesizes a grounded answer from collected evidence, tagging `truncated: true` in `agent_metadata`.
+5. **Dual-Mode API & UI:** The `/chat` endpoint accepts `"mode": "normal" | "agentic"`, allowing developers to seamlessly switch between ultra-fast RAG and multi-step agentic exploration directly from the Workbench UI.
 

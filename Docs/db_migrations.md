@@ -2,7 +2,7 @@
 
 We use Alembic for managing database migrations with PostgreSQL.
 
-## Migration Files (Current)
+## Migration Files (Current — 12 Total)
 
 | Migration | File | Description |
 |---|---|---|
@@ -14,6 +14,10 @@ We use Alembic for managing database migrations with PostgreSQL.
 | `f1c2d3e4b5a6` | `f1c2d3e4b5a6_add_analysis_runs_and_findings.py` | Developer Intelligence Suite — analysis_runs & analysis_findings |
 | `b627460d74e0` | `b627460d74e0_add_pull_requests_table.py` | Pull Requests — pull_requests table for commit staging and PR metadata |
 | `b3c4d5e6f7a8` | `b3c4d5e6f7a8_add_workflow_automation_tables.py` | Workflow Automation & Tasks — tasks, task_plans, approvals, workspaces, checkpoints |
+| `c94e1f8a2d73` | `c94e1f8a2d73_add_week3_task_and_issue_tables.py` | Tasks & Issues — adds github_issues and task relationship enhancements |
+| `d5e6f7a8b9c0` | `d5e6f7a8b9c0_fix_constraints_and_add_indexes.py` | Constraint fixes, cascading foreign keys, and query index hardening |
+| `e1f2a3b4c5d6` | `e1f2a3b4c5d6_add_github_webhook_events_and_repo_automation.py` | Durable GitHub Webhook Ingestion — github_webhook_events table & repository automation flags |
+| `e8f9a0b1c2d3` | `e8f9a0b1c2d3_add_code_search_text_and_index_generation.py` | Multi-Stage Retrieval — code_search_text column on code_chunks & active_index_generation tracking |
 
 ## How to Create a Migration
 
@@ -77,20 +81,17 @@ alembic downgrade <revision_id>
 | `task_checkpoints` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Recovery state snapshots with automated credential scrubbing |
 | `task_events` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Chronological audit timeline and state transition events |
 | `task_pull_requests` | `b3c4d5e6f7a8_add_workflow_automation_tables` | Created GitHub Draft PR records and head revisions |
+| `github_issues` | `c94e1f8a2d73_add_week3_task_and_issue_tables` | Imported and synchronized GitHub issues |
+| `github_webhook_events` | `e1f2a3b4c5d6_add_github_webhook_events_and_repo_automation` | Durable webhook event queue with status, leases, and retry backoff |
 
-## Week 2 Day 7 — Migration Consistency & Index Audit
+## Production Migration Consistency & Acyclic Chain
 
-On Week 2 Day 7, Om verified the entire migration chain and composite index inventory (`backend/tests/test_om_w2_d7_acceptance_regression.py::TestDay7MigrationConsistency`):
-1. **Unbroken, Acyclic Chain:** Verified 6 linear nodes: `24498ac67b3e` (root) -> `5f6dc031921b` -> `aef3bb17eb34` -> `cb4e2a7d0f31` -> `e7b8c9d0f1a2` -> `f1c2d3e4b5a6` (head). No split heads or cycles exist.
-2. **Schema & Model Parity:** All 16 columns of `AnalysisRun` and 13 columns of `AnalysisFinding` have exact type and nullability parity with `f1c2d3e4b5a6`.
-3. **Composite Index Parity:** All 7 high-performance query indexes verified:
-   - `ix_analysis_runs_repo_created` (`repository_id`, `created_at DESC`)
-   - `ix_analysis_runs_repo_feature_status` (`repository_id`, `feature_type`, `status`)
-   - `ix_analysis_runs_repo_revision` (`repository_id`, `source_revision`)
-   - `ix_analysis_runs_repo_target_path` (`repository_id`, `target_path`)
-   - `ix_analysis_findings_run_severity` (`analysis_run_id`, `severity`)
-   - `ix_analysis_findings_repo_file` (`repository_id`, `file_path`)
-   - `ix_analysis_findings_repo_category` (`repository_id`, `category`)
-4. **Cascading Referentials:** `ON DELETE CASCADE` verified on repository and run boundaries; `ON DELETE SET NULL` verified on user references.
+The entire 12-node migration chain is verified as continuous, unbroken, and acyclic (`backend/tests/test_migration_smoke.py::test_alembic_chain_is_unbroken_and_acyclic`):
+1. **Unbroken, Linear Chain:** `24498ac67b3e` (root) → `5f6dc031921b` → `aef3bb17eb34` → `cb4e2a7d0f31` → `e7b8c9d0f1a2` → `f1c2d3e4b5a6` → `b627460d74e0` → `b3c4d5e6f7a8` → `c94e1f8a2d73` → `d5e6f7a8b9c0` → `e1f2a3b4c5d6` → `e8f9a0b1c2d3` (head). Exactly one leaf head revision exists.
+2. **Schema & Model Parity:** All models in `backend/app/models/` have exact column and constraint parity with migrations, including:
+   - `repositories`: `active_index_generation`, `active_commit_sha`, `last_indexed_commit_sha`, `auto_sync_enabled`, `pr_review_enabled`, `pr_review_drafts`.
+   - `code_chunks`: `code_search_text` column with GIN simple text search index for code-aware lexical search.
+   - `github_webhook_events`: `id`, `event_type`, `action`, `delivery_id`, `repository_id`, `status` (Enum: `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`), `attempt_count`, `leased_by`, `lease_expires_at`, `next_retry_at`.
+3. **Cascading Referentials:** `ON DELETE CASCADE` verified on repository and run boundaries; `ON DELETE SET NULL` verified on user references.
 
 Make sure your local PostgreSQL database (via `docker compose up -d`) is running before executing these commands.

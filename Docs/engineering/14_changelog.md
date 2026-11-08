@@ -1,5 +1,5 @@
 # 14. Changelog
-> **Version:** 2.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-09-28
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08
 
 ---
 
@@ -1007,3 +1007,99 @@ ecover_interrupted_tasks.
 **Impact:** Completes Om's entire Week 3 persistence deliverables (Days 1–7), delivering an ultra-fast, crash-resilient, immutable, and fully traceable persistence backbone. Supports all downstream team modules with guaranteed query performance SLAs (<100ms) and complete referential integrity across the 17-step autonomous development lifecycle.
 
 **Related Docs:** Docs/persistence_week3_day6_day7_report.md, Docs/week3.md, Docs/daily_tasks.md, Docs/engineering/10_development_tasks.md
+
+---
+
+## Post-Week 3 Enterprise Hardening & Advanced Intelligence Changes
+
+---
+
+### [Post-Week3-Batch1] 2026-11-02 — JWT & OAuth Security Hardening (Issue #181, PR #202)
+**Type:** Security / Hardening / Auth  
+**Developer:** Meet / Sukun  
+**Changes:**
+- `backend/app/core/security.py`:
+  - Enforced timing-safe HMAC-SHA256 signature verification using `hmac.compare_digest`.
+  - Added strict minimum 32-byte (256-bit) secret validation at startup (`SecurityError`).
+- `backend/app/api/v1/auth.py`:
+  - Switched OAuth CSRF state verification to cryptographically random state nonces stored in Redis (`oauth_state:{state}`).
+  - Used atomic `GETDEL` (with fallback pipeline) to ensure single-use replay protection.
+  - Hardened cookie flags: `httpOnly=True`, `secure=True`, `SameSite=Lax`.
+- `backend/tests/test_jwt_and_oauth_hardening.py`:
+  - 14 automated tests verifying secret validation, timing safety, state replay protection, and cookie security.
+
+**Impact:** Eliminates timing side-channels in authentication and protects against OAuth replay and CSRF attacks.
+
+**Related Docs:** `Docs/engineering/15_authentication_authorization_audit.md`, `Docs/engineering/16_issue181_implementation_plan.md`, `Docs/engineering/17_jwt_oauth_hardening.md`
+
+---
+
+### [Post-Week3-Batch2] 2026-11-04 — Durable GitHub Webhook Ingestion & Event Automation (Issue #182, PR #219)
+**Type:** Feature / Reliability / Automation  
+**Developer:** Meet / Parth  
+**Changes:**
+- `backend/app/models/webhook_event.py`:
+  - Created `github_webhook_events` table tracking `id`, `delivery_id`, `event_type`, `status` (`pending`, `processing`, `completed`, `failed`, `dead_letter`), `attempts`, `lease_token`, `lease_expires_at`, `payload`.
+- `backend/app/workers/webhook_worker.py`:
+  - Autonomous lease-based background worker acquiring pending events with distributed atomic locks.
+  - Automatic re-indexing on GitHub `push` events to default branch.
+  - Automated AI code review comments posted directly to pull requests (`pull_request` events).
+  - Dead-letter queue transition after 3 consecutive failures.
+- `backend/app/api/v1/github.py`:
+  - Added webhook management endpoints: `GET /api/v1/github/events`, `GET /api/v1/github/events/{id}`, `POST /api/v1/github/events/{id}/replay`.
+  - Added repository automation settings endpoints: `GET /repositories/{id}/automation`, `PATCH /repositories/{id}/automation`.
+- `backend/migrations/versions/e1f2a3b4c5d6_add_github_webhook_events_and_repo_automation.py`:
+  - Alembic migration adding `github_webhook_events` table and automation flags to `repositories`.
+- `backend/tests/test_durable_webhook_automation.py`:
+  - 18 automated tests verifying idempotent delivery, lease timeout recovery, replay, and automation settings.
+
+**Impact:** Guarantees zero-loss webhook handling, automatic repo re-indexing on push, and autonomous PR code reviews.
+
+**Related Docs:** `Docs/engineering/17_github_webhook_automation_design.md`, `Docs/db_migrations.md`
+
+---
+
+### [Post-Week3-Batch3] 2026-11-06 — Multi-Stage Code Retrieval Engine & 150-Query Benchmark (Issue #187, PR #220)
+**Type:** Feature / Performance / AI Retrieval  
+**Developer:** Meet  
+**Changes:**
+- `backend/app/retrieval/`:
+  - Created 7-stage retrieval pipeline: intent detection, simple GIN lexical FTS (`code_search_text`), adaptive HNSW savepoints (`ef_search` scaling), 1-hop symbol graph expansion, ONNX cross-encoder reranking, and Redis query caching.
+  - `code_aware_search.py`: Lexical retrieval with CamelCase and snake_case sub-tokenization against PostgreSQL simple dictionary.
+  - `adaptive_hnsw.py`: Dynamic `hnsw.ef_search` configuration based on query intent and candidate pool size.
+  - `graph_expansion.py`: 1-hop AST caller/callee symbol expansion.
+  - `onnx_reranker.py`: ONNX Runtime cross-encoder (`ms-marco-MiniLM-L-6-v2`) with PyTorch fallback and fallback score consistency.
+  - `retrieval_cache.py`: Shared Redis cache keyed by `(repo_id, active_index_generation, query_hash)` with TTL and hit/miss telemetry.
+- `backend/migrations/versions/e8f9a0b1c2d3_add_code_search_text_and_index_generation.py`:
+  - Added `code_search_text` column and GIN index to `code_chunks`; added `active_index_generation` and `active_commit_sha` to `repositories`.
+- `backend/tests/`:
+  - `test_hybrid_retrieval.py`, `test_adaptive_hnsw.py`, `test_reranker_onnx.py`, `test_retrieval_cache.py`, `test_retrieval_benchmark.py` (150-query golden evaluation suite achieving MRR@10 > 0.85 and P95 latency < 350ms).
+
+**Impact:** Drastically improves code retrieval accuracy and recall across complex symbol names and natural language questions.
+
+**Related Docs:** `Docs/retrieval/`, `Docs/db_migrations.md`
+
+---
+
+### [Post-Week3-Batch4] 2026-11-08 — Bounded Agentic Repository Chat & Tool Calling (Issue #188, PR #220)
+**Type:** Feature / Agentic AI / UX  
+**Developer:** Meet / Dhramraj  
+**Changes:**
+- `backend/app/ai/agent/`:
+  - `orchestrator.py`: `AgentOrchestrator` coordinating multi-round tool-augmented repository exploration.
+  - `llm_client.py`: Normalized tool-calling client supporting both Google Gemini and Groq with unified function calling schemas and error handling.
+  - `tools.py`: Read-only repository tool registry (`search_code`, `read_file_range`, `find_symbol`, `list_directory`).
+  - `execution_policy.py`: Strict read-only policy enforcing directory jail, denylists (`.env`, secrets, `.git`), and path traversal defense.
+  - `budget_manager.py`: Enforces hard limits: 8,000 prompt/completion tokens, 5 execution rounds, 30-second wall-clock timeout.
+- `backend/app/api/v1/chat.py`:
+  - Dual-mode chat API accepting `"mode": "normal" | "agentic"`. Returns grounded `RepositoryAnswer` with inspection metadata in `agent_metadata`.
+- `frontend/src/pages/RepositoryChat.tsx`:
+  - Added Normal / Agentic mode toggle with mode badges.
+  - Implemented tool call inspection pill badges showing invoked tools, token counts, and execution latency.
+- `backend/tests/`:
+  - Authored comprehensive test suites: `test_agent_tools.py`, `test_agent_policy.py`, `test_agent_security_and_budget.py`, `test_agent_orchestrator.py`, `test_agent_chat_api.py`.
+- Alembic linear migration chain resolved and linearized from `24498ac67b3e` down through `e8f9a0b1c2d3`.
+
+**Impact:** Provides developers with an interactive, autonomous, yet strictly bounded agent for interactive repository exploration, fully verified across both Gemini and Groq providers.
+
+**Related Docs:** `Docs/agentic-chat/`, `Docs/engineering/08_api_documentation.md`, `frontend/README.md`
