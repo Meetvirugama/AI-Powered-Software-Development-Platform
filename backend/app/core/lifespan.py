@@ -499,7 +499,9 @@ async def lifespan(app: FastAPI):
 
     # ── Background Sync Worker Task ──────────────────────────────────────────
     sync_worker_task = None
-    if "PYTEST_CURRENT_TEST" not in os.environ and not getattr(settings, "disable_embedded_sync_worker", False):
+    if getattr(settings, "disable_embedded_sync_worker", False):
+        logger.info("embedded_sync_worker_disabled_by_config", extra={"is_production": settings.is_production})
+    elif "PYTEST_CURRENT_TEST" not in os.environ:
         try:
             from app.services.sync_worker import sync_worker_loop
 
