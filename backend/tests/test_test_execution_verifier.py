@@ -238,3 +238,53 @@ def test_verifier_marks_flaky_test_unverified(tmp_path: Path) -> None:
     )
     assert verified.verification_status == "UNVERIFIED"
     assert "flakiness" in verified.verification_reasons[0].lower()
+
+
+def test_verifier_marks_stable_with_unconfigured_coverage_unverified(tmp_path: Path) -> None:
+    mock_ws = MagicMock()
+    ws_meta = WorkspaceMetadata(
+        workspace_id="ws-4",
+        task_id="t-4",
+        repository_id=str(uuid4()),
+        base_revision="0123456789abcdef0123456789abcdef01234567",
+        branch_name="agent/t-4",
+        workspace_path=str(tmp_path),
+        status=WorkspaceStatus.READY,
+    )
+    mock_ws.create_workspace.return_value = ws_meta
+
+    mock_stability = MagicMock()
+    mock_stability.validate_with_sandbox_test_runner.return_value = StabilityReport(
+        total_runs=3,
+        passed_runs=3,
+        classification="STABLE",
+        is_stable=True,
+        runs=[
+            StabilityRunResult(run_number=1, passed=True, duration_seconds=0.1, passed_count=1, failed_count=0),
+            StabilityRunResult(run_number=2, passed=True, duration_seconds=0.1, passed_count=1, failed_count=0),
+            StabilityRunResult(run_number=3, passed=True, duration_seconds=0.1, passed_count=1, failed_count=0),
+        ],
+    )
+
+    mock_cov = MagicMock()
+    mock_cov.calculate_coverage_gain.return_value = CoverageReport(
+        collection_status="NOT_CONFIGURED",
+        coverage_attributable_to_generated_tests=False,
+    )
+
+    verifier = TestExecutionVerifier(
+        workspace_manager=mock_ws,
+        stability_validator=mock_stability,
+        coverage_service=mock_cov,
+    )
+    res = _sample_result(syntax_valid=True)
+
+    verified = verifier.verify_generated_test(
+        result=res,
+        target_path="calc.py",
+        target_source_code="def add(a, b): return a + b",
+        repository_id=str(uuid4()),
+    )
+    assert verified.verification_status == "UNVERIFIED"
+    assert "coverage tool not configured" in verified.verification_reasons[0].lower()
+

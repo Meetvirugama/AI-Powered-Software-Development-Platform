@@ -139,7 +139,7 @@ npm run build
 
 ### TC-006: Timing-Safe JWT Signature Verification
 - **Scenario:** Attacker sends a forged JWT with matching header and payload but variable signature bytes.
-- **Invariant:** Token verification uses `hmac.compare_digest` to prevent timing side-channel attacks; startup fails if secret is <32 bytes.
+- **Invariant:** Token verification uses `hmac.compare_digest` to prevent timing side-channel attacks; startup in `production`/`prod` fails if stripped secret is < 32 characters (check omitted in dev/test).
 - **Status:** 🟢 Pass (`test_jwt_and_oauth_hardening.py`)
 
 ### TC-007: Durable Webhook Lease Worker Crash Recovery
@@ -149,7 +149,7 @@ npm run build
 
 ### TC-008: Bounded Agentic Chat Budget Ceiling
 - **Scenario:** User asks a complex recursive query that could trigger unbounded tool calling rounds.
-- **Invariant:** `BudgetManager` halts agent loop at 5 rounds or 8,000 tokens, synthesizes a best-effort answer with `truncated: true` badge in `agent_metadata`.
+- **Invariant:** `BudgetManager` halts agent loop at 3 rounds, 12,000 input tokens, 2,000 output tokens, or 35s timeout (configurable via settings), synthesizes a best-effort answer with `truncated: true` badge in `agent_metadata`.
 - **Status:** 🟢 Pass (`test_agent_security_and_budget.py`)
 
 ### TC-009: Unbroken Alembic Linear Migration Chain

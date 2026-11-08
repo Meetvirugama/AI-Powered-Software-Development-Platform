@@ -87,7 +87,7 @@ All configuration is validated via `pydantic-settings` in [`backend/app/core/con
 | `GITHUB_APP_PRIVATE_KEY` | Yes (for auth) | None | GitHub App `.pem` private key content |
 | `GITHUB_CLIENT_ID` | Yes (for auth) | None | GitHub OAuth Client ID |
 | `GITHUB_CLIENT_SECRET` | Yes (for auth) | None | GitHub OAuth Client Secret |
-| `JWT_SECRET` | Yes (for auth) | None | Session signing secret key (strictly enforced >= 32 bytes) |
+| `JWT_SECRET` | Yes (for auth) | None | Session signing secret key (startup validates stripped length >= 32 characters in `production` or `prod` environments; length check is omitted in dev/test and length alone does not guarantee entropy) |
 | `JWT_ALGORITHM` | No | `HS256` | JWT signing algorithm |
 | `GITHUB_WEBHOOK_SECRET` | No | None | Secret for verifying HMAC-SHA256 signatures on webhooks |
 | `GEMINI_API_KEY` | Yes (for AI) | None | Google Gemini API key (`gemini-flash-lite-latest`, `gemini-1.5-pro`) |

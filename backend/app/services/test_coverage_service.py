@@ -132,6 +132,30 @@ class TestCoverageService:
             collection_status="SUCCESS",
         )
 
+    def _run_command_compat(
+        self,
+        workspace_root: Path,
+        command: str,
+        arguments: list[str],
+        timeout_seconds: int = 45,
+    ) -> Any:
+        """Execute command safely supporting both WorkspaceCommandRunner.run_command and legacy runner.run."""
+        if hasattr(self._command_runner, "run_command"):
+            return self._command_runner.run_command(
+                workspace_root=workspace_root,
+                command=command,
+                arguments=arguments,
+                timeout_seconds=timeout_seconds,
+            )
+        if hasattr(self._command_runner, "run"):
+            return self._command_runner.run(
+                workspace_root=workspace_root,
+                command=command,
+                arguments=arguments,
+                timeout_seconds=timeout_seconds,
+            )
+        raise RuntimeError(f"Unsupported command runner interface: {type(self._command_runner)}")
+
     def _measure_python_coverage(
         self,
         workspace_root: Path,
@@ -167,7 +191,7 @@ class TestCoverageService:
                 cmd_args.extend(["tests", "-p", "test_*.py"])
 
         try:
-            exec_res = self._command_runner.run(
+            exec_res = self._run_command_compat(
                 workspace_root=workspace_root,
                 command="python",
                 arguments=cmd_args,
@@ -182,7 +206,7 @@ class TestCoverageService:
 
         # Export to JSON
         try:
-            json_export_res = self._command_runner.run(
+            json_export_res = self._run_command_compat(
                 workspace_root=workspace_root,
                 command="python",
                 arguments=[
@@ -291,7 +315,7 @@ class TestCoverageService:
             args.append(test_path)
 
         try:
-            exec_res = self._command_runner.run(
+            exec_res = self._run_command_compat(
                 workspace_root=workspace_root,
                 command="npm",
                 arguments=args,

@@ -91,7 +91,7 @@ The entire 12-node migration chain is verified as continuous, unbroken, and acyc
 2. **Schema & Model Parity:** All models in `backend/app/models/` have exact column and constraint parity with migrations, including:
    - `repositories`: `active_index_generation`, `active_commit_sha`, `last_indexed_commit_sha`, `auto_sync_enabled`, `pr_review_enabled`, `pr_review_drafts`.
    - `code_chunks`: `code_search_text` column with GIN simple text search index for code-aware lexical search.
-   - `github_webhook_events`: `id`, `event_type`, `action`, `delivery_id`, `repository_id`, `status` (Enum: `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`), `attempt_count`, `leased_by`, `lease_expires_at`, `next_retry_at`.
+   - `github_webhook_events`: `id`, `event_type`, `action`, `delivery_id`, `repository_id`, `status` (Enum: `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`), `attempts`, `max_attempts`, `available_at`, `claimed_at`, `lease_expires_at`, `last_error`.
 3. **Cascading Referentials:** `ON DELETE CASCADE` verified on repository and run boundaries; `ON DELETE SET NULL` verified on user references.
 
 Make sure your local PostgreSQL database (via `docker compose up -d`) is running before executing these commands.

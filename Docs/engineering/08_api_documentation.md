@@ -509,29 +509,32 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
   "confidence": "high",
   "agent_metadata": {
     "mode": "agentic",
-    "tool_calls_count": 3,
-    "tools_invoked": ["search_code", "read_file_range"],
-    "token_usage": {
-      "prompt_tokens": 1420,
-      "completion_tokens": 310,
-      "total_tokens": 1730
-    },
+    "provider": "gemini",
+    "model": "gemini-flash-lite-latest",
+    "rounds": 2,
+    "model_calls": 2,
+    "tool_calls": 2,
+    "tools_called": 2,
+    "stop_reason": "completed",
+    "total_input_tokens": 1420,
+    "total_output_tokens": 310,
     "execution_time_ms": 1150,
-    "tool_details": [
+    "duration_ms": 1150,
+    "evidence_count": 2,
+    "tool_summary": [
       {
         "tool": "search_code",
-        "arguments": { "query": "verify_token" },
-        "status": "success",
-        "result_count": 2
+        "input": { "query": "verify_token" },
+        "is_error": false,
+        "duration_ms": 120.5
       },
       {
         "tool": "read_file_range",
-        "arguments": { "path": "backend/app/core/security.py", "start_line": 15, "end_line": 65 },
-        "status": "success",
-        "result_count": 1
+        "input": { "path": "backend/app/core/security.py", "start_line": 15, "end_line": 65 },
+        "is_error": false,
+        "duration_ms": 85.2
       }
-    ],
-    "truncated": false
+    ]
   }
 }
 ```
@@ -745,7 +748,13 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 
 ### POST `/api/v1/repositories/{repository_id}/generate-tests`
 
-**Purpose:** Generate a complete, execution-verified test file matching the repository's supported test framework (`pytest`, `unittest`, `jest`, or `vitest`) with 3-run stability validation and runtime coverage attribution.
+**Purpose:** Generate a test file matching the repository's supported test framework (`pytest`, `unittest`, `jest`, or `vitest`) and run isolated sandbox verification with 3-run stability validation and runtime coverage attribution.
+
+> **Verification Outcomes:** Test generation does not guarantee that every test suite is `VERIFIED`. Clients must inspect `result.verification_status`:
+> - `VERIFIED`: Static validation passed, 3/3 stability runs passed, and measurable coverage gain was attributed to the generated tests.
+> - `UNVERIFIED`: Static validation succeeded, but execution failed, exhibited flakiness (e.g. 2/3 passed), produced 0% coverage gain, or coverage tools were not configured in the repository environment.
+> - `REJECTED`: The generated test attempted an unsafe file path or violated safety policies.
+> - `EXECUTION_ERROR`: An infrastructure or workspace sandbox error prevented test execution.
 
 **Authentication:** Required
 
@@ -1058,22 +1067,32 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
 | Param | Type | Description |
 |---|---|---|
 | `event_type` | string | Filter by event type (`push`, `pull_request`, etc.) |
-| `status` | string | Filter by state (`pending`, `processing`, `completed`, `failed`, `dead_letter`) |
-| `limit` | int | Results per page (default: 50, max: 100) |
-| `offset` | int | Pagination offset |
+| `status` | string | Filter by state (`PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`) |
+| `repository_id` | string | Filter by mapped repository UUID |
+| `page` | int | Page number (default: 1, min: 1) |
+| `page_size` | int | Results per page (default: 20, min: 1, max: 100) |
 
 **Response (200 OK):**
 ```json
 {
   "total": 1,
+  "page": 1,
+  "page_size": 20,
   "items": [
     {
       "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
       "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc09d2",
       "event_type": "push",
-      "status": "completed",
+      "action": null,
+      "installation_id": "171308854",
+      "repository_id": "uuid",
+      "status": "SUCCEEDED",
       "attempts": 1,
-      "max_retries": 3,
+      "max_attempts": 5,
+      "available_at": "2026-11-08T10:00:00Z",
+      "processed_at": "2026-11-08T10:00:02Z",
+      "last_error": null,
+      "replay_count": 0,
       "created_at": "2026-11-08T10:00:00Z"
     }
   ]
@@ -1092,10 +1111,16 @@ Side effect: Sets JWT as httpOnly `session` cookie. Clears `oauth_state` cookie.
   "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   "delivery_id": "72d3162e-cc78-11e3-81ab-4c9367dc09d2",
   "event_type": "push",
-  "status": "completed",
+  "action": null,
+  "installation_id": "171308854",
+  "repository_id": "uuid",
+  "status": "SUCCEEDED",
   "attempts": 1,
-  "max_retries": 3,
+  "max_attempts": 5,
+  "available_at": "2026-11-08T10:00:00Z",
+  "processed_at": "2026-11-08T10:00:02Z",
   "last_error": null,
+  "replay_count": 0,
   "payload": { "...": "..." },
   "created_at": "2026-11-08T10:00:00Z"
 }
@@ -1195,7 +1220,7 @@ All error responses follow this envelope:
 |---|---|
 | Method | GitHub OAuth 2.0 → JWT (HS256) |
 | JWT Algorithm | Configured via `JWT_ALGORITHM` env var (HS256 default) |
-| JWT Secret | `JWT_SECRET` env var — enforced >= 32 bytes (256 bits) on startup |
+| JWT Secret | `JWT_SECRET` env var — enforced >= 32 characters on startup in `production`/`prod` environments |
 | Secret Validation | Startup checks reject weak, default, or short secrets (`SecurityError`) |
 | Timing Attack Defense | Cryptographic verification uses `hmac.compare_digest` for timing safety |
 | CSRF State Nonce | Cryptographically random `oauth_state` stored in Redis (`oauth_state:{state}`) with 10-minute TTL, atomically consumed via `GETDEL` |

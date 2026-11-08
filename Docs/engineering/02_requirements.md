@@ -136,4 +136,4 @@
 | NFR-016 | Availability | Health check endpoint (`GET /api/v1/health`) returns 200 without DB dependency | P0 | 🟢 Done |
 | NFR-017 | Test Quality | Backend test suite must maintain ≥ 70% coverage (500+ passing backend tests, 329 frontend tests) | P0 | 🟢 Done |
 | NFR-018 | Retrieval SLA | 150-query golden benchmark: P95 retrieval latency < 350ms, MRR@10 > 0.85, Hit@5 > 0.90 | P0 | 🟢 Done |
-| NFR-019 | Agentic Bound | Agentic chat execution strictly bounded: <= 8,000 tokens, <= 5 tool rounds, <= 30s timeout | P0 | 🟢 Done |
+| NFR-019 | Agentic Bound | Agentic chat execution strictly bounded: <= 12,000 input tokens, <= 2,000 output tokens, <= 3 tool rounds, <= 35s timeout (configurable via settings) | P0 | 🟢 Done |

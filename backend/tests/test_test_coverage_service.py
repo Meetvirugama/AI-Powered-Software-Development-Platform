@@ -169,3 +169,19 @@ def test_calculate_coverage_gain_not_configured_fallback() -> None:
     assert report.line_coverage_gain is None
     assert report.coverage_attributable_to_generated_tests is False
     assert len(report.warnings) > 0
+
+
+def test_coverage_service_with_real_workspace_command_runner() -> None:
+    from sandbox.command_runner import WorkspaceCommandRunner
+
+    runner = WorkspaceCommandRunner()
+    service = TestCoverageService(command_runner=runner)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        res = service._measure_python_coverage(
+            workspace_root=Path(tmp_dir),
+            target_file="test.py",
+            test_path=None,
+            framework="pytest",
+        )
+        assert res.collection_status in ("SUCCESS", "NOT_CONFIGURED", "FAILED")

@@ -307,18 +307,23 @@ Stores asynchronous GitHub webhook deliveries with lease claiming, status progre
 | Column | Type | Nullable | Default | PK | FK | Description |
 |---|---|---|---|---|---|---|
 | `id` | UUID | No | gen_random_uuid() | ✓ | — | Webhook event ID |
+| `delivery_id` | VARCHAR(64) | No | — | — | — | GitHub X-GitHub-Delivery ID (Unique Index) |
 | `event_type` | VARCHAR(64) | No | — | — | — | GitHub event type (`push`, `pull_request`, etc.) |
 | `action` | VARCHAR(64) | Yes | NULL | — | — | Event action (`opened`, `synchronize`, etc.) |
-| `delivery_id` | VARCHAR(128) | No | — | — | — | GitHub X-GitHub-Delivery ID (Unique Index) |
+| `installation_id` | VARCHAR(64) | Yes | NULL | — | — | GitHub installation ID |
 | `repository_id` | UUID | Yes | NULL | — | `repositories.id` | Mapped repository ID (if matched) |
-| `status` | ENUM | No | `'PENDING'` | — | — | `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER` |
-| `attempt_count` | INTEGER | No | 0 | — | — | Processing execution attempt counter |
-| `leased_by` | VARCHAR(128) | Yes | NULL | — | — | Worker ID currently holding the event lease |
-| `lease_expires_at`| TIMESTAMPTZ | Yes | NULL | — | — | Lease expiration deadline |
-| `next_retry_at` | TIMESTAMPTZ | Yes | NULL | — | — | Timestamp for next retry backoff execution |
+| `github_repo_id` | VARCHAR(64) | Yes | NULL | — | — | GitHub numeric repository ID |
 | `payload` | JSONB | No | — | — | — | Raw JSON delivery payload |
-| `payload_hash` | VARCHAR(64) | No | — | — | — | SHA-256 payload digest |
-| `error_message` | TEXT | Yes | NULL | — | — | Failure error details |
+| `status` | ENUM | No | `'PENDING'` | — | — | `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER` |
+| `attempts` | INTEGER | No | 0 | — | — | Processing execution attempt counter |
+| `max_attempts` | INTEGER | No | 5 | — | — | Maximum retry attempts before dead lettering |
+| `available_at` | TIMESTAMPTZ | No | NOW() | — | — | Timestamp when event becomes available for lease |
+| `claimed_at` | TIMESTAMPTZ | Yes | NULL | — | — | Timestamp when worker claimed lease |
+| `lease_expires_at`| TIMESTAMPTZ | Yes | NULL | — | — | Lease expiration deadline |
+| `processed_at` | TIMESTAMPTZ | Yes | NULL | — | — | Timestamp when execution completed |
+| `last_error` | TEXT | Yes | NULL | — | — | Failure error details from latest attempt |
+| `replay_count` | INTEGER | No | 0 | — | — | Number of times operator replayed event |
+| `last_replayed_at`| TIMESTAMPTZ | Yes | NULL | — | — | Timestamp of most recent operator replay |
 | `created_at` | TIMESTAMPTZ | No | NOW() | — | — | Ingestion timestamp |
 | `updated_at` | TIMESTAMPTZ | No | NOW() | — | — | Last status change timestamp |
 

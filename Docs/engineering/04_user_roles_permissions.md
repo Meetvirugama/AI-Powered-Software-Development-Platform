@@ -99,6 +99,6 @@ Enforced server-side by the Policy Engine (Devu / Sukun), not solely by UI butto
 - **Protocol:** GitHub OAuth 2.0 with atomic Redis CSRF state nonces (`oauth_state:{state}` with `GETDEL`).
 - **Session Token:** JSON Web Token (JWT, HS256) stored in `httpOnly`, `secure`, `SameSite=Lax` cookie.
 - **Timing Safety:** Cryptographic signatures verified via `hmac.compare_digest` to prevent timing side-channels.
-- **Secret Entropy:** Startup validation strictly rejects keys shorter than 32 bytes (256 bits).
+- **Secret Length:** Startup validation in `production`/`prod` environments rejects stripped secret keys shorter than 32 characters (check omitted in dev/test).
 - **Frontend State:** Derived from `GET /api/v1/auth/me` via Zustand `useAuthStore`.
 - **Session Revocation:** Logout adds the JWT identifier (`jti`) to Redis blocklist (`jwt_blocklist:{jti}`) with remaining TTL.

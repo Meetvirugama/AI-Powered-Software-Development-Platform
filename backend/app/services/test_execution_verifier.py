@@ -27,6 +27,7 @@ from app.core.secret_redaction import redact
 from app.schemas.analysis import (
     CoverageReport,
     IterationReport,
+    IterationRound,
     StabilityReport,
     TestGenerationResult,
     TestVerificationStatus,
@@ -39,6 +40,7 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionResult,
 )
 from app.services.test_coverage_service import TargetCoverageData, TestCoverageService
+from app.services.test_iteration_service import TestIterationOrchestrator
 from app.services.test_stability_service import MAX_STABILITY_RUNS, TestStabilityValidator
 from sandbox.workspace_manager import WorkspaceManager
 
@@ -55,12 +57,14 @@ class TestExecutionVerifier:
         workspace_manager: WorkspaceManager | None = None,
         stability_validator: TestStabilityValidator | None = None,
         coverage_service: TestCoverageService | None = None,
+        iteration_orchestrator: TestIterationOrchestrator | None = None,
     ) -> None:
         self._workspace_manager = workspace_manager or WorkspaceManager()
         self._stability_validator = stability_validator or TestStabilityValidator()
         self._coverage_service = coverage_service or TestCoverageService(
             command_runner=self._workspace_manager.command_runner
         )
+        self._iteration_orchestrator = iteration_orchestrator or TestIterationOrchestrator()
 
     def verify_generated_test(
         self,
@@ -90,6 +94,12 @@ class TestExecutionVerifier:
                     "verification_status": "UNVERIFIED",
                     "verification_reasons": reasons,
                     "execution_status": "NOT_EXECUTED",
+                    "iteration_report": IterationReport(
+                        total_rounds=1,
+                        rounds=[],
+                        stopping_reason="Static validation failed; execution skipped.",
+                        final_coverage_achieved=None,
+                    ),
                 }
             )
 
@@ -123,6 +133,12 @@ class TestExecutionVerifier:
                         "verification_status": "EXECUTION_ERROR",
                         "verification_reasons": reasons,
                         "execution_status": "INFRASTRUCTURE_ERROR",
+                        "iteration_report": IterationReport(
+                            total_rounds=1,
+                            rounds=[],
+                            stopping_reason=f"Infrastructure error: {ws_err}",
+                            final_coverage_achieved=None,
+                        ),
                     }
                 )
 
@@ -216,9 +232,10 @@ class TestExecutionVerifier:
                         final_status = "UNVERIFIED"
                         reasons.append("Test executed cleanly across 3 runs, but produced 0% coverage gain on target file.")
                 elif cov_report.collection_status == "NOT_CONFIGURED":
-                    # When coverage is not configured in environment, allow verification with warning
-                    final_status = "VERIFIED"
-                    reasons.append("Static validation and 3/3 stability runs passed (Coverage tool not configured).")
+                    final_status = "UNVERIFIED"
+                    reasons.append(
+                        "Static validation and 3/3 stability runs passed, but coverage could not be measured (coverage tool not configured)."
+                    )
                 else:
                     final_status = "UNVERIFIED"
                     reasons.append(f"Coverage collection failed: {'; '.join(cov_report.warnings)}")
@@ -234,12 +251,35 @@ class TestExecutionVerifier:
                     f"First run error: {first_run.error_message if first_run else 'Execution error'}"
                 )
 
+            uncovered = getattr(post_gen_cov, "uncovered_lines", [])
+            cov_val = cov_report.final_line_coverage if cov_report else None
+            prev_cov = cov_report.baseline_line_coverage if cov_report else None
+            should_cont, stop_reason = self._iteration_orchestrator.should_continue_iteration(
+                current_round=1,
+                prev_coverage=prev_cov,
+                new_coverage=cov_val,
+                uncovered_lines=uncovered,
+            )
+            iter_report = IterationReport(
+                total_rounds=1,
+                rounds=[
+                    IterationRound(
+                        round_number=1,
+                        tests_added=len(result.covered_scenarios),
+                        line_coverage_after=cov_val,
+                    )
+                ],
+                stopping_reason=stop_reason,
+                final_coverage_achieved=cov_val,
+            )
+
             return result.model_copy(
                 update={
                     "verification_status": final_status,
                     "verification_reasons": reasons,
                     "stability_report": stability_report,
                     "coverage_report": cov_report,
+                    "iteration_report": iter_report,
                     "execution_attempted": execution_attempted,
                     "execution_status": execution_status,
                     "execution_summary": exec_summary,
