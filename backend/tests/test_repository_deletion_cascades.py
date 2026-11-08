@@ -529,8 +529,12 @@ async def test_incremental_indexer_aborts_when_repository_deleted_before_indexin
 
 
 @pytest.mark.asyncio
-async def test_incremental_indexer_rolls_back_when_repository_deleted_before_snapshot():
+async def test_incremental_indexer_rolls_back_when_repository_deleted_before_snapshot(tmp_path: Path, monkeypatch):
     """IncrementalIndexer rolls back and aborts before publishing snapshot if repository is deleted."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REPOSITORY_INTELLIGENCE_DIR", str(tmp_path / "intel"))
+    monkeypatch.setattr("ai.intelligence.snapshot_manager.DEFAULT_SNAPSHOT_BASE_DIR", tmp_path / "intel")
+
     mock_session = AsyncMock()
     # Check 1: start of sync -> (1,)
     # Check 2: before snapshot -> None (deleted)
@@ -569,8 +573,12 @@ async def test_incremental_indexer_rolls_back_when_repository_deleted_before_sna
 
 
 @pytest.mark.asyncio
-async def test_incremental_indexer_cleans_up_snapshot_and_rolls_back_if_deleted_before_commit():
+async def test_incremental_indexer_cleans_up_snapshot_and_rolls_back_if_deleted_before_commit(tmp_path: Path, monkeypatch):
     """IncrementalIndexer cleans up snapshot and rolls back if repository is deleted before final commit."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("REPOSITORY_INTELLIGENCE_DIR", str(tmp_path / "intel"))
+    monkeypatch.setattr("ai.intelligence.snapshot_manager.DEFAULT_SNAPSHOT_BASE_DIR", tmp_path / "intel")
+
     mock_session = AsyncMock()
     # Check 1: start of sync -> (1,)
     # Check 2: before snapshot -> (1,)

@@ -14,6 +14,19 @@ down_revision: Union[str, Sequence[str], None] = "e8f9a0b1c2d3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+_PENDING_VALIDATIONS: list[tuple[str, str]] = []
+
+
+def _validate_pending_constraints() -> None:
+    """Validate NOT VALID foreign keys outside the DDL transaction in autocommit mode."""
+    pending = list(_PENDING_VALIDATIONS)
+    _PENDING_VALIDATIONS.clear()
+    if not pending:
+        return
+    with op.get_context().autocommit_block():
+        for table_name, constraint_name in pending:
+            op.execute(sa.text(f"ALTER TABLE {table_name} VALIDATE CONSTRAINT {constraint_name}"))
+
 
 def _update_fk_constraint(
     table_name: str,
@@ -56,7 +69,7 @@ def _update_fk_constraint(
             ondelete=ondelete,
             postgresql_not_valid=True,
         )
-        op.execute(sa.text(f"ALTER TABLE {table_name} VALIDATE CONSTRAINT {new_constraint_name}"))
+        _PENDING_VALIDATIONS.append((table_name, new_constraint_name))
     else:
         op.create_foreign_key(
             new_constraint_name,
@@ -69,6 +82,7 @@ def _update_fk_constraint(
 
 
 def upgrade() -> None:
+    """Harden foreign key constraints with ON DELETE CASCADE and SET NULL."""
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     dialect_name = bind.dialect.name
@@ -217,8 +231,12 @@ def upgrade() -> None:
         inspector=inspector,
     )
 
+    # Validate all added constraints outside the DDL transaction in PostgreSQL
+    _validate_pending_constraints()
+
 
 def downgrade() -> None:
+    """Revert foreign key constraints to NO ACTION defaults."""
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     dialect_name = bind.dialect.name
@@ -248,3 +266,6 @@ def downgrade() -> None:
             dialect_name=dialect_name,
             inspector=inspector,
         )
+
+    # Validate all rollback constraints outside the DDL transaction in PostgreSQL
+    _validate_pending_constraints()
