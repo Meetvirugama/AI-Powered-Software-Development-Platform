@@ -170,6 +170,31 @@ def test_deduplicate_intra_run_merges_overlapping(deduplicator):
     assert item["suggested_fix"] == 'token = os.getenv("TOKEN")'
 
 
+def test_deduplicate_intra_run_distinct_bugs_near_lines_not_merged(deduplicator):
+    f1 = {
+        "file_path": "src/auth.py",
+        "start_line": 20,
+        "category": "security",
+        "severity": "CRITICAL",
+        "rule_id": "SEC-001",
+        "title": "SQL Injection vulnerability",
+        "evidence": "execute(query)",
+    }
+    f2 = {
+        "file_path": "src/auth.py",
+        "start_line": 21,  # within +/- 2 lines, but completely different root cause
+        "category": "security",
+        "severity": "HIGH",
+        "rule_id": "SEC-002",
+        "title": "Hardcoded RSA Private Key",
+        "evidence": "-----BEGIN RSA PRIVATE KEY-----",
+    }
+
+    result = deduplicator.deduplicate_intra_run([f1, f2], repository_id="repo-1")
+    # Must preserve both distinct issues without merging!
+    assert len(result) == 2
+
+
 def test_filter_against_existing_pr_comments(deduplicator):
     candidates = [
         {"path": "app/main.py", "line": 10, "body": "Fix this bug"},

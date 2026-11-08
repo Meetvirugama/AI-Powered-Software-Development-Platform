@@ -92,3 +92,24 @@ async def test_incremental_review_filters_persisting_and_detects_resolved(inc_se
     assert len(pub_findings) == 1
     assert pub_findings[0]["deduplication_key"] == "fp3"
     assert "Incremental Review" in call_args["custom_summary"]
+
+
+@pytest.mark.asyncio
+async def test_incremental_review_forwards_is_complete_review_flag(inc_service, monkeypatch):
+    mock_repo = MagicMock(owner="test-owner", name="test-repo", pr_review_enabled=True)
+    mock_track = MagicMock(return_value=([], []))
+    monkeypatch.setattr(inc_service.lifecycle_service, "track_findings_across_commits", mock_track)
+
+    await inc_service.execute_incremental_review(
+        repository=mock_repo,
+        pr_number=10,
+        new_commit_sha="commit_sha_222",
+        previous_commit_sha="commit_sha_111",
+        previous_findings=[],
+        current_findings=[],
+        github_service=AsyncMock(),
+        is_complete_review=False,
+    )
+
+    mock_track.assert_called_once()
+    assert mock_track.call_args.kwargs["is_complete_review"] is False

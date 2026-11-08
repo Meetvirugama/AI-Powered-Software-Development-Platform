@@ -390,6 +390,16 @@ async def publish_review_to_github(
         from app.integrations.github.service import GitHubService
         github_service = GitHubService(db)
 
+    gh_installation_id = None
+    if getattr(repo, "installation_id", None):
+        from app.models.github_installation import GitHubInstallation
+        inst = db.get(GitHubInstallation, repo.installation_id)
+        if inst and inst.installation_id:
+            try:
+                gh_installation_id = int(inst.installation_id)
+            except (ValueError, TypeError):
+                gh_installation_id = inst.installation_id
+
     pub_service = ReviewPublicationService()
     res = await pub_service.publish_pull_request_review(
         owner=repo.owner,
@@ -399,7 +409,7 @@ async def publish_review_to_github(
         findings=findings_data,
         github_service=github_service,
         repository=repo,
-        installation_id=getattr(repo, "installation_id", None),
+        installation_id=gh_installation_id,
         force_publish=payload.force_publish,
         max_comments=payload.max_comments,
         min_confidence=payload.min_confidence,
@@ -443,12 +453,22 @@ async def submit_finding_feedback(
     user_id = _request_user_id(request)
     try:
         f_uuid = UUID(finding_id)
+        r_uuid = UUID(run_id)
     except ValueError:
-        raise APIError(400, ErrorCode.INVALID_PARAMETER, f"Invalid finding_id: {finding_id}")
+        raise APIError(400, ErrorCode.INVALID_PARAMETER, f"Invalid finding_id or run_id")
 
-    finding = db.query(AnalysisFinding).filter(AnalysisFinding.id == f_uuid).first()
+    finding = (
+        db.query(AnalysisFinding)
+        .filter(
+            AnalysisFinding.id == f_uuid,
+            AnalysisFinding.analysis_run_id == r_uuid,
+        )
+        .first()
+    )
     if not finding:
         raise APIError(404, ErrorCode.NOT_FOUND, "Finding not found")
+
+    await _owned_repository_async(finding.repository_id, request, db)
 
     feedback_svc = ReviewFeedbackService()
     feedback_entry = feedback_svc.record_feedback(
@@ -482,11 +502,17 @@ async def get_repository_review_settings(
     db: Session = Depends(get_db),
 ) -> ReviewSettingsResponse:
     """Retrieve repository code review and PR publication settings."""
+    from app.services.review_settings_service import get_repo_review_settings
+
     repo = await _owned_repository_async(repository_id, request, db)
+    settings = get_repo_review_settings(repository_id)
     return ReviewSettingsResponse(
         repository_id=str(repository_id),
         pr_review_enabled=getattr(repo, "pr_review_enabled", False),
         pr_review_drafts=getattr(repo, "pr_review_drafts", False),
+        min_confidence=settings.get("min_confidence", "medium"),
+        max_comments=settings.get("max_comments", 15),
+        changed_lines_only=settings.get("changed_lines_only", True),
     )
 
 
@@ -502,6 +528,8 @@ async def update_repository_review_settings(
     db: Session = Depends(get_db),
 ) -> ReviewSettingsResponse:
     """Update repository code review and PR publication settings."""
+    from app.services.review_settings_service import set_repo_review_settings
+
     repo = await _owned_repository_async(repository_id, request, db)
     if payload.pr_review_enabled is not None:
         repo.pr_review_enabled = payload.pr_review_enabled
@@ -510,12 +538,21 @@ async def update_repository_review_settings(
     db.commit()
     db.refresh(repo)
 
+    updated_settings = set_repo_review_settings(
+        repository_id,
+        {
+            "min_confidence": payload.min_confidence,
+            "max_comments": payload.max_comments,
+            "changed_lines_only": payload.changed_lines_only,
+        },
+    )
+
     return ReviewSettingsResponse(
         repository_id=str(repository_id),
         pr_review_enabled=getattr(repo, "pr_review_enabled", False),
         pr_review_drafts=getattr(repo, "pr_review_drafts", False),
-        min_confidence=payload.min_confidence or "medium",
-        max_comments=payload.max_comments or 15,
-        changed_lines_only=payload.changed_lines_only if payload.changed_lines_only is not None else True,
+        min_confidence=updated_settings["min_confidence"],
+        max_comments=updated_settings["max_comments"],
+        changed_lines_only=updated_settings["changed_lines_only"],
     )
 

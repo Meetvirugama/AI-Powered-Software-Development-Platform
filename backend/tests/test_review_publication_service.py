@@ -204,3 +204,105 @@ async def test_publish_reconciles_on_network_timeout(pub_service):
 
     assert result.status == "RECONCILED"
     assert result.review_id == 7777
+
+
+def test_extract_diff_line_ranges_handles_no_newline_and_multisign(pub_service):
+    patch = (
+        "--- a/file.py\n"
+        "+++ b/file.py\n"
+        "@@ -10,6 +10,7 @@\n"
+        " context_line_10\n"
+        "-deleted_line_11\n"
+        "+added_line_11\n"
+        "++added_line_12_with_pluses\n"
+        " context_line_13\n"
+        "\\ No newline at end of file\n"
+        " context_line_14\n"
+    )
+    changed = pub_service.extract_diff_line_ranges(patch)
+    assert 11 in changed
+    assert 12 in changed
+    # line 13 and 14 are context lines, not added
+    assert 10 not in changed
+    assert 13 not in changed
+    assert 14 not in changed
+
+
+@pytest.mark.asyncio
+async def test_publish_does_not_reconcile_on_http_422(pub_service):
+    mock_gh = AsyncMock()
+    mock_gh.get_pull_request_detail.return_value = {"state": "open", "head": {"sha": "head_123"}}
+    mock_gh.get_pull_request_files.return_value = []
+    # simulate permanent 422 error
+    mock_gh.create_pull_request_review.side_effect = RuntimeError("HTTP 422 Unprocessable Entity: comment line invalid")
+    mock_gh.list_pull_request_reviews.return_value = [
+        {"id": 7777, "body": "## 🤖 AI Code Review Summary\nCommit Evaluated: `head_123`", "commit_id": "head_123"}
+    ]
+
+    result = await pub_service.publish_pull_request_review(
+        owner="test-owner",
+        repo_name="test-repo",
+        pr_number=10,
+        commit_sha="head_123",
+        findings=[],
+        github_service=mock_gh,
+        force_publish=True,
+    )
+
+    assert result.status == "FAILED"
+    assert "422" in result.error_message
+    mock_gh.list_pull_request_reviews.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_publish_skips_inline_when_diff_data_missing(pub_service):
+    mock_gh = AsyncMock()
+    mock_gh.get_pull_request_detail.return_value = {"state": "open", "head": {"sha": "head_123"}}
+    # PR files returned empty or diff unavailable
+    mock_gh.get_pull_request_files.return_value = []
+    mock_gh.create_pull_request_review.return_value = {"id": 1111}
+    mock_repo = MagicMock()
+    mock_repo.pr_review_enabled = True
+
+    finding = {
+        "category": "correctness",
+        "severity": "HIGH",
+        "confidence": "high",
+        "title": "Bug",
+        "description": "Bug details here",
+        "evidence": "def foo(): pass",
+        "source_reference": {"file_path": "app/main.py", "start_line": 5},
+    }
+
+    result = await pub_service.publish_pull_request_review(
+        owner="test-owner",
+        repo_name="test-repo",
+        pr_number=10,
+        commit_sha="head_123",
+        findings=[finding],
+        github_service=mock_gh,
+        repository=mock_repo,
+        changed_lines_only=True,
+    )
+
+    assert result.status == "PUBLISHED"
+    # When changed_lines_only=True and no diff data is present, no unverified comments should be published
+    assert result.published_comments_count == 0
+
+
+@pytest.mark.asyncio
+async def test_github_client_create_pull_request_review_does_not_retry():
+    from app.integrations.github.client import GitHubClient
+
+    client = GitHubClient(token="test-token")
+    client._request = AsyncMock(return_value={"id": 123})
+
+    await client.create_pull_request_review(
+        owner="owner",
+        repo="repo",
+        pr_number=1,
+        body="LGTM",
+    )
+
+    client._request.assert_awaited_once()
+    assert client._request.call_args.kwargs["retry"] is False

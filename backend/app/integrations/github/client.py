@@ -87,6 +87,7 @@ class GitHubClient:
         json_body: dict[str, Any] | None = None,
         accept: str | None = None,
         raw: bool = False,
+        retry: bool = True,
     ) -> Any:
         """Execute an authenticated GitHub API request with bounded retries."""
         url = f"{self._base_url}{path}"
@@ -94,8 +95,9 @@ class GitHubClient:
         if accept:
             headers["Accept"] = accept
 
+        max_attempts = (MAX_RETRIES + 1) if retry else 1
         last_exc: Exception | None = None
-        for attempt in range(MAX_RETRIES + 1):
+        for attempt in range(max_attempts):
             try:
                 async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
                     response = await client.request(
@@ -109,7 +111,7 @@ class GitHubClient:
                 if response.status_code == 403:
                     remaining = response.headers.get("x-ratelimit-remaining", "")
                     if remaining == "0":
-                        if attempt < MAX_RETRIES:
+                        if attempt < max_attempts - 1:
                             await asyncio.sleep(0.05 * (2 ** attempt))
                             continue
                         raise GitHubAPIError(
@@ -122,7 +124,7 @@ class GitHubClient:
                 if response.status_code == 429:
                     retry_after = response.headers.get("retry-after", "")
                     reset_time = response.headers.get("x-ratelimit-reset", "")
-                    if attempt < MAX_RETRIES:
+                    if attempt < max_attempts - 1:
                         await asyncio.sleep(0.05 * (2 ** attempt))
                         continue
                     raise GitHubAPIError(
@@ -145,11 +147,11 @@ class GitHubClient:
                     )
 
                 if response.status_code >= 500:
-                    if attempt < MAX_RETRIES:
+                    if attempt < max_attempts - 1:
                         logger.warning(
                             "GitHub API 5xx error (attempt %d/%d): HTTP %s",
                             attempt + 1,
-                            MAX_RETRIES + 1,
+                            max_attempts,
                             response.status_code,
                         )
                         await asyncio.sleep(0.05 * (2 ** attempt))
@@ -178,11 +180,11 @@ class GitHubClient:
                 ) from exc
             except httpx.HTTPError as exc:
                 last_exc = exc
-                if attempt < MAX_RETRIES:
+                if attempt < max_attempts - 1:
                     logger.warning(
                         "GitHub API request failed (attempt %d/%d): %s",
                         attempt + 1,
-                        MAX_RETRIES + 1,
+                        max_attempts,
                         redact(str(exc)),
                     )
                     continue
@@ -192,7 +194,7 @@ class GitHubClient:
                 ) from exc
 
         raise GitHubAPIError(
-            f"GitHub API request failed after {MAX_RETRIES + 1} attempts.",
+            f"GitHub API request failed after {max_attempts} attempts.",
             retryable=True,
         ) from last_exc
 
@@ -360,6 +362,7 @@ class GitHubClient:
             "POST",
             f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
             json_body=payload,
+            retry=False,
         )
 
     async def list_pull_request_reviews(

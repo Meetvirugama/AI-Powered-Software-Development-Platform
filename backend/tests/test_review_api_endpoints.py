@@ -182,3 +182,83 @@ def test_publish_review_endpoint(db_session, test_user, test_repo, auth_headers)
     assert data["review_id"] == 12345
     assert data["pr_number"] == 5
     assert data["published_comments_count"] == 1
+
+    # Verify installation_id passed to publication is resolved from GitHubInstallation (inst_999), not DB UUID
+    call_kwargs = mock_gh.create_pull_request_review.call_args.kwargs
+    assert call_kwargs["installation_id"] == "inst_999"
+
+
+def test_submit_finding_feedback_idor_and_run_mismatch_rejected(db_session, test_user, test_repo, auth_headers):
+    app.dependency_overrides[get_db] = lambda: db_session
+
+    run1 = AnalysisRun(id=uuid4(), repository_id=test_repo.id, user_id=test_user.id, feature_type="review", status="COMPLETED")
+    run2 = AnalysisRun(id=uuid4(), repository_id=test_repo.id, user_id=test_user.id, feature_type="review", status="COMPLETED")
+    finding1 = AnalysisFinding(
+        id=uuid4(),
+        analysis_run_id=run1.id,
+        repository_id=test_repo.id,
+        category="security",
+        severity="HIGH",
+        title="Issue",
+        description="Desc",
+        file_path="src/a.py",
+        evidence="evidence snippet",
+    )
+    db_session.add_all([run1, run2, finding1])
+    db_session.commit()
+
+    client = TestClient(app)
+
+    # Mismatched run_id must return 404
+    res_mismatch = client.post(
+        f"/api/v1/analysis-runs/{run2.id}/findings/{finding1.id}/feedback",
+        json={"feedback_type": "useful"},
+        headers=auth_headers,
+    )
+    assert res_mismatch.status_code == 404
+
+    # Other user accessing finding must return 404
+    other_user = User(id=uuid4(), github_id="999888", login="other", email="other@example.com")
+    db_session.add(other_user)
+    db_session.commit()
+    other_token, _ = create_access_token(user_id=str(other_user.id))
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    res_other = client.post(
+        f"/api/v1/analysis-runs/{run1.id}/findings/{finding1.id}/feedback",
+        json={"feedback_type": "useful"},
+        headers=other_headers,
+    )
+    assert res_other.status_code == 404
+
+
+def test_review_settings_persistence(db_session, test_user, test_repo, auth_headers):
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+
+    # PATCH custom settings
+    res_patch = client.patch(
+        f"/api/v1/repositories/{test_repo.id}/review/settings",
+        json={
+            "min_confidence": "high",
+            "max_comments": 25,
+            "changed_lines_only": False,
+        },
+        headers=auth_headers,
+    )
+    assert res_patch.status_code == 200
+    data = res_patch.json()
+    assert data["min_confidence"] == "high"
+    assert data["max_comments"] == 25
+    assert data["changed_lines_only"] is False
+
+    # GET settings must return the persisted custom settings
+    res_get = client.get(
+        f"/api/v1/repositories/{test_repo.id}/review/settings",
+        headers=auth_headers,
+    )
+    assert res_get.status_code == 200
+    data_get = res_get.json()
+    assert data_get["min_confidence"] == "high"
+    assert data_get["max_comments"] == 25
+    assert data_get["changed_lines_only"] is False

@@ -77,7 +77,7 @@ class ReviewValidationService:
                 if max_lines > 0 and start_line > max_lines + 500:
                     return False, f"Line number {start_line} exceeds file length ({max_lines})"
 
-        evidence = str(f_dict.get("evidence") or "").strip()
+        evidence = str(f_dict.get("evidence") or f_dict.get("description") or f_dict.get("message") or "").strip()
         if len(evidence) < self.MIN_EVIDENCE_LENGTH:
             return False, f"Insufficient evidence snippet (< {self.MIN_EVIDENCE_LENGTH} chars)"
 
@@ -93,7 +93,7 @@ class ReviewValidationService:
         source_type = str(f_dict.get("source_type") or "AI").upper()
         confidence = str(f_dict.get("confidence") or "medium").lower()
         is_uncertain = bool(f_dict.get("is_uncertain", False))
-        evidence = str(f_dict.get("evidence") or "").strip()
+        evidence = str(f_dict.get("evidence") or f_dict.get("description") or f_dict.get("message") or "").strip()
 
         if is_uncertain:
             return "NEEDS_CONTEXT"
@@ -147,13 +147,18 @@ class ReviewValidationService:
 
             # Determine whether finding is on a changed line
             is_changed = True
-            if changed_lines_by_file is not None and file_path in changed_lines_by_file:
-                is_changed = int(line or 0) in changed_lines_by_file[file_path]
+            if changed_lines_by_file is not None:
+                if file_path in changed_lines_by_file:
+                    is_changed = int(line or 0) in changed_lines_by_file[file_path]
+                else:
+                    is_changed = False
             f_dict["is_changed_line"] = is_changed
 
             # Assign evidence level
             evidence_level = self.assess_evidence_level(f_dict, is_changed_line=is_changed)
             f_dict["evidence_level"] = evidence_level
+            if "is_uncertain" not in f_dict:
+                f_dict["is_uncertain"] = evidence_level == "SUSPECTED"
 
             # Valid findings are always preserved for the platform UI
             platform_findings.append(f_dict)

@@ -74,6 +74,7 @@ class IncrementalReviewService:
         github_service: Any,
         installation_id: Any = None,
         custom_summary: Optional[str] = None,
+        is_complete_review: bool = True,
     ) -> IncrementalReviewResult:
         """Run delta comparison and publish review comments for new findings only."""
         is_incremental = bool(previous_commit_sha and previous_commit_sha != new_commit_sha)
@@ -83,7 +84,7 @@ class IncrementalReviewService:
             current_findings=current_findings,
             previous_findings=previous_findings if is_incremental else [],
             current_commit_sha=new_commit_sha,
-            is_complete_review=True,
+            is_complete_review=is_complete_review,
         )
 
         # 2. Filter publishable findings: on incremental runs, prioritize NEW or REOPENED findings

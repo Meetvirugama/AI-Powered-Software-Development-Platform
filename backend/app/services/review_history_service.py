@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
 from app.repositories.analysis_run_repository import AnalysisRunRepository
 from app.services.history.base import BaseHistoryService
+from app.services.review_settings_service import get_repo_review_settings, set_repo_review_settings
 
 logger = logging.getLogger(__name__)
 

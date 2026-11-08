@@ -602,7 +602,9 @@ class PullRequestEventHandler:
         if github_service and hasattr(github_service, "create_pull_request_review"):
             try:
                 from app.services.review_publication_service import ReviewPublicationService
+                from app.services.review_settings_service import get_repo_review_settings
 
+                review_settings = get_repo_review_settings(repo.id)
                 findings_list = getattr(report, "findings", []) if report else []
                 pub_service = ReviewPublicationService()
                 pub_res = await pub_service.publish_pull_request_review(
@@ -615,6 +617,9 @@ class PullRequestEventHandler:
                     repository=repo,
                     installation_id=gh_installation_id,
                     custom_summary=review_body,
+                    min_confidence=review_settings.get("min_confidence", "medium"),
+                    max_comments=review_settings.get("max_comments", 15),
+                    changed_lines_only=review_settings.get("changed_lines_only", True),
                 )
                 if pub_res.status == "FAILED":
                     raise RuntimeError(pub_res.error_message or "Failed to post PR review comments.")

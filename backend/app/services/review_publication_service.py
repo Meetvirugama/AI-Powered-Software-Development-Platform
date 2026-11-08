@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import asyncio
 import hashlib
 import logging
 import re
@@ -77,15 +78,22 @@ class ReviewPublicationService:
             return changed_lines
 
         current_line = 0
+        in_hunk = False
         for line in patch.splitlines():
             hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
             if hunk_match:
                 current_line = int(hunk_match.group(1))
+                in_hunk = True
                 continue
-            if line.startswith("+") and not line.startswith("+++"):
+            if not in_hunk:
+                continue
+            if line.startswith("\\"):
+                # Diff metadata (e.g. "\ No newline at end of file")
+                continue
+            if line.startswith("+"):
                 changed_lines.add(current_line)
                 current_line += 1
-            elif line.startswith("-") and not line.startswith("---"):
+            elif line.startswith("-"):
                 # Deleted lines do not advance right-side line counter
                 pass
             else:
@@ -273,19 +281,24 @@ class ReviewPublicationService:
         except Exception as exc:
             logger.warning("review_publication_fetch_files_warning", extra={"error": str(exc)})
 
-        # 4. Filter findings for changed-line inline comments
-        inline_comments: list[dict[str, Any]] = []
-        confidence_rank = {"high": 3, "medium": 2, "low": 1}
-        min_conf_val = confidence_rank.get(min_confidence.lower(), 2)
+        # 4. Filter findings for changed-line inline comments via ReviewValidationService
+        from app.services.review_validation_service import ReviewValidationService
 
-        for f in findings:
+        validation_service = ReviewValidationService()
+        allowed_paths = set(file_diff_map.keys()) if (changed_lines_only and file_diff_map) else None
+        gate_result = validation_service.evaluate_quality_gate(
+            findings,
+            changed_lines_by_file=file_diff_map if changed_lines_only else None,
+            allowed_paths=allowed_paths,
+            min_confidence=min_confidence,
+            changed_lines_only=changed_lines_only,
+            max_publishable=max_comments,
+        )
+
+        inline_comments: list[dict[str, Any]] = []
+        for f_dict in gate_result.publishable_findings:
             if len(inline_comments) >= max_comments:
                 break
-
-            f_dict = f if isinstance(f, dict) else f.model_dump()
-            conf = str(f_dict.get("confidence") or "medium").lower()
-            if confidence_rank.get(conf, 1) < min_conf_val:
-                continue
 
             src = f_dict.get("source_reference") or {}
             file_path = src.get("file_path") or f_dict.get("file_path")
@@ -294,11 +307,10 @@ class ReviewPublicationService:
             if not file_path or not line or line <= 0:
                 continue
 
-            # Enforce changed-lines policy if diff map is available
-            if changed_lines_only and file_diff_map:
-                if file_path not in file_diff_map:
-                    continue
-                if line not in file_diff_map[file_path]:
+            # Enforce changed-lines policy: when changed_lines_only is True,
+            # if file_diff_map is empty or has no diff entry for this line, do not publish unverified inline comments.
+            if changed_lines_only:
+                if not file_diff_map or file_path not in file_diff_map or int(line) not in file_diff_map[file_path]:
                     continue
 
             comment_body = self.build_inline_comment_body(f_dict)
@@ -318,6 +330,7 @@ class ReviewPublicationService:
         )
 
         # 6. Publish via GitHub Client
+        attempt_started_at = datetime.now(timezone.utc)
         try:
             review_resp = await github_service.create_pull_request_review(
                 owner=owner,
@@ -350,17 +363,20 @@ class ReviewPublicationService:
                 extra={"owner": owner, "repo": repo_name, "pr": pr_number, "error": err_msg},
             )
 
-            # Reconcile: check if GitHub actually created the review before reporting failure
-            reconciled = await self._reconcile_with_github(
-                github_service=github_service,
-                owner=owner,
-                repo_name=repo_name,
-                pr_number=pr_number,
-                commit_sha=commit_sha,
-                installation_id=installation_id,
-            )
-            if reconciled:
-                return reconciled
+            # Reconcile only on ambiguous exceptions (timeouts, connection drops, 5xx server errors).
+            # Permanent client errors (HTTP 4xx like 400, 401, 403, 404, 422) must fail directly without masking.
+            if self._is_ambiguous_error(exc):
+                reconciled = await self._reconcile_with_github(
+                    github_service=github_service,
+                    owner=owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    commit_sha=commit_sha,
+                    installation_id=installation_id,
+                    attempt_started_at=attempt_started_at,
+                )
+                if reconciled:
+                    return reconciled
 
             return ReviewPublicationResult(
                 status="FAILED",
@@ -369,6 +385,39 @@ class ReviewPublicationService:
                 published_comments_count=0,
                 error_message=f"Failed to publish review to GitHub PR #{pr_number}: {err_msg}",
             )
+
+    def _is_ambiguous_error(self, exc: Exception) -> bool:
+        """Determine whether an error from create_pull_request_review is ambiguous (timeout/network/5xx)."""
+        import httpx
+        from app.integrations.github.client import GitHubAPIError
+        from app.integrations.github.exceptions import GitHubError
+
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, asyncio.TimeoutError)):
+            return True
+
+        if isinstance(exc, GitHubAPIError):
+            status = getattr(exc, "status_code", None)
+            if status is not None:
+                if 400 <= status < 500:
+                    return False
+                if status >= 500:
+                    return True
+            return bool(getattr(exc, "retryable", False))
+
+        status_code = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+        if status_code is not None:
+            if 400 <= status_code < 500:
+                return False
+            if status_code >= 500:
+                return True
+
+        msg = str(exc).lower()
+        if any(term in msg for term in ("400", "401", "403", "404", "422", "unprocessable")):
+            return False
+        if any(term in msg for term in ("timeout", "timed out", "500", "502", "503", "504", "connection")):
+            return True
+
+        return False
 
     async def _reconcile_with_github(
         self,
@@ -379,6 +428,7 @@ class ReviewPublicationService:
         pr_number: int,
         commit_sha: str,
         installation_id: Any,
+        attempt_started_at: datetime,
     ) -> Optional[ReviewPublicationResult]:
         """Check if an ambiguous publication succeeded remotely by querying existing reviews."""
         if not hasattr(github_service, "list_pull_request_reviews"):
@@ -392,10 +442,28 @@ class ReviewPublicationService:
                 installation_id=installation_id,
             )
             if isinstance(reviews, list):
+                from datetime import timedelta
+
                 for rev in reversed(reviews):
                     body = rev.get("body", "")
                     rev_sha = rev.get("commit_id", "")
                     if "AI Code Review Summary" in body and (not commit_sha or rev_sha == commit_sha):
+                        raw_date = rev.get("submitted_at") or rev.get("created_at")
+                        if raw_date:
+                            try:
+                                rev_dt = (
+                                    datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+                                    if isinstance(raw_date, str)
+                                    else raw_date
+                                )
+                                if rev_dt.tzinfo is None:
+                                    rev_dt = rev_dt.replace(tzinfo=timezone.utc)
+                                if rev_dt < (attempt_started_at - timedelta(seconds=5)):
+                                    # Past review submitted prior to current attempt
+                                    continue
+                            except Exception:
+                                pass
+
                         logger.info("reconciled_existing_review_found", extra={"review_id": rev.get("id")})
                         return ReviewPublicationResult(
                             status="RECONCILED",

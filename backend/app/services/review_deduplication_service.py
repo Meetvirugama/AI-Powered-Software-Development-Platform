@@ -104,7 +104,13 @@ class ReviewDeduplicationService:
                     e_line = e_src.get("start_line") or existing.get("start_line")
                     e_cat = str(existing.get("category") or "").lower()
 
-                    if e_file == f_file and e_cat == f_cat and e_line and abs(int(e_line) - int(f_line)) <= 2:
+                    if (
+                        e_file == f_file
+                        and e_cat == f_cat
+                        and e_line
+                        and abs(int(e_line) - int(f_line)) <= 2
+                        and self._is_same_root_cause(existing, f_dict)
+                    ):
                         self._merge_finding_metadata(existing, f_dict)
                         merged = True
                         break
@@ -114,6 +120,41 @@ class ReviewDeduplicationService:
                 deduped.append(f_dict)
 
         return deduped
+
+    def _is_same_root_cause(self, f1: dict[str, Any], f2: dict[str, Any]) -> bool:
+        """Determine whether two nearby findings represent the same root cause defect."""
+        rule1 = f1.get("rule_id") or (f1.get("finding_metadata") or {}).get("rule_id")
+        rule2 = f2.get("rule_id") or (f2.get("finding_metadata") or {}).get("rule_id")
+        if rule1 and rule2 and str(rule1).strip().lower() == str(rule2).strip().lower():
+            return True
+
+        src1 = f1.get("source_reference") or {}
+        src2 = f2.get("source_reference") or {}
+        sym1 = f1.get("target_symbol") or src1.get("target_symbol") or src1.get("symbol_name")
+        sym2 = f2.get("target_symbol") or src2.get("target_symbol") or src2.get("symbol_name")
+        if sym1 and sym2 and str(sym1).strip() == str(sym2).strip():
+            return True
+
+        # 3. Matching or overlapping evidence snippets
+        ev1 = str(f1.get("evidence") or "").strip().lower()
+        ev2 = str(f2.get("evidence") or "").strip().lower()
+        if ev1 and ev2 and (ev1 == ev2 or ev1 in ev2 or ev2 in ev1):
+            return True
+
+        # 4. Normalized title / message similarity (substring or token overlap)
+        t1 = str(f1.get("title") or f1.get("message") or "").strip().lower()
+        t2 = str(f2.get("title") or f2.get("message") or "").strip().lower()
+        if t1 and t2:
+            if t1 == t2 or t1 in t2 or t2 in t1:
+                return True
+            tokens1 = set(t1.split())
+            tokens2 = set(t2.split())
+            if tokens1 and tokens2:
+                overlap = len(tokens1 & tokens2) / max(len(tokens1), len(tokens2))
+                if overlap >= 0.5:
+                    return True
+
+        return False
 
     def _merge_finding_metadata(self, base: dict[str, Any], incoming: dict[str, Any]) -> None:
         """Merge incoming finding into base finding, elevating severity and merging source types."""

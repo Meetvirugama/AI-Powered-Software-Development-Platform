@@ -490,28 +490,95 @@ export function CodeReviewView({
       {/* ------------------------------------------------------------------ */}
       {/* 1.1 GitHub PR Publication Status Banner                            */}
       {/* ------------------------------------------------------------------ */}
-      {(result.review_publication || publicationState.publishedResult) && (
-        <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2">
-            <GitPullRequest className="h-4 w-4 text-indigo-400 shrink-0" />
-            <div>
-              <span className="font-semibold text-indigo-300">
-                GitHub PR Review:
-              </span>{' '}
-              <span className="text-foreground">
-                {(publicationState.publishedResult || result.review_publication)?.status === 'PUBLISHED'
-                  ? `Published ${(publicationState.publishedResult || result.review_publication)?.published_comments_count} inline comment(s) to PR #${(publicationState.publishedResult || result.review_publication)?.pr_number}`
-                  : (publicationState.publishedResult || result.review_publication)?.skipped_reason || 'Publication evaluated'}
-              </span>
+      {(() => {
+        const pub = publicationState.publishedResult || result.review_publication;
+        if (!pub) return null;
+
+        if (pub.status === 'FAILED') {
+          return (
+            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <AlertOctagon className="h-4 w-4 text-rose-400 shrink-0" />
+                <div>
+                  <span className="font-semibold text-rose-300">
+                    GitHub PR Review Failed:
+                  </span>{' '}
+                  <span className="text-foreground">
+                    {pub.error_message || 'Failed to publish review comments to GitHub'}
+                  </span>
+                </div>
+              </div>
             </div>
+          );
+        }
+
+        if (pub.status === 'RECONCILED') {
+          return (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <GitPullRequest className="h-4 w-4 text-amber-400 shrink-0" />
+                <div>
+                  <span className="font-semibold text-amber-300">
+                    GitHub PR Review (Reconciled):
+                  </span>{' '}
+                  <span className="text-foreground">
+                    Previous review on commit {(pub.commit_sha || '').slice(0, 8)} verified on PR #{pub.pr_number}
+                  </span>
+                </div>
+              </div>
+              {pub.review_id && (
+                <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono">
+                  Review ID: #{pub.review_id}
+                </span>
+              )}
+            </div>
+          );
+        }
+
+        if (pub.status === 'PUBLISHED') {
+          return (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                <div>
+                  <span className="font-semibold text-emerald-300">
+                    GitHub PR Review Published:
+                  </span>{' '}
+                  <span className="text-foreground">
+                    Published {pub.published_comments_count} inline comment(s) to PR #{pub.pr_number}
+                  </span>
+                </div>
+              </div>
+              {pub.review_id && (
+                <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-mono">
+                  Review ID: #{pub.review_id}
+                </span>
+              )}
+            </div>
+          );
+        }
+
+        return (
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <GitPullRequest className="h-4 w-4 text-indigo-400 shrink-0" />
+              <div>
+                <span className="font-semibold text-indigo-300">
+                  GitHub PR Review:
+                </span>{' '}
+                <span className="text-foreground">
+                  {pub.skipped_reason || 'Publication evaluated'}
+                </span>
+              </div>
+            </div>
+            {pub.review_id && (
+              <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-mono">
+                Review ID: #{pub.review_id}
+              </span>
+            )}
           </div>
-          {(publicationState.publishedResult || result.review_publication)?.review_id && (
-            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-mono">
-              Review ID: #{(publicationState.publishedResult || result.review_publication)?.review_id}
-            </span>
-          )}
-        </div>
-      )}
+        );
+      })()}
       {publicationState.error && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300 flex items-center gap-2">
           <AlertOctagon className="h-4 w-4 text-rose-400 shrink-0" />

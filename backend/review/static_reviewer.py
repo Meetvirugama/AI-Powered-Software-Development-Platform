@@ -2,6 +2,7 @@
 
 from dataclasses import asdict, dataclass
 import json
+import os
 import subprocess
 import sys
 from typing import Any
@@ -103,24 +104,29 @@ class StaticReviewer:
         self,
         modified_files: list[str],
         ai_findings: list[dict[str, Any]] | None = None,
-        scanners: tuple[str, ...] | None = ("ruff", "bandit"),
+        scanners: tuple[str, ...] | None = None,
         repo_root: str | None = None,
     ) -> dict[str, Any]:
         """Run static scanners on modified files and combine their findings with AI findings."""
         static_findings: list[dict[str, Any]] = []
 
         for file_path in modified_files:
-            if scanners is not None and scanners != ("ruff", "bandit"):
+            if scanners is not None:
                 file_scanners = list(scanners)
             else:
                 detected = self.detect_scanners_for_file(file_path, repo_root=repo_root)
-                file_scanners = detected if detected else list(scanners or ("ruff", "bandit"))
+                file_scanners = detected if detected else ["ruff", "bandit"]
 
             for scanner in file_scanners:
                 try:
-                    static_findings.extend(
-                        self.run_scanner(scanner, file_path)
-                    )
+                    if repo_root is not None:
+                        static_findings.extend(
+                            self.run_scanner(scanner, file_path, cwd=repo_root)
+                        )
+                    else:
+                        static_findings.extend(
+                            self.run_scanner(scanner, file_path)
+                        )
                 except (RuntimeError, ValueError):
                     # Preserve results from other files/scanners.
                     continue
@@ -138,13 +144,15 @@ class StaticReviewer:
         }
 
     def run_scanner(
-        self, scanner: str, target_path: str
+        self, scanner: str, target_path: str, cwd: str | None = None
     ) -> list[dict[str, Any]]:
         """Run a supported scanner and normalize its JSON output.
 
         Security (W2-S3, Sukun/Divu):
         - Rejects empty paths, leading '-' option-injection strings, and null bytes.
         - Passes '--' before target_path so a file path cannot be parsed as a CLI flag.
+        - Passes '--no-install' to npx to disallow downloading untrusted npm packages.
+        - Executes under a sanitized, minimal environment.
         """
         cleaned_target = (target_path or "").strip()
         if not cleaned_target or cleaned_target.startswith("-") or "\x00" in cleaned_target:
@@ -160,15 +168,24 @@ class StaticReviewer:
                 "-r", "--", cleaned_target,
             ],
             "eslint": [
-                "npx", "eslint", "--format", "json", "--no-color", "--", cleaned_target,
+                "npx", "--no-install", "eslint", "--format", "json", "--no-color", "--", cleaned_target,
             ],
             "biome": [
-                "npx", "@biomejs/biome", "lint", "--reporter=json", "--", cleaned_target,
+                "npx", "--no-install", "@biomejs/biome", "lint", "--reporter=json", "--", cleaned_target,
             ],
         }
 
         if scanner not in commands:
             raise ValueError(f"Unsupported scanner: {scanner}")
+
+        safe_env = {
+            "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", "/tmp"),
+            "LANG": os.environ.get("LANG", "en_US.UTF-8"),
+            "NODE_ENV": "production",
+        }
+        if "VIRTUAL_ENV" in os.environ:
+            safe_env["VIRTUAL_ENV"] = os.environ["VIRTUAL_ENV"]
 
         try:
             completed = subprocess.run(
@@ -177,6 +194,8 @@ class StaticReviewer:
                 text=True,
                 timeout=60,
                 check=False,
+                cwd=cwd,
+                env=safe_env,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"{scanner} could not complete: {redact(str(exc))}") from exc
@@ -241,6 +260,26 @@ class StaticReviewer:
                 loc = diag.get("location") or {}
                 f_path = (loc.get("path") or {}).get("file") or cleaned_target
                 l_num = (loc.get("lines") or {}).get("start")
+
+                # Derive line number if lines.start is missing but span is available
+                if l_num is None:
+                    span = loc.get("span")
+                    if isinstance(span, (list, tuple)) and len(span) >= 1 and isinstance(span[0], int):
+                        start_offset = span[0]
+                        source_code = loc.get("sourceCode") or diag.get("sourceCode")
+                        if not source_code:
+                            candidate_file = f_path
+                            if cwd and not os.path.isabs(candidate_file):
+                                candidate_file = os.path.join(cwd, candidate_file)
+                            if os.path.isfile(candidate_file):
+                                try:
+                                    with open(candidate_file, "r", encoding="utf-8", errors="replace") as f:
+                                        source_code = f.read()
+                                except OSError:
+                                    pass
+                        if source_code and 0 <= start_offset <= len(source_code):
+                            l_num = source_code[:start_offset].count("\n") + 1
+
                 sev = "high" if str(diag.get("severity", "")).lower() == "error" else "low"
                 findings.append({
                     "rule_id": diag.get("category") or "biome-lint",

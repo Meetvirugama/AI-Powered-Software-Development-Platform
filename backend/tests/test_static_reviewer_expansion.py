@@ -99,6 +99,54 @@ class TestStaticReviewerExpansion(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.reviewer.run_scanner("biome", "src/file\x00.ts")
 
+    @patch("review.static_reviewer.subprocess.run")
+    def test_biome_derives_line_from_span_byte_offset(self, mock_run):
+        # Biome JSON reporting span without lines.start
+        source_text = "const a = 1;\nconst b = 2;\nconst c = 3;\n"
+        # offset 26 is line 3
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["npx", "--no-install", "@biomejs/biome"],
+            returncode=1,
+            stdout=json.dumps({
+                "diagnostics": [
+                    {
+                        "category": "lint/correctness/noUnusedVariables",
+                        "severity": "error",
+                        "description": "Variable c is unused",
+                        "location": {
+                            "path": {"file": "src/math.ts"},
+                            "span": [26, 35],
+                            "sourceCode": source_text,
+                        },
+                    }
+                ]
+            }),
+            stderr="",
+        )
+
+        results = self.reviewer.run_scanner("biome", "src/math.ts")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["line_number"], 3)
+
+    @patch("review.static_reviewer.subprocess.run")
+    def test_run_scanner_passes_no_install_and_cwd(self, mock_run):
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="[]", stderr="")
+        self.reviewer.run_scanner("eslint", "src/App.tsx", cwd="/custom/root")
+
+        mock_run.assert_called_once()
+        call_args, call_kwargs = mock_run.call_args
+        cmd = call_args[0]
+        self.assertIn("--no-install", cmd)
+        self.assertEqual(call_kwargs["cwd"], "/custom/root")
+
+    @patch.object(StaticReviewer, "run_scanner")
+    def test_review_modified_files_explicit_scanners_not_overridden(self, mock_run_scanner):
+        mock_run_scanner.return_value = []
+        self.reviewer.review_modified_files(["src/App.tsx"], scanners=("biome",))
+
+        # Should only call biome, not ruff or bandit
+        mock_run_scanner.assert_called_once_with("biome", "src/App.tsx")
+
 
 if __name__ == "__main__":
     unittest.main()
