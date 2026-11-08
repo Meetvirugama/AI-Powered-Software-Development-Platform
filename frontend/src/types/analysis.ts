@@ -217,7 +217,58 @@ export interface CodeExplanationResponse {
   created_at: string;
 }
 
-export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest';
+export type SupportedTestFramework = 'pytest' | 'unittest' | 'jest' | 'vitest';
+
+export type TestVerificationStatus = 'VERIFIED' | 'UNVERIFIED' | 'REJECTED' | 'EXECUTION_ERROR';
+export type StabilityClassification = 'STABLE' | 'UNSTABLE' | 'FAILED';
+
+export interface StabilityRunResult {
+  run_number: number;
+  passed: boolean;
+  exit_code: number;
+  duration_seconds: number;
+  passed_count: number;
+  failed_count: number;
+  error_message?: string | null;
+}
+
+export interface StabilityReport {
+  total_runs: number;
+  passed_runs: number;
+  classification: StabilityClassification;
+  is_stable: boolean;
+  runs: StabilityRunResult[];
+}
+
+export interface CoverageReport {
+  baseline_line_coverage?: number | null;
+  final_line_coverage?: number | null;
+  line_coverage_gain?: number | null;
+  baseline_branch_coverage?: number | null;
+  final_branch_coverage?: number | null;
+  branch_coverage_gain?: number | null;
+  newly_covered_lines: number[];
+  newly_covered_branches: number[][];
+  coverage_attributable_to_generated_tests: boolean;
+  collection_status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'NOT_CONFIGURED';
+  warnings: string[];
+}
+
+export interface IterationRound {
+  round_number: number;
+  scenarios_targeted: string[];
+  uncovered_lines_addressed: number[];
+  tests_added: number;
+  line_coverage_after?: number | null;
+  tokens_used?: number | null;
+}
+
+export interface IterationReport {
+  total_rounds: number;
+  rounds: IterationRound[];
+  stopping_reason: string;
+  final_coverage_achieved?: number | null;
+}
 
 export type TestScenarioCategory = 'normal' | 'edge_case' | 'failure_path';
 
@@ -308,6 +359,12 @@ export interface TestGenerationResult {
   execution_summary?: Record<string, any>;
   execution_status?: string;
   execution_attempted?: boolean;
+  verification_status?: TestVerificationStatus;
+  verification_reasons?: string[];
+  stability_report?: StabilityReport | null;
+  coverage_report?: CoverageReport | null;
+  iteration_report?: IterationReport | null;
+  raw_execution_output?: string | null;
 }
 
 export interface TestGenerationResponse {
@@ -351,6 +408,50 @@ export interface CodeReviewRequest {
   include_static?: boolean;
 }
 
+export type FindingLifecycleStatus =
+  | 'NEW'
+  | 'ACTIVE'
+  | 'FIXED'
+  | 'REOPENED'
+  | 'DISMISSED'
+  | 'SUPPRESSED';
+
+export type ReviewFeedbackType =
+  | 'useful'
+  | 'not_useful'
+  | 'false_positive'
+  | 'already_fixed'
+  | 'dismissed';
+
+export interface FindingLifecycle {
+  status: FindingLifecycleStatus;
+  first_seen_commit?: string | null;
+  last_seen_commit?: string | null;
+  resolved_commit?: string | null;
+  history?: Array<{
+    status: FindingLifecycleStatus;
+    commit_sha?: string | null;
+    timestamp?: string;
+  }>;
+}
+
+export interface FindingFeedback {
+  feedback_type: ReviewFeedbackType;
+  comment?: string | null;
+  created_at?: string;
+}
+
+export interface ReviewPublicationSummary {
+  status: string;
+  review_id?: number | null;
+  pr_number?: number | null;
+  commit_sha?: string | null;
+  published_comments_count: number;
+  skipped_reason?: string | null;
+  error_message?: string | null;
+  published_at?: string | null;
+}
+
 export interface ReviewFinding {
   id: string;
   category: ReviewCategory;
@@ -365,6 +466,11 @@ export interface ReviewFinding {
   is_new_in_change?: boolean;
   source_type: FindingSourceType;
   rule_id?: string | null;
+  evidence_level?: 'PROVEN' | 'STRONG' | 'SUSPECTED' | 'NEEDS_CONTEXT' | string;
+  is_changed_line?: boolean;
+  lifecycle?: FindingLifecycle | null;
+  feedback?: FindingFeedback | null;
+  finding_metadata?: Record<string, any>;
 }
 
 export interface ReviewReport {
@@ -382,6 +488,7 @@ export interface ReviewReportResponse {
   status: AnalysisStatus;
   target: ReviewTarget;
   report: ReviewReport;
+  review_publication?: ReviewPublicationSummary | null;
   stage_metrics?: StageMetrics | null;
   created_at: string;
   completed_at?: string | null;

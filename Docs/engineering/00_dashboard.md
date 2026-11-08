@@ -1,5 +1,5 @@
 # 00. Project Dashboard
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Active
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Status:** Active & Production Verified
 
 ---
 
@@ -20,13 +20,14 @@
 
 | Metric | Value |
 |---|---|
-| **Development Phase** | Production Hardened & Acceptance Verified |
-| **Current Week/Sprint** | Week 3 (100% Complete) |
+| **Development Phase** | Production Hardened, Enterprise Scaled & Verified |
+| **Current Week/Sprint** | Post-Week 3 Enterprise Milestones (100% Complete) |
 | **Week 1 Progress** | 100% COMPLETE (Repository Intelligence, Hybrid RAG, Auth, UI) |
 | **Week 2 Progress** | 100% COMPLETE (Developer Intelligence Suite: Explain, Bug, TestGen, Review) |
 | **Week 3 Progress** | 100% COMPLETE (Workflow Automation, Approval Gate, Sandbox, Repair, Draft PR) |
-| **Current Milestone** | Production Hardening, Audit Fixes & Acceptance Sign-off |
-| **Test Suite Health** | 100% passing across backend and frontend test suites |
+| **Post-Week 3 Progress** | 100% COMPLETE (JWT/OAuth Hardening, Durable Webhooks, Multi-Stage Retrieval, Agentic Chat) |
+| **Current Milestone** | Production Release Sign-off & Pull Request Merges (#202, #219, #220) |
+| **Test Suite Health** | 100% passing across 500+ backend tests and 329 frontend tests |
 | **Frontend Health** | 0 lint errors (`oxlint`), production build passing (`tsc -b && vite build`) |
 
 ---
@@ -82,6 +83,15 @@
 | Task Dashboard & Timeline UI (F38) | Dhramraj | 🟢 Done | Live task progress, approval modal, diff review |
 | Persistence & Crash Recovery (F39) | Om | 🟢 Done | Task checkpoints, event history, recovery |
 | Security & Release Acceptance (F40) | Sukun / Keval | 🟢 Done | Attack matrix, end-to-end acceptance demo |
+
+### Post-Week 3 — Enterprise Hardening & Advanced Intelligence (100% Done)
+
+| Feature | Owner | Status | Notes |
+|---|---|---|---|
+| Timing-Safe Auth & OAuth Hardening (Issue #181 / PR #202) | Sukun / Yug / Parth | 🟢 Done | Timing-safe HMAC, 32-byte secret validation, Redis state nonces, token rotation |
+| Durable Webhook Ingestion & Automation (Issue #182 / PR #219) | Parth / Om / Yug | 🟢 Done | `github_webhook_events` state machine, lease workers, push auto-sync, PR review auto-trigger |
+| Multi-Stage Code Retrieval Engine (Issue #187 / PR #220) | Meet / Prit / Om | 🟢 Done | Code-aware lexical search, adaptive HNSW savepoints, 1-hop graph expansion, Redis caching |
+| Bounded Agentic Repository Chat (Issue #188 / PR #220) | Meet / Dev / Dhramraj | 🟢 Done | Normalized tool calling, read-only tools, budget control, dual-mode chat API & UI badges |
 
 ---
 

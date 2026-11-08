@@ -1,0 +1,26 @@
+flowchart TD
+    subgraph HostSystem ["Host Backend Environment"]
+        HostSecrets["Host Secrets & Environment Variables<br>(OPENAI_API_KEY, GITHUB_TOKEN, DB_CREDENTIALS)"]
+        ProductionDB["Production Database / PostgreSQL"]
+        ProductionFS["Host Filesystem / Original Repo Directory"]
+    end
+
+    subgraph SecurityBoundary ["Sandbox Security Boundary (ADR-007)"]
+        PathGuard["WorkspacePathGuard<br>(Rejects ../, symlinks, absolute escapes)"]
+        EnvStripper["Environment Stripper & Secret Redactor<br>(Whitelist-only PATH/HOME, strips auth tokens)"]
+        ResourceMonitor["Resource Monitor & Quota Limiter<br>(Max 60s timeout, 512MB RAM cap, 100KB output)"]
+        CommandAllowlist["Command Runner Allowlist<br>(pytest, python, npm, vitest ONLY; no pip/install)"]
+    end
+
+    subgraph IsolatedWorkspace ["Isolated Temporary Workspace (.workspaces/task-xxx)"]
+        TargetCopy["Disposable Target Source Copy"]
+        GeneratedTest["Proposed Test File"]
+        CoverageReportFiles["Coverage Artifacts (.coverage.json)"]
+    end
+
+    HostSecrets -.->|BLOCKED by EnvStripper| IsolatedWorkspace
+    ProductionDB -.->|BLOCKED by Network Boundary| IsolatedWorkspace
+    ProductionFS -.->|BLOCKED by PathGuard & Directory Copy| IsolatedWorkspace
+    CommandAllowlist -->|Executes in Workspace CWD| IsolatedWorkspace
+    ResourceMonitor -->|Monitors Subprocess| IsolatedWorkspace
+    IsolatedWorkspace -->|Safe Removal on Completion| Cleanup["Idempotent Workspace Cleanup"]

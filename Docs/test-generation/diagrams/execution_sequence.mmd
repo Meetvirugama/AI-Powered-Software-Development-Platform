@@ -1,0 +1,46 @@
+sequenceDiagram
+    autonumber
+    actor User as User / Frontend
+    participant API as API Route (tests.py)
+    participant LLM as TestGenerationService
+    participant Verifier as TestExecutionVerifier
+    participant WS as WorkspaceManager
+    participant Stability as TestStabilityValidator
+    participant Cov as TestCoverageService
+    participant Sandbox as Isolated Subprocess / Runner
+
+    User->>API: POST /repositories/{id}/generate-tests
+    API->>LLM: generate_tests(...)
+    LLM-->>API: TestGenerationResult (synthesized test)
+    API->>Verifier: verify_generated_test(...)
+    
+    Verifier->>WS: create_workspace(directory_copy)
+    WS-->>Verifier: WorkspaceMetadata (/tmp/.workspaces/task-...)
+    
+    Note over Verifier,Cov: Collect Baseline Coverage
+    Verifier->>Cov: measure_coverage(workspace, target, test=None)
+    Cov->>Sandbox: coverage run -m pytest / npm test --coverage
+    Sandbox-->>Cov: baseline report (line=40%)
+    Cov-->>Verifier: TargetCoverageData(line=40%)
+    
+    Note over Verifier,Stability: Write generated test & run 3 stability runs
+    loop Exactly 3 Consecutive Runs
+        Verifier->>Stability: validate_with_sandbox_test_runner(run_idx)
+        Stability->>Sandbox: run_tests(pytest -v / npm test --run)
+        Sandbox-->>Stability: exit_code=0, passed=1, duration=0.05s
+    end
+    Stability-->>Verifier: StabilityReport(3/3 PASS -> STABLE)
+    
+    Note over Verifier,Cov: Collect Post-Gen Coverage
+    Verifier->>Cov: measure_coverage(workspace, target, test=proposed_path)
+    Cov->>Sandbox: coverage run -m pytest tests/test_generated.py
+    Sandbox-->>Cov: post-gen report (line=75%)
+    Cov-->>Verifier: TargetCoverageData(line=75%)
+    Verifier->>Cov: calculate_coverage_gain(baseline, post-gen)
+    Cov-->>Verifier: CoverageReport(gain=+35%, attributable=True)
+    
+    Verifier->>WS: cleanup_workspace(task_id, force=True)
+    WS-->>Verifier: Cleanup OK
+    
+    Verifier-->>API: TestGenerationResult(status=VERIFIED)
+    API-->>User: TestGenerationResponse

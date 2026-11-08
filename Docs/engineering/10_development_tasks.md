@@ -1,8 +1,8 @@
 # 10. Development Tasks — Master Task Board
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08
 
 > [!NOTE]
-> Task data is synchronized with `Docs/daily_tasks.md`, `Docs/week1.md`, `Docs/week2.md`, and `Docs/week3.md`.
+> Task data is synchronized with `Docs/daily_tasks.md`, `Docs/week1.md`, `Docs/week2.md`, `Docs/week3.md`, `Docs/retrieval/`, and `Docs/agentic-chat/`.
 
 ---
 
@@ -91,18 +91,32 @@ Convert verified developer intelligence into a controlled development workflow: 
 
 ---
 
+## POST-WEEK 3 — Enterprise Hardening & Advanced Intelligence (100% COMPLETE)
+
+### Post-Week 3 Milestone Goal
+Harden security primitives to enterprise standards, establish durable and idempotent GitHub webhook event processing with lease-based workers, build a production-grade 7-stage code retrieval engine, and deliver bounded, tool-augmented repository chat with dual LLM provider support.
+
+| Task ID | Task | Owner | Priority | Status | Deliverables |
+|---|---|---|---|---|---|
+| PW3-01 | **JWT & OAuth Security Hardening (F-34)**<br>(Issue #181, PR #202) | Meet / Sukun | P0 | DONE | Timing-safe HMAC JWT signature verification, mandatory >=32-byte secret enforcement, atomic Redis CSRF state nonces via `GETDEL`, cookie security hardening (`app/core/security.py`, `app/api/v1/auth.py`, `backend/tests/test_jwt_and_oauth_hardening.py`) |
+| PW3-02 | **Durable Webhook & Event Automation (F-35)**<br>(Issue #182, PR #219) | Meet / Parth | P0 | DONE | `github_webhook_events` durable state machine table, lease-based background worker (`webhook_worker.py`), automated push re-indexing, PR review bot with comment emission, replay API (`backend/tests/test_durable_webhook_automation.py`) |
+| PW3-03 | **Multi-Stage Code Retrieval Engine (F-36)**<br>(Issue #187, PR #220) | Meet | P0 | DONE | 7-stage retrieval pipeline: intent detection, simple GIN lexical FTS (`code_search_text`), adaptive HNSW savepoints, 1-hop symbol graph expansion, ONNX cross-encoder reranking, Redis cache with active generation invalidation, 150-query benchmark (`backend/app/retrieval/`, `backend/tests/test_hybrid_retrieval.py`, `backend/tests/test_reranker_onnx.py`) |
+| PW3-04 | **Bounded Agentic Repository Chat (F-37)**<br>(Issue #188, PR #220) | Meet / Dhramraj | P0 | DONE | Normalized Gemini & Groq tool calling, read-only repo tools (`search_code`, `read_file_range`, `find_symbol`, `list_directory`), `ExecutionPolicy` path traversal guard, `BudgetManager` (tokens/rounds/time), dual-mode API, React UI mode switch & tool badge inspection (`backend/app/ai/agent/`, `backend/tests/test_agent_*.py`, `frontend/src/pages/RepositoryChat.tsx`) |
+
+---
+
 ## Current Team Assignments
 
 | Member | Current Focus | Deliverables |
 |---|---|---|
-| **Meet** | AI Architecture & Agent Lifecycle Lead | `TaskPlanner`, `AgentExecutionLoop`, `BoundedRepairLoop`, `RequirementVerifier`, AI Acceptance Suite (19/19 passing) |
+| **Meet** | AI Architecture, Retrieval & Agent Lead | 7-stage retrieval engine (`retrieval/`), ONNX reranker, symbol graph expansion, `AgentOrchestrator`, `ToolRegistry`, `ExecutionPolicy`, `BudgetManager`, normalized tool calling, durable webhooks & security hardening |
 | **Dev** | Schemas, AI Engines & Verifier Lead | Pydantic output schemas, failure traceback diagnosis, independent verification, AI quality evaluation |
-| **Dhramraj** | Frontend Studio & Workbench Lead | Task Studio, execution timeline, plan approval panel, repair budget tracker, MSW bootstrap (331/331 tests passing) |
-| **Yug** | API Gateway & Service Orchestration Lead | FastAPI routing, auth guards, task execution lifecycle APIs, publication endpoints, error normalization |
-| **Om** | Workflow Automation, Verification & Traceability Persistence | Database query optimization, crash recovery, 17-step E2E acceptance, draft PR persistence, end-to-end traceability graph (Week 3 Days 1-7 complete, 74/74 tests passing) |
-| **Parth** | GitHub Ecosystem & Branch Manager Lead | GitHub App OAuth, authorized diffs, task branch isolation, draft PR automation (`PR #139, #149`) |
-| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceDiffVerifier`, `WorkspaceTestRunner`, `WorkspaceCommandRunner`, `WorkspaceToolPolicyBridge`, `SymbolBlastRadiusEngine`, `TaskTestPlanner`, Week 3 Day 7 E2E Acceptance & Scenarios A-J Verification (194/194 tests passing) |
-| **Devu** | Tool Router & Policy Lead | Policy-enforced `ToolRouter`, command allowlists, argument schema validation (`router.py`) |
-| **Sukun** | Security Architecture Lead | Prompt-injection defenses, tool policy enforcement, secret scrubbing, full attack matrix sign-off |
-| **Keval** | Quality Assurance Lead | Quality fixtures, regression suites, final 17-step acceptance demo verification & sign-off |
+| **Dhramraj** | Frontend Studio & Workbench Lead | Agentic chat UI mode toggle, tool call badges, execution metrics drawer, Task Studio, MSW bootstrap (329/329 tests passing) |
+| **Yug** | API Gateway & Service Orchestration Lead | FastAPI routing, dual-mode chat endpoint, webhook event management endpoints, repo automation endpoints |
+| **Om** | Workflow Automation & Database Persistence | 12 linear database migrations, `github_webhook_events` table, `code_search_text` GIN index, repository active index generation tracking |
+| **Parth** | GitHub Ecosystem & Branch Manager Lead | GitHub App OAuth, durable webhook ingestion, push-sync and PR review comment automation |
+| **Prit** | Repository Engine & Workspace Lead | `WorkspaceManager`, `WorkspaceDiffVerifier`, `WorkspaceTestRunner`, tree-sitter AST, symbol graph extraction |
+| **Devu** | Tool Router & Policy Lead | Policy-enforced `ToolRouter`, command allowlists, read-only repo tool execution |
+| **Sukun** | Security Architecture Lead | Timing-safe HMAC verification, secret entropy validation, Redis state nonces, path traversal guards |
+| **Keval** | Quality Assurance Lead | 500+ backend regression tests, 150-query retrieval benchmark, QA acceptance sign-off |
 

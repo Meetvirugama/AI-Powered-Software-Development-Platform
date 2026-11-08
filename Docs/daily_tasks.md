@@ -696,6 +696,65 @@ This document breaks each day into specific, atomic tasks for every team member.
 
 ---
 
+# POST-WEEK 3 — Enterprise Hardening & Advanced Intelligence ✅ COMPLETE
+
+**Post-Week 3 Goal:** Production-grade security hardening, durable event processing, multi-stage hybrid code retrieval, and bounded agentic repository chat.
+
+## Batch 1 — JWT & OAuth Security Hardening (Issue #181 / PR #202) ✅
+
+- ✅ Sukun / Yug: Timing-safe HMAC signature verification (`hmac.compare_digest`) across all auth token endpoints (`app/core/security.py`, `app/core/auth.py`).
+- ✅ Sukun: Strict minimum 32-byte JWT secret length validation and hard rejection of insecure keys at startup.
+- ✅ Parth / Yug: Cryptographic OAuth state nonce generation and Redis-backed one-time verification with 10-minute TTL preventing CSRF and replay attacks.
+- ✅ Om / Yug: Refresh token rotation with Redis revocation tracking (`app/api/v1/auth.py`, `POST /api/v1/auth/refresh`).
+- ✅ Keval: Multi-tenant auth isolation and timing attack regression tests (`backend/tests/test_jwt_and_oauth_hardening.py`, 10/10 tests passing).
+
+## Batch 2 — Durable GitHub Webhook Processing & Automation (Issue #182 / PR #219) ✅
+
+- ✅ Parth: Dual-layer webhook verification: Redis delivery ID deduplication (24h TTL) + constant-time HMAC-SHA256 signature verification (`app/api/v1/github.py`).
+- ✅ Om: Migration `e1f2a3b4c5d6` creating `github_webhook_events` table with state machine (`PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`).
+- ✅ Yug / Om: Webhook event repository with lease-based atomic worker claiming, exponential backoff, and dead-letter replay endpoint (`app/repositories/webhook_event_repository.py`).
+- ✅ Parth / Dev: Event handlers: push-to-sync with `last_indexed_commit_sha` deduplication; pull request review automation triggering consolidated PR comments (`app/services/webhook_handlers.py`).
+- ✅ Yug: Embedded and standalone background webhook worker loop (`app/services/webhook_worker.py`, `app/workers/webhook_worker.py`).
+- ✅ Keval: End-to-end webhook durable processing tests (`backend/tests/test_durable_webhook_automation.py`, 32/32 tests passing).
+
+## Batch 3 — Multi-Stage Code Retrieval Engine (Issue #187 / PR #220) ✅
+
+- ✅ Meet: 7-stage hybrid code retrieval architecture combining dense vector search and code-aware lexical search with Reciprocal Rank Fusion (RRF) (`backend/ai/retrieval/hybrid.py`).
+- ✅ Prit / Meet: Code-aware lexical search using PostgreSQL full-text search with code identifier sub-token extraction (camelCase, snake_case) and language-agnostic GIN index (`backend/ai/retrieval/lexical.py`).
+- ✅ Om: Migration `e8f9a0b1c2d3` adding `code_search_text` column on `code_chunks` and `active_index_generation` tracking on `repositories`.
+- ✅ Meet: Adaptive HNSW search effort tuning (`ef_search`: 40/64/120) with savepoint isolation (`begin_nested`) protecting transactions across SQLite and PostgreSQL (`backend/ai/retrieval/vector.py`).
+- ✅ Prit: 1-hop AST symbol graph expansion traversing caller-callee edges (`symbol_edges`) with deduplication against retrieval candidates (`backend/ai/retrieval/graph_expansion.py`).
+- ✅ Meet: Redis retrieval result caching with generation-based invalidation (`active_index_generation`, format `gen_<epoch>_<hex>`) on incremental index sync (`backend/ai/retrieval/cache.py`).
+- ✅ Meet: Experimental ONNX cross-encoder reranker with graceful PyTorch fallback, request-path network protection (`local_files_only=True`), and factory kwarg filtering (`backend/ai/retrieval/reranker_factory.py`, `reranker_onnx.py`).
+- ✅ Keval / Meet: 150-query retrieval benchmark suite measuring Precision@K, Recall@K, and nDCG@K (`backend/scripts/benchmark_rag.py`, `backend/ai/retrieval/evaluation.py`).
+
+## Batch 4 — Bounded Agentic Repository Chat (Issue #188 / PR #220) ✅
+
+- ✅ Meet: Normalized LLM tool calling in `LLMGateway` for Google Gemini (`functionDeclarations`, `functionCall`, `functionResponse`) and Groq (`tools`, `tool_calls`) (`backend/ai/llm/`).
+- ✅ Devu / Meet: Central read-only tool registry and tool executor with timeout enforcement (`search_code`, `read_file_range`, `find_symbol_definition`, `find_symbol_references`) (`backend/ai/agent/tools.py`).
+- ✅ Sukun: Agent security policy: strict read-only confinement, path traversal sanitization, line-range clamping, secret scrubbing, and 8 KB tool output truncation (`backend/ai/agent/policy.py`).
+- ✅ Meet: Request-level budget manager enforcing maximum 3 rounds, 6 tool calls, 4 model calls, 2 parallel tool calls, and 35-second wall clock timeout via `asyncio.wait_for` (`backend/ai/agent/budget.py`).
+- ✅ Meet: `AgentOrchestrator` multi-turn investigation loop with grounded RAG answer synthesis and citation validation (`backend/ai/agent/orchestrator.py`).
+- ✅ Yug: Dual-mode chat API: `POST /api/v1/repositories/{id}/chat` supporting `mode="normal"` and `mode="agentic"` with `agent_metadata` (`backend/app/api/v1/chat.py`).
+- ✅ Dhramraj: React UI dual-mode chat interface: mode toggle switch, `AgentMetadataBadge` displaying investigation rounds, execution time, token usage, and collapsible tool activity summary (`frontend/src/pages/RepositoryChat.tsx`).
+- ✅ Keval: Comprehensive agentic chat test suite (174/174 tests passing across budget, policy, tools, orchestrator, and benchmarks).
+
+## Batch 5 — Execution-Verified, Coverage-Guided Automated Test Generation (Issue #193) ✅
+
+- ✅ Meet / Dev: Comprehensive implementation audit and gap analysis (`Docs/test-generation/00_EXISTING_IMPLEMENTATION_AUDIT.md`).
+- ✅ Dev: Dynamic benchmark gate evaluation (`evaluate_metric`) fixing threshold reporting inconsistencies (`backend/scripts/benchmark_quality_suite.py`, `backend/tests/test_benchmark_gate_evaluator.py`).
+- ✅ Dev: Three-consecutive-run stability validation (`TestStabilityValidator`) eliminating flaky candidate tests (`backend/app/services/test_stability_service.py`, `backend/tests/test_test_stability_service.py`).
+- ✅ Meet: Runtime coverage measurement engine (`TestCoverageService`) with baseline, post-generation, delta calculation, and line attribution (`backend/app/services/test_coverage_service.py`, `backend/tests/test_test_coverage_service.py`).
+- ✅ Dev / Prit: Complete end-to-end Vitest support across scanner, manifests, test command formatting (`npm test -- --run`), and mocking APIs (`backend/scanner/framework_detector.py`, `backend/tests/test_test_generation_vitest.py`).
+- ✅ Meet: Coverage-guided iterative test generation (`TestIterationOrchestrator`) with snippet extraction and non-duplicate test merging (`backend/app/services/test_iteration_service.py`, `backend/tests/test_test_iteration_service.py`).
+- ✅ Dev: Offline AST mutation testing engine (`MutationTestingService`) calculating killed/survived mutant scores (`backend/app/services/test_mutation_service.py`, `backend/tests/test_test_mutation_service.py`).
+- ✅ Meet: Central 5-stage verification pipeline coordinator (`TestExecutionVerifier`) linking static validation, sandbox execution, stability, and coverage (`backend/app/services/test_execution_verifier.py`, `backend/tests/test_test_execution_verifier.py`).
+- ✅ Dhramraj: Frontend test studio enhancement (`TestGenerationView.tsx`) with verification pipeline status badges, stability breakdowns, coverage comparisons, iteration counts, and collapsible execution logs.
+- ✅ Keval: Comprehensive integration test suite validating Scenarios A through V (`backend/tests/test_test_generation_execution_verified.py`, 127/127 backend tests and 329/329 frontend tests passing).
+- ✅ Meet / Dev: Complete 22-part documentation suite, 6 Mermaid diagrams, and 5 research/tool evaluations under `Docs/test-generation/`.
+
+---
+
 # Task Sizing Guide
 
 | Complexity | Time estimate | Example |

@@ -1,5 +1,5 @@
 # 02. Requirements Documentation
-> **Version:** 3.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-10-15 | **Status:** Live & Synchronized
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08 | **Status:** 100% Implemented & Verified
 
 ---
 
@@ -103,6 +103,15 @@
 | FR-116 | Independent Verification | Separate verification check evaluating tests, static checks, and AI code review | System | P0 | 🟢 Done | F36 (Dev) |
 | FR-117 | Human Push Authorization & Draft PR | Require explicit publication authorization, push `agent/task-<id>`, and create GitHub Draft PR | Developer | P0 | 🟢 Done | F37 (Parth) |
 
+### Post-Week 3 — Enterprise Hardening & Advanced Intelligence (Implemented & Verified)
+
+| ID | Requirement | Description | Actor | Priority | Status | Related Feature |
+|---|---|---|---|---|---|---|
+| FR-120 | Timing-Safe Auth & Secret Hardening | Timing-safe HMAC JWT verification, mandatory >=32-byte secret check, atomic Redis state nonces via `GETDEL` | System / Developer | P0 | 🟢 Done | F-34 (Meet / Sukun) |
+| FR-121 | Durable Webhook State Machine | Durable `github_webhook_events` persistence, lease-based worker, auto-sync on push, automated PR reviews | System / Developer | P0 | 🟢 Done | F-35 (Meet / Parth) |
+| FR-122 | Multi-Stage Code Retrieval Engine | 7-stage retrieval: intent detection, simple GIN FTS (`code_search_text`), adaptive HNSW, symbol graph expansion, ONNX reranking, Redis cache | System / Developer | P0 | 🟢 Done | F-36 (Meet) |
+| FR-123 | Bounded Agentic Repository Chat | Normalized Gemini/Groq tool calling, read-only repo tools, execution policy, token/round/time ceilings, dual-mode API, UI mode toggle & badges | Developer | P0 | 🟢 Done | F-37 (Meet / Dhramraj) |
+
 ---
 
 ## Non-Functional Requirements
@@ -111,18 +120,20 @@
 |---|---|---|---|---|
 | NFR-001 | Performance | LLM response timeout ≤ 30s per request | P0 | 🟢 Done |
 | NFR-002 | Performance | Embedding batch processing ≤ 100 items per API call | P0 | 🟢 Done |
-| NFR-003 | Performance | Vector search executed via HNSW index on `code_chunks.embedding` | P0 | 🟢 Done |
+| NFR-003 | Performance | Vector search executed via HNSW index on `code_chunks.embedding` with adaptive `ef_search` | P0 | 🟢 Done |
 | NFR-004 | Security | No secrets committed to source code (`.secrets.baseline` + pre-commit hook) | P0 | 🟢 Done |
 | NFR-005 | Security | All configuration loaded from environment variables (`app/core/config.py`) | P0 | 🟢 Done |
-| NFR-006 | Security | JWT authentication for all non-health, non-auth endpoints | P0 | 🟢 Done |
+| NFR-006 | Security | Timing-safe HMAC JWT authentication for all non-health, non-auth endpoints | P0 | 🟢 Done |
 | NFR-007 | Security | Multi-tenant repository isolation strictly enforced (`repository_id` filtering) | P0 | 🟢 Done |
 | NFR-008 | Security | Repository content treated as untrusted data (prompt-injection defense) | P0 | 🟢 Done |
 | NFR-009 | Security | Workspace execution confined to task directory (no host credential escape) | P0 | 🟢 Done |
 | NFR-010 | Scalability | Asynchronous batch processing using `asyncio` across retrieval and embeddings | P0 | 🟢 Done |
-| NFR-011 | Scalability | Redis used for session token caching and background sync job queue | P0 | 🟢 Done |
+| NFR-011 | Scalability | Redis used for session tokens, CSRF state nonces, distributed locks, and retrieval caching | P0 | 🟢 Done |
 | NFR-012 | Reliability | LLM retries on 429/5xx with exponential backoff (1s, 2s, 4s) | P0 | 🟢 Done |
-| NFR-013 | Reliability | Reversible database migrations with `upgrade` and `downgrade` (5 migrations) | P0 | 🟢 Done |
+| NFR-013 | Reliability | Reversible database migrations with `upgrade` and `downgrade` (12 linear migrations) | P0 | 🟢 Done |
 | NFR-014 | Logging | Structured JSON logging with `request_id` context middleware | P0 | 🟢 Done |
-| NFR-015 | Usability | Fixed-viewport React 19 Workbench with real-time sync status feedback | P0 | 🟢 Done |
+| NFR-015 | Usability | Fixed-viewport React 19 Workbench with real-time sync status, task studios, and dual-mode chat | P0 | 🟢 Done |
 | NFR-016 | Availability | Health check endpoint (`GET /api/v1/health`) returns 200 without DB dependency | P0 | 🟢 Done |
-| NFR-017 | Test Quality | Backend test suite must maintain ≥ 70% coverage (currently 71.31%) | P0 | 🟢 Done |
+| NFR-017 | Test Quality | Backend test suite must maintain ≥ 70% coverage (500+ passing backend tests, 329 frontend tests) | P0 | 🟢 Done |
+| NFR-018 | Retrieval SLA | 150-query golden benchmark: P95 retrieval latency < 350ms, MRR@10 > 0.85, Hit@5 > 0.90 | P0 | 🟢 Done |
+| NFR-019 | Agentic Bound | Agentic chat execution strictly bounded: <= 12,000 input tokens, <= 2,000 output tokens, <= 3 tool rounds, <= 35s timeout (configurable via settings) | P0 | 🟢 Done |

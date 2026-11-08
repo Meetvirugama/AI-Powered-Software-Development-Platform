@@ -227,3 +227,112 @@ export async function getAnalysisRunsSummary(
   );
   return response.data;
 }
+
+/**
+ * Submit developer feedback for a review finding (useful, not_useful, false_positive, etc.).
+ *
+ * Calls POST /api/v1/analysis-runs/{run_id}/findings/{finding_id}/feedback
+ */
+export async function submitFindingFeedback(
+  runId: string,
+  findingId: string,
+  payload: { feedback_type: string; comment?: string }
+): Promise<{
+  finding_id: string;
+  feedback_type: string;
+  comment?: string | null;
+  repository_stats: {
+    useful_count: number;
+    not_useful_count: number;
+    false_positive_count: number;
+    acceptance_rate: number;
+    false_positive_rate: number;
+  };
+}> {
+  const response = await apiClient.post(
+    `/analysis-runs/${runId}/findings/${findingId}/feedback`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * Trigger manual publication of qualified code review findings to GitHub PR.
+ *
+ * Calls POST /api/v1/repositories/{repository_id}/review/publish
+ */
+export async function publishCodeReview(
+  repositoryId: string,
+  payload: {
+    run_id: string;
+    pr_number: number;
+    commit_sha?: string;
+    force_publish?: boolean;
+    max_comments?: number;
+  }
+): Promise<{
+  status: string;
+  review_id?: number | null;
+  pr_number?: number | null;
+  commit_sha?: string | null;
+  published_comments_count: number;
+  skipped_reason?: string | null;
+  error_message?: string | null;
+  published_at?: string | null;
+}> {
+  const response = await apiClient.post(
+    `/repositories/${repositoryId}/review/publish`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * Retrieve repository review automation settings.
+ *
+ * Calls GET /api/v1/repositories/{repository_id}/review/settings
+ */
+export async function getReviewSettings(
+  repositoryId: string
+): Promise<{
+  repository_id: string;
+  pr_review_enabled: boolean;
+  pr_review_drafts: boolean;
+  max_comments: number;
+  min_confidence: string;
+  changed_lines_only: boolean;
+}> {
+  const response = await apiClient.get(
+    `/repositories/${repositoryId}/review/settings`
+  );
+  return response.data;
+}
+
+/**
+ * Update repository review automation settings.
+ *
+ * Calls PATCH /api/v1/repositories/{repository_id}/review/settings
+ */
+export async function updateReviewSettings(
+  repositoryId: string,
+  payload: {
+    pr_review_enabled?: boolean;
+    pr_review_drafts?: boolean;
+    max_comments?: number;
+    min_confidence?: string;
+    changed_lines_only?: boolean;
+  }
+): Promise<{
+  repository_id: string;
+  pr_review_enabled: boolean;
+  pr_review_drafts: boolean;
+  max_comments: number;
+  min_confidence: string;
+  changed_lines_only: boolean;
+}> {
+  const response = await apiClient.patch(
+    `/repositories/${repositoryId}/review/settings`,
+    payload
+  );
+  return response.data;
+}
