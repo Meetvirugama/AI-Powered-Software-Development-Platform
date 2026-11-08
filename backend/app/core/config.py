@@ -254,6 +254,14 @@ class Settings(BaseSettings):
         if self.db_pool_timeout <= 0:
             raise ValueError("DB_POOL_TIMEOUT must be greater than 0.")
 
+        # Validate sync-worker timing settings
+        if self.sync_worker_heartbeat_interval_seconds <= 0:
+            raise ValueError("SYNC_WORKER_HEARTBEAT_INTERVAL_SECONDS must be greater than 0.")
+        if self.sync_worker_heartbeat_interval_seconds * 2 >= self.sync_worker_lease_ttl_seconds:
+            raise ValueError(
+                "SYNC_WORKER_LEASE_TTL_SECONDS must be more than twice SYNC_WORKER_HEARTBEAT_INTERVAL_SECONDS."
+            )
+
         is_prod = self.app_env.lower() in ("production", "prod")
         if is_prod:
             if "disable_embedded_sync_worker" not in self.model_fields_set:

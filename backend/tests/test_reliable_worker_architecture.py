@@ -29,13 +29,14 @@ import pytest
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from ai.embeddings.client import EmbeddingProvider
-from ai.embeddings.rate_limiter import DistributedEmbeddingRateLimiter
+from ai.embeddings.rate_limiter import DistributedEmbeddingRateLimiter, EmbeddingRateLimitExceededError
 from ai.embeddings.service import EmbeddingService
 from app.core.config import Settings
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.services.sync_worker import (
+    RepositoryBusyError,
     _heartbeat_lease,
     process_sync_job,
     recover_stale_processing_jobs,
@@ -74,6 +75,19 @@ def test_development_config_preserves_embedded_sync_worker():
     dev = Settings(_env_file=None, app_env="development")
     assert dev.is_production is False
     assert dev.disable_embedded_sync_worker is False
+
+
+def test_sync_worker_timing_validation():
+    """Verify timing validation enforces positive interval and 2x lease ttl safety margin."""
+    with pytest.raises(ValueError, match="SYNC_WORKER_HEARTBEAT_INTERVAL_SECONDS must be greater than 0"):
+        Settings(_env_file=None, sync_worker_heartbeat_interval_seconds=0)
+
+    with pytest.raises(ValueError, match="SYNC_WORKER_LEASE_TTL_SECONDS must be more than twice"):
+        Settings(
+            _env_file=None,
+            sync_worker_heartbeat_interval_seconds=30,
+            sync_worker_lease_ttl_seconds=60,
+        )
 
 
 @pytest.mark.asyncio
@@ -333,7 +347,7 @@ async def test_recover_stale_processing_jobs_moves_to_dead_letter_on_exhausted_r
 
 @pytest.mark.asyncio
 async def test_process_sync_job_aborts_when_repository_is_locked_by_another_worker():
-    """Verify process_sync_job returns False when repository lock cannot be acquired."""
+    """Verify process_sync_job raises RepositoryBusyError when repository lock cannot be acquired."""
     mock_redis = MagicMock()
     # Redis SET NX returns None/False when key is already locked by another worker
     mock_redis.set = AsyncMock(return_value=False)
@@ -351,6 +365,41 @@ async def test_process_sync_job_aborts_when_repository_is_locked_by_another_work
         mock_session_local.return_value.__enter__.return_value = session_mock
         session_mock.get.side_effect = lambda model, ident: repo if model == Repository else job
 
+        with pytest.raises(RepositoryBusyError):
+            await process_sync_job(
+                job_id=job_id,
+                repository_id=repo_id,
+                user_id=user_id,
+                redis_client=mock_redis,
+            )
+
+        mock_redis.set.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_sync_job_early_return_releases_heartbeat_and_locks():
+    """Verify that early returns in Step 4 properly execute the teardown in finally block."""
+    mock_redis = MagicMock()
+    mock_redis.set = AsyncMock(return_value=True)
+    mock_redis.delete = AsyncMock()
+    mock_redis.eval = AsyncMock(return_value=1)
+
+    job_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+
+    # Repository exists, but GitHubInstallation is missing (triggers Step 4 early return)
+    repo = Repository(id=repo_id, sync_status=SyncStatus.SYNCING, installation_id=uuid.uuid4(), owner="org", name="repo")
+    job = SyncJob(id=job_id, status=SyncJobStatus.QUEUED, repository_id=repo_id)
+
+    with patch("app.services.sync_worker.SessionLocal") as mock_session_local:
+        session_mock = MagicMock()
+        mock_session_local.return_value.__enter__.return_value = session_mock
+        # Installation lookup returns None
+        session_mock.get.side_effect = lambda model, ident: (
+            repo if model == Repository else (job if model == SyncJob else None)
+        )
+
         result = await process_sync_job(
             job_id=job_id,
             repository_id=repo_id,
@@ -358,8 +407,89 @@ async def test_process_sync_job_aborts_when_repository_is_locked_by_another_work
             redis_client=mock_redis,
         )
 
-        assert result is False
-        mock_redis.set.assert_awaited()
+        assert result is True
+        # Verify teardown was reached: lease deleted and lock released via Lua script
+        mock_redis.delete.assert_awaited_with(f"sync_job:lease:{job_id}")
+        assert mock_redis.eval.call_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_lease_verifies_ownership_before_renewing():
+    """Verify _heartbeat_lease calls atomic renew script and alerts on lost ownership."""
+    mock_redis = MagicMock()
+    mock_redis.eval = AsyncMock(return_value=0)  # Ownership was lost!
+    mock_redis.expire = AsyncMock()
+
+    stop_event = asyncio.Event()
+    lost_ownership = asyncio.Event()
+
+    task = asyncio.create_task(
+        _heartbeat_lease(
+            redis=mock_redis,
+            lease_key="sync_job:lease:j1",
+            lock_key="sync_lock:repo:r1",
+            worker_id="w1",
+            stop_event=stop_event,
+            interval=0.01,
+            ttl=30,
+            lost_ownership_event=lost_ownership,
+        )
+    )
+
+    await asyncio.sleep(0.03)
+    stop_event.set()
+    await task
+
+    # Assert eval was invoked to check owner
+    assert mock_redis.eval.call_count >= 1
+    # Assert lost ownership was detected and signalled
+    assert lost_ownership.is_set() is True
+
+
+@pytest.mark.asyncio
+async def test_sync_worker_loop_handles_repository_busy_delay():
+    """Verify sync_worker_loop re-enqueues repository-busy jobs without incrementing attempt_count."""
+    mock_redis = MagicMock()
+    mock_redis.blmove = AsyncMock()
+    mock_redis.lrem = AsyncMock()
+    mock_redis.rpush = AsyncMock()
+
+    job_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    payload = {
+        "job_id": str(job_id),
+        "repository_id": str(repo_id),
+        "user_id": str(uuid.uuid4()),
+        "attempt_count": 1,
+    }
+    raw_payload = json.dumps(payload).encode("utf-8")
+
+    # First iteration returns the job, second returns None
+    mock_redis.blmove.side_effect = [raw_payload, None]
+
+    with patch(
+        "app.services.sync_worker.process_sync_job",
+        AsyncMock(side_effect=RepositoryBusyError("Locked")),
+    ), patch("app.services.sync_worker.get_redis_async", AsyncMock(return_value=mock_redis)):
+        stop_event = asyncio.Event()
+
+        async def stop_soon():
+            await asyncio.sleep(0.05)
+            stop_event.set()
+
+        asyncio.create_task(stop_soon())
+        await sync_worker_loop(worker_id="test-busy-worker", stop_event=stop_event)
+
+    # Verify rpush happened BEFORE lrem (durability order)
+    assert mock_redis.rpush.call_count >= 1
+    assert mock_redis.lrem.call_count >= 1
+
+    # Verify payload re-enqueued has same attempt_count=1 and not_before timestamp set
+    enqueued_raw = mock_redis.rpush.call_args[0][1]
+    enqueued_payload = json.loads(enqueued_raw)
+    assert enqueued_payload["attempt_count"] == 1
+    assert "not_before" in enqueued_payload
+    assert enqueued_payload["not_before"] > time.time()
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +580,18 @@ async def test_distributed_rate_limiter_in_memory_sliding_window():
     elapsed = time.monotonic() - t0
     assert w3 > 0.0
     assert elapsed >= 0.15
+
+
+@pytest.mark.asyncio
+async def test_distributed_rate_limiter_exceeds_max_wait_raises_error():
+    """Verify DistributedEmbeddingRateLimiter raises EmbeddingRateLimitExceededError on timeout."""
+    limiter = DistributedEmbeddingRateLimiter(redis=None, max_requests_per_minute=1, window_seconds=10.0)
+    # First request consumes quota
+    await limiter.acquire("test_provider")
+
+    # Second request with max_wait_total=0.1 should time out and raise exception
+    with pytest.raises(EmbeddingRateLimitExceededError, match="exceeded maximum wait timeout"):
+        await limiter.acquire("test_provider", max_wait_total=0.1)
 
 
 @pytest.mark.asyncio

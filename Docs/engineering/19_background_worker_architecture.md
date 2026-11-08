@@ -166,7 +166,7 @@ Gemini and OpenAI embedding endpoints impose per-minute request limits (RPM) and
 - **Algorithm:** Distributed sliding window / token bucket implemented in Redis.
 - **Configuration:**
   - `EMBEDDING_MAX_REQUESTS_PER_MINUTE`: default 120 RPM.
-  - `EMBEDDING_MAX_CONCURRENT_CALLS`: default 5 concurrent active requests across the worker fleet.
+  - `EMBEDDING_MAX_CONCURRENCY`: default 5 concurrent embedding requests per worker process (not shared across the fleet).
 - **Worker Behavior:**
   - Before `EmbeddingService` sends a batch to the provider, it acquires rate capacity.
   - If limits are reached, the worker sleeps with exponential backoff (up to 30s) instead of failing the job.

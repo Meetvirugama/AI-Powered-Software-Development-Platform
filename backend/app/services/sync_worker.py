@@ -49,11 +49,35 @@ from scanner.walker import FileWalker
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "RepositoryBusyError",
     "process_sync_job",
     "recover_stale_processing_jobs",
     "sync_worker_loop",
     "_heartbeat_lease",
 ]
+
+
+class RepositoryBusyError(Exception):
+    """Raised when repository lock cannot be acquired because another worker is actively syncing it."""
+
+    pass
+
+
+_RELEASE_IF_OWNER_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+_RENEW_IF_OWNER_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('expire', KEYS[1], tonumber(ARGV[2]))
+else
+    return 0
+end
+"""
 
 
 async def _heartbeat_lease(
@@ -64,6 +88,8 @@ async def _heartbeat_lease(
     stop_event: asyncio.Event,
     interval: float = 15.0,
     ttl: int = 60,
+    lock_ttl: int | None = None,
+    lost_ownership_event: asyncio.Event | None = None,
 ) -> None:
     """Renew job lease and repository lock in Redis while work is in progress."""
     while not stop_event.is_set():
@@ -76,12 +102,40 @@ async def _heartbeat_lease(
         try:
             if hasattr(redis, "expire"):
                 await redis.expire(lease_key, ttl)
-                if lock_key:
-                    await redis.expire(lock_key, ttl * 2)
-                logger.debug(
-                    "sync_job_lease_renewed",
-                    extra={"lease_key": lease_key, "worker_id": worker_id},
-                )
+
+            if lock_key:
+                effective_lock_ttl = lock_ttl if lock_ttl is not None else ttl * 2
+                renewed = False
+                if hasattr(redis, "eval"):
+                    res = await redis.eval(_RENEW_IF_OWNER_LUA, 1, lock_key, worker_id, str(effective_lock_ttl))
+                    renewed = bool(res == 1)
+                elif hasattr(redis, "get") and hasattr(redis, "expire"):
+                    curr = redis.get(lock_key)
+                    if asyncio.iscoroutine(curr):
+                        curr = await curr
+                    if isinstance(curr, bytes):
+                        curr = curr.decode("utf-8")
+                    if curr == worker_id:
+                        await redis.expire(lock_key, effective_lock_ttl)
+                        renewed = True
+                    else:
+                        renewed = False
+                elif hasattr(redis, "expire"):
+                    await redis.expire(lock_key, effective_lock_ttl)
+                    renewed = True
+
+                if not renewed:
+                    logger.warning(
+                        "sync_worker_lost_lock_ownership",
+                        extra={"lock_key": lock_key, "worker_id": worker_id},
+                    )
+                    if lost_ownership_event is not None:
+                        lost_ownership_event.set()
+
+            logger.debug(
+                "sync_job_lease_renewed",
+                extra={"lease_key": lease_key, "worker_id": worker_id},
+            )
         except Exception as exc:
             logger.warning(
                 "sync_job_lease_renewal_failed",
@@ -165,6 +219,7 @@ async def process_sync_job(
     lock_acquired = False
     heartbeat_stop = asyncio.Event()
     heartbeat_task: asyncio.Task | None = None
+    lost_ownership_event = asyncio.Event()
 
     if redis is not None and hasattr(redis, "set"):
         try:
@@ -186,7 +241,7 @@ async def process_sync_job(
                         "worker_id": assigned_worker,
                     },
                 )
-                return False
+                raise RepositoryBusyError(f"Repository {repository_id} is locked by another worker")
 
             # Set initial lease
             lease_payload = json.dumps(
@@ -214,42 +269,46 @@ async def process_sync_job(
                     stop_event=heartbeat_stop,
                     interval=float(settings.sync_worker_heartbeat_interval_seconds),
                     ttl=int(settings.sync_worker_lease_ttl_seconds),
+                    lock_ttl=int(settings.sync_worker_repo_lock_ttl_seconds),
+                    lost_ownership_event=lost_ownership_event,
                 )
             )
+        except RepositoryBusyError:
+            raise
         except Exception as lock_exc:
             logger.warning(
                 "sync_lock_setup_warning",
                 extra={"error": str(lock_exc)},
             )
 
-    # Step 4: Transition to RUNNING and resolve GitHub Installation
-    with SessionLocal() as db:
-        repo = db.get(Repository, repository_id)
-        job = db.get(SyncJob, job_id)
-        if not repo or not job:
-            return True
-
-        job.status = SyncJobStatus.RUNNING
-        repo.sync_status = SyncStatus.SYNCING
-        db.commit()
-
-        installation = db.get(GitHubInstallation, repo.installation_id)
-        if not installation:
-            logger.error(
-                "sync_job_missing_installation",
-                extra={"repo_id": str(repository_id)},
-            )
-            job.status = SyncJobStatus.FAILED
-            repo.sync_status = SyncStatus.FAILED
-            db.commit()
-            return True
-
-        installation_id = int(getattr(installation, "installation_id", 0))
-        owner = repo.owner
-        name = repo.name
-        branch = repo.default_branch or "main"
-
     try:
+        # Step 4: Transition to RUNNING and resolve GitHub Installation
+        with SessionLocal() as db:
+            repo = db.get(Repository, repository_id)
+            job = db.get(SyncJob, job_id)
+            if not repo or not job:
+                return True
+
+            job.status = SyncJobStatus.RUNNING
+            repo.sync_status = SyncStatus.SYNCING
+            db.commit()
+
+            installation = db.get(GitHubInstallation, repo.installation_id)
+            if not installation:
+                logger.error(
+                    "sync_job_missing_installation",
+                    extra={"repo_id": str(repository_id)},
+                )
+                job.status = SyncJobStatus.FAILED
+                repo.sync_status = SyncStatus.FAILED
+                db.commit()
+                return True
+
+            installation_id = int(getattr(installation, "installation_id", 0))
+            owner = repo.owner
+            name = repo.name
+            branch = repo.default_branch or "main"
+
         if github_service is None:
             raise RuntimeError("GitHubService is not initialized on app.state")
 
@@ -314,6 +373,9 @@ async def process_sync_job(
             if not gemini_keys and not hasattr(embedding_service, "_mock_name") and embedding_provider is None:
                 raise ValueError("No GEMINI_API_KEYS configured for embeddings.")
 
+            if lost_ownership_event.is_set():
+                raise RuntimeError(f"Sync worker {assigned_worker} lost lock ownership before indexing")
+
             # Step 8: Run IncrementalIndexer
             indexer = IncrementalIndexer(
                 db_session=AsyncSessionLocal,
@@ -327,6 +389,9 @@ async def process_sync_job(
             )
         finally:
             await embedding_service.aclose()
+
+        if lost_ownership_event.is_set():
+            raise RuntimeError(f"Sync worker {assigned_worker} lost lock ownership during indexing")
 
         # Step 9: Mark completed
         with SessionLocal() as db:
@@ -376,6 +441,8 @@ async def process_sync_job(
         )
         return True
 
+    except RepositoryBusyError:
+        raise
     except Exception as exc:
         logger.exception(
             "sync_worker_job_failed",
@@ -427,8 +494,19 @@ async def process_sync_job(
             try:
                 if hasattr(redis, "delete"):
                     await redis.delete(lease_key)
-                if lock_acquired and hasattr(redis, "delete"):
-                    await redis.delete(lock_key)
+                if lock_acquired:
+                    if hasattr(redis, "eval"):
+                        await redis.eval(_RELEASE_IF_OWNER_LUA, 1, lock_key, assigned_worker)
+                    elif hasattr(redis, "get") and hasattr(redis, "delete"):
+                        curr = redis.get(lock_key)
+                        if asyncio.iscoroutine(curr):
+                            curr = await curr
+                        if isinstance(curr, bytes):
+                            curr = curr.decode("utf-8")
+                        if curr == assigned_worker:
+                            await redis.delete(lock_key)
+                    elif hasattr(redis, "delete"):
+                        await redis.delete(lock_key)
             except Exception:
                 pass
 
@@ -486,15 +564,17 @@ async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) 
                         job_time = job_time.replace(tzinfo=timezone.utc)
                     age = (now - job_time).total_seconds() if job_time else 0.0
 
-                    if age >= timeout_seconds or not lease_active:
+                    claim_time = payload.get("claimed_at")
+                    claim_age = (time.time() - float(claim_time)) if claim_time is not None else None
+
+                    # Only reclaim if lease is absent AND grace period / timeout has elapsed
+                    is_stale = (claim_age >= timeout_seconds) if claim_age is not None else (age >= timeout_seconds)
+                    if is_stale:
                         attempt_count = int(payload.get("attempt_count", 1))
                         max_retries = int(getattr(settings, "sync_worker_max_retries", 3))
 
-                        if hasattr(redis, "lrem"):
-                            await redis.lrem("sync_jobs:processing", 1, raw_item)
-
                         if attempt_count < max_retries:
-                            # Re-enqueue for retry
+                            # Re-enqueue for retry BEFORE lrem so the job is not lost
                             if "attempt_count" in payload:
                                 payload["attempt_count"] = attempt_count + 1
                                 re_payload = json.dumps(payload)
@@ -503,16 +583,20 @@ async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) 
 
                             if hasattr(redis, "rpush"):
                                 await redis.rpush("sync_jobs", re_payload)
+                            if hasattr(redis, "lrem"):
+                                await redis.lrem("sync_jobs:processing", 1, raw_item)
                             logger.warning(
                                 "recovering_stalled_processing_sync_job",
                                 extra={"job_id": str(job_id), "attempt": attempt_count + 1, "age_seconds": round(age, 1)},
                             )
                         else:
-                            # Move to dead-letter queue
+                            # Move to dead-letter queue BEFORE lrem
                             payload["exhausted_attempts"] = attempt_count
                             payload["dead_letter_reason"] = "lease_expired_retries_exhausted"
                             if hasattr(redis, "rpush"):
                                 await redis.rpush("sync_jobs:dead_letter", json.dumps(payload))
+                            if hasattr(redis, "lrem"):
+                                await redis.lrem("sync_jobs:processing", 1, raw_item)
                             job.status = SyncJobStatus.FAILED
                             repo = db.get(Repository, job.repository_id)
                             if repo and repo.sync_status == SyncStatus.SYNCING:
@@ -664,8 +748,19 @@ async def sync_worker_loop(
                 decoded = raw_data.decode("utf-8") if isinstance(raw_data, bytes) else str(raw_data)
                 payload: dict[str, Any] = {}
                 success = False
+                is_busy = False
                 try:
                     payload = json.loads(decoded)
+                    not_before = payload.get("not_before")
+                    if not_before is not None and time.time() < float(not_before):
+                        # Job is delayed / in backoff; re-enqueue to sync_jobs and remove from processing
+                        if hasattr(redis, "rpush"):
+                            await redis.rpush("sync_jobs", decoded)
+                        if hasattr(redis, "lrem"):
+                            await redis.lrem("sync_jobs:processing", 1, raw_data)
+                        await asyncio.sleep(0.5)
+                        continue
+
                     job_id = UUID(payload["job_id"])
                     repo_id = UUID(payload["repository_id"])
                     user_id = UUID(payload["user_id"])
@@ -689,52 +784,91 @@ async def sync_worker_loop(
                         force=force_flag,
                         redis_client=redis,
                     )
+                except RepositoryBusyError as busy_exc:
+                    logger.warning(
+                        "sync_worker_repository_busy_delaying",
+                        extra={"repo_id": payload.get("repository_id"), "job_id": payload.get("job_id"), "error": str(busy_exc)},
+                    )
+                    is_busy = True
+                    success = False
                 except Exception as proc_exc:
                     logger.error(
                         "sync_worker_job_processing_uncaught_error",
                         extra={"error": str(proc_exc), "worker_id": assigned_worker},
                     )
                     success = False
-                finally:
-                    # Remove from processing list
+
+                if success:
+                    # Clean completion: remove from processing list
                     if hasattr(redis, "lrem"):
                         try:
                             await redis.lrem("sync_jobs:processing", 1, raw_data)
                         except Exception as lrem_exc:
                             logger.warning("sync_worker_ack_lrem_warning", extra={"error": str(lrem_exc)})
+                elif is_busy and payload:
+                    # Repository-lock conflict: re-enqueue with delay WITHOUT incrementing attempt_count
+                    payload["not_before"] = time.time() + 10.0
+                    busy_payload = json.dumps(payload)
+                    if hasattr(redis, "rpush"):
+                        try:
+                            await redis.rpush("sync_jobs", busy_payload)
+                        except Exception as rpush_exc:
+                            logger.warning("sync_worker_busy_rpush_warning", extra={"error": str(rpush_exc)})
+                    if hasattr(redis, "lrem"):
+                        try:
+                            await redis.lrem("sync_jobs:processing", 1, raw_data)
+                        except Exception as lrem_exc:
+                            logger.warning("sync_worker_ack_lrem_warning", extra={"error": str(lrem_exc)})
+                elif payload:
+                    # Real sync failure: check retry budget
+                    cur_attempt = int(payload.get("attempt_count", 1))
+                    max_retries = int(getattr(settings, "sync_worker_max_retries", 3))
 
-                    # Handle retries vs dead letter on failure
-                    if not success and payload:
-                        cur_attempt = int(payload.get("attempt_count", 1))
-                        max_retries = int(getattr(settings, "sync_worker_max_retries", 3))
+                    if cur_attempt < max_retries:
+                        payload["attempt_count"] = cur_attempt + 1
+                        base_delay = float(getattr(settings, "sync_worker_retry_base_delay_seconds", 2.0))
+                        delay = min(60.0, base_delay * (2 ** (cur_attempt - 1)) + random.uniform(0.1, 0.5))
+                        payload["not_before"] = time.time() + delay
 
-                        if cur_attempt < max_retries:
-                            payload["attempt_count"] = cur_attempt + 1
-                            base_delay = float(getattr(settings, "sync_worker_retry_base_delay_seconds", 2.0))
-                            delay = min(60.0, base_delay * (2 ** (cur_attempt - 1)) + random.uniform(0.1, 0.5))
+                        logger.warning(
+                            "sync_job_retry_scheduled",
+                            extra={
+                                "job_id": payload.get("job_id"),
+                                "next_attempt": cur_attempt + 1,
+                                "delay_seconds": round(delay, 2),
+                            },
+                        )
+                        # Re-enqueue retry BEFORE acknowledging from processing
+                        retry_payload = json.dumps(payload)
+                        if hasattr(redis, "rpush"):
+                            await redis.rpush("sync_jobs", retry_payload)
+                        if hasattr(redis, "lrem"):
+                            await redis.lrem("sync_jobs:processing", 1, raw_data)
+                    else:
+                        # Retries exhausted -> Dead Letter Queue
+                        payload["failed_at"] = datetime.now(timezone.utc).isoformat()
+                        payload["exhausted_attempts"] = cur_attempt
+                        dlq_payload = json.dumps(payload)
+                        if hasattr(redis, "rpush"):
+                            await redis.rpush("sync_jobs:dead_letter", dlq_payload)
+                        if hasattr(redis, "lrem"):
+                            await redis.lrem("sync_jobs:processing", 1, raw_data)
 
-                            logger.warning(
-                                "sync_job_retry_scheduled",
-                                extra={
-                                    "job_id": payload.get("job_id"),
-                                    "next_attempt": cur_attempt + 1,
-                                    "delay_seconds": round(delay, 2),
-                                },
-                            )
-                            # Wait backoff before re-enqueuing
-                            await asyncio.sleep(min(delay, 5.0))
-                            if hasattr(redis, "rpush"):
-                                await redis.rpush("sync_jobs", json.dumps(payload))
-                        else:
-                            # Retries exhausted -> Dead Letter Queue
-                            payload["failed_at"] = datetime.now(timezone.utc).isoformat()
-                            payload["exhausted_attempts"] = cur_attempt
-                            if hasattr(redis, "rpush"):
-                                await redis.rpush("sync_jobs:dead_letter", json.dumps(payload))
-                            logger.error(
-                                "sync_job_moved_to_dead_letter",
-                                extra={"job_id": payload.get("job_id"), "exhausted_attempts": cur_attempt},
-                            )
+                        # Mark SyncJob as FAILED in DB when dead-lettered
+                        try:
+                            with SessionLocal() as db:
+                                if "job_id" in payload:
+                                    failed_job = db.get(SyncJob, UUID(payload["job_id"]))
+                                    if failed_job:
+                                        failed_job.status = SyncJobStatus.FAILED
+                                        db.commit()
+                        except Exception as db_err:
+                            logger.warning("sync_job_db_status_failed_warning", extra={"error": str(db_err)})
+
+                        logger.error(
+                            "sync_job_moved_to_dead_letter",
+                            extra={"job_id": payload.get("job_id"), "exhausted_attempts": cur_attempt},
+                        )
             else:
                 await asyncio.sleep(0.5)
 

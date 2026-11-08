@@ -20,11 +20,12 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.redis import close_redis, close_redis_async, get_redis_async
 from app.integrations.github.service import GitHubService
-from app.services.sync_worker import process_sync_job, sync_worker_loop
+from app.services.sync_worker import RepositoryBusyError, process_sync_job, sync_worker_loop
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "RepositoryBusyError",
     "process_sync_job",
     "sync_worker_loop",
     "run_worker",

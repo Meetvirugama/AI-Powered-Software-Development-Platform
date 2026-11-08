@@ -16,7 +16,7 @@ from .client import (
     RateLimitError,
 )
 from .gemini_provider import GeminiEmbeddingProvider
-from .rate_limiter import DistributedEmbeddingRateLimiter
+from .rate_limiter import DistributedEmbeddingRateLimiter, EmbeddingRateLimitExceededError
 from .service import CachedEmbeddingService, EmbeddingService
 
 __all__ = [
@@ -27,6 +27,7 @@ __all__ = [
     "EmbeddingError",
     "EmbeddingProfile",
     "EmbeddingProvider",
+    "EmbeddingRateLimitExceededError",
     "EmbeddingService",
     "GeminiEmbeddingProvider",
     "InvalidRequestError",

@@ -15,7 +15,27 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DistributedEmbeddingRateLimiter"]
+__all__ = ["DistributedEmbeddingRateLimiter", "EmbeddingRateLimitExceededError"]
+
+
+class EmbeddingRateLimitExceededError(RuntimeError):
+    """Raised when embedding rate limiter exceeds maximum wait time without obtaining quota."""
+
+    pass
+
+
+_ACQUIRE_LUA = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+local count = redis.call('ZCARD', KEYS[1])
+if count >= tonumber(ARGV[3]) then
+  local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+  local oldest_score = (oldest and #oldest >= 2) and oldest[2] or ARGV[2]
+  return {0, tostring(oldest_score)}
+end
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[4])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[5]))
+return {1, '0'}
+"""
 
 
 class DistributedEmbeddingRateLimiter:
@@ -41,7 +61,7 @@ class DistributedEmbeddingRateLimiter:
         self._local_history: list[float] = []
         self._local_lock = asyncio.Lock()
 
-    async def acquire(self, provider: str = "gemini", cost: int = 1) -> float:
+    async def acquire(self, provider: str = "gemini", cost: int = 1, max_wait_total: float = 60.0) -> float:
         """
         Acquire permission to make an embedding API request.
 
@@ -49,7 +69,6 @@ class DistributedEmbeddingRateLimiter:
         Returns the duration waited in seconds.
         """
         waited_seconds = 0.0
-        max_wait_total = 60.0
         start_wait = time.monotonic()
 
         while True:
@@ -63,7 +82,9 @@ class DistributedEmbeddingRateLimiter:
                     "embedding_rate_limiter_max_wait_exceeded",
                     extra={"provider": provider, "waited": round(elapsed, 2)},
                 )
-                return waited_seconds
+                raise EmbeddingRateLimitExceededError(
+                    f"Embedding rate limit for '{provider}' exceeded maximum wait timeout of {max_wait_total}s (waited {round(elapsed, 2)}s)"
+                )
 
             sleep_time = min(max(retry_after, 0.05), 5.0)
             waited_seconds += sleep_time
@@ -78,26 +99,47 @@ class DistributedEmbeddingRateLimiter:
         window_start = now - self.window_seconds
         key = f"{self.key_prefix}:{provider}"
 
-        # If Redis is available with sorted set methods, use distributed sliding window
-        if self.redis is not None and hasattr(self.redis, "zremrangebyscore") and hasattr(self.redis, "zcard"):
+        # If Redis is available with eval, execute atomic sliding window check-and-record
+        if self.redis is not None and hasattr(self.redis, "eval"):
+            try:
+                member = f"{now}:{uuid.uuid4().hex[:6]}"
+                ttl = int(self.window_seconds * 2)
+                res = await self.redis.eval(
+                    _ACQUIRE_LUA,
+                    1,
+                    key,
+                    str(window_start),
+                    str(now),
+                    str(self.max_requests_per_minute),
+                    member,
+                    str(ttl),
+                )
+                status = int(res[0]) if isinstance(res, (list, tuple)) and len(res) >= 1 else 0
+                if status == 1:
+                    return True, 0.0
+
+                oldest_score = float(res[1]) if isinstance(res, (list, tuple)) and len(res) >= 2 else now
+                retry_after = max(0.05, (oldest_score + self.window_seconds) - now)
+                return False, retry_after
+            except Exception as exc:
+                logger.debug("redis_rate_limiter_fallback", extra={"error": str(exc)})
+                # Fall through to local fallback on Redis failure
+        elif self.redis is not None and hasattr(self.redis, "zremrangebyscore") and hasattr(self.redis, "zcard"):
             try:
                 await self.redis.zremrangebyscore(key, "-inf", window_start)
                 current_count = await self.redis.zcard(key)
 
                 if current_count >= self.max_requests_per_minute:
-                    # Look up oldest score to determine retry delay
                     oldest_items = []
                     if hasattr(self.redis, "zrange"):
                         oldest_items = await self.redis.zrange(key, 0, 0, withscores=True)
 
                     retry_after = 1.0
                     if oldest_items:
-                        # oldest_items is list of (member, score)
                         oldest_score = oldest_items[0][1]
                         retry_after = max(0.05, (oldest_score + self.window_seconds) - now)
                     return False, retry_after
 
-                # Record current request
                 member = f"{now}:{uuid.uuid4().hex[:6]}"
                 if hasattr(self.redis, "zadd"):
                     await self.redis.zadd(key, {member: now})
@@ -107,7 +149,6 @@ class DistributedEmbeddingRateLimiter:
                 return True, 0.0
             except Exception as exc:
                 logger.debug("redis_rate_limiter_fallback", extra={"error": str(exc)})
-                # Fall through to local fallback on Redis failure
 
         # Local in-memory sliding window fallback
         async with self._local_lock:
