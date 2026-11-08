@@ -185,6 +185,17 @@ class IncrementalIndexer:
         root_path: str = "",
     ) -> dict[str, int]:
         """Internal worker executing indexing and deletion reconciliation inside the active transaction."""
+        # Safeguard (Issue #183): Check repository existence before doing any work
+        repo_check = await self._execute(
+            text("SELECT 1 FROM repositories WHERE id = :repo_id"),
+            {"repo_id": repository_id},
+            sess=session,
+        )
+        repo_exists = repo_check.first() if hasattr(repo_check, "first") else None
+        if not repo_exists:
+            logger.warning("indexing_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
+            return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
+
         # 1. Fetch existing hashes from DB
         query = text(
             "SELECT path, content_hash, id FROM repository_files WHERE repository_id = :repo_id"
@@ -532,6 +543,22 @@ class IncrementalIndexer:
             except Exception as edge_exc:
                 logger.warning("Symbol edge persistence error for repo %s: %s", repository_id, edge_exc)
 
+        # Safeguard (Issue #183): Revalidate repository existence before generating and persisting snapshot
+        repo_check_snap = await self._execute(
+            text("SELECT 1 FROM repositories WHERE id = :repo_id"),
+            {"repo_id": repository_id},
+            sess=session,
+        )
+        repo_exists_snap = repo_check_snap.first() if hasattr(repo_check_snap, "first") else None
+        if not repo_exists_snap:
+            logger.warning("indexing_snapshot_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
+            if session is not None and hasattr(session, "rollback"):
+                if inspect.iscoroutinefunction(session.rollback):
+                    await session.rollback()
+                else:
+                    session.rollback()
+            return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
+
         # Build and persist the Repository Intelligence Snapshot (task.md §3, §4, §10)
         try:
             from ai.intelligence.builder import RepositoryIntelligenceBuilder
@@ -578,6 +605,29 @@ class IncrementalIndexer:
             )
         except Exception as gen_exc:  # noqa: BLE001
             logger.warning("Active index generation update failed: %s", gen_exc)
+
+        # Safeguard (Issue #183): Revalidate repository existence before final transaction commit
+        repo_check_commit = await self._execute(
+            text("SELECT 1 FROM repositories WHERE id = :repo_id"),
+            {"repo_id": repository_id},
+            sess=session,
+        )
+        repo_exists_commit = repo_check_commit.first() if hasattr(repo_check_commit, "first") else None
+        if not repo_exists_commit:
+            logger.warning("indexing_commit_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
+            # Clean up any snapshot directory that was published before repository deletion was discovered
+            try:
+                from app.repositories.repository_repository import cleanup_repository_filesystem_resources
+                cleanup_repository_filesystem_resources(repository_id)
+            except Exception as clean_exc:
+                logger.warning("indexing_abort_cleanup_failed", extra={"error": str(clean_exc), "repo_id": str(repository_id)})
+
+            if session is not None and hasattr(session, "rollback"):
+                if inspect.iscoroutinefunction(session.rollback):
+                    await session.rollback()
+                else:
+                    session.rollback()
+            return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
 
         await self._commit(sess=session)
         logger.info(

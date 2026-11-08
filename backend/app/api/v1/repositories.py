@@ -185,18 +185,24 @@ def sync_repository(
 def delete_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> None:
     user_id = _request_user_id(request)
     repo = _owned_repository(repository_id, request, db)
-    RepositoryRepository(db).delete(repo.id)
+    redis_client = None
     try:
-        get_redis().publish(
-            "platform_events",
-            json.dumps(
-                {
-                    "type": "repository.updated",
-                    "user_id": str(user_id),
-                    "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
-                }
-            ),
-        )
+        redis_client = get_redis()
+    except Exception:
+        pass
+    RepositoryRepository(db).delete(repo.id, redis_client=redis_client)
+    try:
+        if redis_client is not None:
+            redis_client.publish(
+                "platform_events",
+                json.dumps(
+                    {
+                        "type": "repository.updated",
+                        "user_id": str(user_id),
+                        "data": {"repository_id": str(repository_id), "user_id": str(user_id)},
+                    }
+                ),
+            )
     except Exception as pub_exc:
         req_id = getattr(getattr(request, "state", None), "request_id", None)
         logger.warning(

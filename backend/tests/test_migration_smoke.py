@@ -73,6 +73,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "d5e6f7a8b9c0",  # fix constraints and add indexes
     "e1f2a3b4c5d6",  # durable github webhook events and repo automation (Issue #182)
     "e8f9a0b1c2d3",  # code search text and index generation tracking (Issue #187)
+    "f3c4d5e6a7b8",  # harden repository deletion cascades (Issue #183)
 )
 
 

@@ -13,9 +13,9 @@ from app.models.base import TimestampedModel
 class CodeChunk(TimestampedModel, Base):
     __tablename__ = "code_chunks"
 
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True)
-    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repository_files.id"), index=True)
-    symbol_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("code_symbols.id"), nullable=True)
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repository_files.id", ondelete="CASCADE"), index=True)
+    symbol_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("code_symbols.id", ondelete="SET NULL"), nullable=True)
     content: Mapped[str] = mapped_column(Text)
     code_search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_count: Mapped[int] = mapped_column(Integer)

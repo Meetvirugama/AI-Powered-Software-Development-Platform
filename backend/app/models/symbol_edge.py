@@ -10,9 +10,9 @@ from app.models.base import TimestampedModel
 class SymbolEdge(TimestampedModel, Base):
     __tablename__ = "symbol_edges"
 
-    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id"), index=True)
-    source_symbol_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("code_symbols.id"))
-    target_symbol_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("code_symbols.id"))
+    repository_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("repositories.id", ondelete="CASCADE"), index=True)
+    source_symbol_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("code_symbols.id", ondelete="CASCADE"))
+    target_symbol_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("code_symbols.id", ondelete="CASCADE"))
     edge_type: Mapped[str] = mapped_column(String)
 
     source_id = synonym("source_symbol_id")
