@@ -598,20 +598,36 @@ class PullRequestEventHandler:
         # Compose consolidated review summary
         review_body = self._format_consolidated_review(report, head_sha, pr_number)
 
-        # Publish review comment via GitHub API with event="COMMENT"
+        # Publish review comment via GitHub API with event="COMMENT" and inline comments
         if github_service and hasattr(github_service, "create_pull_request_review"):
             try:
-                await github_service.create_pull_request_review(
+                from app.services.review_publication_service import ReviewPublicationService
+
+                findings_list = getattr(report, "findings", []) if report else []
+                pub_service = ReviewPublicationService()
+                pub_res = await pub_service.publish_pull_request_review(
                     owner=repo.owner,
-                    repo=repo.name,
+                    repo_name=repo.name,
                     pr_number=pr_number,
-                    body=review_body,
-                    event="COMMENT",
+                    commit_sha=head_sha,
+                    findings=findings_list,
+                    github_service=github_service,
+                    repository=repo,
                     installation_id=gh_installation_id,
+                    custom_summary=review_body,
                 )
+                if pub_res.status == "FAILED":
+                    raise RuntimeError(pub_res.error_message or "Failed to post PR review comments.")
+
                 logger.info(
                     "pr_review_comment_published",
-                    extra={"repo_id": str(repo.id), "pr_number": pr_number, "head_sha": head_sha},
+                    extra={
+                        "repo_id": str(repo.id),
+                        "pr_number": pr_number,
+                        "head_sha": head_sha,
+                        "status": pub_res.status,
+                        "comments_count": pub_res.published_comments_count,
+                    },
                 )
             except Exception as exc:
                 logger.error(

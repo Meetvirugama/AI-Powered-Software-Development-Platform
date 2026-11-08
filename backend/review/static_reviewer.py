@@ -82,17 +82,41 @@ class StaticReviewer:
             for item in self.normalize_findings(findings, scanner=scanner)
         ]
 
+    SUPPORTED_SCANNERS = {"ruff", "bandit", "eslint", "biome"}
+
+    def detect_scanners_for_file(self, file_path: str, repo_root: str | None = None) -> list[str]:
+        """Detect recommended static scanners based on file type and repository config."""
+        lower = (file_path or "").lower()
+        if lower.endswith(".py"):
+            return ["ruff", "bandit"]
+        if lower.endswith((".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs")):
+            if repo_root:
+                import os
+                if os.path.exists(os.path.join(repo_root, "biome.json")) or os.path.exists(os.path.join(repo_root, "biome.jsonc")):
+                    return ["biome"]
+                if any(os.path.exists(os.path.join(repo_root, f)) for f in (".eslintrc", ".eslintrc.json", ".eslintrc.js", "eslint.config.js", "eslint.config.mjs")):
+                    return ["eslint"]
+            return ["eslint", "biome"]
+        return []
+
     def review_modified_files(
         self,
         modified_files: list[str],
         ai_findings: list[dict[str, Any]] | None = None,
-        scanners: tuple[str, ...] = ("ruff", "bandit"),
+        scanners: tuple[str, ...] | None = ("ruff", "bandit"),
+        repo_root: str | None = None,
     ) -> dict[str, Any]:
         """Run static scanners on modified files and combine their findings with AI findings."""
         static_findings: list[dict[str, Any]] = []
 
         for file_path in modified_files:
-            for scanner in scanners:
+            if scanners is not None and scanners != ("ruff", "bandit"):
+                file_scanners = list(scanners)
+            else:
+                detected = self.detect_scanners_for_file(file_path, repo_root=repo_root)
+                file_scanners = detected if detected else list(scanners or ("ruff", "bandit"))
+
+            for scanner in file_scanners:
                 try:
                     static_findings.extend(
                         self.run_scanner(scanner, file_path)
@@ -135,6 +159,12 @@ class StaticReviewer:
                 sys.executable, "-m", "bandit", "-f", "json",
                 "-r", "--", cleaned_target,
             ],
+            "eslint": [
+                "npx", "eslint", "--format", "json", "--no-color", "--", cleaned_target,
+            ],
+            "biome": [
+                "npx", "@biomejs/biome", "lint", "--reporter=json", "--", cleaned_target,
+            ],
         }
 
         if scanner not in commands:
@@ -175,7 +205,7 @@ class StaticReviewer:
                 }
                 for item in payload
             ]
-        else:
+        elif scanner == "bandit":
             raw_findings = payload.get("results", [])
             findings = [
                 {
@@ -189,5 +219,37 @@ class StaticReviewer:
                 }
                 for item in raw_findings
             ]
+        elif scanner == "eslint":
+            if not isinstance(payload, list):
+                raise RuntimeError("ESLint returned an unexpected JSON format")
+            findings = []
+            for file_entry in payload:
+                f_path = file_entry.get("filePath") or cleaned_target
+                for msg in file_entry.get("messages", []):
+                    sev = "high" if msg.get("severity") == 2 else "low"
+                    findings.append({
+                        "rule_id": msg.get("ruleId") or "eslint-rule",
+                        "severity": sev,
+                        "message": redact(str(msg.get("message") or "")),
+                        "file_path": f_path,
+                        "line_number": msg.get("line"),
+                    })
+        elif scanner == "biome":
+            diagnostics = payload.get("diagnostics", []) if isinstance(payload, dict) else []
+            findings = []
+            for diag in diagnostics:
+                loc = diag.get("location") or {}
+                f_path = (loc.get("path") or {}).get("file") or cleaned_target
+                l_num = (loc.get("lines") or {}).get("start")
+                sev = "high" if str(diag.get("severity", "")).lower() == "error" else "low"
+                findings.append({
+                    "rule_id": diag.get("category") or "biome-lint",
+                    "severity": sev,
+                    "message": redact(str(diag.get("description") or diag.get("message") or "")),
+                    "file_path": f_path,
+                    "line_number": l_num,
+                })
+        else:
+            findings = []
 
         return self.review(findings, scanner=scanner)

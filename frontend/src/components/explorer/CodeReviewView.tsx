@@ -26,9 +26,18 @@ import {
   Clock,
   RotateCcw,
   Loader2,
+  ThumbsUp,
+  ThumbsDown,
+  Flag,
+  Send,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { getCodeReviewHistory, reopenCodeReview } from '../../services/analysis';
+import {
+  getCodeReviewHistory,
+  reopenCodeReview,
+  submitFindingFeedback,
+  publishCodeReview,
+} from '../../services/analysis';
 import type {
   ReviewReportResponse,
   ReviewFinding,
@@ -38,6 +47,8 @@ import type {
   SourceReference,
   ReviewTarget,
   AnalysisRunSummary,
+  FindingLifecycleStatus,
+  ReviewFeedbackType,
 } from '../../types/analysis';
 
 export interface CodeReviewViewProps {
@@ -186,6 +197,36 @@ const CATEGORY_COLORS: Record<ReviewCategory, string> = {
   maintainability: 'text-purple-400 bg-purple-500/10 border-purple-500/30',
 };
 
+const LIFECYCLE_CONFIG: Record<
+  FindingLifecycleStatus,
+  { label: string; badgeClass: string }
+> = {
+  NEW: {
+    label: 'New Finding',
+    badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+  },
+  ACTIVE: {
+    label: 'Active',
+    badgeClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
+  },
+  FIXED: {
+    label: 'Fixed in Commit',
+    badgeClass: 'bg-teal-500/15 text-teal-300 border-teal-500/30 font-semibold',
+  },
+  REOPENED: {
+    label: 'Reopened',
+    badgeClass: 'bg-rose-500/15 text-rose-300 border-rose-500/30 font-semibold',
+  },
+  DISMISSED: {
+    label: 'Dismissed',
+    badgeClass: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  },
+  SUPPRESSED: {
+    label: 'Suppressed',
+    badgeClass: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  },
+};
+
 export function CodeReviewView({
   result,
   onSelectSourceReference,
@@ -223,6 +264,63 @@ export function CodeReviewView({
   });
 
   const [showMissingContext, setShowMissingContext] = useState(false);
+
+  const [feedbackMap, setFeedbackMap] = useState<
+    Record<string, { type: ReviewFeedbackType; submitting?: boolean }>
+  >(() => {
+    const init: Record<string, { type: ReviewFeedbackType }> = {};
+    findings.forEach((f) => {
+      const fb = (f.feedback?.feedback_type || (f.finding_metadata as any)?.feedback?.feedback_type);
+      if (fb) {
+        init[f.id] = { type: fb as ReviewFeedbackType };
+      }
+    });
+    return init;
+  });
+
+  const [publicationState, setPublicationState] = useState<{
+    isPublishing?: boolean;
+    publishedResult?: any;
+    error?: string | null;
+  }>({});
+
+  async function handleFeedback(findingId: string, feedbackType: ReviewFeedbackType) {
+    setFeedbackMap((prev) => ({
+      ...prev,
+      [findingId]: { ...prev[findingId], type: feedbackType, submitting: true },
+    }));
+    try {
+      await submitFindingFeedback(result.run_id, findingId, { feedback_type: feedbackType });
+      setFeedbackMap((prev) => ({
+        ...prev,
+        [findingId]: { type: feedbackType, submitting: false },
+      }));
+    } catch {
+      setFeedbackMap((prev) => ({
+        ...prev,
+        [findingId]: { ...prev[findingId], submitting: false },
+      }));
+    }
+  }
+
+  async function handleManualPublish() {
+    if (!repositoryId || target.type !== 'pr' || !target.pr_number) return;
+    setPublicationState({ isPublishing: true, error: null });
+    try {
+      const pubRes = await publishCodeReview(repositoryId, {
+        run_id: result.run_id,
+        pr_number: target.pr_number,
+        commit_sha: target.commit_sha || target.head_revision || undefined,
+        force_publish: true,
+      });
+      setPublicationState({ isPublishing: false, publishedResult: pubRes });
+    } catch (err: any) {
+      setPublicationState({
+        isPublishing: false,
+        error: err?.message || 'Failed to publish review to GitHub PR.',
+      });
+    }
+  }
 
   // Severity counts
   const severityCounts = useMemo(() => {
@@ -364,13 +462,62 @@ export function CodeReviewView({
             <span>Commit SHA: <strong className="text-primary">{target.commit_sha}</strong></span>
           )}
           {target.type === 'pr' && (
-            <span>Pull Request: <strong className="text-primary">#{target.pr_number}</strong></span>
+            <div className="flex items-center justify-between gap-2">
+              <span>Pull Request: <strong className="text-primary">#{target.pr_number}</strong></span>
+              {repositoryId && (
+                <button
+                  type="button"
+                  onClick={handleManualPublish}
+                  disabled={publicationState.isPublishing}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+                >
+                  {publicationState.isPublishing ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <Send className="h-2.5 w-2.5" />
+                  )}
+                  <span>Publish to PR #{target.pr_number}</span>
+                </button>
+              )}
+            </div>
           )}
           {target.type === 'diff' && (
             <span>Unified Diff ({target.diff?.length || 0} characters)</span>
           )}
         </div>
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* 1.1 GitHub PR Publication Status Banner                            */}
+      {/* ------------------------------------------------------------------ */}
+      {(result.review_publication || publicationState.publishedResult) && (
+        <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2">
+            <GitPullRequest className="h-4 w-4 text-indigo-400 shrink-0" />
+            <div>
+              <span className="font-semibold text-indigo-300">
+                GitHub PR Review:
+              </span>{' '}
+              <span className="text-foreground">
+                {(publicationState.publishedResult || result.review_publication)?.status === 'PUBLISHED'
+                  ? `Published ${(publicationState.publishedResult || result.review_publication)?.published_comments_count} inline comment(s) to PR #${(publicationState.publishedResult || result.review_publication)?.pr_number}`
+                  : (publicationState.publishedResult || result.review_publication)?.skipped_reason || 'Publication evaluated'}
+              </span>
+            </div>
+          </div>
+          {(publicationState.publishedResult || result.review_publication)?.review_id && (
+            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-mono">
+              Review ID: #{(publicationState.publishedResult || result.review_publication)?.review_id}
+            </span>
+          )}
+        </div>
+      )}
+      {publicationState.error && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300 flex items-center gap-2">
+          <AlertOctagon className="h-4 w-4 text-rose-400 shrink-0" />
+          <span>{publicationState.error}</span>
+        </div>
+      )}
 
       {/* History Drawer Modal / Popover */}
       {showHistory && (
@@ -619,6 +766,21 @@ export function CodeReviewView({
                   finding.source_reference &&
                   typeof finding.source_reference.start_line === 'number';
 
+                const lifecycleStatus: FindingLifecycleStatus =
+                  (finding.lifecycle?.status ||
+                    (finding.finding_metadata as any)?.lifecycle?.status ||
+                    'NEW') as FindingLifecycleStatus;
+                const lifeMeta = LIFECYCLE_CONFIG[lifecycleStatus] || LIFECYCLE_CONFIG.NEW;
+
+                const isChangedLine =
+                  finding.is_changed_line ??
+                  (finding.finding_metadata as any)?.is_changed_line ??
+                  finding.is_new_in_change;
+
+                const evidenceLevel =
+                  finding.evidence_level ||
+                  (finding.finding_metadata as any)?.evidence_level;
+
                 return (
                   <div
                     key={finding.id}
@@ -679,14 +841,31 @@ export function CodeReviewView({
                             <span>{sourceMeta.label}</span>
                           </span>
 
-                          {/* New in change tag */}
-                          {finding.is_new_in_change ? (
+                          {/* Lifecycle Status Badge */}
+                          <span
+                            className={cn(
+                              'px-1.5 py-0.5 rounded text-[9px] font-mono border',
+                              lifeMeta.badgeClass
+                            )}
+                          >
+                            {lifeMeta.label}
+                          </span>
+
+                          {/* Changed Line vs Platform Only Badge */}
+                          {isChangedLine ? (
                             <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-mono font-medium">
-                              New in Change
+                              Changed Line
                             </span>
                           ) : (
                             <span className="px-1.5 py-0.5 rounded bg-muted/40 text-muted-foreground border border-border/50 text-[9px] font-mono">
-                              Pre-existing
+                              Platform Only
+                            </span>
+                          )}
+
+                          {/* Evidence Level Badge */}
+                          {evidenceLevel && (
+                            <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 text-[9px] font-mono font-medium">
+                              {evidenceLevel}
                             </span>
                           )}
 
@@ -798,6 +977,63 @@ export function CodeReviewView({
                             </pre>
                           </div>
                         )}
+
+                        {/* Developer Feedback Action Toolbar */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-border/40 flex-wrap">
+                          <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider font-mono">
+                            Feedback:
+                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleFeedback(finding.id, 'useful')}
+                              disabled={feedbackMap[finding.id]?.submitting}
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                                feedbackMap[finding.id]?.type === 'useful'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50 font-bold'
+                                  : 'border-border/60 text-muted-foreground hover:bg-emerald-500/10 hover:text-emerald-400'
+                              )}
+                              title="Mark finding as useful"
+                            >
+                              <ThumbsUp className="h-2.5 w-2.5" />
+                              <span>Useful</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleFeedback(finding.id, 'not_useful')}
+                              disabled={feedbackMap[finding.id]?.submitting}
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                                feedbackMap[finding.id]?.type === 'not_useful'
+                                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold'
+                                  : 'border-border/60 text-muted-foreground hover:bg-amber-500/10 hover:text-amber-400'
+                              )}
+                              title="Mark finding as not useful"
+                            >
+                              <ThumbsDown className="h-2.5 w-2.5" />
+                              <span>Not Useful</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleFeedback(finding.id, 'false_positive')}
+                              disabled={feedbackMap[finding.id]?.submitting}
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                                feedbackMap[finding.id]?.type === 'false_positive'
+                                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 font-bold'
+                                  : 'border-border/60 text-muted-foreground hover:bg-rose-500/10 hover:text-rose-400'
+                              )}
+                              title="Flag finding as false positive"
+                            >
+                              <Flag className="h-2.5 w-2.5" />
+                              <span>False Positive</span>
+                            </button>
+                            {feedbackMap[finding.id]?.submitting && (
+                              <Loader2 className="h-3 w-3 animate-spin text-muted-foreground ml-1" />
+                            )}
+                          </div>
+                        </div>
 
                         {/* Meta footer: Confidence, Rule ID, Location Action */}
                         <div className="pt-1 flex items-center justify-between text-[10px] font-mono text-muted-foreground flex-wrap gap-2">

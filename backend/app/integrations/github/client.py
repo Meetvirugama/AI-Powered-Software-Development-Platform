@@ -348,16 +348,39 @@ class GitHubClient:
         body: str,
         event: str = "COMMENT",
         comments: list[dict[str, Any]] | None = None,
+        commit_id: str | None = None,
     ) -> dict[str, Any]:
-        """Create a review on a pull request with an overall comment."""
+        """Create a review on a pull request with an overall comment and optional inline comments."""
         payload: dict[str, Any] = {"body": body, "event": event}
         if comments:
             payload["comments"] = comments
+        if commit_id:
+            payload["commit_id"] = commit_id
         return await self._request(
             "POST",
             f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews",
             json_body=payload,
         )
+
+    async def list_pull_request_reviews(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> list[dict[str, Any]]:
+        """List reviews on a pull request."""
+        res = await self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews")
+        return res if isinstance(res, list) else []
+
+    async def list_pull_request_review_comments(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+    ) -> list[dict[str, Any]]:
+        """List review comments on a pull request."""
+        res = await self._request("GET", f"/repos/{owner}/{repo}/pulls/{pr_number}/comments")
+        return res if isinstance(res, list) else []
 
     # ----- Week 3 F31 & F-23: Issues ---------------------------------------
 

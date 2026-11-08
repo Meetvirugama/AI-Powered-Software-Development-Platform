@@ -408,6 +408,50 @@ export interface CodeReviewRequest {
   include_static?: boolean;
 }
 
+export type FindingLifecycleStatus =
+  | 'NEW'
+  | 'ACTIVE'
+  | 'FIXED'
+  | 'REOPENED'
+  | 'DISMISSED'
+  | 'SUPPRESSED';
+
+export type ReviewFeedbackType =
+  | 'useful'
+  | 'not_useful'
+  | 'false_positive'
+  | 'already_fixed'
+  | 'dismissed';
+
+export interface FindingLifecycle {
+  status: FindingLifecycleStatus;
+  first_seen_commit?: string | null;
+  last_seen_commit?: string | null;
+  resolved_commit?: string | null;
+  history?: Array<{
+    status: FindingLifecycleStatus;
+    commit_sha?: string | null;
+    timestamp?: string;
+  }>;
+}
+
+export interface FindingFeedback {
+  feedback_type: ReviewFeedbackType;
+  comment?: string | null;
+  created_at?: string;
+}
+
+export interface ReviewPublicationSummary {
+  status: string;
+  review_id?: number | null;
+  pr_number?: number | null;
+  commit_sha?: string | null;
+  published_comments_count: number;
+  skipped_reason?: string | null;
+  error_message?: string | null;
+  published_at?: string | null;
+}
+
 export interface ReviewFinding {
   id: string;
   category: ReviewCategory;
@@ -422,6 +466,11 @@ export interface ReviewFinding {
   is_new_in_change?: boolean;
   source_type: FindingSourceType;
   rule_id?: string | null;
+  evidence_level?: 'PROVEN' | 'STRONG' | 'SUSPECTED' | 'NEEDS_CONTEXT' | string;
+  is_changed_line?: boolean;
+  lifecycle?: FindingLifecycle | null;
+  feedback?: FindingFeedback | null;
+  finding_metadata?: Record<string, any>;
 }
 
 export interface ReviewReport {
@@ -439,6 +488,7 @@ export interface ReviewReportResponse {
   status: AnalysisStatus;
   target: ReviewTarget;
   report: ReviewReport;
+  review_publication?: ReviewPublicationSummary | null;
   stage_metrics?: StageMetrics | null;
   created_at: string;
   completed_at?: string | null;

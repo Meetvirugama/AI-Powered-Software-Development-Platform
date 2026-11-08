@@ -1345,3 +1345,71 @@ class AnalysisRunMetricsSummaryResponse(BaseModel):
     integrity_status: str = "CLEAN"
     integrity_issues_count: int = 0
     retention: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Code Review Publication, Feedback & Settings Schemas (F14)
+# ---------------------------------------------------------------------------
+
+class ReviewPublicationRequest(BaseModel):
+    """Payload to trigger manual publication of a code review run to a GitHub PR."""
+
+    run_id: str | None = None
+    pr_number: int
+    commit_sha: str | None = None
+    force_publish: bool = True
+    max_comments: int = Field(default=15, ge=1, le=50)
+    min_confidence: str = Field(default="medium")
+    changed_lines_only: bool = True
+
+
+class ReviewPublicationResponse(BaseModel):
+    """Result of publishing a code review run to a GitHub PR."""
+
+    status: str
+    review_id: int | None = None
+    pr_number: int | None = None
+    commit_sha: str | None = None
+    published_comments_count: int = 0
+    skipped_reason: str | None = None
+    error_message: str | None = None
+    published_at: datetime | None = None
+
+
+class ReviewFeedbackRequest(BaseModel):
+    """Developer feedback on an individual review finding (AutoCommenter)."""
+
+    feedback_type: Literal["useful", "not_useful", "false_positive", "already_fixed", "dismissed"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+
+class ReviewFeedbackResponse(BaseModel):
+    """Feedback submission outcome with updated repository stats."""
+
+    finding_id: str
+    feedback_type: str
+    user_id: str | None = None
+    comment: str | None = None
+    updated_at: str
+    repository_stats: dict[str, Any] | None = None
+
+
+class ReviewSettingsResponse(BaseModel):
+    """Repository-level code review and publication configuration."""
+
+    repository_id: str
+    pr_review_enabled: bool = False
+    pr_review_drafts: bool = False
+    min_confidence: str = "medium"
+    max_comments: int = 15
+    changed_lines_only: bool = True
+
+
+class UpdateReviewSettingsRequest(BaseModel):
+    """Update repository-level review configuration."""
+
+    pr_review_enabled: bool | None = None
+    pr_review_drafts: bool | None = None
+    min_confidence: str | None = None
+    max_comments: int | None = Field(default=None, ge=1, le=50)
+    changed_lines_only: bool | None = None
