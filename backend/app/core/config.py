@@ -205,6 +205,13 @@ class Settings(BaseSettings):
     # their IP to dodge the per-IP rate limit.
     trust_proxy_headers: bool = False
     disable_embedded_sync_worker: bool = False
+    sync_worker_lease_ttl_seconds: int = 60
+    sync_worker_heartbeat_interval_seconds: int = 15
+    sync_worker_max_retries: int = 3
+    sync_worker_retry_base_delay_seconds: float = 2.0
+    sync_worker_repo_lock_ttl_seconds: int = 120
+    embedding_max_requests_per_minute: int = 120
+    embedding_max_concurrency: int = 5
 
     @property
     def is_production(self) -> bool:
@@ -249,6 +256,8 @@ class Settings(BaseSettings):
 
         is_prod = self.app_env.lower() in ("production", "prod")
         if is_prod:
+            if "disable_embedded_sync_worker" not in self.model_fields_set:
+                self.disable_embedded_sync_worker = True
             if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
                 raise ValueError(
                     "Production configuration error: JWT_SECRET must be configured with at least 32 characters."

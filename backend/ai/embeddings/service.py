@@ -58,6 +58,7 @@ class EmbeddingService:
         provider: EmbeddingProvider,
         batch_size: int = _BATCH_SIZE,
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
+        rate_limiter: Any = None,
     ) -> None:
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
@@ -67,6 +68,7 @@ class EmbeddingService:
         self._provider = provider
         self._batch_size = batch_size
         self._max_concurrency = max_concurrency
+        self._rate_limiter = rate_limiter
 
     # ------------------------------------------------------------------
     # Properties
@@ -91,6 +93,11 @@ class EmbeddingService:
     def max_concurrency(self) -> int:
         """Maximum concurrent API requests permitted."""
         return self._max_concurrency
+
+    @property
+    def rate_limiter(self) -> Any:
+        """Underlying distributed or local rate limiter, if configured."""
+        return self._rate_limiter
 
     @property
     def model_name(self) -> str:
@@ -153,6 +160,9 @@ class EmbeddingService:
         if text is None:
             raise ValueError("text to embed cannot be None.")
 
+        if self._rate_limiter is not None and hasattr(self._rate_limiter, "acquire"):
+            await self._rate_limiter.acquire(getattr(self._provider, "provider_name", "gemini"))
+
         start_time = time.perf_counter()
         vector = await self._provider.embed(text)
         self._validate_dimensions(vector)
@@ -204,6 +214,8 @@ class EmbeddingService:
 
         async def _run_sub_batch(batch: list[str]) -> list[list[float]]:
             async with semaphore:
+                if self._rate_limiter is not None and hasattr(self._rate_limiter, "acquire"):
+                    await self._rate_limiter.acquire(getattr(self._provider, "provider_name", "gemini"))
                 return await self._provider.embed_batch(batch)
 
         batch_results: list[list[list[float]]] = await asyncio.gather(
@@ -239,8 +251,11 @@ class EmbeddingService:
         return all_vectors
 
     async def aclose(self) -> None:
-        """Release underlying provider resources."""
-        await self._provider.aclose()
+        """Release underlying provider and rate limiter resources."""
+        if hasattr(self._provider, "aclose"):
+            await self._provider.aclose()
+        if self._rate_limiter is not None and hasattr(self._rate_limiter, "aclose"):
+            await self._rate_limiter.aclose()
 
     async def __aenter__(self: Self) -> Self:
         return self

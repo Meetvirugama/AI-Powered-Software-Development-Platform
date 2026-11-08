@@ -14,6 +14,18 @@ fi
 
 echo "Starting AI-Powered Software Development Platform..."
 
+ROLE="${SERVICE_ROLE:-${1:-api}}"
+
+if [ "$ROLE" = "worker" ] || [ "$ROLE" = "sync_worker" ]; then
+    echo "Starting standalone background sync worker process..."
+    exec $PY_BIN -m app.workers.sync_worker
+fi
+
+if [ "$ROLE" = "webhook_worker" ]; then
+    echo "Starting standalone background webhook worker process..."
+    exec $PY_BIN -m app.workers.webhook_worker
+fi
+
 # Locate alembic.ini (check backend/alembic.ini first, then ./alembic.ini)
 ALEMBIC_CONFIG="backend/alembic.ini"
 if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then

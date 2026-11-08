@@ -16,12 +16,14 @@ from .client import (
     RateLimitError,
 )
 from .gemini_provider import GeminiEmbeddingProvider
+from .rate_limiter import DistributedEmbeddingRateLimiter
 from .service import CachedEmbeddingService, EmbeddingService
 
 __all__ = [
     "AuthenticationError",
     "CachedEmbeddingService",
     "DimensionMismatchError",
+    "DistributedEmbeddingRateLimiter",
     "EmbeddingError",
     "EmbeddingProfile",
     "EmbeddingProvider",
