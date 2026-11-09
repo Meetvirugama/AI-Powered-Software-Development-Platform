@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -49,14 +49,27 @@ def get_runner_secret() -> str:
 
 
 def verify_runner_auth(
+    request: Request,
     x_runner_token: str | None = Header(default=None, alias="X-Runner-Token"),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> str:
     """Authenticate internal API calls using constant-time comparison."""
     expected = get_runner_secret()
     if not expected:
-        # In development without an explicit secret configured, allow if DEV
-        if not getattr(settings, "is_production", False) and getattr(settings, "app_env", "") == "development":
+        # Fail closed by default even in development. Permit unauthenticated development
+        # access only behind an explicit opt-in setting AND when binding/connecting to a loopback address.
+        allow_unauth = (
+            getattr(settings, "runner_allow_unauthenticated_dev", False)
+            or os.environ.get("RUNNER_ALLOW_UNAUTHENTICATED_DEV", "").strip().lower() in ("true", "1")
+        )
+        client_host = request.client.host if (request and request.client) else None
+        is_loopback = client_host in ("127.0.0.1", "::1", "localhost", "testclient")
+        if (
+            not getattr(settings, "is_production", False)
+            and getattr(settings, "app_env", "") == "development"
+            and allow_unauth
+            and is_loopback
+        ):
             return "dev-unauthenticated"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

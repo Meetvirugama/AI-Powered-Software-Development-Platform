@@ -151,3 +151,42 @@ def test_runner_file_operations(runner_client, mock_backend):
     assert resp.status_code == 200
     assert resp.json()["status"] == "DESTROYED"
     mock_backend.destroy_workspace.assert_called_once_with("test-task-1")
+
+
+def test_runner_auth_missing_secret_fails_closed(mock_backend, monkeypatch):
+    """Missing secret fails closed (500) by default even in development."""
+    monkeypatch.setattr("runner.main.get_runner_secret", lambda: "")
+    monkeypatch.setattr("app.core.config.settings.app_env", "development")
+    monkeypatch.setattr("app.core.config.settings.runner_allow_unauthenticated_dev", False)
+
+    app = create_runner_app(backend=mock_backend)
+    client = TestClient(app)
+
+    resp = client.post("/internal/v1/workspaces", json={"task_id": "test-task"})
+    assert resp.status_code == 500
+    assert "RUNNER_AUTH_SECRET" in resp.json()["detail"]
+
+
+def test_runner_auth_missing_secret_opt_in_loopback(mock_backend, monkeypatch):
+    """Missing secret allows access only when explicit dev opt-in is enabled on loopback."""
+    monkeypatch.setattr("runner.main.get_runner_secret", lambda: "")
+    monkeypatch.setattr("app.core.config.settings.app_env", "development")
+    monkeypatch.setattr("app.core.config.settings.runner_allow_unauthenticated_dev", True)
+
+    app = create_runner_app(backend=mock_backend)
+    client = TestClient(app)
+
+    resp = client.post("/internal/v1/workspaces", json={"task_id": "test-task"})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+
+
+def test_runner_create_workspace_path_traversal_rejection(runner_client):
+    """base_repo_path traversal attempts are rejected."""
+    headers = {"X-Runner-Token": "test-runner-token-12345"}
+    resp = runner_client.post(
+        "/internal/v1/workspaces",
+        json={"task_id": "test-task", "base_repo_path": "/etc/shadow"},
+        headers=headers,
+    )
+    assert resp.status_code in (400, 422)

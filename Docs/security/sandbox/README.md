@@ -33,7 +33,7 @@ Executing arbitrary repository code directly on an API server poses an existenti
               │
               └── (APP_ENV=production)  ────────► RunnerClient
                                                         │
-                                                        ▼ (Mutual Bearer Auth)
+                                                        ▼ (Bearer Auth over TLS)
                                               [ DEDICATED RUNNER SERVICE ]
                                               (Linux Runner Host / Azure VM)
                                                         │
@@ -56,7 +56,7 @@ This documentation suite provides a complete, production-grade reference for dev
 | [01-existing-architecture-audit.md](01-existing-architecture-audit.md) | Existing Architecture Audit | Codebase audit of execution entry points, security gaps, and vulnerability scenarios. |
 | [02-technology-research.md](02-technology-research.md) | Technology Research | Deep-dive evaluation of Docker, gVisor (`runsc`), Firecracker, E2B, Daytona, and nsjail. |
 | [03-target-architecture.md](03-target-architecture.md) | Target Architecture | Comprehensive architecture specification, trust boundaries, lifecycle, and interfaces. |
-| [04-runner-service-design.md](04-runner-service-design.md) | Runner Service Design | Internal REST API contracts, mutual authentication, schemas, and lifecycle management. |
+| [04-runner-service-design.md](04-runner-service-design.md) | Runner Service Design | Internal REST API contracts, bearer authentication over TLS, schemas, and lifecycle management. |
 | [05-container-isolation.md](05-container-isolation.md) | Container & gVisor Isolation | Kernel flags, cgroups limits, read-only rootfs, tmpfs, capabilities, and runtime setup. |
 | [06-dependency-installation.md](06-dependency-installation.md) | Two-Phase Execution | Phase A (controlled dependency install) vs Phase B (offline execution without network). |
 | [07-agent-integration.md](07-agent-integration.md) | Agent & Tool Integration | Integration with CommandRunner, WorkspaceManager, test generators, and review agents. |

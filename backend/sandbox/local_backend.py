@@ -197,14 +197,28 @@ class LocalSubprocessBackend(SandboxBackend):
     def destroy_workspace(self, task_id: str) -> None:
         self._enforce_environment_policy()
         clean_id = str(task_id).strip()
-        ws_path = self._workspaces.pop(clean_id, None) or (self._base_dir / clean_id).resolve()
         self._monitors.pop(clean_id, None)
 
-        if ws_path.exists() and ws_path.is_dir():
-            try:
-                shutil.rmtree(ws_path, ignore_errors=True)
-            except Exception as exc:
-                logger.warning(f"Error removing local workspace {ws_path}: {exc}")
+        if not clean_id or clean_id == ".":
+            self._workspaces.pop(clean_id, None)
+            return
+
+        try:
+            ws_path = self._resolve_task_root(clean_id)
+        except SandboxSecurityError:
+            self._workspaces.pop(clean_id, None)
+            return
+
+        self._workspaces.pop(clean_id, None)
+
+        base_resolved = self._base_dir.resolve()
+        ws_resolved = ws_path.resolve()
+        if ws_resolved != base_resolved and ws_resolved.is_relative_to(base_resolved):
+            if ws_resolved.exists() and ws_resolved.is_dir():
+                try:
+                    shutil.rmtree(ws_resolved, ignore_errors=True)
+                except Exception as exc:
+                    logger.warning(f"Error removing local workspace {ws_resolved}: {exc}")
 
     def get_status(self, task_id: str) -> dict[str, Any]:
         self._enforce_environment_policy()

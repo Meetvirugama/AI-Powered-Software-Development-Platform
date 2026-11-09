@@ -24,13 +24,36 @@ sudo apt-get update -y
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
 echo "[2/4] Downloading and Installing Google gVisor (runsc)..."
-ARCH=$(uname -m)
-URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
-wget -q "${URL}/runsc" "${URL}/runsc.sha512"
-sha512sum -c runsc.sha512
+GVISOR_VERSION="20241021.0"
+RAW_ARCH=$(uname -m)
+case "${RAW_ARCH}" in
+  x86_64)
+    ARCH="x86_64"
+    EXPECTED_SHA512="258b8008b52bd317e4f0ac676298b497e6986c930f2affa34cfb75659c93135447ff572691a4750c32250d5df30479bf368bafbd5d7bbe6c3bd8473b861d329e"
+    ;;
+  aarch64|arm64)
+    ARCH="aarch64"
+    EXPECTED_SHA512="2e11d628c1f6209a5023d34bb9c8cc515a7a2f2acc11a46b79c8c6622544991e105ba67bc0ca3ec79845d6ee78ed9bb2cca6e8dfe8eb5e252a651904b745adb2"
+    ;;
+  *)
+    echo "ERROR: Unsupported architecture for gVisor: ${RAW_ARCH}" >&2
+    exit 1
+    ;;
+esac
+
+URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${ARCH}"
+echo "Downloading pinned gVisor (runsc) release ${GVISOR_VERSION} for ${ARCH}..."
+wget -q -O runsc "${URL}/runsc"
+
+# Verify against repository-stored trusted checksum BEFORE chmod or install
+echo "${EXPECTED_SHA512}  runsc" | sha512sum -c - || {
+    echo "ERROR: Checksum verification failed for runsc binary! Aborting installation." >&2
+    rm -f runsc
+    exit 1
+}
+
 chmod a+rx runsc
-sudo mv runsc /usr/local/bin/
-rm -f runsc.sha512
+sudo mv runsc /usr/local/bin/runsc
 
 echo "[3/4] Registering runsc OCI runtime with Docker daemon..."
 sudo /usr/local/bin/runsc install

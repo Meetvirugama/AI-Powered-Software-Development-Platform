@@ -10,7 +10,7 @@ graph TD
     end
 
     subgraph RunnerHost["Dedicated Linux Runner VM"]
-        RunnerClient -->|Mutual Auth Token| RunnerAPI["Runner Service (FastAPI)"]
+        RunnerClient -->|Bearer Token over TLS| RunnerAPI["Runner Service (FastAPI)"]
         RunnerAPI --> ContainerMgr["Container Lifecycle Manager"]
         ContainerMgr --> Docker["Docker Engine (cgroups v2)"]
         Docker --> gVisor["gVisor OCI Runtime (runsc)"]

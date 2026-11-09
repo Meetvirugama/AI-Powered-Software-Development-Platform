@@ -151,3 +151,103 @@ def test_container_backend_builds_hardened_docker_command(tmp_path, monkeypatch)
     assert "--pids-limit=512" in cmd
     assert any("/tmp:rw,noexec,nosuid" in c for c in cmd)
     assert any(":/workspace:rw" in c for c in cmd)
+
+
+def test_container_backend_network_enabled_environment(tmp_path, monkeypatch):
+    """Verify that network_enabled=True omits offline guards, does not leak host PATH/HOME, and sets local caches."""
+    monkeypatch.setattr("sandbox.container_backend.settings.sandbox_use_gvisor", False)
+    # Set host environment variables that must NOT leak into the container
+    monkeypatch.setenv("PATH", "/usr/host/bin:/opt/host/bin")
+    monkeypatch.setenv("HOME", "/Users/hostuser")
+    monkeypatch.setenv("TEMP", "/tmp/host_temp")
+
+    backend = ContainerBackend(base_workspaces_dir=tmp_path, use_gvisor=False)
+    backend.create_workspace("task-phase-a")
+
+    captured_cmds = []
+
+    def mock_popen(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = MagicMock()
+        mock_proc.stdout.read.side_effect = [b"installed successfully\n", b""]
+        mock_proc.stderr = MagicMock()
+        mock_proc.stderr.read.side_effect = [b""]
+        mock_proc.wait.return_value = 0
+        return mock_proc
+
+    with patch("sandbox.container_backend.subprocess.Popen", side_effect=mock_popen):
+        res = backend.execute(
+            task_id="task-phase-a",
+            command="python",
+            arguments=["-m", "pip", "install", "-r", "requirements.txt"],
+            network_enabled=True,
+        )
+        assert res.success is True
+
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+
+    # 1. Network must be enabled (no --network=none)
+    assert "--network=none" not in cmd
+
+    # 2. Extract -e env arguments passed to docker run
+    env_args = {}
+    for i, part in enumerate(cmd):
+        if part == "-e" and i + 1 < len(cmd):
+            kv = cmd[i + 1]
+            k, v = kv.split("=", 1)
+            env_args[k] = v
+
+    # 3. Offline guards must NOT be present when network_enabled=True
+    assert "PIP_NO_INDEX" not in env_args
+    assert "NPM_CONFIG_OFFLINE" not in env_args
+
+    # 4. Host environment variables must NOT leak into container
+    assert env_args.get("PATH") != "/usr/host/bin:/opt/host/bin"
+    assert "PATH" not in env_args  # Uses Docker container's own internal PATH
+    assert env_args.get("HOME") == "/tmp"  # Container-local writable HOME
+    assert env_args.get("TMPDIR") == "/tmp"
+    assert env_args.get("PIP_CACHE_DIR") == "/tmp/.cache/pip"
+    assert "/workspace/.deps" in env_args.get("PYTHONPATH", "")
+
+
+def test_destroy_workspace_containment_safety(tmp_path):
+    """Verify destroy_workspace rejects '.' and never deletes base_workspaces_dir."""
+    # 1. ContainerBackend safety check
+    c_backend = ContainerBackend(base_workspaces_dir=tmp_path, use_gvisor=False)
+    ws_1 = c_backend.create_workspace("task-c-1")
+    assert ws_1.exists()
+
+    # Attempting to destroy '.' or '' must NOT delete base directory
+    c_backend.destroy_workspace(".")
+    assert tmp_path.exists()
+    assert ws_1.exists()
+
+    c_backend.destroy_workspace("")
+    assert tmp_path.exists()
+    assert ws_1.exists()
+
+    # Destroying valid task deletes only that task
+    c_backend.destroy_workspace("task-c-1")
+    assert tmp_path.exists()
+    assert not ws_1.exists()
+
+    # 2. LocalSubprocessBackend safety check
+    from sandbox.local_backend import LocalSubprocessBackend
+    l_backend = LocalSubprocessBackend(base_workspaces_dir=tmp_path)
+    ws_2 = l_backend.create_workspace("task-l-1")
+    assert ws_2.exists()
+
+    l_backend.destroy_workspace(".")
+    assert tmp_path.exists()
+    assert ws_2.exists()
+
+    l_backend.destroy_workspace("")
+    assert tmp_path.exists()
+    assert ws_2.exists()
+
+    l_backend.destroy_workspace("task-l-1")
+    assert tmp_path.exists()
+    assert not ws_2.exists()

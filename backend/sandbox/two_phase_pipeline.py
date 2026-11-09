@@ -78,25 +78,35 @@ class TwoPhaseExecutionService:
         manifests = cls.detect_manifests(workspace_path)
         results: list[WorkspaceCommandResult] = []
 
+        # Target directory for installed dependencies inside the task workspace:
+        # In container/runner backends, the workspace is mounted at /workspace.
+        # Installing to /workspace/.deps ensures packages persist across ephemeral containers
+        # and are discoverable via PYTHONPATH in Phase B.
+        deps_dir = (
+            "/workspace/.deps"
+            if getattr(backend, "backend_type", "") in ("container", "runner")
+            else str((workspace_path / ".deps").resolve())
+        )
+
         # 1. Python dependencies
         if manifests["has_python"]:
             if (workspace_path / "requirements.txt").is_file():
-                logger.info(f"Phase A: Installing Python requirements for task '{task_id}'")
+                logger.info(f"Phase A: Installing Python requirements for task '{task_id}' into {deps_dir}")
                 res = backend.execute(
                     task_id=task_id,
                     command="python",
-                    arguments=["-m", "pip", "install", "--no-cache-dir", "-r", "requirements.txt"],
+                    arguments=["-m", "pip", "install", "--target", deps_dir, "--no-cache-dir", "-r", "requirements.txt"],
                     timeout_seconds=timeout_seconds,
                     network_enabled=True,
                 )
                 res.sandbox_status = "PHASE_A_DEPENDENCY_INSTALL"
                 results.append(res)
             elif (workspace_path / "pyproject.toml").is_file():
-                logger.info(f"Phase A: Installing pyproject dependencies for task '{task_id}'")
+                logger.info(f"Phase A: Installing pyproject dependencies for task '{task_id}' into {deps_dir}")
                 res = backend.execute(
                     task_id=task_id,
                     command="python",
-                    arguments=["-m", "pip", "install", "--no-cache-dir", "."],
+                    arguments=["-m", "pip", "install", "--target", deps_dir, "--no-cache-dir", "."],
                     timeout_seconds=timeout_seconds,
                     network_enabled=True,
                 )

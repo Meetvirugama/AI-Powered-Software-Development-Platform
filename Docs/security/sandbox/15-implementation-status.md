@@ -41,7 +41,7 @@
 - [x] `01-existing-architecture-audit.md` — Complete codebase audit and entry-point inventory
 - [x] `02-technology-research.md` — Docker, gVisor, Firecracker, E2B, Daytona evaluation
 - [x] `03-target-architecture.md` — Full target architecture specification and data flow
-- [x] `04-runner-service-design.md` — REST contracts, schemas, mutual bearer auth
+- [x] `04-runner-service-design.md` — REST contracts, schemas, bearer auth over TLS
 - [x] `05-container-isolation.md` — Kernel flags, cgroups, gVisor setup, and OCI profiles
 - [x] `06-dependency-installation.md` — Two-Phase dependency install & offline test pipeline
 - [x] `07-agent-integration.md` — Agent migration and tool integration

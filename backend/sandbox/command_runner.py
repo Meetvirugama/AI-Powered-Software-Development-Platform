@@ -277,18 +277,29 @@ class WorkspaceCommandRunner:
             MAX_TIMEOUT_SECONDS,
         )
 
-        # Delegate to isolated sandbox backend if bound or in production/container mode
+        # Delegate to isolated sandbox backend if bound or in production/non-local mode
         backend = self._backend
         if backend is None:
             app_env = getattr(settings, "app_env", "development").strip().lower()
             is_prod = getattr(settings, "is_production", False) or app_env in ("production", "prod")
             sandbox_setting = getattr(settings, "sandbox_backend", "local").strip().lower()
-            if is_prod or sandbox_setting in ("container", "runner"):
+            recognized_local_names = {"local", "subprocess", "localsubprocess"}
+            if is_prod or sandbox_setting not in recognized_local_names:
                 from sandbox.factory import SandboxFactory
                 backend = SandboxFactory.get_backend()
+                self._backend = backend
 
         if backend is not None:
             task_id = workspace_root.name
+            # Ensure backend resolves and executes in the exact workspace_root
+            if hasattr(backend, "_workspaces"):
+                backend._workspaces[task_id] = workspace_root.resolve()
+            elif hasattr(backend, "create_workspace"):
+                # Remote runner client: ensure workspace is initialized on runner
+                try:
+                    backend.create_workspace(task_id)
+                except Exception:
+                    pass
             return backend.execute(
                 task_id=task_id,
                 command=command,
@@ -301,7 +312,11 @@ class WorkspaceCommandRunner:
 
         env = self.sanitize_environment(custom_env)
         ws_str = str(workspace_root.resolve())
-        env["PYTHONPATH"] = f"{ws_str}{os.pathsep}."
+        deps_path = (workspace_root / ".deps").resolve()
+        if deps_path.is_dir():
+            env["PYTHONPATH"] = f"{deps_path}{os.pathsep}{ws_str}{os.pathsep}."
+        else:
+            env["PYTHONPATH"] = f"{ws_str}{os.pathsep}."
         venv_bin = str(Path(sys.executable).parent)
         curr_path = env.get("PATH", "")
         if venv_bin and venv_bin not in curr_path.split(os.pathsep):

@@ -149,9 +149,16 @@ class ContainerBackend(SandboxBackend):
     ) -> WorkspaceCommandResult:
         start_time = time.perf_counter()
         args = list(arguments or [])
+        clean_id = str(task_id).strip()
 
         # Validate command and arguments via policy
         self._command_runner.validate_command(command, args)
+
+        # Ensure task workspace is registered to cwd if supplied from WorkspaceManager
+        if cwd is not None and clean_id not in self._workspaces:
+            resolved_cwd = Path(cwd).resolve()
+            if resolved_cwd.is_dir() and (resolved_cwd.name == clean_id or resolved_cwd.is_relative_to(self._base_dir)):
+                self._workspaces[clean_id] = resolved_cwd if resolved_cwd.name == clean_id else (self._base_dir / clean_id).resolve()
 
         ws_path = self._resolve_task_root(task_id)
         if not ws_path.exists() or not ws_path.is_dir():
@@ -171,6 +178,16 @@ class ContainerBackend(SandboxBackend):
         container_name = f"sandbox-{task_id[:16]}-{int(time.time() * 1000) % 1000000}"
         self._active_containers[task_id] = container_name
 
+        # Resolve container working directory relative to mounted /workspace
+        container_workdir = "/workspace"
+        if cwd is not None:
+            resolved_cwd = Path(cwd).resolve()
+            if resolved_cwd == ws_path or resolved_cwd.name == clean_id:
+                container_workdir = "/workspace"
+            elif resolved_cwd.is_relative_to(ws_path):
+                rel = resolved_cwd.relative_to(ws_path)
+                container_workdir = f"/workspace/{rel.as_posix()}" if str(rel) != "." else "/workspace"
+
         # Construct Docker CLI command with full security profile
         docker_cmd: list[str] = [
             "docker",
@@ -189,7 +206,7 @@ class ContainerBackend(SandboxBackend):
             "-v",
             f"{ws_path}:/workspace:rw",
             "-w",
-            "/workspace",
+            container_workdir,
             # Security boundaries
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
@@ -208,10 +225,51 @@ class ContainerBackend(SandboxBackend):
         if self._gvisor_verified:
             docker_cmd.append("--runtime=runsc")
 
-        # Environment variables
-        sanitized_env = self._command_runner.sanitize_environment(custom_env)
-        for k, v in sanitized_env.items():
-            docker_cmd.extend(["-e", f"{k}={v}"])
+        # Container environment isolation:
+        # Do not forward host-specific values (PATH, HOME, TEMP, etc.) into the container.
+        # Ensure writable container-local paths for HOME, TMPDIR, and package caches.
+        container_env: dict[str, str] = {
+            "HOME": "/tmp",
+            "TMPDIR": "/tmp",
+            "PYTHONUNBUFFERED": "1",
+            "PIP_CACHE_DIR": "/tmp/.cache/pip",
+            "PYTHONPATH": "/workspace/.deps:/workspace",
+        }
+
+        # Offline guards: only enforce for Phase B (network_enabled=False).
+        # Phase A dependency installation (network_enabled=True) must NOT receive offline guards.
+        if not network_enabled:
+            container_env["PIP_NO_INDEX"] = "1"
+            container_env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+            container_env["NPM_CONFIG_OFFLINE"] = "true"
+
+        # Safe custom environment overrides (preventing host path leaks and sensitive credential overrides)
+        if custom_env:
+            for k, v in custom_env.items():
+                k_upper = k.upper()
+                if k_upper in {"PATH", "HOME", "TEMP", "TMP"}:
+                    continue
+                if (
+                    k_upper
+                    in (
+                        "RUNNER_AUTH_SECRET",
+                        "DATABASE_URL",
+                        "SECRET_KEY",
+                        "OPENAI_API_KEY",
+                        "ANTHROPIC_API_KEY",
+                        "GITHUB_TOKEN",
+                    )
+                    or k_upper.startswith("AWS_")
+                    or k_upper.startswith("AZURE_")
+                ):
+                    continue
+                if k_upper == "PYTHONPATH":
+                    container_env["PYTHONPATH"] = f"/workspace/.deps:/workspace:{v}"
+                else:
+                    container_env[k] = str(v)
+
+        for k in sorted(container_env.keys()):
+            docker_cmd.extend(["-e", f"{k}={container_env[k]}"])
 
         # Image and command entrypoint
         docker_cmd.append(image)
@@ -377,11 +435,27 @@ class ContainerBackend(SandboxBackend):
         if container_name:
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, check=False)
 
-        ws_path = self._workspaces.pop(clean_id, None) or (self._base_dir / clean_id).resolve()
         self._monitors.pop(clean_id, None)
 
-        if ws_path.exists() and ws_path.is_dir():
-            shutil.rmtree(ws_path, ignore_errors=True)
+        # Reject empty, ".", or invalid task IDs
+        if not clean_id or clean_id == ".":
+            self._workspaces.pop(clean_id, None)
+            return
+
+        try:
+            ws_path = self._resolve_task_root(clean_id)
+        except SandboxSecurityError:
+            self._workspaces.pop(clean_id, None)
+            return
+
+        self._workspaces.pop(clean_id, None)
+
+        # Containment check: verify path is strictly inside self._base_dir and NOT self._base_dir itself
+        base_resolved = self._base_dir.resolve()
+        ws_resolved = ws_path.resolve()
+        if ws_resolved != base_resolved and ws_resolved.is_relative_to(base_resolved):
+            if ws_resolved.exists() and ws_resolved.is_dir():
+                shutil.rmtree(ws_resolved, ignore_errors=True)
 
     def get_status(self, task_id: str) -> dict[str, Any]:
         ws_path = self._resolve_task_root(task_id)

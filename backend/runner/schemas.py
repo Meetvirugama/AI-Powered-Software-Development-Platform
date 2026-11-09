@@ -2,13 +2,59 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.config import PROJECT_ROOT
 
 
 class RunnerCreateWorkspaceRequest(BaseModel):
     task_id: str = Field(..., min_length=1, description="Unique task identifier.")
     base_repo_path: str | None = Field(default=None, description="Optional path to seed repo files.")
+
+    @field_validator("base_repo_path")
+    @classmethod
+    def validate_base_repo_path(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return None
+
+        if ".." in cleaned:
+            raise ValueError(f"Directory traversal detected in base_repo_path: '{v}'")
+
+        resolved = Path(cleaned).resolve()
+        allowed_roots = [
+            PROJECT_ROOT.resolve(),
+            (PROJECT_ROOT / ".workspaces").resolve(),
+            (PROJECT_ROOT / "repos").resolve(),
+            Path("/sandbox/workspaces").resolve(),
+            Path("/tmp/workspaces").resolve(),
+        ]
+
+        is_allowed = any(
+            resolved == root or resolved.is_relative_to(root)
+            for root in allowed_roots
+        )
+        if not is_allowed:
+            raise ValueError(
+                f"base_repo_path '{v}' resolves outside allowed runner repository directories."
+            )
+
+        if resolved.is_symlink():
+            target = resolved.readlink()
+            target_resolved = (resolved.parent / target).resolve()
+            if not any(
+                target_resolved == root or target_resolved.is_relative_to(root)
+                for root in allowed_roots
+            ):
+                raise ValueError(
+                    f"base_repo_path symlink target resolves outside allowed repository directories."
+                )
+
+        return str(resolved)
 
 
 class RunnerCreateWorkspaceResponse(BaseModel):

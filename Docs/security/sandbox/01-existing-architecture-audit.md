@@ -156,7 +156,7 @@ A thorough search across the entire backend identifies all subprocess invocation
 
 2. **Dedicated Runner Service:**
    - Standalone microservice running on a secure Linux container host.
-   - Authenticated via mutual token/key (`RUNNER_AUTH_SECRET`).
+   - Authenticated via client bearer token over TLS (`RUNNER_AUTH_SECRET`).
    - Narrow API endpoints with zero access to LLM keys or database credentials.
 
 3. **Two-Phase Execution Strategy:**

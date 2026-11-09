@@ -20,7 +20,7 @@ Security is never entrusted to a single defense mechanism. The architecture enfo
 [ LAYER 2: Host Network & Secret Boundary ]
     ├── Zero Secret Injection: Runner and containers receive no cloud API keys
     ├── Private VNet: Runner service isolated behind internal NSG rules
-    └── Mutual Bearer Token: Authenticated API with constant-time verification
+    └── Client Bearer Token over TLS: Authenticated API with constant-time verification
 
 [ LAYER 3: OCI Container Boundary (Linux Kernel) ]
     ├── Network Isolation: --network=none in offline execution phase

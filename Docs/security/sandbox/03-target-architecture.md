@@ -92,7 +92,7 @@ Abstract Base Class defining the contract for executing commands and managing wo
 
 ### 2.4 RunnerClient (`backend/sandbox/runner_client.py`)
 - Implements `SandboxBackend` for the API server when calling the dedicated remote Runner Service over HTTP/TLS.
-- Uses mutual bearer token authentication (`RUNNER_AUTH_SECRET`), handles retries, connection timeouts, and translates runner responses into `WorkspaceCommandResult`.
+- Uses client bearer token authentication (`RUNNER_AUTH_SECRET`) with mandatory TLS encryption on every network hop, handles retries, connection timeouts, and translates runner responses into `WorkspaceCommandResult`.
 
 ### 2.5 Runner Service (`backend/runner/main.py`)
 - Dedicated FastAPI microservice running on the Linux Runner VM.
@@ -116,7 +116,7 @@ Abstract Base Class defining the contract for executing commands and managing wo
      v
 [ API SERVER ] (Trusted for Task Management; Contains DB / LLM Secrets)
      |
-     | === SECURITY BOUNDARY 1: Mutual Auth (RUNNER_AUTH_SECRET), Private VNet ===
+     | === SECURITY BOUNDARY 1: Client Bearer Auth over TLS (RUNNER_AUTH_SECRET), Private VNet ===
      | (No LLM keys, DB passwords, or cloud credentials passed)
      v
 [ RUNNER SERVICE ] (Trusted Execution Manager; Zero Cloud Secrets)

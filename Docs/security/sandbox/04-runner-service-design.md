@@ -11,7 +11,7 @@ The **Runner Service** is a dedicated internal execution microservice designed t
 
 The Runner Service:
 - Has zero access to LLM API keys (`GEMINI_API_KEY`, `GROQ_API_KEY`), Supabase DB passwords, or user credentials.
-- Exposes a narrow, strictly validated REST interface protected by constant-time mutual bearer authentication.
+- Exposes a narrow, strictly validated REST interface protected by constant-time client bearer token authentication over TLS.
 - Independently validates command executables, argument tokens, and workspace paths, enforcing security policies even if an API server request was compromised.
 
 ---
@@ -153,16 +153,20 @@ Base Path: `/internal/v1`
 
 ---
 
-## 3. Mutual Authentication & Security Architecture
+## 3. Client Bearer Authentication & TLS Transport Security
 
 1. **Authentication Token (`RUNNER_AUTH_SECRET`):**
    - Every request from `RunnerClient` to the Runner Service must provide an authentication header:
      - `X-Runner-Token: <RUNNER_AUTH_SECRET>`
      - OR `Authorization: Bearer <RUNNER_AUTH_SECRET>`
-   - The token is verified using Python `secrets.compare_digest` to prevent timing attacks.
+   - The token authenticates the client caller and is verified using Python `secrets.compare_digest` to prevent timing attacks.
    - Any missing or incorrect token immediately terminates with `HTTP 401 Unauthorized`.
-2. **Private Network Containment:**
-   - The Runner Service binds to internal network interfaces (e.g. `0.0.0.0:8080` inside an Azure Virtual Network).
-   - Ingress is restricted via Azure Network Security Group (NSG) rules allowing traffic strictly from the App Service Subnet.
-3. **No Docker Socket Exposure:**
+   - Missing secret configuration causes the runner service to fail closed (`HTTP 500`).
+2. **Mandatory Authenticated TLS Encryption:**
+   - Client bearer tokens authenticate the caller but do not encrypt traffic. Therefore, **every network hop carrying the token must use authenticated TLS (HTTPS)** to protect against eavesdropping and token interception.
+   - In production, TLS is terminated via a reverse proxy (e.g. Nginx or Caddy on port 8443) or an Application Gateway in front of Uvicorn.
+3. **Private Network Containment:**
+   - The Runner Service is deployed inside a private Azure Virtual Network subnet.
+   - Ingress is restricted via Azure Network Security Group (NSG) rules allowing traffic strictly from the App Service Subnet over TLS.
+4. **No Docker Socket Exposure:**
    - The Docker socket `/var/run/docker.sock` is accessible only to the Runner Service daemon, never exposed over the network, and never bind-mounted into untrusted task containers.

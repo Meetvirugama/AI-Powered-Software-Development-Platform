@@ -218,6 +218,7 @@ class Settings(BaseSettings):
     runner_base_url: str | None = None
     runner_auth_secret: str | None = None
     runner_request_timeout: float = 60.0
+    runner_allow_unauthenticated_dev: bool = False
     sandbox_cpu_limit: float = 2.0
     sandbox_memory_limit: str = "4g"
     sandbox_pid_limit: int = 512

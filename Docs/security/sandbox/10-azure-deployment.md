@@ -102,7 +102,8 @@ Environment=APP_ENV=production
 Environment=RUNNER_AUTH_SECRET=configure-your-32-char-secret-here!
 Environment=SANDBOX_BACKEND=container
 Environment=SANDBOX_USE_GVISOR=true
-ExecStart=/opt/ai-platform-runner/.venv/bin/uvicorn runner.main:app --host 0.0.0.0 --port 8080 --workers 4
+# Single worker process required: ContainerBackend tracks container monitors and active task processes in memory
+ExecStart=/opt/ai-platform-runner/.venv/bin/uvicorn runner.main:app --host 127.0.0.1 --port 8080 --workers 1
 Restart=always
 RestartSec=5
 
@@ -114,24 +115,73 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
+### 4.2 TLS Transport Termination (Reverse Proxy)
+
+Because `RUNNER_AUTH_SECRET` is a client bearer token sent over HTTP headers, **every network hop carrying the token must use authenticated TLS (HTTPS)** to prevent eavesdropping and credential theft.
+
+Terminate TLS on the Runner host using Nginx or Caddy reverse proxy:
+
+```nginx
+# /etc/nginx/sites-available/runner
+server {
+    listen 8443 ssl http2;
+    server_name runner.internal;
+
+    ssl_certificate /etc/ssl/runner/runner.crt;
+    ssl_certificate_key /etc/ssl/runner/runner.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+The API App Service connects to `https://runner.internal:8443` over the private Azure VNet.
+
 ---
 
-## 5. Network Security Group (NSG) Configuration
+## 5. Network Security Group (NSG) and Egress Filtering Configuration
 
-1. **Ingress Rules:**
-   - **Rule 100 (Allow App Service):**
+Standard Azure NSG 5-tuple rules filter at Layer 4 (IP/port) and **cannot filter by hostname/domain name**. To enforce that Phase A dependency installation reaches only approved package registries:
+
+1. **Egress Firewall / Forward Proxy (FQDN Filtering):**
+   - Route outbound traffic from the Runner subnet via an Azure Route Table (UDR `0.0.0.0/0`) through an egress proxy (e.g., Azure Firewall with Application Rules or a forward Squid proxy).
+   - Configure FQDN allowlist rules for:
+     - PyPI: `pypi.org`, `files.pythonhosted.org` (TCP 443)
+     - npm: `registry.npmjs.org` (TCP 443)
+   - Block all other outbound destination hostnames.
+   - Direct outbound internet access bypassing the egress firewall is strictly blocked.
+
+2. **NSG Ingress Rules:**
+   - **Rule 100 (Allow App Service HTTPS):**
      - Source: Azure App Service Subnet (or App Service Outbound IPs)
-     - Destination Port: `8080`
+     - Destination Port: `8443` (TLS)
      - Protocol: TCP
      - Action: **Allow**
    - **Rule 110 (Allow Operator SSH):**
      - Source: Bastion / Operator IP
      - Destination Port: `22`
+     - Protocol: TCP
      - Action: **Allow**
    - **Rule 4096 (Deny All Ingress):**
      - Destination Port: `*`
      - Action: **Deny**
 
-2. **Egress Rules:**
-   - Allow outbound HTTPS (Port 443) to PyPI (`pypi.org`, `files.pythonhosted.org`) and npm (`registry.npmjs.org`) for Phase A dependency installation.
-   - Deny outbound access to cloud internal metadata IP `169.254.169.254`.
+3. **NSG Egress Rules:**
+   - **Rule 100 (Deny Cloud Metadata):**
+     - Destination: `169.254.169.254`
+     - Destination Port: `*`
+     - Action: **Deny**
+   - **Rule 110 (Allow Forward Proxy / Azure Firewall):**
+     - Destination: Firewall / Proxy Subnet CIDR
+     - Destination Port: `443`, `8080`
+     - Action: **Allow**
+   - **Rule 4096 (Deny Direct Internet Egress):**
+     - Destination: `Internet`
+     - Action: **Deny**
