@@ -168,3 +168,16 @@ The `ToolRegistry` (`backend/ai/agent/tool_registry.py`) maintains definitions, 
 - **Timeout:** 5.0 seconds.
 - **Failure Cases:** Empty symbol name, symbol has no recorded edges in the repository graph.
 - **Test Coverage:** `test_agent_tools.py::test_find_callers_success`.
+
+---
+
+## 6. Relationship to Unified Tool Registry
+
+While the agentic chat subsystem utilizes dedicated read-only semantic exploration tools (`search_code`, `read_file_range`, `get_symbol`, `find_callers`), all platform-wide tools (including the 19 canonical workspace tools, future MCP servers, and marketplace plugins) are governed by the platform's **`UnifiedToolRegistry`** and **`ToolRouter`** (`backend/agent/tools/`).
+
+For full architectural specifications, execution adapters, Draft 2020-12 schema validation, atomic sliding-window rate limiting, and database audit schemas, refer to the complete documentation suite:
+- [Unified Tool Registry Architecture Overview](../tool-registry/README.md)
+- [System Architecture](../tool-registry/03-system-architecture.md)
+- [Execution Pipeline & Adapters](../tool-registry/06-execution-pipeline.md)
+- [Security & Permissions](../tool-registry/07-security-and-permissions.md)
+

@@ -24,3 +24,6 @@ bandit>=1.7.0
 
 # Durable workflow evaluation (F04 - Issue #184)
 dbos>=3.4.0
+
+# JSON Schema validation for Unified Tool Registry (F21 - Issue #201)
+jsonschema>=4.23,<5

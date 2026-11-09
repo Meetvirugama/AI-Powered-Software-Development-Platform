@@ -18,7 +18,14 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from agent.tools.router import ToolDefinition, ToolRequest, ToolResult, ToolRouter
+from agent.tools.router import (
+    ToolAnnotations,
+    ToolDefinition,
+    ToolRateLimit,
+    ToolRequest,
+    ToolResult,
+    ToolRouter,
+)
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
@@ -600,6 +607,124 @@ class WorkspaceToolPolicyBridge:
 WorkspaceToolPolicyBridge.execute_tool._is_policy_guarded = True
 
 
+CANONICAL_TOOL_METADATA: dict[str, dict[str, Any]] = {
+    TOOL_READ_FILE: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=120, window_seconds=60, scope="task"),
+    },
+    TOOL_LIST_FILES: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=120, window_seconds=60, scope="task"),
+    },
+    TOOL_INSPECT_DIFF: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_CHECK_STALE_REVISION: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_VERIFY_DIFF_IMMUTABILITY: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_VALIDATE_INVARIANTS: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_CHECK_DISK_BUDGET: {
+        "risk_tier": "low",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True, idempotent_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_WRITE_FILE: {
+        "risk_tier": "medium",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=False, destructive_hint=False),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_PATCH_FILE: {
+        "risk_tier": "medium",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=False, destructive_hint=False),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_VALIDATE_DIFF: {
+        "risk_tier": "medium",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=True),
+        "rate_limit": ToolRateLimit(requests=60, window_seconds=60, scope="task"),
+    },
+    TOOL_RECORD_REPAIR: {
+        "risk_tier": "medium",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=False),
+        "rate_limit": ToolRateLimit(requests=10, window_seconds=60, scope="task"),
+    },
+    TOOL_COMMIT_CHANGES: {
+        "risk_tier": "medium",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(read_only_hint=False),
+        "rate_limit": ToolRateLimit(requests=20, window_seconds=60, scope="task"),
+    },
+    TOOL_RUN_TESTS: {
+        "risk_tier": "medium",
+        "timeout_s": 300.0,
+        "annotations": ToolAnnotations(read_only_hint=True),
+        "rate_limit": ToolRateLimit(requests=30, window_seconds=60, scope="task"),
+    },
+    TOOL_CLEANUP_ORPHANED: {
+        "risk_tier": "medium",
+        "timeout_s": 60.0,
+        "annotations": ToolAnnotations(read_only_hint=False),
+        "rate_limit": ToolRateLimit(requests=10, window_seconds=60, scope="task"),
+    },
+    TOOL_RECOVER_WORKSPACE: {
+        "risk_tier": "medium",
+        "timeout_s": 60.0,
+        "annotations": ToolAnnotations(read_only_hint=False),
+        "rate_limit": ToolRateLimit(requests=20, window_seconds=60, scope="task"),
+    },
+    TOOL_EXECUTE_COMMAND: {
+        "risk_tier": "high",
+        "timeout_s": 120.0,
+        "annotations": ToolAnnotations(read_only_hint=False, open_world_hint=True),
+        "rate_limit": ToolRateLimit(requests=30, window_seconds=60, scope="task"),
+    },
+    TOOL_DELETE_FILE: {
+        "risk_tier": "high",
+        "timeout_s": 30.0,
+        "annotations": ToolAnnotations(destructive_hint=True),
+        "rate_limit": ToolRateLimit(requests=30, window_seconds=60, scope="task"),
+    },
+    TOOL_PUSH_BRANCH: {
+        "risk_tier": "critical",
+        "timeout_s": 120.0,
+        "annotations": ToolAnnotations(destructive_hint=False),
+        "rate_limit": ToolRateLimit(requests=5, window_seconds=60, scope="task"),
+    },
+    TOOL_CREATE_DRAFT_PR: {
+        "risk_tier": "critical",
+        "timeout_s": 120.0,
+        "annotations": ToolAnnotations(destructive_hint=False),
+        "rate_limit": ToolRateLimit(requests=5, window_seconds=60, scope="task"),
+    },
+}
+
+
 def register_workspace_tools(
     tool_router: ToolRouter,
     workspace_manager: WorkspaceManager,
@@ -998,8 +1123,18 @@ def register_workspace_tools(
     ]
 
     for name, desc, params in tool_specs:
-        defn = ToolDefinition(name=name, description=desc, parameters=params)
-        # Wrap handler to bind bridge
+        meta = CANONICAL_TOOL_METADATA.get(name, {})
+        defn = ToolDefinition(
+            name=name,
+            description=desc,
+            input_schema=params,
+            risk_tier=meta.get("risk_tier", "medium"),
+            timeout_s=meta.get("timeout_s", 60.0),
+            annotations=meta.get("annotations", ToolAnnotations()),
+            rate_limit=meta.get("rate_limit", None),
+            source="builtin",
+            version="1.0.0",
+        )
         tool_router.register(defn, bridge.execute_tool)
 
     return bridge

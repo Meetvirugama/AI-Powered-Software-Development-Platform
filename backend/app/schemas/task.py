@@ -700,7 +700,7 @@ class TaskExecutionResponse(BaseModel):
 
 
 class ToolInvocationResponse(BaseModel):
-    """Audit log of operations routed through ToolRouter (Day 3)."""
+    """Audit log of operations routed through ToolRouter (Day 3 & F21)."""
 
     invocation_id: str
     task_id: str
@@ -709,6 +709,15 @@ class ToolInvocationResponse(BaseModel):
     status: str
     duration_ms: Optional[int] = None
     output_summary: Optional[str] = None
+    tool_version: Optional[str] = None
+    tool_source: Optional[str] = "builtin"
+    provider_id: Optional[str] = None
+    risk_tier: Optional[str] = "low"
+    schema_fingerprint: Optional[str] = None
+    execution_timeout_s: Optional[int] = None
+    execution_timed_out: bool = False
+    rate_limit_status: Optional[str] = None
+    error_category: Optional[str] = None
     created_at: Optional[str] = None
 
 

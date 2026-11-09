@@ -1,2015 +1,1836 @@
-# MASTER IMPLEMENTATION PROMPT — Secure Sandbox Execution Architecture
-## Project: AI-Powered Software Development Platform
-### Target Agent: Antigravity 3.8 Flash
+# TASK: Implement Unified Tool Registry Architecture
+## AI-Powered Software Development Platform
+### Target coding agent: Antigravity 3.8 Flash
 
 ---
 
-# 0. YOUR ROLE
+# 0. YOUR ROLE AND OBJECTIVE
 
-Act as a Senior Backend Engineer, Application Security Engineer, DevSecOps Architect, and Software Infrastructure Engineer.
+Act as a Senior Backend Architect, Python Engineer, AI Agent Infrastructure Engineer, and Application Security Engineer.
 
 You are working on my existing project:
 
 **AI-Powered Software Development Platform**
 
-Your responsibility is to research, audit, design, implement, test, and document a production-grade secure execution architecture for untrusted GitHub repositories.
+Your task is to evolve the existing ToolRouter into a production-oriented Unified Tool Registry that can eventually support:
 
-This is an existing project. Do not create a separate demonstration application or replace the existing architecture unnecessarily.
+1. Built-in workspace tools.
+2. Model Context Protocol (MCP) server tools.
+3. External plugin tools.
+4. Standardized JSON Schema validation.
+5. Tool version management.
+6. Tool-level security and risk classification.
+7. Execution timeouts.
+8. Rate limiting.
+9. Output validation.
+10. Centralized execution auditing.
 
-You must understand the current codebase before making modifications.
+IMPORTANT:
 
-## Primary objective
+This is an existing production-oriented codebase. Do not build a new tool execution system from scratch.
 
-Currently, our platform can execute commands, run tests, install dependencies, and perform AI-assisted code modifications.
+Preserve the existing implementation wherever possible and extend it through controlled architectural refactoring.
 
-However, repository code is currently executed directly on the API host.
+Your implementation must be backward compatible with existing workspace tool functionality.
 
-We need to replace this unsafe execution architecture with an isolated sandbox architecture using:
+Do not sacrifice existing security controls for architectural simplicity.
 
-- SandboxBackend abstraction.
-- Docker-based execution.
-- gVisor runtime support.
-- Dedicated Runner Service.
-- CPU, RAM, PID, disk and execution-time restrictions.
-- Network isolation.
-- Filesystem isolation.
-- Secure workspace lifecycle management.
-- Dependency installation and offline execution phases.
-
-The API server must never directly execute untrusted repository code in production.
-
-**This is a P0 security task. Prioritize security and correctness over implementation speed.**
+You must perform actual implementation, testing, and documentation. Do not stop after producing an implementation plan.
 
 ---
 
-# 1. IMPORTANT DEVELOPMENT RULES
+# 1. FIRST UNDERSTAND THE EXISTING PROJECT
 
-Follow these rules throughout the task.
+Before modifying anything, inspect the complete relevant backend implementation.
 
-## 1.1 Audit before implementation
+Start with these files:
 
-Before modifying anything:
+- backend/agent/tools/router.py
+- backend/sandbox/tool_policy_bridge.py
+- backend/app/core/tool_api_policy.py
+- backend/app/services/task_execution_orchestrator.py
+- backend/app/models/task.py
+- backend/app/repositories/task_repository.py
+- backend/app/schemas/task.py
+- backend/requirements.txt
+- backend/requirements-dev.txt
 
-1. Explore the entire repository.
-2. Understand the existing backend architecture.
-3. Locate all command execution entry points.
-4. Find every place that executes Python, Node.js, pytest, npm, npx, git or shell commands.
-5. Identify every component that interacts with workspaces.
-6. Identify all agents that use CommandRunner.
-7. Identify existing security controls.
-8. Understand how task IDs, repository IDs and user IDs are managed.
-9. Understand existing authentication and authorization.
-10. Identify deployment architecture.
+Also inspect:
 
-Do not assume the architecture described in this prompt perfectly matches the current source code.
+- WorkspaceManager
+- WorkspacePathGuard
+- PolicyEngine
+- ToolDefinition
+- ToolRequest
+- ToolResult
+- ToolInvocation
+- Tool registration functions
+- Existing tool handlers
+- Redis integration
+- Existing database migrations
+- Existing authorization and approval logic
+- Existing test fixtures and mocks
 
-The actual repository is the source of truth.
+Search the entire repository for:
 
-If a component already exists, extend it instead of creating a duplicate.
+- ToolRouter
+- ToolDefinition
+- register_workspace_tools
+- execute_tool
+- _is_policy_guarded
+- _validate_arguments
+- _validate_value
+- ToolInvocation
+- tool_invocations
+- policy_engine
+- WorkspaceToolPolicyBridge
 
-## 1.2 Preserve existing functionality
+Do not assume the previous architectural assessment is completely accurate.
 
-Do not break:
+Verify every observation against the actual source code.
 
-- GitHub repository integration.
-- Repository cloning.
-- Git worktrees.
-- WorkspaceManager.
-- Code review agent.
-- Bug detection agent.
-- Test generation agent.
-- AI orchestrator.
-- Code modification workflows.
-- Diff generation.
-- File reading and writing.
-- Existing task lifecycle.
-- Existing authentication.
-- Existing API contracts unless changes are necessary.
+If an assumption is incorrect, document the actual implementation and adjust the design accordingly.
 
-All existing agents should continue working through the new secure execution architecture.
+## 1.1 Existing architecture that must be preserved
 
-## 1.3 No fake implementation
+The current system already provides:
 
-Never:
-
-- Create a Docker backend that internally uses host subprocess.
-- Claim gVisor support without actually verifying the runtime.
-- Claim network isolation based only on environment variables.
-- Claim CPU/RAM protection based only on application monitoring.
-- Silently fall back to local subprocess in production.
-- Hardcode Docker credentials.
-- Expose the Docker socket through an unrestricted API.
-- Use unverified container image digests.
-- Mark security tests as passed without running them.
-- Create documentation describing features that do not exist.
-
-If infrastructure is unavailable, implement the code that can safely be implemented, document the infrastructure dependency, and clearly mark the relevant functionality as unverified or blocked.
-
-## 1.4 Documentation is mandatory
-
-Every major implementation decision must be documented.
-
-I want to maintain long-term technical documentation for this project.
-
-Do not put all documentation into one short README.
-
-Create a structured documentation system with architecture diagrams, sequence diagrams, component responsibilities, security decisions, APIs, configuration, testing, deployment and troubleshooting.
-
-## 1.5 Work in manageable stages
-
-Do not attempt a blind large-scale rewrite.
-
-Work in the following order:
-
-Audit → Research → Architecture → Design → Implementation → Testing → Documentation → Final Verification.
-
-Maintain a progress document so that work can continue without losing decisions.
-
----
-
-# 2. PHASE 1 — COMPLETE EXISTING CODEBASE AUDIT
-
-First, analyze the actual source code.
-
-## 2.1 Components to investigate
-
-Find and inspect the actual implementations of:
-
-### A. WorkspaceManager
-
-Reported existing responsibility:
-
-- Creates task-specific workspaces.
-- Uses Git worktrees.
-- Creates task branches.
-- Has directory-copy fallback.
-- Manages workspace paths.
-- Handles workspace cleanup.
-
-Investigate:
-
-- How task workspaces are created.
-- Whether different users can access each other's workspaces.
-- Whether worktrees share Git metadata.
-- How fallback copying works.
-- Whether symbolic links can escape the workspace.
-- How workspace deletion works.
-- Whether concurrent tasks create race conditions.
-- Whether workspaces are persisted or recreated.
-
-### B. WorkspacePathGuard
-
-Investigate:
-
-- Path traversal protection.
-- Absolute path handling.
-- Symbolic links.
-- Hard links where applicable.
-- `.git` restrictions.
-- `.env` restrictions.
-- Private key restrictions.
-- File read/write operations.
-- Whether every file access passes through the guard.
-
-Identify bypass opportunities.
-
-### C. WorkspaceResourceMonitor
-
-Reported existing limits:
-
-- Disk: 500 MB.
-- Individual file: 5 MB.
-- Files modified: 50.
-
-Investigate:
-
-- How these limits are enforced.
-- Whether limits are checked before or after writes.
-- Whether directory copies bypass them.
-- Whether temporary files count toward disk usage.
-- Whether symlinks affect calculations.
-- Whether concurrent writes can bypass limits.
-
-Identify which limits are application-level and which can be enforced by the OS.
-
-### D. CommandRunner
-
-Investigate:
-
-- Command allowlist.
+- Tool registration.
 - Argument validation.
-- Shell injection protection.
-- Dangerous flags.
-- Environment sanitization.
-- Timeout handling.
-- Process-group handling.
-- Output limits.
-- Python execution.
-- Pytest execution.
-- npm execution.
-- Node.js execution.
-- Git operations.
-
-Specifically identify:
-
-- Every direct subprocess call.
-- Every use of `sys.executable`.
-- Every command that executes repository-controlled code.
-- Every package installation path.
-- Every indirect execution path.
-
-### E. Other execution entry points
-
-Search the entire backend for:
-
-- subprocess.Popen
-- subprocess.run
-- subprocess.call
-- os.system
-- os.popen
-- asyncio.create_subprocess_exec
-- asyncio.create_subprocess_shell
-- shell=True
-- exec
-- eval
-- pytest invocation
-- npm install
-- npm test
-- pip install
-- setup.py
-- build backend execution
-
-Do not assume that all execution happens through CommandRunner.
-
-Find every entry point.
-
-## 2.2 Existing security risk analysis
-
-For every identified issue, document:
-
-1. Vulnerability.
-2. Root cause.
-3. Exploitation scenario.
-4. Potential impact.
-5. Existing mitigation.
-6. Missing mitigation.
-7. Required solution.
-8. Priority.
-9. Files affected.
-10. Acceptance criteria.
-
-Classify issues as:
-
-- Critical
-- High
-- Medium
-- Low
-
-## 2.3 Audit output
-
-Create:
-
-Docs/security/sandbox/01-existing-architecture-audit.md
-
-Include:
-
-- Existing architecture.
-- Existing components.
-- Actual file paths.
-- Actual class and function names.
-- Existing execution flow.
-- Security gaps.
-- Vulnerability scenarios.
-- Existing protections.
-- Limitations.
-- Recommended changes.
-- Implementation dependencies.
-
-Also create a complete execution-entry-point inventory.
-
-Do not start major implementation until this audit is completed.
-
----
-
-# 3. PHASE 2 — RESEARCH AND TECHNICAL DECISIONS
-
-Research the technologies that are relevant to secure execution.
-
-The objective is not to integrate every available technology.
-
-The objective is to select the safest practical architecture for our project.
-
-## 3.1 Docker
-
-Research:
-
-- Docker Engine architecture.
-- Container lifecycle.
-- Linux namespaces.
-- cgroups.
-- seccomp.
-- Linux capabilities.
-- Read-only root filesystem.
-- Bind mounts.
-- tmpfs.
-- Non-root execution.
-- Network isolation.
-- Container resource limits.
-- Container cleanup.
-- Image security.
-- Container escape risks.
-
-Official documentation:
-
-https://docs.docker.com/
-
-https://docs.docker.com/engine/security/
-
-https://docs.docker.com/engine/containers/resource_constraints/
-
-https://docs.docker.com/engine/security/seccomp/
-
-## 3.2 gVisor
-
-Research:
-
-- gVisor architecture.
-- Sentry.
-- Gofer.
-- runsc runtime.
-- Docker integration.
-- Filesystem behavior.
-- Network behavior.
-- Supported system calls.
-- Performance overhead.
-- Compatibility limitations.
-- Deployment requirements.
-- Security boundaries.
-
-Official resources:
-
-https://gvisor.dev/
-
-https://gvisor.dev/docs/
-
-https://gvisor.dev/docs/user_guide/containerd/quick_start/docker/
-
-We prefer gVisor because it adds a userspace-kernel isolation layer without requiring KVM.
-
-Do not claim that gVisor eliminates all container escape risks.
-
-## 3.3 Firecracker
-
-Research:
-
-- MicroVM architecture.
-- KVM requirements.
-- Snapshotting.
-- Isolation boundaries.
-- Performance.
-- Resource overhead.
-- Operational complexity.
-
-Official resources:
-
-https://firecracker-microvm.github.io/
-
-https://github.com/firecracker-microvm/firecracker
-
-Evaluate Firecracker as a future alternative, not an immediate mandatory implementation.
-
-## 3.4 Other projects
-
-Study:
-
-- E2B: https://github.com/e2b-dev
-- OpenHands: https://github.com/All-Hands-AI/OpenHands
-- Daytona: https://github.com/daytonaio/daytona
-- nsjail: https://github.com/google/nsjail
-- bubblewrap: https://github.com/containers/bubblewrap
-- Docker MCP Gateway: https://github.com/docker/mcp-gateway
-
-For each project document:
-
-- Architecture.
-- Main functionality.
-- Isolation technology.
-- Integration approach.
-- Strengths.
-- Weaknesses.
-- Dependencies.
-- Licensing.
-- Whether it is suitable for our platform.
-- What we can learn or reuse.
-- What we should not copy.
-
-Verify current licences and versions from authoritative sources.
-
-Do not assume the entire product and its SDK have the same licence.
-
-## 3.5 Research deliverable
-
-Create:
-
-Docs/security/sandbox/02-technology-research.md
-
-Include a detailed comparison table.
-
-Final expected decision:
-
-- Docker: primary container management.
-- gVisor: additional production isolation.
-- Firecracker: future microVM option.
-- E2B: optional managed alternative.
-- Daytona: architecture reference; evaluate AGPL implications.
-- OpenHands: runtime architecture reference.
-
-Do not introduce unnecessary dependencies.
-
----
-
-# 4. PHASE 3 — DESIGN THE NEW ARCHITECTURE
-
-Introduce a pluggable sandbox architecture.
-
-The API server should manage tasks, while a separate runner executes untrusted code.
-
-## 4.1 Target architecture
-
-Implement the following logical architecture:
-
-USER
- |
- v
-FRONTEND
- |
- v
-API SERVER
- |
- +---- Authentication
- |
- +---- Repository Management
- |
- +---- AI Orchestrator
- |
- +---- WorkspaceManager
- |
- +---- CommandRunner
-          |
-          v
-     SandboxBackend
-          |
-          +-----------------------+
-          |                       |
-          v                       v
-   LocalSubprocessBackend   RunnerClient
-   Development only              |
-                                 v
-                          RUNNER SERVICE
-                                 |
-                                 v
-                            Docker Engine
-                                 |
-                                 v
-                              gVisor
-                                 |
-                    +------------+------------+
-                    |            |            |
-                    v            v            v
-                 Task 123     Task 124     Task 125
-                 Container    Container    Container
-
-Production API server must not execute untrusted repository code locally.
-
-## 4.2 SandboxBackend interface
-
-Create an abstraction based on the existing project architecture.
-
-Suggested location:
-
-backend/execution/sandbox/base.py
-
-Expected logical operations:
-
-- create_workspace()
-- execute()
-- read_file()
-- write_file()
-- get_diff()
-- destroy_workspace()
-- get_status()
-- get_resource_usage()
-
-Use typed interfaces and structured request/response models.
-
-Do not implement empty methods or fake responses.
-
-Each operation must have clear error handling.
-
-Support asynchronous execution if the existing backend uses async architecture.
-
-Do not introduce unnecessary synchronous blocking operations into an async API.
-
-## 4.3 LocalSubprocessBackend
-
-Move the existing subprocess behavior into a dedicated backend.
-
-Rules:
-
-- Allowed only when APP_ENV=development.
-- Must reject production execution.
-- Must not be used as an automatic fallback.
-- Must preserve current development workflows.
-- Must continue enforcing existing command and path guards.
-
-Production initialization must fail closed if the secure runner is unavailable or misconfigured.
-
-Do not infer development mode from missing environment variables.
-
-Require an explicit, validated environment configuration.
-
-## 4.4 ContainerBackend
-
-Implement the production backend.
-
-It should communicate with the Runner Service.
-
-Do not allow arbitrary API requests to construct unrestricted Docker commands.
-
-Use validated configuration and a narrow operation interface.
-
-## 4.5 SandboxFactory
-
-Implement backend selection.
-
-Expected behavior:
-
-APP_ENV=development:
-    LocalSubprocessBackend may be selected explicitly.
-
-APP_ENV=production:
-    ContainerBackend / RunnerClient required.
-
-Unknown APP_ENV:
-    Fail closed.
-
-Missing production runner configuration:
-    Fail closed.
-
-Runner unavailable:
-    Return a controlled execution error.
-
-Never fall back to host execution.
-
-## 4.6 Architecture deliverables
-
-Create:
-
-Docs/security/sandbox/03-target-architecture.md
-
-Include:
-
-- Architecture diagram.
-- Component responsibilities.
-- Data flow.
-- Trust boundaries.
-- Execution lifecycle.
-- Workspace lifecycle.
-- Backend selection.
-- Authentication.
-- Failure handling.
-- Deployment architecture.
-- Security boundaries.
-
-Create:
-
-Docs/security/sandbox/diagrams/
-
-Include:
-
-- architecture.mmd
-- execution-sequence.mmd
-- workspace-lifecycle.mmd
-- dependency-installation-flow.mmd
-- security-boundary.mmd
-
-Use Mermaid diagrams.
-
-Keep diagrams synchronized with the actual implementation.
-
----
-
-# 5. PHASE 4 — IMPLEMENT THE RUNNER SERVICE
-
-This is a critical infrastructure component.
-
-Our existing API is deployed on Azure App Service.
-
-Do not assume that Azure App Service can run arbitrary sibling Docker containers.
-
-We need a dedicated Linux runner host.
-
-## 5.1 Runner Service responsibilities
-
-The runner service should handle:
-
-- Sandbox creation.
-- Workspace management.
-- Container creation.
-- Command execution.
-- Resource enforcement.
-- Network policies.
-- File operations.
-- Diff generation.
-- Container termination.
-- Cleanup.
-- Resource monitoring.
-
-The runner should be independent of the AI orchestration logic.
-
-It must not require access to LLM API keys.
-
-## 5.2 Runner API
-
-Create a narrow authenticated API.
-
-Suggested operations:
-
-POST /internal/v1/workspaces
-
-Create a workspace and sandbox.
-
-POST /internal/v1/workspaces/{task_id}/exec
-
-Execute an approved command.
-
-GET /internal/v1/workspaces/{task_id}/files
-
-Read a file.
-
-PUT /internal/v1/workspaces/{task_id}/files
-
-Write a file.
-
-GET /internal/v1/workspaces/{task_id}/diff
-
-Get Git diff.
-
-GET /internal/v1/workspaces/{task_id}/status
-
-Get sandbox status.
-
-DELETE /internal/v1/workspaces/{task_id}
-
-Destroy the sandbox and workspace resources according to retention policy.
-
-Adapt exact paths to existing API conventions.
-
-## 5.3 Authentication and authorization
-
-Implement strong runner authentication.
-
-Requirements:
-
-- Runner is not publicly accessible.
-- Private network access where feasible.
-- Service-to-service authentication.
-- TLS.
-- Short-lived credentials or signed requests.
-- Replay protection where applicable.
-- Task ownership validation.
-- User authorization.
-- Request validation.
-- Rate limits.
-- Audit logs.
-
-Do not trust task_id supplied by the frontend.
-
-The API server must verify ownership before requesting runner operations.
-
-Do not expose:
-
-- Docker socket.
-- Arbitrary Docker API.
-- Unrestricted host filesystem access.
-- Arbitrary host command execution.
-
-The runner must independently validate all requests.
-
-## 5.4 Runner security
-
-Treat API-server requests as untrusted at the runner boundary.
-
-Enforce:
-
-- Command allowlists.
-- Argument validation.
-- Workspace containment.
-- Maximum request sizes.
-- Execution timeout.
-- Resource limits.
-- Container lifecycle restrictions.
-- Output caps.
-- Authentication.
-- Authorization.
-
-The runner must not accept arbitrary image names, mount paths, Docker flags or runtime options from the API client.
-
-Only server-controlled configuration may define those values.
-
-## 5.5 Runner deliverable
-
-Create:
-
-Docs/security/sandbox/04-runner-service-design.md
-
-Document:
-
-- API contracts.
-- Request schemas.
-- Response schemas.
-- Authentication.
-- Authorization.
-- Error handling.
-- Lifecycle.
-- Security controls.
-- Deployment requirements.
-
----
-
-# 6. PHASE 5 — IMPLEMENT DOCKER + GV​​ISOR ISOLATION
-
-This is the most important implementation phase.
-
-Use Docker with gVisor for production sandbox execution.
-
-## 6.1 Container configuration
-
-Initial proposed limits:
-
-CPU: 2 vCPU
-
-Memory: 4 GB
-
-PID limit: 512
-
-Workspace disk: 500 MB
-
-Temporary storage: 512 MB
-
-Individual file size: 5 MB
-
-Output limit: 100 KB
-
-Command timeout: configurable.
-
-These values are starting defaults. Make them configurable through validated server-side settings.
-
-Do not allow normal users to override security-critical limits.
-
-## 6.2 Required security settings
-
-Implement the equivalent of:
-
---network=none
-
---pids-limit=512
-
---memory=4g
-
---cpus=2
-
---read-only
-
---tmpfs /tmp
-
---cap-drop=ALL
-
---security-opt=no-new-privileges
-
---user=10001:10001
-
---runtime=runsc
-
-Use:
-
-- Non-root execution.
-- Read-only root filesystem.
-- Restricted writable mounts.
-- Secure temporary storage.
-- Default-deny networking.
-- Runtime-enforced resource limits.
-- Appropriate seccomp configuration.
-- No privileged containers.
-- No host PID namespace.
-- No host network.
-- No Docker socket mount.
-- No unnecessary Linux capabilities.
-
-Do not disable seccomp without a documented and justified compatibility requirement.
-
-Do not use --privileged.
-
-## 6.3 Workspace mounting
-
-Each task must have its own workspace.
-
-Example:
-
-Host:
-
-/sandbox/workspaces/task-123
-
-Container:
-
-/workspace
-
-Mount only the assigned task workspace.
-
-Ensure:
-
-- No cross-task workspace access.
-- No host secrets.
-- No application source access.
-- No unrelated host mounts.
-- Correct non-root ownership.
-- Controlled writable directories.
-- No symlink-based escape.
-- Disk quota enforcement.
-
-Remember that a read-only container root does not automatically impose a quota on a writable host bind mount.
-
-Use filesystem quotas or a suitable isolated storage mechanism.
-
-## 6.4 Image management
-
-Create approved language images.
+- Command allowlisting.
+- Dangerous command flag restrictions.
+- Shell metacharacter checks.
+- Path restrictions.
+- Policy-engine authorization.
+- Workspace lifecycle enforcement.
+- Task approval checks.
+- Protected branch restrictions.
+- Secret redaction.
+- Output size restrictions.
+- Tool invocation auditing.
+
+The WorkspaceToolPolicyBridge defines approximately 19 canonical workspace tools.
 
 Examples:
 
-- Python.
-- Node.js.
-- Python + Node.js if genuinely required.
+- read_file
+- write_file
+- patch_file
+- execute_command
+- run_tests
+- commit_task_changes
+- push_task_branch
+- create_draft_pr
 
-Use minimal base images.
+Verify the actual complete list before implementation.
 
-Pin exact versions and verified image digests.
-
-Example:
-
-FROM python:3.12-slim@sha256:<verified-digest>
-
-Never invent image digests.
-
-Never use unverified floating tags in production.
-
-Implement:
-
-- Image allowlist.
-- Digest verification.
-- Image scanning.
-- Image update policy.
-- Image caching.
-- Image pull failure handling.
-
-Repository-controlled files must never decide which privileged image or runtime the host executes.
-
-## 6.5 Container lifecycle
-
-Implement:
-
-CREATED
-   |
-   v
-INITIALIZING
-   |
-   v
-READY
-   |
-   v
-INSTALLING_DEPENDENCIES
-   |
-   v
-EXECUTING
-   |
-   v
-COLLECTING_RESULTS
-   |
-   v
-COMPLETED
-   |
-   v
-DESTROYED
-
-Also support:
-
-FAILED
-
-TIMED_OUT
-
-CANCELLED
-
-EXPIRED
-
-Every state transition should be validated.
-
-Implement:
-
-- Maximum lifetime.
-- Idle timeout.
-- Explicit cancellation.
-- Cleanup after failures.
-- Cleanup after API disconnects where appropriate.
-- Periodic orphan-container cleanup.
-- Restart recovery.
-- Resource usage tracking.
-
-Do not depend solely on the API process remaining alive to clean up containers.
-
-## 6.6 Deliverable
-
-Create:
-
-Docs/security/sandbox/05-container-isolation.md
-
-Include all Docker configurations, gVisor setup, resource limits, image policies, mount policies, lifecycle and failure handling.
+Preserve these tools and their existing functionality.
 
 ---
 
-# 7. PHASE 6 — TWO-PHASE DEPENDENCY INSTALLATION
+# 2. UNDERSTAND THE PROBLEMS WE ARE SOLVING
 
-We need separate dependency installation from untrusted test execution.
+Document the existing implementation and explain these architectural problems.
 
-Do not disable network permanently without considering dependency installation.
+## Problem 1: Limited ToolDefinition metadata
 
-## 7.1 Phase A: Dependency installation
+Current ToolDefinition primarily contains:
 
-Flow:
+- name
+- description
+- parameters
 
-Repository
-   |
-   v
-Manifest Detection
-   |
-   v
-Python / Node Dependency Detection
-   |
-   v
-Restricted Installation Environment
-   |
-   v
-Dependency Installation
-   |
-   v
-Dependency Artifacts
+It does not provide a standardized contract for:
 
-Support relevant manifests, including:
+- output_schema
+- annotations
+- risk_tier
+- version
+- source
+- timeout_s
+- rate_limit
 
-Python:
-- requirements.txt
-- pyproject.toml
-- poetry.lock
-- Pipfile.lock
+We need a richer tool definition.
 
-Node.js:
-- package.json
-- package-lock.json
-- npm lockfiles.
+## Problem 2: Hand-written JSON Schema validation
 
-Only support the package managers that the existing project actually needs.
+The current router uses custom validation logic.
 
-During installation:
+It does not provide complete standardized support for:
 
-- Run inside a sandbox.
-- Use non-root.
-- Do not expose application secrets.
-- Restrict outbound networking.
-- Prefer approved package registries.
-- Apply download-size limits.
-- Apply timeouts.
-- Record installation logs.
-- Prevent access to host filesystem.
-- Protect against malicious install scripts.
+- $ref
+- $defs
+- oneOf
+- anyOf
+- allOf
+- not
+- pattern
+- format
+- uniqueItems
+- multipleOf
+- dependentRequired
+- minProperties
+- maxProperties
 
-Important:
+Replace custom validation with the Python jsonschema library.
 
-npm lifecycle scripts and Python build backends can execute arbitrary code.
+Target JSON Schema Draft 2020-12.
 
-Dependency installation must be treated as untrusted execution.
+Do not implement a second custom JSON Schema engine.
 
-Never install dependencies on the API host.
+## Problem 3: Missing output validation
 
-## 7.2 Phase B: Offline testing
+The current implementation does not consistently validate tool outputs against formal output schemas.
 
-After dependency installation:
+Introduce optional output_schema validation.
 
-- Ensure the execution environment has all required dependencies.
-- Start the test phase without external network access.
-- Use --network=none.
-- Execute pytest or npm test.
-- Execute approved static analysis tools.
-- Capture output.
-- Collect exit codes.
-- Collect execution metrics.
-- Preserve relevant logs.
+Maintain compatibility with existing handlers that return different output structures.
 
-Do not assume Docker networking can be changed in-place between phases.
+Do not invent output schemas without inspecting actual handler responses.
 
-Design the transition using separate containers or another explicitly verified isolation strategy.
+## Problem 4: No explicit tool versioning
 
-The dependency artifacts shared between phases must be carefully controlled.
+The registry currently identifies tools primarily by their names.
 
-Do not introduce shared writable directories between unrelated tasks.
+Introduce explicit semantic versions.
 
-## 7.3 Deliverable
+Examples:
 
-Create:
+- workspace.read_file@1.0.0
+- workspace.write_file@1.0.0
+- github.create_pull_request@1.0.0
 
-Docs/security/sandbox/06-dependency-installation.md
+Support controlled schema evolution.
 
-Document:
+Prevent accidental version conflicts.
 
-- Manifest detection.
-- Package manager selection.
-- Installation environment.
-- Network policy.
-- Dependency caching.
-- Artifact transfer.
-- Offline execution.
-- Failure cases.
-- Security risks.
+## Problem 5: Missing execution deadlines
 
----
+Introduce per-tool timeout configuration.
 
-# 8. PHASE 7 — INTEGRATE WITH EXISTING AGENTS
+Support:
 
-This project has multiple AI-assisted workflows.
+- Async handlers.
+- Blocking handlers.
+- Subprocess handlers.
+- External provider adapters in the future.
 
-Do not make the sandbox an isolated feature that existing agents cannot use.
+A timeout must not automatically cause a second execution.
 
-Find every agent that invokes CommandRunner or performs repository execution.
+Do not assume that cancelling an asyncio task terminates an underlying blocking operation.
 
-Expected integration targets may include:
+Use subprocess termination and appropriate client-level timeouts where applicable.
 
-- Code Review Agent.
-- Bug Detection Agent.
-- Test Generation Agent.
-- AI Orchestrator.
-- Repository Analysis.
-- Automated Code Modification.
-- Validation workflows.
+## Problem 6: Missing rate limiting
 
-Actual component names must be discovered from the repository.
+Introduce configurable per-tool invocation limits.
 
-## 8.1 Integration requirements
+Support scopes:
 
-All repository-controlled code execution must go through the new execution abstraction.
+- user
+- task
+- provider
+- global
 
-Example:
+Use the existing Redis infrastructure if available.
 
-AI Agent
-   |
-   v
-CommandRunner
-   |
-   v
-SandboxBackend
-   |
-   v
-Runner Service
-   |
-   v
-Container
+Use atomic Redis operations for distributed deployments.
 
-Agents should not need to know whether the implementation uses Docker or gVisor.
+Do not add another Redis instance.
 
-They should receive a structured result:
+## Problem 7: Missing semantic annotations and risk classification
 
-- Exit code.
-- Standard output.
-- Standard error.
-- Timeout status.
-- Execution duration.
-- Resource usage.
-- Sandbox status.
+Introduce MCP-compatible semantic annotations:
 
-Preserve existing agent contracts where possible.
+- readOnlyHint
+- destructiveHint
+- idempotentHint
+- openWorldHint
 
-## 8.2 Git operations
+Introduce separate internal risk tiers:
 
-Review which Git operations need to execute on the API host and which need to execute inside the runner.
+- low
+- medium
+- high
+- critical
 
-Do not unnecessarily move trusted repository-management operations into the sandbox.
+Never treat annotations supplied by an external MCP server as proof of safety.
 
-However, any Git operation that processes untrusted repository-controlled content must be reviewed for security.
+Risk classification must be controlled by trusted platform configuration.
 
-Treat Git configuration, hooks, filters and submodules as potential execution or network attack surfaces.
+## Problem 8: Missing provider abstraction
 
-Do not allow repository-controlled Git hooks to execute on the API host.
+The current implementation is mainly designed around built-in workspace tools.
 
-Use controlled Git configuration.
+Introduce execution adapter boundaries so that future MCP and plugin integrations do not require rewriting ToolRouter.
 
-## 8.3 Integration deliverable
+## Problem 9: Incomplete execution audit information
 
-Create:
+The existing tool_invocations table must be preserved.
 
-Docs/security/sandbox/07-agent-integration.md
+Extend it where appropriate to support:
 
-Include:
+- tool version
+- source
+- provider
+- risk tier
+- schema fingerprint
+- timeout status
+- rate-limit status
+- normalized error category
 
-- Existing agent execution paths.
-- New execution flow.
-- Files changed.
-- Interface changes.
-- Compatibility.
-- Error propagation.
-- Task cancellation.
-- Integration tests.
+Avoid duplicate audit tables and duplicate data.
+
+## Problem 10: Handler execution convention
+
+Inspect the existing handler dispatch logic.
+
+If the current implementation uses TypeError-based fallback to guess handler calling conventions, replace it with an explicit handler interface.
+
+A TypeError raised inside a handler must never result in the same operation being executed a second time.
 
 ---
 
-# 9. PHASE 8 — SECURITY HARDENING
+# 3. TARGET ARCHITECTURE
 
-Preserve all existing application-level protections.
+Implement the following logical architecture.
 
-Sandboxing is an additional layer, not a replacement.
+AI AGENT
+    |
+    v
+UNIFIED TOOL REGISTRY
+    |
+    +-------------------------------+
+    |               |               |
+    v               v               v
+BUILT-IN TOOLS    MCP TOOLS      PLUGIN TOOLS
+    |               |               |
+    v               v               v
+Builtin Adapter  MCP Adapter    Plugin Adapter
+    |               |               |
+    v               v               v
+Workspace       MCP Client     Plugin Provider
+Bridge          (Future)        (Future)
+    |               |               |
+    +---------------+---------------+
+                    |
+                    v
+           COMMON EXECUTION PIPELINE
+                    |
+          +---------+---------+
+          |         |         |
+          v         v         v
+       SCHEMA    POLICY    EXECUTION
+      VALIDATION ENGINE    LIMITS
+          |         |         |
+          +---------+---------+
+                    |
+                    v
+            OUTPUT VALIDATION
+                    |
+                    v
+             SECRET REDACTION
+                    |
+                    v
+               AUDITING
+                    |
+                    v
+                AI AGENT
 
-## 9.1 Retain existing protections
+Important architectural separation:
 
-Keep:
+1. Unified Tool Registry manages metadata and tool resolution.
+2. SchemaValidator manages standardized schema validation.
+3. ExecutionPolicy manages common execution restrictions.
+4. PolicyEngine remains responsible for authorization decisions.
+5. WorkspaceToolPolicyBridge retains workspace-specific security.
+6. BuiltinWorkspaceAdapter connects existing workspace handlers.
+7. MCP and Plugin adapters are future integration boundaries.
 
-- WorkspacePathGuard.
-- Command allowlist.
-- Argument validation.
-- Environment sanitization.
-- Secret redaction.
-- Output caps.
-- Timeout handling.
-- WorkspaceResourceMonitor.
-- File modification limits.
+Do not move workspace-specific authorization logic into the generic registry.
 
-Extend them where required.
-
-## 9.2 Additional controls
-
-Implement or document:
-
-- Container-level filesystem isolation.
-- Network isolation.
-- CPU restrictions.
-- Memory restrictions.
-- PID restrictions.
-- Disk quotas.
-- File descriptor limits.
-- Process termination.
-- Task ownership.
-- Runner authentication.
-- Container image verification.
-- Audit logging.
-- Concurrency limits.
-- Container cleanup.
-- Secret isolation.
-- Secure error handling.
-
-## 9.3 Secret protection
-
-The runner and sandbox must never receive:
-
-- Gemini API keys.
-- Groq API keys.
-- Database passwords.
-- JWT signing secrets.
-- Azure credentials.
-- GitHub personal access tokens.
-- Application `.env` contents.
-
-If private repository access is required, use a separate trusted cloning operation with narrowly scoped credentials.
-
-Never expose cloning credentials to repository tests or installation scripts.
-
-## 9.4 Security deliverable
-
-Create:
-
-Docs/security/sandbox/08-security-hardening.md
+Do not bypass PolicyEngine.
 
 ---
 
-# 10. PHASE 9 — TESTING AND SECURITY VALIDATION
+# 4. IMPLEMENT THE NEW TOOL DEFINITION MODEL
 
-Do not consider implementation complete without testing.
+Create or refactor the ToolDefinition model.
 
-Create automated unit, integration and security tests.
+Suggested design:
 
-## 10.1 Unit tests
+```python
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
-Test:
 
-- SandboxFactory.
-- Backend selection.
-- Environment validation.
-- Production fail-closed behavior.
-- Local backend restrictions.
-- Command validation.
-- Workspace path validation.
-- Request validation.
-- Lifecycle transitions.
-- Error mapping.
-- Resource configuration.
+@dataclass(frozen=True)
+class ToolAnnotations:
+    read_only_hint: bool = False
+    destructive_hint: bool = False
+    idempotent_hint: bool = False
+    open_world_hint: bool = False
 
-## 10.2 Integration tests
 
-Test:
+@dataclass(frozen=True)
+class ToolRateLimit:
+    requests: int
+    window_seconds: int
 
-- Runner authentication.
-- Workspace creation.
-- Container creation.
-- File writing.
-- File reading.
-- Git diff.
-- Command execution.
-- Timeout handling.
-- Container termination.
-- Cleanup.
-- Runner failure.
-- API-runner communication.
+    scope: Literal[
+        "user",
+        "task",
+        "provider",
+        "global"
+    ] = "task"
 
-## 10.3 Security tests
 
-Create controlled malicious test repositories.
+@dataclass(frozen=True)
+class ToolDefinition:
+    name: str
+    description: str
 
-Test the following:
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
 
-### Test 1: Host secret access
+    annotations: ToolAnnotations = field(
+        default_factory=ToolAnnotations
+    )
 
-Try reading a known test secret placed outside the workspace.
+    risk_tier: Literal[
+        "low",
+        "medium",
+        "high",
+        "critical"
+    ] = "medium"
 
-Expected:
+    version: str = "1.0.0"
 
-The secret must not be accessible.
+    source: str = "builtin"
 
-### Test 2: Cross-task access
+    timeout_s: float = 30.0
 
-Task A attempts to read Task B's workspace.
+    rate_limit: ToolRateLimit | None = None
+```
 
-Expected:
+This is the target conceptual model.
 
-Access denied.
+Adapt it to the project's actual Pydantic/dataclass conventions.
 
-### Test 3: Network exfiltration
+Do not introduce conflicting models.
 
-Try opening an external TCP connection during the offline execution phase.
+## 4.1 Requirements
 
-Expected:
+- Maintain compatibility with existing parameters if required.
+- Introduce input_schema as the standardized name.
+- Provide a migration strategy for existing parameters.
+- Avoid duplicate representations of the same schema.
+- Validate tool names.
+- Validate semantic versions.
+- Validate risk tiers.
+- Validate timeout values.
+- Validate rate-limit configuration.
+- Prevent invalid source metadata.
+- Make tool definitions immutable after registration.
+- Store validated schemas safely.
 
-Connection blocked.
+If a backwards-compatible parameters property is necessary, implement it as a controlled compatibility property rather than storing two independent schemas.
 
-### Test 4: CPU exhaustion
+## 4.2 Tool identity
 
-Run an infinite CPU loop.
+Design a collision-safe tool identity.
 
-Expected:
+External servers can expose identical names.
 
-CPU usage remains within configured limits.
+For example:
 
-### Test 5: Memory exhaustion
+- github.read_file
+- filesystem.read_file
+- workspace.read_file
 
-Attempt to allocate excessive memory.
+Do not allow an untrusted provider to impersonate a built-in tool.
 
-Expected:
+Use structured provider identity and namespace resolution.
 
-Container memory limit enforced.
-
-### Test 6: Process exhaustion
-
-Attempt to create excessive processes.
-
-Expected:
-
-PID limit enforced.
-
-### Test 7: Filesystem writes
-
-Try writing to:
-
-/workspace/test.txt
-
-Expected:
-
-Allowed within quota.
-
-Try writing to:
-
-/usr/test.txt
-
-Expected:
-
-Denied.
-
-### Test 8: Docker socket access
-
-Try accessing:
-
-/var/run/docker.sock
-
-Expected:
-
-Not mounted and inaccessible.
-
-### Test 9: Symbolic link escape
-
-Create a symlink pointing outside the workspace and attempt to access it through file operations.
-
-Expected:
-
-Workspace boundary preserved.
-
-### Test 10: Malicious repository hooks
-
-Test malicious:
-
-- conftest.py
-- setup.py
-- npm lifecycle scripts
-- build backend scripts
-- Git hooks.
-
-Expected:
-
-All untrusted execution occurs inside the sandbox, never on the API host.
-
-### Test 11: Timeout
-
-Start a long-running process and terminate it.
-
-Expected:
-
-The container and its child processes are stopped.
-
-### Test 12: Runner outage
-
-Make the runner unavailable.
-
-Expected:
-
-Production execution fails safely.
-
-No local subprocess fallback.
-
-## 10.4 Test reporting
-
-For each test, record:
-
-- Test ID.
-- Objective.
-- Attack scenario.
-- Execution procedure.
-- Expected result.
-- Actual result.
-- Pass/fail.
-- Evidence.
-- Related source files.
-
-Do not mark an infrastructure-dependent security test as passed if the runner host or gVisor runtime is unavailable.
-
-Use:
-
-PASS
-FAIL
-NOT RUN
-BLOCKED
-
-## 10.5 Testing deliverable
-
-Create:
-
-Docs/security/sandbox/09-security-testing.md
-
-Also create an automated security test suite in the appropriate existing test directory.
+Keep existing workspace tool names working during migration.
 
 ---
 
-# 11. PHASE 10 — AZURE DEPLOYMENT ARCHITECTURE
+# 5. IMPLEMENT STANDARD JSON SCHEMA VALIDATION
 
-Our current architecture uses:
+Install:
 
-- Frontend: Vercel.
-- API backend: Azure App Service.
-- Database: Supabase.
-- Redis: Upstash.
+```bash
+pip install "jsonschema>=4.23,<5"
+```
 
-We want to retain the existing deployment architecture wherever possible.
+Update the correct backend dependency file.
 
-## 11.1 Proposed architecture
-
-VERCEL
-  |
-  v
-AZURE APP SERVICE
-  |
-  | Authenticated internal communication
-  |
-  v
-DEDICATED LINUX RUNNER VM
-  |
-  v
-DOCKER ENGINE
-  |
-  v
-GVISOR RUNTIME
-  |
-  v
-ISOLATED TASK CONTAINERS
-
-The existing App Service must not execute repository tests locally.
-
-## 11.2 Hosting research
-
-Evaluate:
-
-1. Dedicated Azure Linux VM.
-2. Azure Container Apps dynamic sessions.
-3. E2B managed cloud sandboxes.
-
-For each, compare:
-
-- Infrastructure requirements.
-- Isolation.
-- Operational complexity.
-- Security.
-- Pricing.
-- Networking.
-- Scaling.
-- Compatibility with Docker/gVisor.
-- Deployment complexity.
-- Limitations.
-
-Do not assume that a service supports gVisor or arbitrary Docker runtime configuration without verifying it.
-
-## 11.3 Budget awareness
-
-We have previously used Azure for Students credits.
-
-Keep infrastructure cost under control.
-
-Research:
-
-- VM pricing.
-- Disk pricing.
-- Network pricing.
-- Idle costs.
-- Container overhead.
-- Concurrent task capacity.
-
-Recommend a minimal practical configuration.
-
-Implement:
-
-- Maximum concurrency.
-- Idle shutdown where practical.
-- Container cleanup.
-- Disk cleanup.
-- Resource monitoring.
-- Cost alerts.
-
-Do not deploy expensive infrastructure automatically.
-
-Do not create cloud resources or spend credits without explicit approval.
-
-## 11.4 Deployment deliverable
+Use Draft202012Validator.
 
 Create:
 
-Docs/security/sandbox/10-azure-deployment.md
+backend/agent/tools/schema_validator.py
 
-Include:
+The validator must support:
 
-- Architecture.
-- Infrastructure requirements.
-- Linux setup.
-- Docker installation.
-- gVisor installation.
-- Runner deployment.
-- Network configuration.
-- TLS and authentication.
-- Environment variables.
-- Monitoring.
-- Scaling.
-- Cost considerations.
-- Rollback procedure.
-
-Also create deployment scripts or configuration files where appropriate.
-
----
-
-# 12. PHASE 11 — CONFIGURATION AND ENVIRONMENT VARIABLES
-
-Create a central validated configuration.
-
-Suggested settings:
-
-APP_ENV
-
-SANDBOX_BACKEND
-
-RUNNER_BASE_URL
-
-RUNNER_AUTH_SECRET or the selected secure credential configuration
-
-RUNNER_REQUEST_TIMEOUT
-
-SANDBOX_CPU_LIMIT
-
-SANDBOX_MEMORY_LIMIT
-
-SANDBOX_PID_LIMIT
-
-SANDBOX_DISK_LIMIT_MB
-
-SANDBOX_FILE_LIMIT_MB
-
-SANDBOX_OUTPUT_LIMIT_BYTES
-
-SANDBOX_DEFAULT_TIMEOUT
-
-SANDBOX_MAX_LIFETIME
-
-SANDBOX_IDLE_TIMEOUT
-
-SANDBOX_MAX_CONCURRENT_TASKS
-
-SANDBOX_RUNTIME
-
-SANDBOX_PYTHON_IMAGE
-
-SANDBOX_NODE_IMAGE
-
-Use actual project configuration conventions.
+- type
+- required
+- properties
+- additionalProperties
+- enum
+- const
+- $ref
+- $defs
+- oneOf
+- anyOf
+- allOf
+- not
+- pattern
+- format
+- uniqueItems
+- minItems
+- maxItems
+- minimum
+- maximum
+- exclusiveMinimum
+- exclusiveMaximum
+- multipleOf
+- minLength
+- maxLength
+- minProperties
+- maxProperties
+- dependentRequired
+- conditional schemas
 
 Requirements:
 
-- Validate settings at startup.
-- Reject invalid configurations.
-- Do not use insecure production defaults.
-- Never expose secrets in API responses.
-- Never log secret values.
-- Update .env.example.
-- Document each setting.
-- Ensure development and production configurations are separate.
+1. Validate the schema at registration time.
+2. Validate arguments before execution.
+3. Validate outputs when output_schema exists.
+4. Produce deterministic validation errors.
+5. Do not expose sensitive information in error messages.
+6. Restrict schema size and nesting depth.
+7. Reuse compiled validator instances where practical.
+8. Avoid unnecessary repeated schema compilation.
+9. Support locally registered $ref definitions.
+10. Prevent uncontrolled remote $ref resolution.
+11. Never allow untrusted schemas to trigger arbitrary network requests.
+
+Use FormatChecker for supported formats.
+
+Do not assume that format validation automatically guarantees security.
+
+Add unit tests for valid and invalid schemas.
+
+---
+
+# 6. IMPLEMENT TOOL REGISTRY
 
 Create:
 
-Docs/security/sandbox/11-configuration-reference.md
+backend/agent/tools/registry.py
+
+Responsibilities:
+
+- Register tools.
+- Resolve tools.
+- Unregister tools when permitted.
+- Enable and disable tools.
+- List available tools.
+- Filter tools by source.
+- Filter tools by permissions.
+- Resolve versions.
+- Detect duplicates.
+- Detect conflicting registrations.
+- Validate schemas during registration.
+- Calculate schema fingerprints.
+- Maintain provider identity.
+
+The registry should become the single source of truth for tool definitions.
+
+Avoid unnecessary global mutable state.
+
+Use dependency injection consistent with the current architecture.
+
+## 6.1 Registration requirements
+
+Registration must reject:
+
+- Empty names.
+- Invalid schemas.
+- Invalid versions.
+- Unsupported source types.
+- Invalid risk tiers.
+- Invalid timeout values.
+- Invalid rate-limit configurations.
+- Duplicate conflicting identities.
+- Untrusted attempts to register built-in tools.
+
+Tool discovery must never automatically grant execution permission.
+
+Separate:
+
+DISCOVERED
+    |
+    v
+VALIDATED
+    |
+    v
+APPROVED
+    |
+    v
+REGISTERED
+    |
+    v
+ENABLED
+    |
+    v
+EXECUTABLE
+
+The initial implementation can retain an in-memory registry for built-in tools.
+
+Do not introduce unnecessary database persistence if the current architecture does not require it.
 
 ---
 
-# 13. PHASE 12 — DOCUMENTATION SYSTEM
+# 7. IMPLEMENT TOOL EXECUTION ADAPTERS
 
-Documentation is one of the primary deliverables.
+Create a common adapter interface.
 
-I want enough documentation that another developer can understand the entire architecture and continue development without asking me how it works.
+Suggested location:
 
-Create the following structure, adapting it to the existing Docs folder:
+backend/agent/tools/adapters/base.py
 
-Docs/
-└── security/
-    └── sandbox/
-        │
-        ├── README.md
-        │
-        ├── 01-existing-architecture-audit.md
-        ├── 02-technology-research.md
-        ├── 03-target-architecture.md
-        ├── 04-runner-service-design.md
-        ├── 05-container-isolation.md
-        ├── 06-dependency-installation.md
-        ├── 07-agent-integration.md
-        ├── 08-security-hardening.md
-        ├── 09-security-testing.md
-        ├── 10-azure-deployment.md
-        ├── 11-configuration-reference.md
-        ├── 12-implementation-guide.md
-        ├── 13-operations-and-troubleshooting.md
-        ├── 14-risk-register.md
-        ├── 15-implementation-status.md
-        │
-        └── diagrams/
-            ├── architecture.mmd
-            ├── execution-sequence.mmd
-            ├── workspace-lifecycle.mmd
-            ├── dependency-installation-flow.mmd
-            ├── security-boundary.mmd
-            └── deployment-architecture.mmd
+Use an explicit execution contract.
 
-## 13.1 README.md
+Conceptually:
 
-This should be the starting point.
+```python
+from typing import Protocol, Any
 
-Explain:
 
-- What sandbox execution means.
-- Why we need it.
-- Existing security problems.
-- New architecture.
-- How components communicate.
-- How to navigate the documentation.
-- Current implementation status.
+class ToolExecutionAdapter(Protocol):
 
-## 13.2 Technology research
+    def execute(
+        self,
+        tool,
+        arguments: dict[str, Any],
+        context,
+    ) -> Any:
+        ...
+```
 
-Explain:
+Adapt the contract to support asynchronous execution where needed.
 
-- Why Docker.
-- Why gVisor.
-- Why not ordinary subprocess.
-- Why not Docker alone.
-- When Firecracker is useful.
-- E2B alternatives.
-- Open-source project comparisons.
-- Licence considerations.
-- Research sources.
+Implement:
 
-Include authoritative source links.
+## 7.1 BuiltinWorkspaceAdapter
 
-Clearly distinguish verified facts from engineering assumptions.
+File:
 
-## 13.3 Architecture documentation
+backend/agent/tools/adapters/builtin.py
+
+Responsibilities:
+
+- Integrate with existing WorkspaceToolPolicyBridge.
+- Preserve all workspace operations.
+- Preserve WorkspaceManager behavior.
+- Preserve WorkspacePathGuard.
+- Preserve task ownership checks.
+- Preserve workspace lifecycle checks.
+- Preserve protected branch restrictions.
+- Preserve publication approval.
+- Preserve command allowlists.
+
+Do not duplicate the workspace bridge's security logic.
+
+The adapter should call the existing trusted implementation.
+
+All 19 existing workspace tools must continue functioning.
+
+## 7.2 MCP adapter boundary
+
+File:
+
+backend/agent/tools/adapters/mcp.py
+
+For this milestone, implement only the interface and necessary extension points.
+
+Do not connect real MCP servers yet.
+
+Define how future MCP tools will:
+
+- Register metadata.
+- Import input schemas.
+- Import output schemas where available.
+- Resolve server identity.
+- Invoke tools.
+- Handle remote errors.
+- Apply timeouts.
+- Validate responses.
+
+Do not install an MCP SDK unless an actual requirement exists in this milestone.
+
+## 7.3 Plugin adapter boundary
+
+File:
+
+backend/agent/tools/adapters/plugin.py
+
+For this milestone, implement only the architecture boundary.
+
+Do not implement external plugin integrations yet.
+
+Define provider resolution, authentication boundary, invocation and error normalization responsibilities.
+
+---
+
+# 8. IMPLEMENT THE COMMON EXECUTION PIPELINE
+
+Refactor ToolRouter so all execution adapters follow the same common lifecycle.
+
+Required sequence:
+
+1. Receive ToolRequest.
+2. Resolve tool identity.
+3. Confirm tool is registered.
+4. Confirm tool is enabled.
+5. Resolve approved tool version.
+6. Validate input arguments.
+7. Resolve trusted execution adapter.
+8. Build execution context.
+9. Check user authorization.
+10. Check task authorization.
+11. Check provider authorization where applicable.
+12. Apply internal risk policy.
+13. Check human approval requirements.
+14. Apply rate limits.
+15. Apply concurrency limits.
+16. Execute with configured timeout.
+17. Normalize execution result.
+18. Validate output schema if configured.
+19. Redact secrets.
+20. Apply output size limits.
+21. Persist audit information.
+22. Return ToolResult.
+
+Use the project's existing ToolRequest and ToolResult conventions.
+
+Do not create incompatible response structures.
+
+## 8.1 Important: policy-guarded handlers
+
+Inspect:
+
+```python
+_is_policy_guarded
+```
+
+The current workspace bridge uses a special guarded execution path.
+
+Do not allow arbitrary MCP or plugin handlers to set this marker.
+
+Replace implicit trust based on a handler attribute with explicit trusted adapter configuration.
+
+Only the built-in workspace adapter may use the special workspace policy contract.
+
+Even then, the common execution pipeline must apply the required result sanitization and audit operations.
+
+Never let an external adapter skip:
+
+- Registry validation.
+- Provider authorization.
+- Rate limiting.
+- Execution deadlines.
+- Output sanitization.
+- Audit logging.
+
+Preserve all existing workspace authorization guarantees.
+
+## 8.2 Important: prevent double execution
+
+Remove TypeError-based execution signature fallback.
+
+Never implement:
+
+```python
+try:
+    output = handler(**arguments)
+except TypeError:
+    output = handler(request, agent_state)
+```
+
+Use explicit handler protocols or adapters.
+
+A handler's internal TypeError must become an execution failure, not a second execution attempt.
+
+Do not retry destructive operations automatically.
+
+---
+
+# 9. IMPLEMENT RISK-BASED POLICIES
+
+Introduce internal risk classification.
+
+Suggested initial configuration:
+
+| Tool | Risk |
+|---|---|
+| read_file | low |
+| list_files | low |
+| inspect_git_diff | low |
+| write_file | medium |
+| patch_file | medium |
+| run_tests | medium |
+| execute_command | high |
+| delete_file | high |
+| push_task_branch | critical |
+| create_draft_pr | critical |
+
+These are starting classifications.
+
+Inspect the actual behavior of each tool before assigning its final risk.
+
+The system must distinguish between:
+
+1. Semantic annotations.
+2. Internal risk classification.
+3. Authorization.
+4. Human approval.
+
+They are different concepts.
+
+For example:
+
+A tool can declare readOnlyHint=true, but the platform must still check whether the user can read the requested resource.
+
+A tool can declare destructiveHint=false, but the platform must not automatically trust it.
+
+MCP and plugin metadata must never be allowed to lower internally configured risk.
+
+---
+
+# 10. IMPLEMENT EXECUTION TIMEOUTS
+
+Introduce per-tool timeout enforcement.
+
+Example:
+
+```python
+timeout_s = tool.timeout_s
+```
+
+Support appropriate execution strategies.
+
+For async operations:
+
+- Use async deadlines.
+- Handle cancellation.
+- Normalize timeout errors.
+
+For subprocess operations:
+
+- Enforce subprocess timeout.
+- Terminate the process.
+- Kill it if graceful termination fails.
+- Capture safe diagnostic information.
+
+For blocking operations:
+
+- Use suitable worker isolation.
+- Do not assume thread cancellation terminates the operation.
+
+For future remote providers:
+
+- Use provider-level connect/read timeouts.
+- Support request cancellation where available.
+
+Record:
+
+- Configured timeout.
+- Actual duration.
+- Timeout status.
+- Execution outcome.
+
+Do not automatically retry an operation after a timeout if the operation may already have completed.
+
+---
+
+# 11. IMPLEMENT RATE LIMITING
+
+Inspect existing Redis utilities first.
+
+Reuse the existing Redis connection and configuration.
+
+Do not introduce a new Redis server.
+
+Create:
+
+backend/agent/tools/rate_limiter.py
+
+Support:
+
+- Per-user limits.
+- Per-task limits.
+- Per-provider limits.
+- Global limits.
+- Per-tool limits.
+
+Use atomic Redis operations.
+
+Do not use an in-memory counter as the production distributed rate limiter.
+
+Provide a safe fallback only if the existing architecture explicitly supports one.
+
+Rate limits must be configurable.
+
+Do not hardcode arbitrary limits throughout handlers.
+
+Example initial configurations:
+
+read_file:
+60 requests / minute / task
+
+execute_command:
+10 requests / minute / task
+
+create_draft_pr:
+3 requests / hour / user
+
+These are examples. Adjust based on the existing execution workload.
+
+Also implement configurable maximum concurrent executions per tool and provider if compatible with the current worker architecture.
+
+Important:
+
+A rate-limited operation must never reach its handler.
+
+---
+
+# 12. OUTPUT VALIDATION AND SANITIZATION
+
+This is a critical part of the task.
+
+Currently, generic handlers and policy-guarded workspace handlers can take different execution paths.
+
+Ensure every adapter passes through a common post-execution boundary.
+
+The order must be:
+
+Tool execution
+    |
+    v
+Normalize result
+    |
+    v
+Validate output schema
+    |
+    v
+Redact secrets
+    |
+    v
+Enforce output limits
+    |
+    v
+Record audit event
+    |
+    v
+Return ToolResult
+
+Preserve existing secret redaction patterns.
+
+Inspect all existing output sanitization logic.
+
+Do not duplicate sanitization implementations.
+
+Avoid logging raw credentials or sensitive output.
+
+Treat MCP and plugin outputs as untrusted external data.
+
+External tool responses must never modify authorization policies or trusted registry metadata.
+
+For tools without a defined output schema, preserve their existing response format and document the missing contract.
+
+---
+
+# 13. AUDITING AND DATABASE CHANGES
+
+Inspect the existing ToolInvocation model and tool_invocations table.
+
+Do not replace them.
+
+Extend the existing invocation auditing system.
+
+Potential fields:
+
+- tool_version
+- tool_source
+- provider_id
+- risk_tier
+- schema_fingerprint
+- execution_timeout_s
+- execution_timed_out
+- rate_limit_status
+- error_category
+
+Choose fields based on actual project conventions.
+
+Create separate provider or registry tables only if necessary.
+
+Possible future tables:
+
+tool_providers
+tool_registry
+
+An immutable version history table can be considered if required.
+
+Requirements:
+
+1. Use existing SQLAlchemy conventions.
+2. Create proper Alembic migrations.
+3. Ensure migration rollback works.
+4. Maintain backward compatibility.
+5. Update repository methods.
+6. Update API schemas if exposed.
+7. Avoid storing secrets.
+8. Preserve sanitized_arguments behavior.
+9. Ensure audit failures do not silently create security bypasses.
+
+Classify execution outcomes properly.
+
+At minimum, distinguish:
+
+- SUCCESS
+- DENIED
+- FAILED
+- TIMEOUT
+- RATE_LIMITED
+
+Preserve existing status conventions where API compatibility requires them.
+
+Do not silently change API response semantics.
+
+---
+
+# 14. TASK EXECUTION ORCHESTRATOR INTEGRATION
+
+Inspect:
+
+backend/app/services/task_execution_orchestrator.py
+
+Currently, ToolRouter is instantiated inside task orchestration.
+
+Refactor this carefully.
+
+The orchestrator should depend on the unified registry and execution interfaces.
+
+Requirements:
+
+- Do not duplicate registry initialization.
+- Do not register the same workspace tools multiple times.
+- Preserve dependency injection.
+- Preserve existing agent state.
+- Preserve execution context creation.
+- Preserve task lifecycle behavior.
+- Preserve workspace ownership checks.
+- Preserve approval flow.
+- Preserve existing agent/tool calling behavior.
+
+Keep the refactor small and testable.
+
+Do not rewrite the entire orchestrator.
+
+---
+
+# 15. DOCUMENTATION REQUIREMENTS — MANDATORY
+
+I want every architectural decision, research finding, implementation detail, and testing result documented.
+
+Documentation is a core deliverable, not an optional final step.
+
+First inspect:
+
+Docs/agentic-chat/
+Docs/agentic-chat/07-tool-registry-and-tool-reference.md
+Docs/agentic-chat/09-security-and-permissions.md
+Docs/agentic-chat/13-testing-strategy.md
+Docs/agentic-chat/17-future-enhancements.md
+
+Also inspect the main Docs/README.md.
+
+Update existing documents where appropriate.
+
+Do not create duplicate documentation for topics already documented.
+
+Create or update the following documentation structure, adapting names to the existing convention:
+
+Docs/tool-registry/
+
+00-existing-architecture-audit.md
 
 Include:
 
-- Component diagrams.
-- Class diagrams.
-- Sequence diagrams.
-- Data flow.
+- Current ToolRouter implementation.
+- Existing ToolDefinition.
+- Existing handler architecture.
+- WorkspaceToolPolicyBridge.
+- Existing policy integration.
+- Current invocation auditing.
+- Current security mechanisms.
+- Existing tests.
+- Exact architectural limitations.
+- Actual file references.
+
+01-requirements-and-scope.md
+
+Include:
+
+- Problem statement.
+- Functional requirements.
+- Non-functional requirements.
+- Security requirements.
+- Compatibility requirements.
+- Scope of this milestone.
+- Out-of-scope features.
+- Acceptance criteria.
+
+02-research-and-design-decisions.md
+
+Document detailed technical research.
+
+Include:
+
+A. JSON Schema Draft 2020-12.
+
+- Why standardized validation is needed.
+- Custom validation limitations.
+- Draft 2020-12 capabilities.
+- jsonschema library selection.
+- FormatChecker.
+- Local $ref handling.
+- External reference security.
+- Performance considerations.
+
+B. MCP tool architecture.
+
+- MCP tool definition concepts.
+- inputSchema.
+- outputSchema.
+- annotations.
+- Tool discovery.
+- Provider identity.
 - Trust boundaries.
-- API communication.
-- Error handling.
-- Lifecycle.
-- Network boundaries.
+- Why MCP server metadata cannot determine authorization.
 
-## 13.4 Implementation documentation
+C. Versioning.
 
-For every new module explain:
+- Semantic versioning.
+- Schema fingerprints.
+- Compatibility.
+- Breaking changes.
+- Version retirement.
 
-1. Purpose.
-2. Responsibilities.
-3. Important classes.
-4. Important methods.
-5. Inputs.
-6. Outputs.
-7. Dependencies.
-8. Error handling.
-9. Security considerations.
-10. Integration with other modules.
+D. Risk classification.
 
-## 13.5 Operations documentation
+- readOnlyHint.
+- destructiveHint.
+- idempotentHint.
+- openWorldHint.
+- Internal risk tiers.
+- Human approval.
+- Policy integration.
 
-Explain:
+E. Execution controls.
 
-- How to start the runner.
-- How to check Docker.
-- How to check gVisor.
-- How to create a sandbox.
-- How to inspect logs.
-- How to diagnose failed commands.
-- How to terminate containers.
-- How to clean up orphan containers.
-- How to rotate credentials.
-- How to troubleshoot network restrictions.
-- How to investigate resource exhaustion.
+- Timeout mechanisms.
+- Cancellation.
+- Subprocess termination.
+- Rate limiting.
+- Redis atomic operations.
+- Concurrency control.
 
-## 13.6 Risk register
+F. Auditing.
 
-Create a table with:
+- Existing audit architecture.
+- Required additional metadata.
+- Secret redaction.
+- Error classification.
 
-| ID | Risk | Severity | Likelihood | Mitigation | Status |
-|---|---|---|---|---|---|
+G. Alternatives considered.
 
-Include remaining risks and unresolved infrastructure dependencies.
+For every major design decision explain:
 
-## 13.7 Implementation status
+- What problem it solves.
+- Alternatives considered.
+- Why the selected approach is preferable.
+- Tradeoffs.
+- Security implications.
+- Performance implications.
 
-Maintain a checklist of:
+03-system-architecture.md
 
-- Completed tasks.
-- Partially implemented tasks.
-- Pending tasks.
-- Blocked tasks.
-- Tests executed.
-- Security tests passed.
-- Security tests failed.
-- Infrastructure dependencies.
-- Remaining production blockers.
+Include:
 
-Update this document whenever implementation status changes.
+- Target architecture.
+- Component responsibilities.
+- Module structure.
+- Registry design.
+- Adapter design.
+- Execution lifecycle.
+- Data flow.
+- Security boundaries.
+- Error flow.
 
----
+Use Mermaid diagrams.
 
-# 14. IMPLEMENTATION ORDER
+04-tool-definition-and-registry.md
 
-Follow this exact dependency-aware order.
+Include:
 
-WEEK / STAGE 1:
-- Repository audit.
-- Execution entry-point inventory.
-- Security gap analysis.
-- Technology research.
-- Architecture documentation.
+- Final ToolDefinition.
+- ToolAnnotations.
+- ToolRateLimit.
+- Registration.
+- Tool identity.
+- Version resolution.
+- Source identification.
+- Schema fingerprinting.
+- Enable/disable lifecycle.
 
-STAGE 2:
-- SandboxBackend interface.
-- SandboxFactory.
-- LocalSubprocessBackend.
-- Production fail-closed configuration.
-- Unit tests.
+05-schema-validation.md
 
-STAGE 3:
-- Runner Service.
-- Authentication.
+Include:
+
+- JSON Schema implementation.
+- Supported schema features.
+- Registration validation.
+- Input validation.
+- Output validation.
+- $ref policy.
+- Validation errors.
+- Test cases.
+
+06-execution-pipeline.md
+
+Include detailed step-by-step execution logic.
+
+Explain each stage:
+
+- Registry resolution.
+- Input validation.
+- Context construction.
 - Authorization.
-- API contracts.
-- RunnerClient.
+- Risk evaluation.
+- Human approval.
+- Rate limiting.
+- Concurrency limiting.
+- Timeout enforcement.
+- Adapter execution.
+- Output validation.
+- Redaction.
+- Auditing.
 
-STAGE 4:
-- Docker ContainerBackend.
-- Container lifecycle.
-- Workspace mounting.
-- Resource enforcement.
-- gVisor integration.
+07-security-and-permissions.md
 
-STAGE 5:
-- Dependency installation.
-- Restricted network phase.
-- Offline execution phase.
-- Python and Node.js support.
+Include:
 
-STAGE 6:
-- Existing agent integration.
-- CommandRunner migration.
-- Git integration review.
-- Workspace integration.
-
-STAGE 7:
-- Security testing.
+- Existing security controls.
+- New security controls.
+- Trusted adapter model.
+- Workspace authorization.
+- MCP trust boundary.
+- Plugin trust boundary.
+- SSRF prevention.
+- External reference restrictions.
+- Command restrictions.
+- Path restrictions.
+- Secret management.
 - Failure handling.
-- Cleanup.
-- Performance testing.
+- Threat model.
 
-STAGE 8:
-- Azure deployment documentation.
-- Infrastructure setup.
-- Production verification.
-- Final documentation.
+08-database-and-auditing.md
 
-Do not move to production deployment before the security tests and infrastructure prerequisites are satisfied.
+Include:
+
+- Existing ToolInvocation model.
+- Database changes.
+- Migration details.
+- New audit fields.
+- Provider persistence.
+- Error categories.
+- Retention considerations.
+- Sensitive-data handling.
+
+09-testing-and-validation.md
+
+Include:
+
+- Unit tests.
+- Integration tests.
+- Security tests.
+- Regression tests.
+- Performance tests.
+- Test commands.
+- Test results.
+- Known limitations.
+
+10-implementation-changelog.md
+
+Maintain a chronological record of:
+
+- Date.
+- Phase.
+- Files changed.
+- Features implemented.
+- Decisions.
+- Tests executed.
+- Failures encountered.
+- Fixes.
+- Remaining work.
+
+11-future-mcp-and-plugin-integration.md
+
+Document:
+
+- Future MCP integration plan.
+- MCP client architecture.
+- Provider configuration.
+- Tool discovery.
+- Approval workflow.
+- External authentication.
+- Plugin architecture.
+- Provider monitoring.
+- Future implementation sequence.
+
+12-operations-and-troubleshooting.md
+
+Include:
+
+- Common validation failures.
+- Registration errors.
+- Provider errors.
+- Timeout behavior.
+- Redis rate-limit errors.
+- Audit failures.
+- Debugging instructions.
+- Operational configuration.
+
+README.md
+
+Create an index explaining:
+
+- Purpose.
+- Architecture.
+- Document navigation.
+- Implementation status.
+- Current supported capabilities.
+- Future capabilities.
+
+Documentation rules:
+
+1. Use accurate file paths and class names.
+2. Include actual code examples from the implemented system.
+3. Include Mermaid diagrams.
+4. Explain why every major change exists.
+5. Document all configuration variables.
+6. Document all database migrations.
+7. Document all tests and their results.
+8. Clearly distinguish implemented features from planned features.
+9. Never claim a feature is implemented when it is only an interface or proposal.
+10. Update documentation as implementation progresses, not only at the end.
 
 ---
 
-# 15. ACCEPTANCE CRITERIA
+# 16. TESTING REQUIREMENTS
 
-The task is complete only when the following criteria are addressed.
+Testing is mandatory.
+
+Inspect the existing tests first.
+
+Preserve and run relevant existing tests, especially:
+
+- backend/tests/test_tool_router.py
+- backend/tests/test_security_w3_tools.py
+- backend/tests/test_prit_w3_d3_workspace_execution.py
+- backend/tests/test_prit_w3_d4_restricted_test_runner.py
+- backend/tests/test_prit_w3_d5_verification_and_draft_pr.py
+- backend/tests/test_prit_w3_d7_acceptance.py
+- backend/tests/test_week3_day3_day4_and_fixes.py
+
+Verify these exact paths exist before running them.
+
+Do not delete existing tests to make the suite pass.
+
+## 16.1 Registry tests
+
+Test:
+
+- Successful registration.
+- Duplicate registration.
+- Conflicting version registration.
+- Unknown tool.
+- Disabled tool.
+- Invalid source.
+- Invalid risk tier.
+- Invalid timeout.
+- Invalid rate limit.
+- Schema fingerprint.
+- Version resolution.
+- Provider namespace collision.
+
+## 16.2 Schema validation tests
+
+Test:
+
+- Valid object.
+- Invalid property type.
+- Missing required field.
+- Invalid enum.
+- Invalid pattern.
+- Valid $defs.
+- Valid local $ref.
+- Invalid $ref.
+- oneOf.
+- anyOf.
+- allOf.
+- uniqueItems.
+- multipleOf.
+- minProperties.
+- maxProperties.
+- Format validation.
+- Malformed schema.
+- External reference rejection.
+- Excessive schema nesting.
+
+## 16.3 Execution tests
+
+Test:
+
+- Built-in adapter execution.
+- Input validation before handler execution.
+- Authorization denial.
+- Successful execution.
+- Invalid output.
+- Secret redaction.
+- Output size restriction.
+- Handler exception.
+- Internal TypeError.
+- No double execution.
+- Timeout.
+- Rate-limit rejection.
+- Concurrency-limit rejection.
+- Audit persistence.
+
+## 16.4 Security regression tests
+
+Specifically verify:
+
+1. External tools cannot claim trusted built-in identity.
+2. External tools cannot self-assign lower risk.
+3. MCP annotations do not bypass authorization.
+4. External adapters cannot bypass common validation.
+5. External adapters cannot bypass output sanitization.
+6. Invalid input never reaches handlers.
+7. Rate-limited requests never reach handlers.
+8. A failed authorization check always denies execution.
+9. Workspace paths remain restricted.
+10. Protected branch restrictions remain intact.
+11. Task ownership restrictions remain intact.
+12. Human publication approval remains mandatory.
+13. Secrets are not written into audit records.
+14. Timeouts do not cause duplicate execution.
+15. Provider name collisions cannot cause tool impersonation.
+
+## 16.5 Run the wider backend test suite
+
+Run:
+
+- Focused unit tests.
+- Existing security regression tests.
+- Relevant integration tests.
+- Database migration tests.
+- Full backend test suite where the environment permits.
+
+Record:
+
+- Number of tests passed.
+- Number of tests failed.
+- Number skipped.
+- Exact failure reasons.
+- Existing failures versus newly introduced failures.
+
+Never report tests as passing unless they were actually executed.
+
+---
+
+# 17. PERFORMANCE AND QUALITY REQUIREMENTS
+
+This platform must remain efficient.
+
+Avoid:
+
+- Recompiling schemas unnecessarily.
+- Recreating Redis clients for each call.
+- Repeated registry initialization.
+- Excessive database queries.
+- Unnecessary database tables.
+- Duplicate audit records.
+- Excessive logging.
+- Large tool outputs.
+- Blocking asynchronous execution.
+- Unbounded concurrent tool calls.
+
+Measure performance before and after the refactor where possible.
+
+Benchmark:
+
+1. Tool registration.
+2. Tool resolution.
+3. Schema validation.
+4. Execution overhead.
+5. Audit persistence.
+
+Document results.
+
+Do not claim performance improvements without measurements.
+
+---
+
+# 18. IMPLEMENTATION ORDER
+
+Follow this sequence.
+
+Do not implement everything in one uncontrolled refactoring.
+
+PHASE 0 — Existing code audit
+
+- Inspect files.
+- Map dependencies.
+- Identify existing tests.
+- Identify security boundaries.
+- Document the current architecture.
+- Record existing failures.
+
+PHASE 1 — Registry foundation
+
+- Expand ToolDefinition.
+- Introduce ToolAnnotations.
+- Introduce ToolRateLimit.
+- Introduce source metadata.
+- Introduce tool versioning.
+- Implement UnifiedToolRegistry.
+- Preserve compatibility.
+
+PHASE 2 — JSON Schema
+
+- Install jsonschema.
+- Implement SchemaValidator.
+- Validate schemas during registration.
+- Validate arguments.
+- Add output schema support.
+- Add schema tests.
+
+PHASE 3 — Execution architecture
+
+- Introduce explicit adapter interface.
+- Implement BuiltinWorkspaceAdapter.
+- Add MCP adapter boundary.
+- Add Plugin adapter boundary.
+- Refactor ToolRouter dispatch.
+- Remove TypeError-based fallback.
+- Preserve workspace policies.
+
+PHASE 4 — Security and execution limits
+
+- Introduce internal risk policy.
+- Introduce timeout manager.
+- Introduce Redis rate limiter.
+- Introduce concurrency controls.
+- Unify output sanitization.
+- Verify trusted adapter restrictions.
+
+PHASE 5 — Audit and database
+
+- Extend ToolInvocation where necessary.
+- Add migrations.
+- Update repository methods.
+- Update response schemas.
+- Verify audit correctness.
+
+PHASE 6 — Orchestrator integration
+
+- Inject registry.
+- Remove unnecessary duplicate initialization.
+- Preserve agent execution.
+- Preserve existing task and workspace behavior.
+
+PHASE 7 — Testing
+
+- Run new tests.
+- Run existing regression tests.
+- Run security tests.
+- Run migration tests.
+- Run wider backend tests.
+- Fix regressions.
+
+PHASE 8 — Documentation and final review
+
+- Complete all documentation.
+- Update implementation changelog.
+- Update documentation index.
+- Verify diagrams.
+- Verify implementation status.
+- Produce final implementation report.
+
+You may adjust the order if the actual dependencies require it, but document why.
+
+---
+
+# 19. STRICT SCOPE BOUNDARIES
+
+Implement now:
+
+- Unified Tool Registry.
+- Rich tool metadata.
+- JSON Schema Draft 2020-12 validation.
+- Input schema validation.
+- Optional output schema validation.
+- Tool versioning.
+- Source identification.
+- MCP-compatible annotations.
+- Internal risk classification.
+- Execution adapter architecture.
+- Built-in workspace adapter.
+- MCP adapter interface.
+- Plugin adapter interface.
+- Execution timeouts.
+- Rate limiting.
+- Concurrency controls where supported.
+- Common output sanitization.
+- Improved audit logging.
+- Regression testing.
+- Complete documentation.
+
+Do NOT implement in this milestone:
+
+- Actual MCP server connections.
+- Automatic MCP server discovery over the network.
+- Arbitrary third-party plugin installation.
+- Arbitrary remote code execution.
+- New frontend MCP management screens.
+- External plugin marketplaces.
+- Unnecessary changes to the agent's LLM orchestration.
+- A complete rewrite of WorkspaceManager.
+- A replacement for PolicyEngine.
+
+These belong to future milestones.
+
+---
+
+# 20. SECURITY RULES THAT MUST NEVER BE VIOLATED
+
+1. Never weaken existing authorization.
+2. Never remove WorkspacePathGuard.
+3. Never remove command allowlists.
+4. Never remove dangerous flag restrictions.
+5. Never allow untrusted tools to become trusted built-in tools.
+6. Never trust external semantic annotations for authorization.
+7. Never allow MCP tools to bypass PolicyEngine.
+8. Never allow plugin tools to bypass common execution controls.
+9. Never expose credentials in logs.
+10. Never execute invalid arguments.
+11. Never retry destructive operations automatically.
+12. Never treat a timeout as proof that a remote operation failed.
+13. Never allow uncontrolled remote JSON Schema references.
+14. Never allow one task to access another task's workspace.
+15. Never bypass protected branch restrictions.
+16. Never bypass human publication approval.
+17. Never silently swallow security failures.
+18. Never claim a test passed without running it.
+
+If a requested change conflicts with an existing security guarantee, stop and document the conflict before implementing that change.
+
+---
+
+# 21. DEFINITION OF DONE
+
+The task is complete only when the following conditions are satisfied.
 
 ## Architecture
 
-[ ] SandboxBackend abstraction implemented.
+- [ ] Unified Tool Registry implemented.
+- [ ] ToolDefinition expanded.
+- [ ] Source and version management implemented.
+- [ ] Execution adapters implemented.
+- [ ] Existing workspace bridge integrated.
+- [ ] MCP adapter boundary documented.
+- [ ] Plugin adapter boundary documented.
 
-[ ] SandboxFactory implemented.
+## Validation
 
-[ ] LocalSubprocessBackend restricted to explicit development mode.
+- [ ] Standard jsonschema validation implemented.
+- [ ] Draft 2020-12 used.
+- [ ] Registration-time schema validation implemented.
+- [ ] Input validation implemented.
+- [ ] Optional output validation implemented.
+- [ ] Remote reference resolution restricted.
 
-[ ] Production execution fails closed.
+## Execution
 
-[ ] ContainerBackend implemented.
-
-[ ] RunnerClient implemented.
-
-[ ] Separate Runner Service implemented.
+- [ ] Timeouts implemented.
+- [ ] Rate limits implemented.
+- [ ] Concurrency limits implemented or documented as unsupported.
+- [ ] Handler dispatch is explicit.
+- [ ] Double-execution issue fixed.
+- [ ] Common output sanitization implemented.
 
 ## Security
 
-[ ] No untrusted repository execution on API host in production.
+- [ ] Existing workspace security preserved.
+- [ ] PolicyEngine integration preserved.
+- [ ] Risk classification implemented.
+- [ ] External provider trust boundary enforced.
+- [ ] Secret redaction preserved.
+- [ ] Approval checks preserved.
 
-[ ] Container isolation implemented.
+## Auditing
 
-[ ] gVisor integration implemented and verified on supported Linux infrastructure.
-
-[ ] Network restrictions implemented.
-
-[ ] Filesystem isolation implemented.
-
-[ ] CPU restrictions implemented.
-
-[ ] Memory restrictions implemented.
-
-[ ] PID restrictions implemented.
-
-[ ] Disk restrictions implemented.
-
-[ ] Non-root execution.
-
-[ ] No Docker socket exposed to repository code.
-
-[ ] No application secrets exposed.
-
-[ ] No cross-task workspace access.
-
-[ ] Timeout and process termination verified.
-
-[ ] Automatic cleanup implemented.
-
-## Integration
-
-[ ] Existing agents use the new execution interface.
-
-[ ] Existing workspace functionality preserved.
-
-[ ] Git diff functionality preserved.
-
-[ ] Python execution works.
-
-[ ] Node.js execution works where supported.
-
-[ ] Dependency installation works in the restricted installation phase.
-
-[ ] Tests execute offline.
-
-[ ] Structured execution results returned.
+- [ ] Existing ToolInvocation preserved.
+- [ ] Required audit metadata added.
+- [ ] Database migrations tested.
+- [ ] Error categories standardized.
+- [ ] No credentials stored in audit records.
 
 ## Testing
 
-[ ] Unit tests.
-
-[ ] Integration tests.
-
-[ ] Security tests.
-
-[ ] Failure tests.
-
-[ ] Resource limit tests.
-
-[ ] Production configuration tests.
-
-[ ] Existing regression tests.
+- [ ] New unit tests pass.
+- [ ] Existing tool router tests pass.
+- [ ] Existing security tests pass.
+- [ ] Workspace regression tests pass.
+- [ ] Database migration tests pass.
+- [ ] Wider backend test suite executed where possible.
 
 ## Documentation
 
-[ ] Existing architecture audit.
-
-[ ] Technology research.
-
-[ ] Target architecture.
-
-[ ] Runner API documentation.
-
-[ ] Docker/gVisor configuration.
-
-[ ] Dependency installation design.
-
-[ ] Agent integration documentation.
-
-[ ] Security testing documentation.
-
-[ ] Deployment documentation.
-
-[ ] Configuration reference.
-
-[ ] Troubleshooting guide.
-
-[ ] Risk register.
-
-[ ] Implementation status.
+- [ ] Existing documentation reviewed.
+- [ ] Architecture audit updated.
+- [ ] Research and design decisions documented.
+- [ ] Implementation explained.
+- [ ] Security explained.
+- [ ] Database changes documented.
+- [ ] Testing results documented.
+- [ ] Changelog updated.
+- [ ] Future MCP/plugin roadmap documented.
 
 ---
 
-# 16. IMPORTANT ARCHITECTURAL DECISIONS
+# 22. FINAL IMPLEMENTATION REPORT
 
-Use these decisions as the default unless actual codebase constraints require a documented alternative.
+At the end, provide a comprehensive report.
 
-1. Docker + gVisor is the preferred production sandbox architecture.
-2. A separate Linux runner host is the preferred deployment architecture.
-3. Azure App Service remains responsible for API and AI orchestration.
-4. The runner is responsible for untrusted repository execution.
-5. Local subprocess is development-only.
-6. Production execution must fail closed.
-7. Dependency installation occurs inside an isolated environment.
-8. Test execution happens without external network access.
-9. Existing application-level security controls must be retained.
-10. Container limits must be enforced by the runtime/operating system.
-11. All runner operations must be authenticated and authorized.
-12. Docker and host management interfaces must never be exposed to untrusted workloads.
-13. Future Firecracker support should be possible through the abstraction without implementing it now.
-14. MCP integration is optional and must not bypass runner authorization or security boundaries.
+Use this structure:
 
-If you change any of these decisions, create an Architecture Decision Record explaining:
+## A. Executive Summary
 
-- Original decision.
-- New decision.
-- Reason.
-- Advantages.
-- Disadvantages.
-- Security impact.
-- Cost impact.
-- Migration impact.
+Explain what changed and why.
 
----
+## B. Existing vs New Architecture
 
-# 17. FINAL EXECUTION INSTRUCTIONS
+Explain the previous architecture and final architecture.
 
-Start with repository exploration and audit.
+## C. Files Created
 
-Do not immediately start creating Docker files.
+List every new file and its responsibility.
 
-First understand the existing code.
+## D. Files Modified
 
-Then create the audit and research documents.
+For each file explain:
 
-After that, implement the architecture incrementally.
+- What changed.
+- Why it changed.
+- Which functionality was affected.
 
-For every implementation stage:
+## E. Technical Implementation
 
-1. Explain what you found.
-2. Explain what needs changing.
-3. Identify exact files.
-4. Explain the implementation.
-5. Implement the changes.
-6. Run relevant tests.
-7. Record results.
-8. Update documentation.
-9. Update implementation status.
+Explain:
 
-Keep changes minimal, modular, testable and maintainable.
+- Registry.
+- ToolDefinition.
+- Schema validation.
+- Versioning.
+- Annotations.
+- Risk policies.
+- Adapters.
+- Timeouts.
+- Rate limiting.
+- Output validation.
+- Auditing.
 
-Do not rewrite unrelated parts of the platform.
+## F. Security Analysis
 
-Do not delete existing functionality without proving that it is unnecessary.
+Explain existing security preservation and new protections.
 
-If you discover additional vulnerabilities during implementation, document and address them when relevant to sandbox security.
+## G. Database Changes
 
-If you encounter infrastructure limitations:
+List migrations and model changes.
 
-- Continue with safe code-level implementation.
-- Document the limitation.
-- Provide exact infrastructure setup instructions.
-- Mark runtime verification as BLOCKED.
-- Never pretend the security feature is production-ready.
+## H. Testing Results
 
-## FINAL REPORT REQUIRED
+Give actual test commands and results.
 
-At the end, provide a detailed report containing:
+## I. Documentation Created/Updated
 
-### A. Existing architecture
-What was present before implementation.
+List every documentation file.
 
-### B. Security problems
-What vulnerabilities were identified.
+## J. Remaining Issues
 
-### C. Research
-What technologies were evaluated and why the final choices were made.
+Clearly identify anything incomplete.
 
-### D. Implementation
-Every new file and every modified file.
+## K. Future MCP and Plugin Integration
 
-### E. Architecture
-How the new execution flow works.
+Explain how the architecture supports future integration and what remains to be implemented.
 
-### F. Security
-Which security boundaries are now enforced and how.
+## L. Final Acceptance Checklist
 
-### G. Testing
-Actual commands executed and test results.
+Mark each requirement:
 
-### H. Documentation
-All documentation files created or updated.
+- COMPLETED
+- PARTIALLY COMPLETED
+- NOT COMPLETED
+- BLOCKED
 
-### I. Deployment
-What is ready for Azure and what still requires infrastructure configuration.
-
-### J. Remaining work
-Incomplete features, blockers, known risks and future improvements.
-
-### K. Production readiness
-
-Give an honest status:
-
-- NOT READY
-- DEVELOPMENT READY
-- STAGING READY
-- PRODUCTION READY
-
-Only select PRODUCTION READY if the actual infrastructure, runtime, isolation controls and required security tests have been verified.
+Do not mark an item completed without evidence.
 
 ---
 
-# FINAL PRINCIPLE
+# 23. EXECUTION INSTRUCTIONS FOR ANTIGRAVITY
 
-We are building an AI-powered software development platform that executes code from external GitHub repositories.
+Follow these working rules throughout the task.
 
-Every external repository must be considered untrusted.
+1. Start by inspecting the actual repository.
+2. Read all relevant source files before modifying them.
+3. Read the existing documentation.
+4. Create the implementation audit first.
+5. Present the proposed file-level implementation plan.
+6. Implement incrementally.
+7. Keep changes focused on this feature.
+8. Update documentation alongside implementation.
+9. Run tests after each significant phase.
+10. Fix regressions before proceeding.
+11. Do not remove existing functionality to simplify implementation.
+12. Do not create unnecessary abstractions.
+13. Do not duplicate existing utilities.
+14. Do not invent configuration or database structures without inspecting the project.
+15. Do not silently skip failed tests.
+16. Do not leave placeholder implementations while claiming features are complete.
+17. Clearly document future-only adapter boundaries.
+18. Keep the code readable, typed and maintainable.
 
-The AI agent may inspect, modify, install dependencies and execute tests, but it must never gain access to the API server's secrets, filesystem, other users' workspaces or unrestricted network.
+If the implementation is too large for one working session, complete it in phases and maintain an accurate progress document so work can resume without repeating completed changes.
 
-**Security must be enforced at the infrastructure boundary, not merely through prompts, Python validation or command allowlists.**
+Do not stop after the planning phase. Continue with implementation unless a genuine blocker requires my decision.
 
-Build this as a reusable, modular and production-oriented sandbox execution system that can support future AI coding agents, autonomous debugging, test generation, code modification and repository automation.
+**MOST IMPORTANT: Preserve the existing working platform. The goal is to improve the architecture, not break or replace the existing system.**
 
-Prioritize correctness, isolation, maintainability, observability and complete technical documentation.
+Begin with PHASE 0: inspect the repository, audit the existing ToolRouter architecture, and document the findings. Then proceed through the implementation phases in order.

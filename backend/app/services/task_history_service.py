@@ -467,6 +467,7 @@ class TaskHistoryService:
         duration_ms: Optional[int] = None,
         output_summary: Optional[str] = None,
         db: Optional[Session] = None,
+        **kwargs: Any,
     ) -> ToolInvocation:
         """Record an operation routed through the controlled tool router with argument scrubbing."""
         with self._get_session(db) as session:
@@ -479,6 +480,7 @@ class TaskHistoryService:
                 status=status,
                 duration_ms=duration_ms,
                 output_summary=output_summary,
+                **kwargs,
             )
 
     def get_tool_invocations(

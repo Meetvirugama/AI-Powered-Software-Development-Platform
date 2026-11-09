@@ -1,49 +1,43 @@
-"""Tool definitions and policy-enforced routing for agent tools.
+"""Tool definitions, registration, and policy-enforced routing for agent tools.
 
-Owner: Devu — Week 3 Day 3 & Day 4 Deliverable (Docs/daily_tasks.md lines 625, 635 & Docs/week3.md §6 F34)
-Responsibilities:
-1. Tool registration & JSON Schema argument validation.
-2. Command allowlist enforcement (exact template & safe prefix matching) and argument validation
-   (rejecting shell metacharacters, path traversal, and dangerous flags).
-3. PolicyEngine authorization checks before handler invocation.
-4. Secret redaction and output bounding on tool return payloads.
+F21 Unified Tool Registry Architecture (Issue #201).
+Integrates:
+- UnifiedToolRegistry: SemVer resolution, collision prevention, metadata contracts
+- SchemaValidator: Draft 2020-12 JSON Schema validation, precompiled caches, depth limits
+- ToolRateLimiter: Sliding-window rate limiting per task/user/provider
+- BuiltinWorkspaceAdapter: Zero TypeError retry fallback, signature inspection
+- Output Sanitization: Common post-execution boundary (output schema, secret redaction, bounding)
 """
 
+from __future__ import annotations
+
+import concurrent.futures
 from dataclasses import dataclass, field
+import inspect
 import json
+import logging
 import math
 import re
+import time
 from typing import Any, Callable
 
+from agent.tools.adapters.builtin import BuiltinWorkspaceAdapter
+from agent.tools.models import (
+    ToolAnnotations,
+    ToolDefinition,
+    ToolRateLimit,
+    ToolRequest,
+    ToolResult,
+)
+from agent.tools.rate_limiter import RateLimitDecision, ToolRateLimiter
+from agent.tools.registry import UnifiedToolRegistry
+from agent.tools.schema_validator import SchemaValidator
 
-@dataclass(frozen=True)
-class ToolDefinition:
-    """Metadata describing an agent tool."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-
-
-@dataclass
-class ToolRequest:
-    """A request from the agent to execute a tool."""
-
-    tool_name: str
-    arguments: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ToolResult:
-    """Standard result returned by the router."""
-
-    success: bool
-    output: Any = None
-    error: str | None = None
+logger = logging.getLogger(__name__)
 
 
 class ToolRouter:
-    """Registers tools and authorizes requests before execution."""
+    """Registers tools, enforces schemas, rate limits, authorizations, and bounds outputs."""
 
     SECRET_PATTERNS = (
         re.compile(
@@ -72,177 +66,100 @@ class ToolRouter:
         policy_context_factory: Callable[[Any, ToolRequest], Any] | None = None,
         command_allowlist: dict[str, list[list[str]]] | None = None,
         max_output_chars: int = 10000,
+        registry: UnifiedToolRegistry | None = None,
+        rate_limiter: ToolRateLimiter | None = None,
+        schema_validator: SchemaValidator | None = None,
     ) -> None:
-        self._tools: dict[str, ToolDefinition] = {}
-        self._handlers: dict[str, Callable[..., Any]] = {}
+        if max_output_chars < 1:
+            raise ValueError("max_output_chars must be positive")
+
         self._policy_engine = policy_engine
         self._policy_context_factory = policy_context_factory
         self._command_allowlist = command_allowlist or {}
         self._max_output_chars = max_output_chars
 
-        if max_output_chars < 1:
-            raise ValueError("max_output_chars must be positive")
+        # Subsystems
+        self.schema_validator = schema_validator or SchemaValidator()
+        self.registry = registry or UnifiedToolRegistry(schema_validator=self.schema_validator)
+        self.rate_limiter = rate_limiter or ToolRateLimiter(fallback_to_memory=True)
+
+        # Backward-compatibility maps
+        self._tools: dict[str, ToolDefinition] = {}
+        self._handlers: dict[str, Callable[..., Any]] = {}
+        self._builtin_adapter = BuiltinWorkspaceAdapter()
 
     def register(
         self,
-        definition: ToolDefinition,
+        definition: ToolDefinition | Any,
         handler: Callable[..., Any],
+        adapter: Any = None,
     ) -> None:
-        """Register a tool and its handler."""
-
+        """Register a tool, its metadata schema, and its execution handler."""
         if not definition.name or not isinstance(definition.name, str):
             raise ValueError("Tool name must be a non-empty string")
 
-        if definition.name in self._tools:
+        if definition.name in self._tools or self.registry.has_tool(definition.name):
             raise ValueError(f"Tool already registered: {definition.name}")
 
-        if not isinstance(definition.parameters, dict):
+        params = getattr(definition, "input_schema", None) or getattr(definition, "parameters", None)
+        if not isinstance(params, dict):
             raise ValueError("Tool parameters must be a JSON Schema object")
 
-        if definition.parameters.get("type") != "object":
+        if params.get("type") != "object":
             raise ValueError("Tool parameter schema must have type 'object'")
 
         if not callable(handler):
             raise ValueError("Tool handler must be callable")
 
-        self._tools[definition.name] = definition
-        self._handlers[definition.name] = handler
+        # Normalize to rich ToolDefinition if needed
+        if not isinstance(definition, ToolDefinition):
+            rich_def = ToolDefinition(
+                name=definition.name,
+                description=definition.description,
+                input_schema=params,
+                output_schema=getattr(definition, "output_schema", None),
+                annotations=getattr(definition, "annotations", ToolAnnotations()),
+                risk_tier=getattr(definition, "risk_tier", "medium"),
+                version=getattr(definition, "version", "1.0.0"),
+                source=getattr(definition, "source", "builtin"),
+                timeout_s=getattr(definition, "timeout_s", 60.0),
+                rate_limit=getattr(definition, "rate_limit", None),
+            )
+        else:
+            rich_def = definition
+
+        # Track in backward-compatibility dictionaries
+        self._tools[rich_def.name] = rich_def
+        self._handlers[rich_def.name] = handler
+
+        # Register in UnifiedToolRegistry
+        self.registry.register(
+            tool=rich_def,
+            adapter=adapter,
+            handler=handler,
+        )
 
     def get_tools(self) -> list[ToolDefinition]:
-        """Return registered tool definitions."""
+        """Return all registered tool definitions."""
+        return self.registry.list_tools()
 
-        return list(self._tools.values())
-
-    @staticmethod
-    def _matches_type(value: Any, expected: str) -> bool:
-        checks = {
-            "object": lambda v: isinstance(v, dict),
-            "array": lambda v: isinstance(v, list),
-            "string": lambda v: isinstance(v, str),
-            "integer": lambda v: isinstance(v, int)
-            and not isinstance(v, bool),
-            "number": lambda v: isinstance(v, (int, float))
-            and not isinstance(v, bool)
-            and math.isfinite(v),
-            "boolean": lambda v: isinstance(v, bool),
-            "null": lambda v: v is None,
-        }
-        check = checks.get(expected)
-        return check(value) if check else False
-
-    @classmethod
-    def _validate_value(
-        cls,
-        value: Any,
-        schema: dict[str, Any],
-        path: str,
-    ) -> str | None:
-        """Validate a value against supported JSON Schema keywords."""
-
-        if not isinstance(schema, dict):
-            return f"Invalid schema at {path}"
-
-        expected = schema.get("type")
-        if expected is not None:
-            if isinstance(expected, list):
-                if not all(isinstance(item, str) for item in expected):
-                    return f"Invalid type declaration at {path}"
-                if not any(cls._matches_type(value, item) for item in expected):
-                    return f"{path} has an invalid type"
-            elif not isinstance(expected, str) or not cls._matches_type(
-                value, expected
-            ):
-                return f"{path} must be of type {expected}"
-
-        if "enum" in schema:
-            if not isinstance(schema["enum"], list):
-                return f"Invalid enum at {path}"
-            if value not in schema["enum"]:
-                return f"{path} must be one of {schema['enum']}"
-
-        if isinstance(value, dict):
-            properties = schema.get("properties", {})
-            required = schema.get("required", [])
-
-            if not isinstance(properties, dict) or not isinstance(required, list):
-                return f"Invalid object schema at {path}"
-
-            for key in required:
-                if not isinstance(key, str):
-                    return f"Invalid required property at {path}"
-                if key not in value:
-                    return f"Missing required argument: {path}.{key}"
-
-            if schema.get("additionalProperties") is False:
-                unexpected = set(value) - set(properties)
-                if unexpected:
-                    key = sorted(unexpected)[0]
-                    return f"Unexpected argument: {path}.{key}"
-
-            for key, item in value.items():
-                if key in properties:
-                    error = cls._validate_value(
-                        item, properties[key], f"{path}.{key}"
-                    )
-                    if error:
-                        return error
-
-        if isinstance(value, list):
-            item_schema = schema.get("items")
-            if item_schema is not None:
-                if not isinstance(item_schema, dict):
-                    return f"Invalid items schema at {path}"
-                for index, item in enumerate(value):
-                    error = cls._validate_value(
-                        item, item_schema, f"{path}[{index}]"
-                    )
-                    if error:
-                        return error
-
-            if len(value) < schema.get("minItems", 0):
-                return f"{path} has too few items"
-
-            if len(value) > schema.get("maxItems", float("inf")):
-                return f"{path} has too many items"
-
-        if isinstance(value, str):
-            if len(value) < schema.get("minLength", 0):
-                return f"{path} is too short"
-
-            if len(value) > schema.get("maxLength", float("inf")):
-                return f"{path} is too long"
-
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if not math.isfinite(value):
-                return f"{path} must be finite"
-
-            if "minimum" in schema and value < schema["minimum"]:
-                return f"{path} must be at least {schema['minimum']}"
-
-            if "maximum" in schema and value > schema["maximum"]:
-                return f"{path} must be at most {schema['maximum']}"
-
-        return None
-
-    @classmethod
     def _validate_arguments(
-        cls,
+        self,
         arguments: dict[str, Any],
         schema: dict[str, Any],
     ) -> str | None:
-        """Validate request arguments against the tool's schema."""
-
+        """Validate request arguments against tool schema."""
         if not isinstance(arguments, dict):
             return "Tool arguments must be an object"
 
         if schema.get("type") != "object":
             return "Tool parameter schema must declare type 'object'"
 
-        return cls._validate_value(arguments, schema, "arguments")
+        return self.schema_validator.validate_arguments(arguments, schema)
 
     @classmethod
     def validate_argv_tokens(cls, argv: list[str]) -> str | None:
-        """Validate command argv tokens against shell metacharacters, path traversal, and dangerous flags."""
+        """Validate command argv tokens against metacharacters, path traversal, and forbidden flags."""
         for token in argv:
             if not isinstance(token, str) or not token.strip():
                 return "Command argv tokens must be non-empty strings"
@@ -261,8 +178,7 @@ class ToolRouter:
         tool_name: str,
         arguments: dict,
     ) -> str | None:
-        """Validate argv against approved command templates and argument safety rules."""
-
+        """Validate argv against approved command templates and safety constraints."""
         if "command" in arguments:
             return "Shell command strings are not permitted; use argv"
 
@@ -292,7 +208,6 @@ class ToolRouter:
                 continue
             if argv == template:
                 return None
-            # Support wildcard suffix marker '*' in template when explicitly configured
             if template[-1] == "*" and len(argv) >= len(template) - 1:
                 prefix = template[:-1]
                 if argv[: len(prefix)] == prefix:
@@ -305,8 +220,7 @@ class ToolRouter:
         request: ToolRequest,
         agent_state: Any,
     ) -> str | None:
-        """Call the policy engine. Any missing or failed check denies access."""
-
+        """Check authorization with policy engine. Any failure or absence denies access."""
         if self._policy_engine is None:
             return "Policy engine unavailable; execution denied"
 
@@ -315,7 +229,6 @@ class ToolRouter:
 
         try:
             context = self._policy_context_factory(agent_state, request)
-
             if context is None:
                 return "Policy context unavailable; execution denied"
 
@@ -341,21 +254,17 @@ class ToolRouter:
 
     @classmethod
     def _redact_string(cls, value: str) -> str:
-        """Redact common credential patterns from output."""
-
+        """Redact common secrets and credentials from output."""
         result = value
-
         for index, pattern in enumerate(cls.SECRET_PATTERNS):
             if index == 0:
                 result = pattern.sub(r"\1[REDACTED]", result)
             else:
                 result = pattern.sub("[REDACTED]", result)
-
         return result
 
     def _sanitize_output(self, output: Any) -> Any:
-        """Redact secrets and bound the total returned output."""
-
+        """Redact secrets and bound total output length."""
         try:
             serialized = json.dumps(output, default=str)
         except (TypeError, ValueError):
@@ -365,7 +274,7 @@ class ToolRouter:
 
         if len(sanitized) > self._max_output_chars:
             sanitized = (
-                sanitized[:self._max_output_chars]
+                sanitized[: self._max_output_chars]
                 + "... [OUTPUT TRUNCATED]"
             )
 
@@ -374,79 +283,213 @@ class ToolRouter:
         except (json.JSONDecodeError, TypeError):
             return sanitized
 
+    def _post_process_output(
+        self,
+        raw_result: Any,
+        output_schema: dict[str, Any] | None,
+        duration_ms: int,
+    ) -> ToolResult:
+        """Common post-execution boundary: normalize, schema-validate, redact, and bound."""
+        if isinstance(raw_result, ToolResult):
+            success = raw_result.success
+            output = raw_result.output
+            error = raw_result.error
+            error_cat = raw_result.error_category
+        else:
+            success = True
+            output = raw_result
+            error = None
+            error_cat = None
+
+        if success and output_schema is not None:
+            schema_err = self.schema_validator.validate_output(output, output_schema)
+            if schema_err:
+                return ToolResult(
+                    success=False,
+                    error=f"Output validation failed: {schema_err}",
+                    error_category="OUTPUT_SCHEMA_ERROR",
+                    duration_ms=duration_ms,
+                )
+
+        if success:
+            sanitized_output = self._sanitize_output(output)
+            return ToolResult(
+                success=True,
+                output=sanitized_output,
+                duration_ms=duration_ms,
+            )
+        else:
+            sanitized_error = self._sanitize_output(error) if error else "Tool execution failed"
+            return ToolResult(
+                success=False,
+                error=sanitized_error if isinstance(sanitized_error, str) else str(sanitized_error),
+                error_category=error_cat or "EXECUTION_ERROR",
+                duration_ms=duration_ms,
+            )
+
     def route(
         self,
         request: ToolRequest,
-        agent_state: Any,
+        agent_state: Any = None,
         policy_engine: Any = None,
     ) -> ToolResult:
-        """Validate, authorize, and execute an approved tool request."""
+        """Execute the standardized tool routing and authorization pipeline."""
+        start_time = time.perf_counter()
 
         if not isinstance(request, ToolRequest):
             return ToolResult(
                 success=False,
                 error="Invalid tool request",
+                error_category="INVALID_REQUEST",
             )
 
-        definition = self._tools.get(request.tool_name)
+        # 1. Lookup tool definition
+        entry = self.registry.get_entry(request.tool_name, version=request.version)
+        definition = entry.definition if entry else self._tools.get(request.tool_name)
 
         if definition is None:
             return ToolResult(
                 success=False,
                 error=f"Unknown tool: {request.tool_name}",
+                error_category="NOT_FOUND_ERROR",
             )
 
-        schema = getattr(definition, "parameters", None) or getattr(definition, "schema", {})
-        error = self._validate_arguments(
-            request.arguments,
-            schema,
+        if entry and not entry.enabled:
+            return ToolResult(
+                success=False,
+                error=f"Tool is disabled: {request.tool_name}",
+                error_category="DISABLED_ERROR",
+            )
+
+        # 2. Input Schema Validation
+        schema = definition.input_schema or getattr(definition, "parameters", {})
+        validation_error = self._validate_arguments(request.arguments, schema)
+        if validation_error:
+            return ToolResult(
+                success=False,
+                error=validation_error,
+                error_category="SCHEMA_VALIDATION_ERROR",
+            )
+
+        # 3. Rate Limiting Check (Must never reach handler if rate limited)
+        task_id = (
+            agent_state.get("task_id")
+            if isinstance(agent_state, dict)
+            else getattr(agent_state, "task_id", None)
         )
+        user_id = (
+            agent_state.get("user_id")
+            if isinstance(agent_state, dict)
+            else getattr(agent_state, "user_id", None)
+        )
+        rate_decision = self.rate_limiter.check(
+            tool_name=request.tool_name,
+            rate_limit=definition.rate_limit,
+            task_id=task_id,
+            user_id=user_id,
+            provider_id=definition.source,
+        )
+        if not rate_decision.allowed:
+            return ToolResult(
+                success=False,
+                error=rate_decision.reason or "Rate limit exceeded",
+                error_category="RATE_LIMIT_ERROR",
+                rate_limited=True,
+            )
 
-        if error:
-            return ToolResult(success=False, error=error)
-
+        # 4. Handler Retrieval
         handler = self._handlers.get(request.tool_name)
-        if handler is not None and getattr(handler, "_is_policy_guarded", False) is True:
-            return handler(request, agent_state)
+        if handler is None and entry and entry.handler:
+            handler = entry.handler
 
-        error = self._validate_command(
-            request.tool_name,
-            request.arguments,
-        )
+        # 5. Policy & Command Validation (if not internally policy guarded)
+        is_policy_guarded = handler is not None and getattr(handler, "_is_policy_guarded", False) is True
 
-        if error:
-            return ToolResult(success=False, error=error)
+        if not is_policy_guarded:
+            command_err = self._validate_command(request.tool_name, request.arguments)
+            if command_err:
+                return ToolResult(
+                    success=False,
+                    error=command_err,
+                    error_category="POLICY_ERROR",
+                )
 
-        if policy_engine is not None and self._policy_engine is None:
-            self._policy_engine = policy_engine
+            if policy_engine is not None and self._policy_engine is None:
+                self._policy_engine = policy_engine
 
-        error = self._authorize(request, agent_state)
+            auth_err = self._authorize(request, agent_state)
+            if auth_err:
+                return ToolResult(
+                    success=False,
+                    error=auth_err,
+                    error_category="POLICY_ERROR",
+                )
 
-        if error:
-            return ToolResult(success=False, error=error)
-
-        if handler is None:
+        if handler is None and (not entry or not entry.adapter):
             return ToolResult(
                 success=False,
                 error=(
                     "Tool execution is not enabled until policy checks "
                     "and argument validation are integrated."
                 ),
+                error_category="NOT_FOUND_ERROR",
             )
+
+        # 6. Execute Handler (Strict signature inspection — no TypeError retry)
+        def _invoke_handler() -> Any:
+            if entry and entry.adapter:
+                return entry.adapter.execute(definition, request.arguments, agent_state)
+
+            assert handler is not None
+            sig = inspect.signature(handler)
+            params = list(sig.parameters.values())
+
+            # Check if handler expects (request, context/agent_state)
+            is_req_ctx = (
+                is_policy_guarded
+                or (params and params[0].name in ("request", "req", "tool_request"))
+                or (len(params) == 2 and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params))
+            )
+
+            if is_req_ctx:
+                return handler(request, agent_state)
+            return handler(**request.arguments)
 
         try:
-            try:
-                output = handler(**request.arguments)
-            except TypeError:
-                output = handler(request, agent_state)
+            timeout_s = getattr(definition, "timeout_s", 60.0)
+            # Enforce execution timeout via ThreadPoolExecutor when configured
+            if timeout_s and timeout_s > 0:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(_invoke_handler)
+                    try:
+                        raw_result = future.result(timeout=timeout_s)
+                    except concurrent.futures.TimeoutError:
+                        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                        return ToolResult(
+                            success=False,
+                            error=f"Tool execution timed out after {timeout_s}s",
+                            error_category="TIMEOUT_ERROR",
+                            duration_ms=elapsed_ms,
+                            timed_out=True,
+                        )
+            else:
+                raw_result = _invoke_handler()
 
-            return ToolResult(
-                success=True,
-                output=self._sanitize_output(output),
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+
+            # 7. Common Output Boundary
+            return self._post_process_output(
+                raw_result=raw_result,
+                output_schema=definition.output_schema,
+                duration_ms=elapsed_ms,
             )
 
-        except Exception:
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error("Tool execution failed for '%s': %s", request.tool_name, exc, exc_info=True)
             return ToolResult(
                 success=False,
                 error="Tool execution failed",
+                error_category="EXECUTION_ERROR",
+                duration_ms=elapsed_ms,
             )

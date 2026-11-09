@@ -1238,8 +1238,17 @@ class TaskRepository:
         status: ToolInvocationStatus | str = ToolInvocationStatus.COMPLETED,
         duration_ms: Optional[int] = None,
         output_summary: Optional[str] = None,
+        tool_version: Optional[str] = None,
+        tool_source: str = "builtin",
+        provider_id: Optional[str] = None,
+        risk_tier: str = "low",
+        schema_fingerprint: Optional[str] = None,
+        execution_timeout_s: Optional[int] = None,
+        execution_timed_out: bool = False,
+        rate_limit_status: Optional[str] = None,
+        error_category: Optional[str] = None,
     ) -> ToolInvocation:
-        """Record a validated tool invocation."""
+        """Record a validated tool invocation with enhanced audit metadata."""
         task = self.get_task(task_id, repository_id)
         if not task:
             raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
@@ -1254,6 +1263,15 @@ class TaskRepository:
             status=status_val,
             duration_ms=duration_ms,
             output_summary=scrub_sensitive_text(output_summary),
+            tool_version=tool_version,
+            tool_source=tool_source,
+            provider_id=provider_id,
+            risk_tier=risk_tier,
+            schema_fingerprint=schema_fingerprint,
+            execution_timeout_s=execution_timeout_s,
+            execution_timed_out=execution_timed_out,
+            rate_limit_status=rate_limit_status,
+            error_category=error_category,
         )
         self.session.add(inv)
         self.session.flush()
@@ -1262,7 +1280,13 @@ class TaskRepository:
             task_id=task.id,
             repository_id=task.repository_id,
             event_type=TaskEventType.TOOL_INVOKED.value,
-            event_data={"tool_name": tool_name, "status": status_val, "duration_ms": duration_ms},
+            event_data={
+                "tool_name": tool_name,
+                "status": status_val,
+                "duration_ms": duration_ms,
+                "risk_tier": risk_tier,
+                "error_category": error_category,
+            },
         )
         self.session.commit()
         self.session.refresh(inv)

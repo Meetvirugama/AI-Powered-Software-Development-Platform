@@ -623,15 +623,34 @@ class TaskExecutionOrchestrator:
         res = self.tool_router.route(req, agent_state={"task_id": str(task.id)})
         elapsed_ms = int((time.perf_counter() - start_perf) * 1000)
 
-        inv_status = ToolInvocationStatus.COMPLETED if res.success else ToolInvocationStatus.BLOCKED
+        tool_entry = getattr(self.tool_router, "registry", None)
+        defn = tool_entry.get(tool_name) if tool_entry else None
+
+        if getattr(res, "timed_out", False) or getattr(res, "error_category", None) == "TIMEOUT_ERROR":
+            inv_status = ToolInvocationStatus.TIMEOUT
+        elif getattr(res, "rate_limited", False) or getattr(res, "error_category", None) == "RATE_LIMIT_ERROR":
+            inv_status = ToolInvocationStatus.RATE_LIMITED
+        elif res.success:
+            inv_status = ToolInvocationStatus.COMPLETED
+        else:
+            inv_status = ToolInvocationStatus.BLOCKED
+
         task_repo.record_tool_invocation(
             task_id=task.id,
             repository_id=task.repository_id,
             tool_name=tool_name,
             arguments=arguments,
             status=inv_status,
-            duration_ms=elapsed_ms,
+            duration_ms=getattr(res, "duration_ms", None) or elapsed_ms,
             output_summary=redact(str(res.output if res.success else res.error)),
+            tool_version=getattr(defn, "version", "1.0.0"),
+            tool_source=getattr(defn, "source", "builtin"),
+            risk_tier=getattr(defn, "risk_tier", "low"),
+            schema_fingerprint=getattr(defn, "schema_fingerprint", None),
+            execution_timeout_s=int(getattr(defn, "timeout_s", 60.0)) if getattr(defn, "timeout_s", None) else None,
+            execution_timed_out=bool(getattr(res, "timed_out", False)),
+            rate_limit_status="LIMITED" if getattr(res, "rate_limited", False) else "OK",
+            error_category=getattr(res, "error_category", None),
         )
 
         if not res.success:
