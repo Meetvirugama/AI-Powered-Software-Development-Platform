@@ -2328,6 +2328,19 @@ class TaskRepository:
         )
         return self.session.scalars(stmt).first()
 
+    def get_approved_plan(
+        self,
+        task_id: uuid.UUID | str,
+    ) -> Optional[TaskPlan]:
+        """Return the currently approved plan for a task, or None if unapproved."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        task = self.get_by_id(t_uuid)
+        if not task or not task.approved_plan_version:
+            return None
+        return self.get_plan_by_version(task.id, task.approved_plan_version)
+
     def get_workspace_record(
         self,
         task_id: uuid.UUID | str,

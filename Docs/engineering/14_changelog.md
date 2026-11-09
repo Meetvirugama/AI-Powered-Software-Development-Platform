@@ -1141,3 +1141,44 @@ ecover_interrupted_tasks.
 **Impact:** Generated test files are no longer unverified syntax previews; they are execution-verified, flakiness-tested, and coverage-attributed in isolated sandboxes with end-to-end Vitest support.
 
 **Related Docs:** `Docs/test-generation/`, `Docs/README.md`, `Docs/quality_benchmark_report.md`
+
+---
+
+### [Post-Week3-Batch6] 2026-11-09 — Autonomous Code Synthesis, Plan-Bound Editing & Durable Workflow Execution (Issue #202 / Issue #203)
+**Type:** Feature / Security / Distributed Systems  
+**Developer:** Meet Virugama (Lead Agent Architect)  
+**Changes:**
+- `backend/ai/services/edit_synthesizer.py`:
+  - Implemented `EditSynthesizer` providing search/replace editing (`search_block`, `replace_block`) inspired by SWE-agent and Aider.
+  - Implemented 7-stage validation pipeline: JSON fence parsing, exact single-match validation (`occurrences == 1`), path safety & `fnmatch` forbidden file detection, plan-bound scope enforcement (`expected_files`), atomic in-memory patch application, AST syntax validation (`ast.parse`, `json.loads`), and SHA-256 stale-content fingerprinting.
+  - Implemented bounded self-refinement (up to 3 total attempts) with verbal failure feedback.
+  - Provided thread-safe synchronous wrapper `synthesize_sync` for direct execution loop integration.
+- `backend/ai/services/agent_execution_loop.py`:
+  - Extended `StepExecutionRecord` with `synthesis_attempts`, `patch_hashes`, `validation_status`, `changed_files`, `failure_category`.
+  - Injected `EditSynthesizer` and eliminated dangerous cross-step payload fallback loop.
+  - Preserved caller-supplied payload priority while autonomously synthesizing modifications when payloads are missing.
+- `backend/ai/workflows/`:
+  - Created `workflow_models.py` defining `AutonomousWorkflowInput`, `AutonomousWorkflowResult`, `AutonomousWorkflowStatus`, and `WorkflowStatusResponse`.
+  - Created `autonomous_task_workflow.py` with 7 durable steps (`step_validate_approval`, `step_initialize_workspace`, `step_execute_plan_and_synthesize`, `step_validate_plan_bound_diff`, `step_run_tests_and_repair`, `step_run_independent_verification`, `step_publish_draft_pr_if_authorized`).
+  - Added re-entrant registry locking (`threading.RLock`) to guarantee idempotent submission and prevent duplicate workflows.
+  - Added Redis pubsub streaming to `platform_events` channel.
+- `backend/app/api/v1/tasks.py`:
+  - Updated `POST /api/v1/tasks/{task_id}/run-workflow` to accept `async_execution=True` and `Prefer: respond-async`, returning `HTTP 202 Accepted` with `TaskWorkflowAcceptedResponse`.
+  - Added `GET /api/v1/tasks/{task_id}/workflow-status` endpoint returning real-time progress, completed steps, and verification results.
+- `backend/app/repositories/task_repository.py`:
+  - Added `get_approved_plan(task_id)` helper.
+- `frontend/src/services/tasks.ts`:
+  - Added `startAutonomousWorkflow` and `getWorkflowStatus`.
+- `frontend/src/pages/RepositoryTaskStudio.tsx`:
+  - Updated `handleRunAutoPilot` to invoke `startAutonomousWorkflow` with async execution and auto-fallback.
+- `backend/tests/`:
+  - Added `test_edit_synthesizer.py` (19 tests).
+  - Added `test_autonomous_task_workflow.py` (6 tests).
+  - Validated 58 regression tests (total 83/83 passing).
+- `Docs/autonomous-execution/`:
+  - Authored comprehensive 14-part documentation suite (`00` through `13` and `README.md`).
+
+**Impact:** The platform can now autonomously synthesize code changes following human plan approval without requiring caller-provided payloads, while executing workflows durably in the background with HTTP 202 acceptance and SSE streaming.
+
+**Related Docs:** `Docs/autonomous-execution/`, `Docs/engineering/13_architecture_decisions.md` (ADR-015), `Docs/README.md`
+

@@ -32,6 +32,7 @@ from ai.services.agent_execution_loop import (
     AgentExecutionResult,
     StepExecutionStatus,
 )
+from ai.services.edit_synthesizer import EditSynthesizer
 from ai.services.bounded_repair_loop import BoundedRepairLoop, BoundedRepairOutcome
 from ai.services.execution_budget_manager import ExecutionBudgetManager
 from ai.services.execution_checkpoint_manager import ExecutionCheckpointManager
@@ -179,9 +180,11 @@ class TaskExecutionOrchestrator:
         self.workspace_manager = workspace_manager or WorkspaceManager()
         self.tool_router = tool_router or ToolRouter(command_allowlist=DEFAULT_COMMAND_ALLOWLIST)
         self.policy_bridge = self._ensure_tools_registered(self.tool_router, self.workspace_manager)
+        self.edit_synthesizer = EditSynthesizer()
         self.execution_loop = AgentExecutionLoop(
             workspace_manager=self.workspace_manager,
             tool_router=self.tool_router,
+            edit_synthesizer=self.edit_synthesizer,
         )
         self.repair_loop = BoundedRepairLoop(
             workspace_manager=self.workspace_manager,

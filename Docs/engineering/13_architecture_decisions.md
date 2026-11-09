@@ -442,3 +442,38 @@ Developers require an interactive assistant capable of iteratively discovering, 
    When budgets are exhausted, the agent halts tool invocation and synthesizes a grounded answer from collected evidence, tagging `truncated: true` in `agent_metadata`.
 5. **Dual-Mode API & UI:** The `/chat` endpoint accepts `"mode": "normal" | "agentic"`, allowing developers to seamlessly switch between ultra-fast RAG and multi-step agentic exploration directly from the Workbench UI.
 
+---
+
+## ADR-015: Autonomous Code Synthesis, Search/Replace Patching & Durable Workflow Execution
+
+| Field | Value |
+|---|---|
+| **Title** | Autonomous Code Synthesis via Search/Replace Blocks and Durable DBOS Workflow Execution |
+| **Date** | 2026-11-09 |
+| **Status** | Accepted |
+| **Owner** | Meet Virugama (Lead Agent Architect) |
+
+**Context:**
+Prior to this decision, autonomous execution after human plan approval exhibited two major architectural vulnerabilities:
+1. When HTTP callers did not provide code modification payloads, `AgentExecutionLoop` was unable to autonomously synthesize modifications, or fell back onto a dangerous cross-step content loop that reused unrelated file payloads across steps.
+2. The entire post-approval autonomous workflow (workspace setup, step execution, testing, repair, verification, draft PR) ran synchronously within a single HTTP request, making it susceptible to socket timeouts, connection drops, and process crashes.
+
+**Decision:**
+1. **EditSynthesizer Engine:** Implement `EditSynthesizer` using SWE-agent and Aider-inspired search/replace blocks (`search_block`, `replace_block`) rather than whole-file generation.
+2. **7-Stage Validation Pipeline:** Evaluate patches in memory through 7 strict stages prior to disk modification:
+   - Stage A: Structured JSON and fence validation.
+   - Stage B: Exact single-match validation (`occurrences == 1`).
+   - Stage C: Path traversal safety, `fnmatch` forbidden file detection, and approved plan scope enforcement.
+   - Stage D: Atomic in-memory patch application.
+   - Stage E: Language AST syntax checks (`ast.parse` for Python, `json.loads` for JSON).
+   - Stage F: Lint checks prohibiting placeholder comments and raw secrets.
+   - Stage G: SHA-256 stale-content fingerprint verification against concurrent modifications.
+3. **Bounded Self-Refinement:** Govern iterative correction with a hard ceiling of 3 total attempts (1 initial + 2 retries) with verbal failure feedback.
+4. **Elimination of Cross-Step Reuse:** Eliminate the cross-step payload fallback loop. Caller payloads have first priority; missing payloads autonomously trigger `EditSynthesizer`. If synthesis fails, execution fails closed.
+5. **Durable Workflow Architecture:** Wrap multi-stage post-approval workflows into 7 durable steps with DBOS (`@dbos_step()` and `@dbos_workflow()`), utilizing stable workflow IDs, re-entrant registry locks (`threading.RLock`), and persistent `TaskCheckpoint` records.
+6. **Asynchronous HTTP 202 Initiation & Progress Streaming:**
+   - `POST /api/v1/tasks/{task_id}/run-workflow` accepts `async_execution=True` or `Prefer: respond-async`, returning `HTTP 202 Accepted` with a workflow status URL.
+   - `GET /api/v1/tasks/{task_id}/workflow-status` returns real-time progress percentage, completed steps, and verification results.
+   - Real-time step transitions stream over Redis pubsub (`platform_events`) to frontend SSE clients.
+
+

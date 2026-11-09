@@ -41,6 +41,7 @@ from sandbox.exceptions import (
 )
 
 from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
+from ai.services.edit_synthesizer import EditSynthesizer
 
 if TYPE_CHECKING:
     from sandbox.workspace_manager import WorkspaceManager
@@ -88,6 +89,11 @@ class StepExecutionRecord:
     started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     completed_at: str | None = None
     verification_outcome: StepVerificationOutcome | None = None
+    synthesis_attempts: int = 0
+    patch_hashes: list[str] = field(default_factory=list)
+    validation_status: str | None = None
+    changed_files: list[str] = field(default_factory=list)
+    failure_category: str | None = None
 
 
 @dataclass
@@ -179,6 +185,7 @@ class AgentExecutionLoop:
         tool_router: Any = None,
         execution_verifier: ExecutionVerifier | None = None,
         forbidden_files: Sequence[str] | None = None,
+        edit_synthesizer: Any = None,
     ) -> None:
         self.workspace_manager = workspace_manager
         self.max_iterations = max_iterations
@@ -186,6 +193,7 @@ class AgentExecutionLoop:
         self.tool_router = tool_router
         self.execution_verifier = execution_verifier or ExecutionVerifier()
         self.forbidden_files = list(forbidden_files or [])
+        self.edit_synthesizer = edit_synthesizer
 
     def _resolve_step_dependencies(self, steps: Sequence[PlanStep]) -> list[PlanStep]:
         """Validate step dependency DAG strictly; rejects cycles, missing IDs, or self-dependencies."""
@@ -322,11 +330,6 @@ class AgentExecutionLoop:
             action_type = str(getattr(step, "action_type", None) or getattr(step, "step_type", "edit")).lower()
             expected_files = list(getattr(step, "expected_files", []) or getattr(step, "target_files", []) or [])
             step_input = dict(payload_map.get(step_id, {}) or {})
-            if "content" not in step_input and action_type in ("edit", "create", "write", "modify", "refactor"):
-                for other_input in payload_map.values():
-                    if isinstance(other_input, dict) and "content" in other_input:
-                        step_input["content"] = other_input["content"]
-                        break
 
             # 1. Anti-Cyclic Loop Check
             fingerprint = self.loop_detector.fingerprint_action(
@@ -435,34 +438,78 @@ class AgentExecutionLoop:
 
             output: Any = None
             if action_type == "patch" or ("target_content" in step_input and "replacement_content" in step_input):
-                target_content = str(step_input.get("target_content", ""))
-                replacement_content = str(step_input.get("replacement_content", ""))
-                patched_files: dict[str, int] = {}
-                for target_file in expected_files:
-                    res = self.workspace_manager.patch_file(
+                if "target_content" in step_input and "replacement_content" in step_input:
+                    target_content = str(step_input.get("target_content", ""))
+                    replacement_content = str(step_input.get("replacement_content", ""))
+                    patched_files: dict[str, int] = {}
+                    for target_file in expected_files:
+                        res = self.workspace_manager.patch_file(
+                            task_id=task_id,
+                            file_path=target_file,
+                            target_content=target_content,
+                            replacement_content=replacement_content,
+                        )
+                        patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
+                    output = {"patched_files": patched_files}
+                elif self.edit_synthesizer is not None:
+                    synth_res = self.edit_synthesizer.synthesize_sync(
                         task_id=task_id,
-                        file_path=target_file,
-                        target_content=target_content,
-                        replacement_content=replacement_content,
+                        step=step,
+                        workspace_manager=self.workspace_manager,
+                        allowed_files=expected_files,
                     )
-                    patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
-                output = {"patched_files": patched_files}
+                    record.synthesis_attempts = synth_res.attempts
+                    record.patch_hashes = synth_res.patch_hashes
+                    record.validation_status = synth_res.status
+                    record.changed_files = synth_res.changed_files
+                    if synth_res.status != "VALIDATED":
+                        record.failure_category = "SYNTHESIS_ERROR"
+                        raise WorkspaceError(synth_res.error_message or f"Autonomous synthesis failed for step '{step_id}'.")
+                    output = {
+                        "synthesized_edits": len(synth_res.edits),
+                        "changed_files": synth_res.changed_files,
+                        "explanation": synth_res.explanation,
+                    }
+                else:
+                    raise WorkspaceError(
+                        f"Patch step '{step_id}' failed: target_content and replacement_content required."
+                    )
 
             elif action_type in ("edit", "create", "write", "modify", "refactor"):
                 content = step_input.get("content")
-                if content is None:
+                if content is not None:
+                    for target_file in expected_files:
+                        res = self.workspace_manager.write_file(
+                            task_id=task_id,
+                            file_path=target_file,
+                            content=content,
+                            create_parents=True,
+                        )
+                        output = {"written_bytes": getattr(res, "bytes_written", len(content))}
+                elif self.edit_synthesizer is not None:
+                    synth_res = self.edit_synthesizer.synthesize_sync(
+                        task_id=task_id,
+                        step=step,
+                        workspace_manager=self.workspace_manager,
+                        allowed_files=expected_files,
+                    )
+                    record.synthesis_attempts = synth_res.attempts
+                    record.patch_hashes = synth_res.patch_hashes
+                    record.validation_status = synth_res.status
+                    record.changed_files = synth_res.changed_files
+                    if synth_res.status != "VALIDATED":
+                        record.failure_category = "SYNTHESIS_ERROR"
+                        raise WorkspaceError(synth_res.error_message or f"Autonomous synthesis failed for step '{step_id}'.")
+                    output = {
+                        "synthesized_edits": len(synth_res.edits),
+                        "changed_files": synth_res.changed_files,
+                        "explanation": synth_res.explanation,
+                    }
+                else:
                     raise WorkspaceError(
                         f"Modification step '{step_id}' ({action_type}) failed: No content payload provided. "
                         "Placeholder synthetic writes are prohibited."
                     )
-                for target_file in expected_files:
-                    res = self.workspace_manager.write_file(
-                        task_id=task_id,
-                        file_path=target_file,
-                        content=content,
-                        create_parents=True,
-                    )
-                    output = {"written_bytes": getattr(res, "bytes_written", len(content))}
 
             elif action_type == "delete":
                 deleted_files: list[str] = []

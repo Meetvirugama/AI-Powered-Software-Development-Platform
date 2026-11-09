@@ -69,6 +69,7 @@ import {
   recoverTask,
   rejectTaskPlan,
   resumeTask,
+  startAutonomousWorkflow,
   triggerTaskRepair,
   triggerTaskTests,
   triggerTaskVerification,
@@ -500,11 +501,19 @@ export function RepositoryTaskStudio() {
         });
       }
       setActiveTab('workspace');
-      await executeTask(tid, {
-        run_steps: true,
-        run_tests_after: true,
-        auto_repair: true,
-      });
+      try {
+        await startAutonomousWorkflow(tid, {
+          run_tests: true,
+          auto_repair: true,
+          publication_authorized: false,
+        });
+      } catch {
+        await executeTask(tid, {
+          run_steps: true,
+          run_tests_after: true,
+          auto_repair: true,
+        });
+      }
     } catch (err: any) {
       setErrorBanner(err?.message || 'Auto-pilot pipeline encountered an error.');
     } finally {

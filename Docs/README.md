@@ -26,6 +26,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | [Bounded Agentic Repository Chat](./agentic-chat/README.md) | Multi-turn repository investigation loop, tool registry, execution policy, budget control, and UI integration. | Meet |
 | [Execution-Verified Test Generation](./test-generation/README.md) | 5-stage verification pipeline, 3-run stability, runtime coverage delta & attribution, iterative loop, and Vitest support. | Dev & Meet |
 | [AI-Powered Code Review Intelligence](./code-review/README.md) | Inline GitHub PR review comments, precision quality gate, ESLint/Biome static analysis, multi-commit lifecycle tracking, and developer feedback loop. | Meet |
+| [Autonomous Code Synthesis & Durable Execution](./autonomous-execution/README.md) | Search/replace edit blocks, 7-stage validation filter chain, bounded self-refinement, plan-bound security, DBOS durable steps, and HTTP 202 status tracking. | Meet |
 | [GitHub App Setup Guide](./github_app_setup.md) | Setup instructions for GitHub App registration, permissions, webhooks, and private key storage. | Parth |
 | [Product Vision & Specification](./project_idea.md) | Foundational product thesis, architecture diagrams, user personas, and differentiation. | Meet |
 | [Prompt Architecture](./prompt_architecture.md) | System/data separation rules, prompt-injection defense guidelines, and placeholder specifications. | Dev |
