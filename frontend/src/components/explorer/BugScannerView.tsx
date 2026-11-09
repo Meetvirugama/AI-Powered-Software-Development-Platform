@@ -163,6 +163,8 @@ function formatCategory(category: string): string {
     race_condition: 'Race Condition',
     logic_error: 'Logic Error',
     security: 'Security',
+    supply_chain: 'Supply Chain',
+    secrets: 'Secrets',
     other: 'Code Smell',
   };
   return map[category] || category.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());

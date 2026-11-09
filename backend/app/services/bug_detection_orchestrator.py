@@ -108,7 +108,9 @@ _COMPATIBLE_CATEGORIES: dict[str, frozenset[str]] = {
     "resource_leak": frozenset({"resource_leak"}),
     "race_condition": frozenset({"race_condition"}),
     "logic_error": frozenset({"logic_error"}),
-    "security": frozenset({"security"}),
+    "security": frozenset({"security", "secrets"}),
+    "secrets": frozenset({"secrets", "security"}),
+    "supply_chain": frozenset({"supply_chain"}),
     "other": frozenset({"other"}),
 }
 
@@ -999,10 +1001,10 @@ def normalize_and_ground_findings(
 
         # 2. Ground against indexed_paths when repository files exist in DB
         if resolved.indexed_paths:
-            if clean_path not in resolved.indexed_paths:
+            if clean_path not in resolved.indexed_paths and clean_path != resolved.target.path:
                 dropped += 1
                 continue
-            max_lines = resolved.indexed_paths[clean_path]
+            max_lines = resolved.indexed_paths.get(clean_path, 0)
             if max_lines > 0:
                 if s_line is not None and s_line > max_lines:
                     dropped += 1

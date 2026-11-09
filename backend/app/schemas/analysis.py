@@ -114,6 +114,8 @@ BugCategory = Literal[
     "race_condition",
     "logic_error",
     "security",
+    "supply_chain",
+    "secrets",
     "other",
 ]
 
