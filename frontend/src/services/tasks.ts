@@ -643,3 +643,64 @@ export async function checkStaleRevision(
  * Compatibility aliases for Day 5-7 verification & Draft PR publication callers.
  */
 export const triggerVerification = triggerTaskVerification;
+
+export interface TaskWorkflowStatusResponse {
+  task_id: string;
+  workflow_id: string;
+  status: string;
+  current_step?: string | null;
+  completed_steps: string[];
+  progress_percentage: number;
+  verification?: Record<string, unknown> | null;
+  pull_request?: Record<string, unknown> | null;
+  error_summary?: string | null;
+  started_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+  status_url: string;
+}
+
+export interface TaskWorkflowAcceptedResponse {
+  task_id: string;
+  workflow_id: string;
+  status: string;
+  message: string;
+  status_url: string;
+}
+
+/**
+ * Initiate durable autonomous post-approval workflow (HTTP 202 Accepted).
+ * POST /api/v1/tasks/:taskId/run-workflow
+ */
+export async function startAutonomousWorkflow(
+  taskId: string,
+  payload?: {
+    step_payloads?: Record<string, unknown>;
+    run_tests?: boolean;
+    auto_repair?: boolean;
+    publication_authorized?: boolean;
+    pr_title?: string;
+    pr_body?: string;
+  }
+): Promise<TaskWorkflowAcceptedResponse> {
+  const response = await apiClient.post<TaskWorkflowAcceptedResponse>(
+    `/tasks/${taskId}/run-workflow`,
+    {
+      ...(payload || {}),
+      async_execution: true,
+    }
+  );
+  return response.data;
+}
+
+/**
+ * Get progress status of durable autonomous workflow.
+ * GET /api/v1/tasks/:taskId/workflow-status
+ */
+export async function getWorkflowStatus(taskId: string): Promise<TaskWorkflowStatusResponse> {
+  const response = await apiClient.get<TaskWorkflowStatusResponse>(
+    `/tasks/${taskId}/workflow-status`
+  );
+  return response.data;
+}
+

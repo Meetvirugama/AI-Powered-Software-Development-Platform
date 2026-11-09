@@ -1,1836 +1,2365 @@
-# TASK: Implement Unified Tool Registry Architecture
-## AI-Powered Software Development Platform
-### Target coding agent: Antigravity 3.8 Flash
+# MASTER IMPLEMENTATION TASK
+# Autonomous Code Synthesis, Plan-Bound Editing & Durable Workflow Execution
+
+**Project:** AI-Powered Software Development Platform  
+**Coding Agent:** Antigravity 3.8 Flash  
+**Implementation Level:** Production-oriented backend architecture  
+**Priority:** P0 + P1  
+**Primary Objective:** Enable end-to-end autonomous code generation and execution after human approval.
 
 ---
 
-# 0. YOUR ROLE AND OBJECTIVE
+# 0. YOUR ROLE
 
-Act as a Senior Backend Architect, Python Engineer, AI Agent Infrastructure Engineer, and Application Security Engineer.
+Act as a Senior AI Agent Architect, Python Backend Engineer, LLM Systems Engineer, Distributed Workflow Engineer, and Application Security Engineer.
 
-You are working on my existing project:
+You are working on an existing AI-powered software development platform.
 
-**AI-Powered Software Development Platform**
+Your task is to solve two major architectural problems:
 
-Your task is to evolve the existing ToolRouter into a production-oriented Unified Tool Registry that can eventually support:
+1. The agent cannot autonomously synthesize code for approved plan steps when the HTTP caller does not provide file content.
+2. The entire autonomous execution workflow runs synchronously inside HTTP requests, making it vulnerable to timeouts, connection drops, and process failures.
 
-1. Built-in workspace tools.
-2. Model Context Protocol (MCP) server tools.
-3. External plugin tools.
-4. Standardized JSON Schema validation.
-5. Tool version management.
-6. Tool-level security and risk classification.
-7. Execution timeouts.
-8. Rate limiting.
-9. Output validation.
-10. Centralized execution auditing.
+You must implement:
+
+- EditSynthesizer.
+- Plan-bound code modifications.
+- Validated search/replace patches.
+- LLM-based code synthesis.
+- Syntax and lint validation.
+- Bounded iterative self-correction.
+- Durable workflow execution using the existing DBOS infrastructure where technically appropriate.
+- HTTP 202 Accepted execution initiation.
+- Workflow progress tracking.
+- Recovery and checkpoint integration.
+- Comprehensive documentation.
 
 IMPORTANT:
 
-This is an existing production-oriented codebase. Do not build a new tool execution system from scratch.
+Do not rewrite the existing agent execution architecture from scratch.
 
-Preserve the existing implementation wherever possible and extend it through controlled architectural refactoring.
+Inspect and reuse:
 
-Your implementation must be backward compatible with existing workspace tool functionality.
+- AgentExecutionLoop.
+- LoopDetector.
+- WorkspaceManager.
+- WorkspacePathGuard.
+- WorkspaceDiffVerifier.
+- ExecutionVerifier.
+- ExecutionCheckpointManager.
+- ExecutionRecovery.
+- ExecutionBudgetManager.
+- TaskExecutionOrchestrator.
+- Existing LLM providers.
+- Existing retrieval and code localization infrastructure.
+- Existing SSE/event infrastructure.
 
-Do not sacrifice existing security controls for architectural simplicity.
+Preserve all existing security controls and human approval requirements.
 
-You must perform actual implementation, testing, and documentation. Do not stop after producing an implementation plan.
+Do not stop after producing a plan. Implement, test, document, and provide a final report.
 
 ---
 
-# 1. FIRST UNDERSTAND THE EXISTING PROJECT
+# 1. PHASE 0 — COMPLETE EXISTING CODEBASE AUDIT
 
-Before modifying anything, inspect the complete relevant backend implementation.
+Before changing any code, inspect the following files.
 
-Start with these files:
+## 1.1 Core execution
 
-- backend/agent/tools/router.py
-- backend/sandbox/tool_policy_bridge.py
-- backend/app/core/tool_api_policy.py
+- backend/ai/services/agent_execution_loop.py
+- backend/ai/services/execution_verifier.py
+- backend/ai/services/execution_checkpoint_manager.py
+- backend/ai/services/execution_recovery.py
+- backend/ai/services/execution_budget_manager.py
+- backend/ai/services/bounded_repair_loop.py
+- backend/ai/services/plan_replanner.py
+
+## 1.2 Task orchestration
+
 - backend/app/services/task_execution_orchestrator.py
+- backend/app/api/v1/tasks.py
+- backend/app/api/v1/events.py
 - backend/app/models/task.py
 - backend/app/repositories/task_repository.py
 - backend/app/schemas/task.py
+- backend/app/schemas/plan.py
+
+## 1.3 Workspace and security
+
+- backend/sandbox/workspace_manager.py
+- backend/sandbox/diff_verifier.py
+- backend/sandbox/path_guard.py
+- backend/sandbox/workspace_tool_policy_bridge.py
+- backend/app/core/input_security.py
+
+Verify the actual file locations. Do not assume every listed path exists.
+
+## 1.4 Frontend
+
+Inspect:
+
+- frontend/src/pages/RepositoryTaskStudio.tsx
+- frontend/src/services/tasks.ts
+- Existing task execution hooks.
+- Existing task event streaming.
+- Existing execution progress UI.
+
+Find the actual implementation of:
+
+```typescript
+executeTask()
+```
+
+Inspect the automatic execution call:
+
+```typescript
+await executeTask(created.task_id, {
+    run_steps: true,
+    run_tests_after: true,
+    auto_repair: true
+});
+```
+
+Understand why it does not provide content for modification steps.
+
+## 1.5 Existing DBOS infrastructure
+
+Inspect:
+
 - backend/requirements.txt
-- backend/requirements-dev.txt
+- backend/poc/dbos/__init__.py
+- backend/poc/dbos/workflow.py
+- backend/tests/test_reliable_worker_architecture.py
 
 Also inspect:
 
-- WorkspaceManager
-- WorkspacePathGuard
-- PolicyEngine
-- ToolDefinition
-- ToolRequest
-- ToolResult
-- ToolInvocation
-- Tool registration functions
-- Existing tool handlers
-- Redis integration
-- Existing database migrations
-- Existing authorization and approval logic
-- Existing test fixtures and mocks
+- DBOS initialization.
+- Application lifespan.
+- Database configuration.
+- SQLAlchemy session factory.
+- Existing checkpoint storage.
+- Existing worker infrastructure.
+- Existing workflow persistence.
 
-Search the entire repository for:
+DBOS is already listed in the backend requirements.
 
-- ToolRouter
-- ToolDefinition
-- register_workspace_tools
-- execute_tool
-- _is_policy_guarded
-- _validate_arguments
-- _validate_value
-- ToolInvocation
-- tool_invocations
-- policy_engine
-- WorkspaceToolPolicyBridge
+Do not install another workflow engine without demonstrating a technical reason.
 
-Do not assume the previous architectural assessment is completely accurate.
+Do not assume the existing DBOS proof of concept is production-ready. Verify its initialization, persistence, retry, and recovery behavior.
 
-Verify every observation against the actual source code.
+## 1.6 Documentation
 
-If an assumption is incorrect, document the actual implementation and adjust the design accordingly.
+Inspect:
 
-## 1.1 Existing architecture that must be preserved
+- Docs/agentic-chat/
+- Docs/engineering/13_architecture_decisions.md
+- Docs/engineering/14_changelog.md
+- Docs/week3.md
+- Docs/README.md
 
-The current system already provides:
+Pay particular attention to:
 
-- Tool registration.
-- Argument validation.
-- Command allowlisting.
-- Dangerous command flag restrictions.
-- Shell metacharacter checks.
-- Path restrictions.
-- Policy-engine authorization.
-- Workspace lifecycle enforcement.
-- Task approval checks.
-- Protected branch restrictions.
-- Secret redaction.
-- Output size restrictions.
-- Tool invocation auditing.
+**ADR-010: Mandatory Human Approval Gate & Bounded Repair Loop**
 
-The WorkspaceToolPolicyBridge defines approximately 19 canonical workspace tools.
-
-Examples:
-
-- read_file
-- write_file
-- patch_file
-- execute_command
-- run_tests
-- commit_task_changes
-- push_task_branch
-- create_draft_pr
-
-Verify the actual complete list before implementation.
-
-Preserve these tools and their existing functionality.
+This ADR must remain enforced.
 
 ---
 
-# 2. UNDERSTAND THE PROBLEMS WE ARE SOLVING
+# 2. EXISTING IMPLEMENTATION AND PROBLEMS
 
-Document the existing implementation and explain these architectural problems.
+Document the actual implementation before changing it.
 
-## Problem 1: Limited ToolDefinition metadata
+## 2.1 AgentExecutionLoop
 
-Current ToolDefinition primarily contains:
+File:
 
-- name
-- description
-- parameters
+backend/ai/services/agent_execution_loop.py
 
-It does not provide a standardized contract for:
+Current responsibilities:
 
-- output_schema
-- annotations
-- risk_tier
-- version
-- source
-- timeout_s
-- rate_limit
+- Dependency-aware plan execution.
+- Topological ordering.
+- Action dispatch.
+- Workspace operations.
+- Loop detection.
+- Iteration limits.
+- Step execution records.
+- Timeline events.
 
-We need a richer tool definition.
+Existing action mapping:
 
-## Problem 2: Hand-written JSON Schema validation
+| Action | Current behavior |
+|---|---|
+| patch | Calls patch_file |
+| edit | Calls write_file |
+| create | Calls write_file |
+| write | Calls write_file |
+| modify | Calls write_file |
+| refactor | Calls write_file |
+| delete | Calls delete_file |
+| inspect | Calls read_file |
+| read | Calls read_file |
 
-The current router uses custom validation logic.
+Current problem:
 
-It does not provide complete standardized support for:
+For modification steps, content must be provided through step_payloads.
 
-- $ref
-- $defs
-- oneOf
-- anyOf
-- allOf
-- not
-- pattern
-- format
-- uniqueItems
-- multipleOf
-- dependentRequired
-- minProperties
-- maxProperties
+Without content, the execution fails with:
 
-Replace custom validation with the Python jsonschema library.
+"No content payload provided. Placeholder synthetic writes are prohibited."
 
-Target JSON Schema Draft 2020-12.
+We must preserve the prohibition against placeholder content.
 
-Do not implement a second custom JSON Schema engine.
+Instead of fabricating content, introduce an actual LLM-powered code synthesis service.
 
-## Problem 3: Missing output validation
+## 2.2 Important payload mapping bug
 
-The current implementation does not consistently validate tool outputs against formal output schemas.
+Inspect this logic:
 
-Introduce optional output_schema validation.
+```python
+if "content" not in step_input:
+    for other_input in payload_map.values():
+        if isinstance(other_input, dict) and "content" in other_input:
+            step_input["content"] = other_input["content"]
+            break
+```
 
-Maintain compatibility with existing handlers that return different output structures.
+This can reuse content belonging to another plan step.
 
-Do not invent output schemas without inspecting actual handler responses.
+Remove this cross-step fallback.
 
-## Problem 4: No explicit tool versioning
+Each step must receive only its own explicitly associated payload.
 
-The registry currently identifies tools primarily by their names.
+Correct behavior:
 
-Introduce explicit semantic versions.
+```text
+Step 1 -> payloads["step_1"]
+Step 2 -> payloads["step_2"]
+Step 3 -> payloads["step_3"]
+```
 
-Examples:
+Never copy content from another step.
 
-- workspace.read_file@1.0.0
-- workspace.write_file@1.0.0
-- github.create_pull_request@1.0.0
+## 2.3 Existing loop detection
 
-Support controlled schema evolution.
+The LoopDetector fingerprints actions and detects repeated cycles.
 
-Prevent accidental version conflicts.
+Preserve:
 
-## Problem 5: Missing execution deadlines
+- Action fingerprinting.
+- Cycle detection.
+- Maximum iteration limit.
+- Safe failure behavior.
 
-Introduce per-tool timeout configuration.
+Integrate synthesis attempts with execution budgets so that repeated LLM generation cannot create uncontrolled loops.
 
-Support:
+## 2.4 Existing workflow
 
-- Async handlers.
-- Blocking handlers.
-- Subprocess handlers.
-- External provider adapters in the future.
+File:
 
-A timeout must not automatically cause a second execution.
+backend/app/services/task_execution_orchestrator.py
 
-Do not assume that cancelling an asyncio task terminates an underlying blocking operation.
+The existing autonomous workflow performs:
 
-Use subprocess termination and appropriate client-level timeouts where applicable.
+1. Execute approved steps.
+2. Save checkpoint.
+3. Run tests.
+4. Attempt bounded repair.
+5. Save checkpoint.
+6. Run independent verification.
+7. Save verification checkpoint.
+8. Create Draft PR if publication is authorized.
 
-## Problem 6: Missing rate limiting
+Preserve this progression.
 
-Introduce configurable per-tool invocation limits.
+Do not introduce automatic merging or deployment.
 
-Support scopes:
+## 2.5 Existing synchronous execution
 
-- user
-- task
-- provider
-- global
+Inspect:
 
-Use the existing Redis infrastructure if available.
+```python
+def execute_approved_task(...)
+```
 
-Use atomic Redis operations for distributed deployments.
+in:
 
-Do not add another Redis instance.
+backend/app/api/v1/tasks.py
 
-## Problem 7: Missing semantic annotations and risk classification
+The current endpoint calls the orchestrator synchronously and returns after execution.
 
-Introduce MCP-compatible semantic annotations:
+This is unsuitable for long-running autonomous tasks.
 
-- readOnlyHint
-- destructiveHint
-- idempotentHint
-- openWorldHint
+Move execution into durable background workflow execution.
 
-Introduce separate internal risk tiers:
+The API should initiate the workflow and return:
 
-- low
-- medium
-- high
-- critical
+HTTP 202 Accepted
 
-Never treat annotations supplied by an external MCP server as proof of safety.
-
-Risk classification must be controlled by trusted platform configuration.
-
-## Problem 8: Missing provider abstraction
-
-The current implementation is mainly designed around built-in workspace tools.
-
-Introduce execution adapter boundaries so that future MCP and plugin integrations do not require rewriting ToolRouter.
-
-## Problem 9: Incomplete execution audit information
-
-The existing tool_invocations table must be preserved.
-
-Extend it where appropriate to support:
-
-- tool version
-- source
-- provider
-- risk tier
-- schema fingerprint
-- timeout status
-- rate-limit status
-- normalized error category
-
-Avoid duplicate audit tables and duplicate data.
-
-## Problem 10: Handler execution convention
-
-Inspect the existing handler dispatch logic.
-
-If the current implementation uses TypeError-based fallback to guess handler calling conventions, replace it with an explicit handler interface.
-
-A TypeError raised inside a handler must never result in the same operation being executed a second time.
+with a workflow identifier and task identifier.
 
 ---
 
 # 3. TARGET ARCHITECTURE
 
-Implement the following logical architecture.
+Implement the following architecture.
 
-AI AGENT
-    |
-    v
-UNIFIED TOOL REGISTRY
-    |
-    +-------------------------------+
-    |               |               |
-    v               v               v
-BUILT-IN TOOLS    MCP TOOLS      PLUGIN TOOLS
-    |               |               |
-    v               v               v
-Builtin Adapter  MCP Adapter    Plugin Adapter
-    |               |               |
-    v               v               v
-Workspace       MCP Client     Plugin Provider
-Bridge          (Future)        (Future)
-    |               |               |
-    +---------------+---------------+
-                    |
-                    v
-           COMMON EXECUTION PIPELINE
-                    |
-          +---------+---------+
-          |         |         |
-          v         v         v
-       SCHEMA    POLICY    EXECUTION
-      VALIDATION ENGINE    LIMITS
-          |         |         |
-          +---------+---------+
-                    |
-                    v
-            OUTPUT VALIDATION
-                    |
-                    v
-             SECRET REDACTION
-                    |
-                    v
-               AUDITING
-                    |
-                    v
-                AI AGENT
+                    HUMAN APPROVAL
+                          |
+                          v
+                   APPROVED PLAN
+                          |
+                          v
+                  DURABLE WORKFLOW
+                          |
+                          v
+                  AGENT EXECUTION LOOP
+                          |
+              +-----------+-----------+
+              |                       |
+              v                       v
+        USER PAYLOAD             EDIT SYNTHESIZER
+              |                       |
+              |                 Repository Context
+              |                       |
+              |                 File Localization
+              |                       |
+              |                 Current File Content
+              |                       |
+              |                 LLM Code Generation
+              |                       |
+              |                 Search/Replace Blocks
+              |                       |
+              |                 Validation Pipeline
+              |                       |
+              |                 Bounded Self-Refinement
+              |                       |
+              +-----------+-----------+
+                          |
+                          v
+                 PLAN-BOUND PATCHES
+                          |
+                          v
+                  WORKSPACE EDITING
+                          |
+                          v
+                 DIFF SCOPE VALIDATION
+                          |
+                          v
+                     TEST RUNNER
+                          |
+                          v
+                   BOUNDED REPAIR
+                          |
+                          v
+                INDEPENDENT VERIFICATION
+                          |
+                          v
+                   HUMAN PUBLICATION
+                          |
+                          v
+                     DRAFT PR
 
-Important architectural separation:
-
-1. Unified Tool Registry manages metadata and tool resolution.
-2. SchemaValidator manages standardized schema validation.
-3. ExecutionPolicy manages common execution restrictions.
-4. PolicyEngine remains responsible for authorization decisions.
-5. WorkspaceToolPolicyBridge retains workspace-specific security.
-6. BuiltinWorkspaceAdapter connects existing workspace handlers.
-7. MCP and Plugin adapters are future integration boundaries.
-
-Do not move workspace-specific authorization logic into the generic registry.
-
-Do not bypass PolicyEngine.
-
----
-
-# 4. IMPLEMENT THE NEW TOOL DEFINITION MODEL
-
-Create or refactor the ToolDefinition model.
-
-Suggested design:
-
-```python
-from dataclasses import dataclass, field
-from typing import Any, Literal
-
-
-@dataclass(frozen=True)
-class ToolAnnotations:
-    read_only_hint: bool = False
-    destructive_hint: bool = False
-    idempotent_hint: bool = False
-    open_world_hint: bool = False
-
-
-@dataclass(frozen=True)
-class ToolRateLimit:
-    requests: int
-    window_seconds: int
-
-    scope: Literal[
-        "user",
-        "task",
-        "provider",
-        "global"
-    ] = "task"
-
-
-@dataclass(frozen=True)
-class ToolDefinition:
-    name: str
-    description: str
-
-    input_schema: dict[str, Any]
-    output_schema: dict[str, Any] | None = None
-
-    annotations: ToolAnnotations = field(
-        default_factory=ToolAnnotations
-    )
-
-    risk_tier: Literal[
-        "low",
-        "medium",
-        "high",
-        "critical"
-    ] = "medium"
-
-    version: str = "1.0.0"
-
-    source: str = "builtin"
-
-    timeout_s: float = 30.0
-
-    rate_limit: ToolRateLimit | None = None
-```
-
-This is the target conceptual model.
-
-Adapt it to the project's actual Pydantic/dataclass conventions.
-
-Do not introduce conflicting models.
-
-## 4.1 Requirements
-
-- Maintain compatibility with existing parameters if required.
-- Introduce input_schema as the standardized name.
-- Provide a migration strategy for existing parameters.
-- Avoid duplicate representations of the same schema.
-- Validate tool names.
-- Validate semantic versions.
-- Validate risk tiers.
-- Validate timeout values.
-- Validate rate-limit configuration.
-- Prevent invalid source metadata.
-- Make tool definitions immutable after registration.
-- Store validated schemas safely.
-
-If a backwards-compatible parameters property is necessary, implement it as a controlled compatibility property rather than storing two independent schemas.
-
-## 4.2 Tool identity
-
-Design a collision-safe tool identity.
-
-External servers can expose identical names.
-
-For example:
-
-- github.read_file
-- filesystem.read_file
-- workspace.read_file
-
-Do not allow an untrusted provider to impersonate a built-in tool.
-
-Use structured provider identity and namespace resolution.
-
-Keep existing workspace tool names working during migration.
+Every major workflow stage must be durable, observable, and recoverable.
 
 ---
 
-# 5. IMPLEMENT STANDARD JSON SCHEMA VALIDATION
+# 4. PHASE 1 — IMPLEMENT EditSynthesizer
 
-Install:
-
-```bash
-pip install "jsonschema>=4.23,<5"
-```
-
-Update the correct backend dependency file.
-
-Use Draft202012Validator.
+Priority: P0
 
 Create:
 
-backend/agent/tools/schema_validator.py
+backend/ai/services/edit_synthesizer.py
 
-The validator must support:
+This service is responsible for generating actual code modifications using the existing LLM infrastructure.
 
-- type
-- required
-- properties
-- additionalProperties
-- enum
-- const
-- $ref
-- $defs
-- oneOf
-- anyOf
-- allOf
-- not
-- pattern
-- format
-- uniqueItems
-- minItems
-- maxItems
-- minimum
-- maximum
-- exclusiveMinimum
-- exclusiveMaximum
-- multipleOf
-- minLength
-- maxLength
-- minProperties
-- maxProperties
-- dependentRequired
-- conditional schemas
+Do not make AgentExecutionLoop directly responsible for LLM prompts, repository retrieval, syntax checking, or patch generation.
 
-Requirements:
+Keep those responsibilities inside EditSynthesizer and its supporting components.
 
-1. Validate the schema at registration time.
-2. Validate arguments before execution.
-3. Validate outputs when output_schema exists.
-4. Produce deterministic validation errors.
-5. Do not expose sensitive information in error messages.
-6. Restrict schema size and nesting depth.
-7. Reuse compiled validator instances where practical.
-8. Avoid unnecessary repeated schema compilation.
-9. Support locally registered $ref definitions.
-10. Prevent uncontrolled remote $ref resolution.
-11. Never allow untrusted schemas to trigger arbitrary network requests.
+## 4.1 Input contract
 
-Use FormatChecker for supported formats.
+The synthesizer should receive:
 
-Do not assume that format validation automatically guarantees security.
+- Approved PlanStep.
+- Task ID.
+- Repository ID.
+- Workspace path or trusted workspace context.
+- Current file content.
+- Expected files.
+- Plan version.
+- Approved base revision.
+- Relevant code context.
+- Previous validation feedback, if retrying.
+- Execution budget.
+- Existing task constraints.
 
-Add unit tests for valid and invalid schemas.
-
----
-
-# 6. IMPLEMENT TOOL REGISTRY
-
-Create:
-
-backend/agent/tools/registry.py
-
-Responsibilities:
-
-- Register tools.
-- Resolve tools.
-- Unregister tools when permitted.
-- Enable and disable tools.
-- List available tools.
-- Filter tools by source.
-- Filter tools by permissions.
-- Resolve versions.
-- Detect duplicates.
-- Detect conflicting registrations.
-- Validate schemas during registration.
-- Calculate schema fingerprints.
-- Maintain provider identity.
-
-The registry should become the single source of truth for tool definitions.
-
-Avoid unnecessary global mutable state.
-
-Use dependency injection consistent with the current architecture.
-
-## 6.1 Registration requirements
-
-Registration must reject:
-
-- Empty names.
-- Invalid schemas.
-- Invalid versions.
-- Unsupported source types.
-- Invalid risk tiers.
-- Invalid timeout values.
-- Invalid rate-limit configurations.
-- Duplicate conflicting identities.
-- Untrusted attempts to register built-in tools.
-
-Tool discovery must never automatically grant execution permission.
-
-Separate:
-
-DISCOVERED
-    |
-    v
-VALIDATED
-    |
-    v
-APPROVED
-    |
-    v
-REGISTERED
-    |
-    v
-ENABLED
-    |
-    v
-EXECUTABLE
-
-The initial implementation can retain an in-memory registry for built-in tools.
-
-Do not introduce unnecessary database persistence if the current architecture does not require it.
-
----
-
-# 7. IMPLEMENT TOOL EXECUTION ADAPTERS
-
-Create a common adapter interface.
-
-Suggested location:
-
-backend/agent/tools/adapters/base.py
-
-Use an explicit execution contract.
-
-Conceptually:
+Conceptual interface:
 
 ```python
-from typing import Protocol, Any
+class EditSynthesizer:
 
-
-class ToolExecutionAdapter(Protocol):
-
-    def execute(
+    def synthesize(
         self,
-        tool,
-        arguments: dict[str, Any],
-        context,
-    ) -> Any:
+        task_id: str,
+        step: PlanStep,
+        workspace_context,
+        previous_feedback=None,
+    ) -> EditSynthesisResult:
         ...
 ```
 
-Adapt the contract to support asynchronous execution where needed.
+Adapt to existing dependency injection and async conventions.
 
-Implement:
+Do not introduce a second repository or workspace access mechanism.
 
-## 7.1 BuiltinWorkspaceAdapter
+## 4.2 Output contract
 
-File:
-
-backend/agent/tools/adapters/builtin.py
-
-Responsibilities:
-
-- Integrate with existing WorkspaceToolPolicyBridge.
-- Preserve all workspace operations.
-- Preserve WorkspaceManager behavior.
-- Preserve WorkspacePathGuard.
-- Preserve task ownership checks.
-- Preserve workspace lifecycle checks.
-- Preserve protected branch restrictions.
-- Preserve publication approval.
-- Preserve command allowlists.
-
-Do not duplicate the workspace bridge's security logic.
-
-The adapter should call the existing trusted implementation.
-
-All 19 existing workspace tools must continue functioning.
-
-## 7.2 MCP adapter boundary
-
-File:
-
-backend/agent/tools/adapters/mcp.py
-
-For this milestone, implement only the interface and necessary extension points.
-
-Do not connect real MCP servers yet.
-
-Define how future MCP tools will:
-
-- Register metadata.
-- Import input schemas.
-- Import output schemas where available.
-- Resolve server identity.
-- Invoke tools.
-- Handle remote errors.
-- Apply timeouts.
-- Validate responses.
-
-Do not install an MCP SDK unless an actual requirement exists in this milestone.
-
-## 7.3 Plugin adapter boundary
-
-File:
-
-backend/agent/tools/adapters/plugin.py
-
-For this milestone, implement only the architecture boundary.
-
-Do not implement external plugin integrations yet.
-
-Define provider resolution, authentication boundary, invocation and error normalization responsibilities.
-
----
-
-# 8. IMPLEMENT THE COMMON EXECUTION PIPELINE
-
-Refactor ToolRouter so all execution adapters follow the same common lifecycle.
-
-Required sequence:
-
-1. Receive ToolRequest.
-2. Resolve tool identity.
-3. Confirm tool is registered.
-4. Confirm tool is enabled.
-5. Resolve approved tool version.
-6. Validate input arguments.
-7. Resolve trusted execution adapter.
-8. Build execution context.
-9. Check user authorization.
-10. Check task authorization.
-11. Check provider authorization where applicable.
-12. Apply internal risk policy.
-13. Check human approval requirements.
-14. Apply rate limits.
-15. Apply concurrency limits.
-16. Execute with configured timeout.
-17. Normalize execution result.
-18. Validate output schema if configured.
-19. Redact secrets.
-20. Apply output size limits.
-21. Persist audit information.
-22. Return ToolResult.
-
-Use the project's existing ToolRequest and ToolResult conventions.
-
-Do not create incompatible response structures.
-
-## 8.1 Important: policy-guarded handlers
-
-Inspect:
-
-```python
-_is_policy_guarded
-```
-
-The current workspace bridge uses a special guarded execution path.
-
-Do not allow arbitrary MCP or plugin handlers to set this marker.
-
-Replace implicit trust based on a handler attribute with explicit trusted adapter configuration.
-
-Only the built-in workspace adapter may use the special workspace policy contract.
-
-Even then, the common execution pipeline must apply the required result sanitization and audit operations.
-
-Never let an external adapter skip:
-
-- Registry validation.
-- Provider authorization.
-- Rate limiting.
-- Execution deadlines.
-- Output sanitization.
-- Audit logging.
-
-Preserve all existing workspace authorization guarantees.
-
-## 8.2 Important: prevent double execution
-
-Remove TypeError-based execution signature fallback.
-
-Never implement:
-
-```python
-try:
-    output = handler(**arguments)
-except TypeError:
-    output = handler(request, agent_state)
-```
-
-Use explicit handler protocols or adapters.
-
-A handler's internal TypeError must become an execution failure, not a second execution attempt.
-
-Do not retry destructive operations automatically.
-
----
-
-# 9. IMPLEMENT RISK-BASED POLICIES
-
-Introduce internal risk classification.
-
-Suggested initial configuration:
-
-| Tool | Risk |
-|---|---|
-| read_file | low |
-| list_files | low |
-| inspect_git_diff | low |
-| write_file | medium |
-| patch_file | medium |
-| run_tests | medium |
-| execute_command | high |
-| delete_file | high |
-| push_task_branch | critical |
-| create_draft_pr | critical |
-
-These are starting classifications.
-
-Inspect the actual behavior of each tool before assigning its final risk.
-
-The system must distinguish between:
-
-1. Semantic annotations.
-2. Internal risk classification.
-3. Authorization.
-4. Human approval.
-
-They are different concepts.
-
-For example:
-
-A tool can declare readOnlyHint=true, but the platform must still check whether the user can read the requested resource.
-
-A tool can declare destructiveHint=false, but the platform must not automatically trust it.
-
-MCP and plugin metadata must never be allowed to lower internally configured risk.
-
----
-
-# 10. IMPLEMENT EXECUTION TIMEOUTS
-
-Introduce per-tool timeout enforcement.
+The synthesizer must return structured, validated edits.
 
 Example:
 
-```python
-timeout_s = tool.timeout_s
+```json
+{
+  "step_id": "step_2",
+  "status": "VALIDATED",
+  "edits": [
+    {
+      "file": "backend/app/services/example.py",
+      "search": "def calculate(value):\n    return value",
+      "replace": "def calculate(value):\n    if value < 0:\n        raise ValueError('Invalid value')\n    return value"
+    }
+  ],
+  "explanation": "Added input validation.",
+  "attempts": 1,
+  "validation": {
+    "exact_match": true,
+    "path_valid": true,
+    "syntax_valid": true,
+    "lint_passed": true
+  }
+}
 ```
 
-Support appropriate execution strategies.
+This is a conceptual output contract.
 
-For async operations:
+Use the project's Pydantic conventions for actual models.
 
-- Use async deadlines.
-- Handle cancellation.
-- Normalize timeout errors.
+Requirements:
 
-For subprocess operations:
+- Structured output.
+- Per-file edits.
+- No arbitrary file paths.
+- No placeholder code.
+- No incomplete patches.
+- No ambiguous replacements.
+- No unvalidated LLM output.
 
-- Enforce subprocess timeout.
-- Terminate the process.
-- Kill it if graceful termination fails.
-- Capture safe diagnostic information.
+Do not use a single shared content string for multiple expected files.
 
-For blocking operations:
+Each file must receive its own correctly generated modification.
 
-- Use suitable worker isolation.
-- Do not assume thread cancellation terminates the operation.
+## 4.3 LLM integration
 
-For future remote providers:
+Inspect the existing LLM provider architecture.
 
-- Use provider-level connect/read timeouts.
-- Support request cancellation where available.
+Reuse the current provider abstraction and model configuration.
+
+Do not introduce hardcoded API keys.
+
+Do not add a new paid API dependency.
+
+Do not bypass existing token budgets.
+
+Use the existing model selection and provider fallback mechanisms.
+
+The synthesizer prompt should include:
+
+1. Task objective.
+2. Approved step description.
+3. Relevant requirements.
+4. Current file content.
+5. Relevant localized code context.
+6. File-specific modification instructions.
+7. Existing coding conventions.
+8. Dependency information.
+9. Security constraints.
+10. Expected output schema.
+11. Restrictions on modifying unrelated files.
+
+Use structured LLM output or strict parsing with validation.
+
+Treat retrieved repository code as untrusted input. Code comments and repository content must not override system instructions or security policy.
+
+## 4.4 Context preparation
+
+Before asking the model to generate an edit:
+
+1. Read the target file from the isolated workspace.
+2. Retrieve relevant code context.
+3. Identify relevant classes, functions, methods, and imports.
+4. Inspect related tests.
+5. Identify existing conventions.
+6. Provide only relevant context to the model.
+
+Do not blindly include the entire repository in the prompt.
+
+Use existing retrieval and localization components where available.
+
+Inspect the project's F18/source-localization implementation before creating a new one.
+
+If the existing localization system is insufficient, introduce a small abstraction around existing AST and retrieval capabilities.
+
+Do not invent an F18 implementation that does not exist.
+
+---
+
+# 5. PHASE 2 — IMPLEMENT SEARCH/REPLACE PATCH GENERATION
+
+Priority: P0
+
+Use a constrained edit format inspired by SWE-agent and Aider.
+
+The model should generate structured search/replace blocks.
+
+Each edit must identify:
+
+- File.
+- Exact search content.
+- Replacement content.
+
+## 5.1 Exact single-match validation
+
+Before applying a patch:
+
+```python
+occurrences = current_content.count(search)
+```
+
+Require:
+
+```python
+occurrences == 1
+```
+
+Cases:
+
+- Zero matches: reject stale or incorrect patch.
+- One match: continue.
+- Multiple matches: reject ambiguous patch.
+
+Never silently replace multiple occurrences.
+
+Do not use broad regular-expression replacement unless the edit format explicitly supports a separately validated operation.
+
+## 5.2 Multiple edits in one file
+
+If multiple blocks target the same file:
+
+- Validate all blocks against a consistent source revision.
+- Detect overlapping or conflicting ranges.
+- Apply edits deterministically.
+- Avoid index-shift errors.
+- Revalidate the final content.
+
+Do not partially apply a patch if a later block fails validation.
+
+Use atomic per-file writes or rollback-safe patch application.
+
+## 5.3 Path guard
+
+Every target path must pass:
+
+- validate_repo_relative_path.
+- WorkspacePathGuard.
+- Existing forbidden file checks.
+- Symlink/path escape checks.
+- Approved plan scope checks.
+
+Never trust an LLM-generated file path.
+
+The synthesizer must not be able to create or modify files outside the approved workspace.
+
+## 5.4 Stale-content protection
+
+Before applying a generated patch, ensure the source file has not changed since it was read.
+
+Use a content hash or revision fingerprint.
+
+If the source changed:
+
+- Reject the stale patch.
+- Re-read the file.
+- Re-synthesize using the updated content.
+- Record the stale-context event.
+
+Do not apply a patch against an outdated file snapshot.
+
+---
+
+# 6. PHASE 3 — VALIDATION FILTER CHAIN
+
+Priority: P0
+
+Every synthesized patch must pass the following validation pipeline.
+
+## Stage A: Structured output validation
+
+Validate the LLM response.
+
+Reject:
+
+- Invalid JSON.
+- Missing fields.
+- Unexpected fields.
+- Empty search strings.
+- Empty replacements where prohibited.
+- Unsupported edit operations.
+- Excessively large output.
+- Duplicate or conflicting edits.
+
+## Stage B: Exact match validation
+
+Verify the search block occurs exactly once.
+
+## Stage C: Path validation
+
+Validate all paths against the approved plan and workspace security boundary.
+
+## Stage D: Patch application validation
+
+Apply patches to an in-memory representation first.
+
+Only persist the edit after every block passes validation.
+
+## Stage E: Syntax validation
+
+Choose validators based on file type.
+
+For Python:
+
+- Python ast.parse.
+- Ruff where configured.
+
+For JavaScript and TypeScript:
+
+- Existing ESLint configuration.
+- TypeScript compiler checks where appropriate.
+
+For JSON:
+
+- Standard JSON parsing.
+
+For YAML:
+
+- Existing YAML parser if available.
+
+For unsupported formats:
+
+- Apply structural and patch validation.
+- Do not claim syntax validation was performed.
+
+Consider tree-sitter only if it is already available or clearly justified by the supported languages.
+
+Do not install unnecessary parsers.
+
+## Stage F: Sandbox lint validation
+
+Use the existing workspace command execution infrastructure.
+
+Python:
+
+- Ruff.
+
+JavaScript/TypeScript:
+
+- Existing ESLint scripts.
+- Existing project-specific checks.
+
+Do not assume every repository contains Ruff or ESLint.
+
+Detect supported project tooling.
+
+Run focused validation on changed files rather than executing an unnecessarily expensive full repository pipeline after every generation attempt.
+
+## Stage G: Final edit acceptance
+
+Only after all required checks pass:
+
+- Apply the patch to the workspace.
+- Record the accepted patch hash.
+- Record changed files.
+- Record validation results.
+- Emit timeline events.
+
+If validation fails, proceed to bounded self-refinement.
+
+---
+
+# 7. PHASE 4 — ITERATIVE SELF-REFINEMENT
+
+Priority: P0
+
+Implement a bounded correction loop inspired by Reflexion and Self-Refine.
+
+Maximum synthesizer correction retries:
+
+2 retries after the initial attempt.
+
+Therefore:
+
+- Attempt 1: Initial generation.
+- Attempt 2: First correction.
+- Attempt 3: Final correction.
+
+Total maximum generation attempts: 3.
+
+This is a separate limit from the task-level repair budget.
+
+Do not accidentally reset the global task execution budget.
+
+## 7.1 Feedback loop
+
+```text
+LLM GENERATION
+      |
+      v
+STRUCTURED OUTPUT VALIDATION
+      |
+      v
+PATCH VALIDATION
+      |
+      v
+SYNTAX CHECK
+      |
+      v
+LINT CHECK
+      |
+      +---- PASS ---> ACCEPT PATCH
+      |
+      +---- FAIL
+              |
+              v
+       COLLECT VALIDATION ERRORS
+              |
+              v
+       BUILD CORRECTION CONTEXT
+              |
+              v
+       LLM REGENERATION
+              |
+              v
+       RETRY BUDGET CHECK
+              |
+              +---- AVAILABLE ---> REPEAT
+              |
+              +---- EXHAUSTED ---> FAIL SAFELY
+```
+
+## 7.2 Feedback content
+
+Send the model:
+
+- Previous generated patch.
+- Exact validation error.
+- File and line information where available.
+- Relevant current file content.
+- Previous failed attempt summary.
+- Original approved task objective.
+
+Do not send entire logs unnecessarily.
+
+Do not expose secrets in feedback.
+
+## 7.3 Attempt persistence
+
+Record every generation attempt.
+
+Use existing tool invocation auditing.
+
+Possible tool name:
+
+```text
+edit_synthesizer.generate_patch
+```
 
 Record:
 
-- Configured timeout.
-- Actual duration.
-- Timeout status.
-- Execution outcome.
+- Task ID.
+- Step ID.
+- Attempt number.
+- Model/provider.
+- Sanitized input summary.
+- Patch fingerprint.
+- Validation outcome.
+- Error category.
+- Duration.
+- Token usage if available.
 
-Do not automatically retry an operation after a timeout if the operation may already have completed.
+Never store raw API credentials or unredacted sensitive prompts.
 
----
+Emit timeline events for:
 
-# 11. IMPLEMENT RATE LIMITING
+- SYNTHESIS_STARTED.
+- SYNTHESIS_ATTEMPT_COMPLETED.
+- PATCH_VALIDATION_FAILED.
+- SYNTHESIS_RETRY_STARTED.
+- SYNTHESIS_ACCEPTED.
+- SYNTHESIS_EXHAUSTED.
 
-Inspect existing Redis utilities first.
-
-Reuse the existing Redis connection and configuration.
-
-Do not introduce a new Redis server.
-
-Create:
-
-backend/agent/tools/rate_limiter.py
-
-Support:
-
-- Per-user limits.
-- Per-task limits.
-- Per-provider limits.
-- Global limits.
-- Per-tool limits.
-
-Use atomic Redis operations.
-
-Do not use an in-memory counter as the production distributed rate limiter.
-
-Provide a safe fallback only if the existing architecture explicitly supports one.
-
-Rate limits must be configurable.
-
-Do not hardcode arbitrary limits throughout handlers.
-
-Example initial configurations:
-
-read_file:
-60 requests / minute / task
-
-execute_command:
-10 requests / minute / task
-
-create_draft_pr:
-3 requests / hour / user
-
-These are examples. Adjust based on the existing execution workload.
-
-Also implement configurable maximum concurrent executions per tool and provider if compatible with the current worker architecture.
-
-Important:
-
-A rate-limited operation must never reach its handler.
+Adapt event names to existing event conventions.
 
 ---
 
-# 12. OUTPUT VALIDATION AND SANITIZATION
+# 8. PHASE 5 — INTEGRATE SYNTHESIZER INTO AgentExecutionLoop
 
-This is a critical part of the task.
+Priority: P0
 
-Currently, generic handlers and policy-guarded workspace handlers can take different execution paths.
+File:
 
-Ensure every adapter passes through a common post-execution boundary.
+backend/ai/services/agent_execution_loop.py
 
-The order must be:
+The loop must support both:
 
-Tool execution
-    |
-    v
-Normalize result
-    |
-    v
-Validate output schema
-    |
-    v
-Redact secrets
-    |
-    v
-Enforce output limits
-    |
-    v
-Record audit event
-    |
-    v
-Return ToolResult
+1. Caller-supplied payloads.
+2. Automatically synthesized edits.
 
-Preserve existing secret redaction patterns.
+## 8.1 Payload priority
 
-Inspect all existing output sanitization logic.
+Use this exact priority:
 
-Do not duplicate sanitization implementations.
+```text
+STEP EXECUTION
+      |
+      v
+Does this exact step have caller payload?
+      |
+      +---- YES ---> Validate payload ---> Execute
+      |
+      +---- NO ----> Is action a modification?
+                            |
+                            +---- NO ---> Existing dispatch
+                            |
+                            +---- YES
+                                  |
+                                  v
+                           EditSynthesizer
+                                  |
+                                  v
+                           Validate edits
+                                  |
+                                  v
+                           Apply patches
+```
 
-Avoid logging raw credentials or sensitive output.
+Caller-supplied content has priority.
 
-Treat MCP and plugin outputs as untrusted external data.
+However, caller-supplied payloads must still pass:
 
-External tool responses must never modify authorization policies or trusted registry metadata.
+- Plan scope validation.
+- Path validation.
+- Patch validation.
+- Existing workspace authorization.
 
-For tools without a defined output schema, preserve their existing response format and document the missing contract.
+Never bypass validation because content came from an HTTP caller.
+
+## 8.2 Action-specific behavior
+
+For:
+
+- edit
+- create
+- write
+- modify
+- refactor
+
+If a valid exact-step payload is present, preserve its behavior where safe.
+
+If no payload exists, call EditSynthesizer.
+
+For patch:
+
+- Preserve structured search/replace behavior.
+- Synthesize a patch if no valid caller payload exists and the step requires an edit.
+
+For inspect/read:
+
+- Preserve read-only behavior.
+- Never call EditSynthesizer.
+
+For delete:
+
+- Preserve existing authorization and approval restrictions.
+- Do not synthesize deletion instructions.
+- Never automatically delete an unexpected file.
+
+For command/test:
+
+- Preserve the existing command policy and test runner.
+
+## 8.3 Remove unsafe cross-step content fallback
+
+Delete the logic that searches every other payload for content.
+
+Every payload must be associated with its own step ID.
+
+## 8.4 Multiple expected files
+
+The existing write_file path can write the same content to every expected file.
+
+This is unsuitable for autonomous synthesis.
+
+Change modification handling to use per-file edit results.
+
+For example:
+
+```text
+Step:
+  expected_files:
+    - src/auth.py
+    - tests/test_auth.py
+
+Synthesized edits:
+  src/auth.py -> implementation patch
+  tests/test_auth.py -> test patch
+```
+
+Do not write identical content into both files.
+
+## 8.5 Execution result
+
+Extend StepExecutionRecord if necessary to include:
+
+- synthesis_attempts
+- patch_hashes
+- validation_status
+- changed_files
+- failure_category
+
+Maintain compatibility with existing response serialization.
 
 ---
 
-# 13. AUDITING AND DATABASE CHANGES
+# 9. PHASE 6 — PLAN-BOUND EDIT ENFORCEMENT
 
-Inspect the existing ToolInvocation model and tool_invocations table.
+Priority: P0
 
-Do not replace them.
+This is a mandatory security requirement.
 
-Extend the existing invocation auditing system.
+A task must never modify files outside its approved plan without explicit human re-approval.
 
-Potential fields:
+Relevant existing architecture:
 
-- tool_version
-- tool_source
-- provider_id
-- risk_tier
-- schema_fingerprint
-- execution_timeout_s
-- execution_timed_out
-- rate_limit_status
-- error_category
+- PlanStep.expected_files.
+- StructuredPlan.expected_files.
+- WorkspaceDiffVerifier.
+- ADR-010.
+- Existing independent verification.
 
-Choose fields based on actual project conventions.
+## 9.1 Allowed file scope
 
-Create separate provider or registry tables only if necessary.
+Build an immutable approved file scope from the approved plan version.
 
-Possible future tables:
+Use:
 
-tool_providers
-tool_registry
+- PlanStep.expected_files.
+- StructuredPlan.expected_files.
+- Approved task requirements where appropriate.
 
-An immutable version history table can be considered if required.
+But distinguish:
+
+- Files allowed to inspect.
+- Files allowed to modify.
+- Files allowed to delete.
+- Files allowed only for testing.
+
+Do not assume every expected file is automatically modifiable.
+
+Inspect the plan schema and existing planning semantics.
+
+## 9.2 Enforce at three levels
+
+Enforce file scope at:
+
+LEVEL 1 — EditSynthesizer
+
+The LLM can only generate edits for approved modification targets.
+
+LEVEL 2 — Workspace modification
+
+Before write_file, patch_file or delete_file:
+
+- Verify exact approved scope.
+- Verify current plan version.
+- Verify approval is still valid.
+- Verify path safety.
+
+LEVEL 3 — Independent diff verification
+
+After execution:
+
+- Extract actual workspace diff.
+- Compare every changed file with approved modification scope.
+- Reject unauthorized additions, deletions, renames and modifications.
+- Record blocking findings.
+
+Do not rely only on the synthesizer prompt.
+
+The server must enforce the boundary independently.
+
+## 9.3 Human re-approval
+
+If an operation needs a file outside the approved modification scope:
+
+1. Do not modify the file.
+2. Generate an additional scope request.
+3. Explain why the file is required.
+4. Show the requested file and reason.
+5. Require explicit human approval.
+6. Update the approved plan/version or approved scope through the existing approval workflow.
+7. Invalidate previous approval if the plan version changes.
+8. Resume execution only after authorization.
+
+Never silently expand approved scope.
+
+## 9.4 WorkspaceDiffVerifier integration
+
+Actual class:
+
+```python
+WorkspaceDiffVerifier
+```
+
+File:
+
+backend/sandbox/diff_verifier.py
+
+Inspect its existing allowed_files logic.
+
+The current implementation has optional scope validation.
+
+Also inspect the independent verifier's current handling of test files and Markdown files.
+
+Do not automatically allow every changed test or Markdown file merely because of its extension.
+
+A test file should be included in approved scope or explicitly approved through the appropriate process.
+
+Preserve:
+
+- Forbidden file checks.
+- Critical manifest deletion restrictions.
+- Secret scanning.
+- Path traversal checks.
+- Diff immutability checks.
+
+Ensure unauthorized files cause a blocking verification result.
+
+---
+
+# 10. PHASE 7 — IMPLEMENT DURABLE WORKFLOW EXECUTION
+
+Priority: P1
+
+This is the second major objective.
+
+The current execution flow must not run entirely inside the HTTP request lifecycle.
+
+Use the existing DBOS infrastructure after validating that it is properly configured.
+
+Do not replace DBOS with Temporal or another engine.
+
+Do not use FastAPI BackgroundTasks as the production durable execution mechanism.
+
+## 10.1 Existing components to reuse
+
+Inspect and reuse:
+
+- DBOS dependency.
+- Existing DBOS proof of concept.
+- TaskExecutionOrchestrator.
+- ExecutionCheckpointManager.
+- ExecutionRecovery.
+- ExecutionBudgetManager.
+- save_task_checkpoint.
+- Existing task status transitions.
+- Existing event/timeline infrastructure.
+
+## 10.2 Target workflow
+
+Implement a durable workflow with these logical steps:
+
+```text
+1. VALIDATE_APPROVAL
+2. INITIALIZE_WORKSPACE
+3. EXECUTE_APPROVED_PLAN
+4. SYNTHESIZE_MISSING_EDITS
+5. VALIDATE_PLAN_BOUND_DIFF
+6. SAVE_EXECUTION_CHECKPOINT
+7. RUN_TESTS
+8. RUN_BOUNDED_REPAIR_IF_NEEDED
+9. SAVE_TEST_REPAIR_CHECKPOINT
+10. RUN_INDEPENDENT_VERIFICATION
+11. SAVE_VERIFICATION_CHECKPOINT
+12. WAIT_FOR_PUBLICATION_AUTHORIZATION_IF_REQUIRED
+13. CREATE_DRAFT_PR_IF_AUTHORIZED
+14. COMPLETE_WORKFLOW
+```
+
+Keep workflow boundaries aligned with actual business operations.
+
+Do not create a separate DBOS step for every trivial Python function.
+
+## 10.3 DBOS workflow design
+
+Create an appropriate module, for example:
+
+```text
+backend/ai/workflows/
+    __init__.py
+    autonomous_task_workflow.py
+    workflow_steps.py
+    workflow_models.py
+```
+
+Adapt this structure to existing project conventions.
 
 Requirements:
 
-1. Use existing SQLAlchemy conventions.
-2. Create proper Alembic migrations.
-3. Ensure migration rollback works.
-4. Maintain backward compatibility.
-5. Update repository methods.
-6. Update API schemas if exposed.
-7. Avoid storing secrets.
-8. Preserve sanitized_arguments behavior.
-9. Ensure audit failures do not silently create security bypasses.
+- Use proper DBOS workflow decorators.
+- Use DBOS step decorators for durable boundaries.
+- Use stable workflow IDs.
+- Persist workflow status.
+- Support restart and recovery.
+- Support idempotent execution.
+- Handle failures safely.
+- Preserve task ownership.
+- Preserve human approval.
+- Prevent duplicate workflow submission.
+- Avoid executing completed durable steps twice.
 
-Classify execution outcomes properly.
+Do not treat an in-memory workflow dictionary as durable persistence.
 
-At minimum, distinguish:
+## 10.4 Workflow input
 
-- SUCCESS
-- DENIED
-- FAILED
-- TIMEOUT
-- RATE_LIMITED
+Do not pass SQLAlchemy ORM sessions or live request objects into durable workflow arguments.
 
-Preserve existing status conventions where API compatibility requires them.
+Persist or pass serializable identifiers:
 
-Do not silently change API response semantics.
+- task_id
+- actor_id
+- approved_plan_version
+- approved_base_revision
+- run_tests
+- auto_repair
+- publication authorization state
+- safe workflow options
+
+Each durable step should acquire its own database session through the application's session factory and reload the task and repository records.
+
+Revalidate task ownership and approval before sensitive operations.
+
+## 10.5 Idempotency
+
+Every durable step must be designed for possible replay.
+
+Examples:
+
+Workspace initialization:
+
+- Detect an existing valid workspace.
+- Do not create duplicate workspaces.
+
+Plan execution:
+
+- Use step-level checkpoints.
+- Do not repeat completed modifications blindly.
+- Verify workspace revision and patch fingerprints.
+
+Test execution:
+
+- Associate runs with workflow and execution attempt IDs.
+
+Repair:
+
+- Preserve the existing task-level maximum of three repair attempts.
+- Do not reset the repair budget after workflow restart.
+
+Draft PR:
+
+- Check whether the corresponding draft PR already exists.
+- Avoid creating duplicates after recovery.
+
+Never automatically retry an operation with uncertain completion unless it is protected by an idempotency mechanism.
+
+## 10.6 Recovery
+
+If the process crashes:
+
+1. Recover the workflow.
+2. Load the last completed durable step.
+3. Load task checkpoints.
+4. Verify workspace state.
+5. Verify current approved plan version.
+6. Verify current workspace revision.
+7. Resume only safe incomplete work.
+
+If the workspace no longer matches the expected revision, stop and require reconciliation.
+
+Do not blindly replay patches.
 
 ---
 
-# 14. TASK EXECUTION ORCHESTRATOR INTEGRATION
+# 11. PHASE 8 — HTTP 202 ACCEPTED API
+
+Priority: P1
+
+Refactor the execution endpoints.
 
 Inspect:
 
-backend/app/services/task_execution_orchestrator.py
+backend/app/api/v1/tasks.py
 
-Currently, ToolRouter is instantiated inside task orchestration.
+Current endpoints include:
 
-Refactor this carefully.
+- execute_approved_task.
+- run_autonomous_workflow_endpoint.
 
-The orchestrator should depend on the unified registry and execution interfaces.
+Both currently invoke synchronous orchestration paths.
 
-Requirements:
+Change the long-running execution path to enqueue a durable workflow.
 
-- Do not duplicate registry initialization.
-- Do not register the same workspace tools multiple times.
-- Preserve dependency injection.
-- Preserve existing agent state.
-- Preserve execution context creation.
-- Preserve task lifecycle behavior.
-- Preserve workspace ownership checks.
-- Preserve approval flow.
-- Preserve existing agent/tool calling behavior.
+## 11.1 New API response
 
-Keep the refactor small and testable.
+Return:
 
-Do not rewrite the entire orchestrator.
+HTTP 202 Accepted
+
+Example:
+
+```json
+{
+  "task_id": "task-uuid",
+  "workflow_id": "workflow-uuid",
+  "status": "QUEUED",
+  "message": "Autonomous execution has been accepted.",
+  "status_url": "/api/v1/tasks/task-uuid/workflow-status"
+}
+```
+
+Create an appropriate Pydantic response schema.
+
+Do not return a fake workflow ID.
+
+## 11.2 Endpoint behavior
+
+The endpoint should:
+
+1. Authenticate the user.
+2. Verify task ownership.
+3. Verify approved plan.
+4. Verify approval is still valid.
+5. Verify workspace prerequisites.
+6. Create or retrieve the idempotent workflow.
+7. Persist execution metadata.
+8. Submit the workflow.
+9. Return HTTP 202.
+
+Do not perform code generation, test execution, repair or verification before returning the response.
+
+Keep dry-run behavior compatible with the existing API.
+
+## 11.3 Workflow status endpoint
+
+Add:
+
+```text
+GET /tasks/{task_id}/workflow-status
+```
+
+Return:
+
+- workflow_id
+- task_id
+- status
+- current_step
+- completed_steps
+- failed_step
+- progress information
+- last_checkpoint
+- started_at
+- updated_at
+- completed_at
+- safe error summary
+
+Enforce task ownership.
+
+Do not expose internal credentials, raw prompts or stack traces.
+
+## 11.4 Idempotent submission
+
+If the same approved task workflow is submitted multiple times:
+
+- Detect the existing active workflow.
+- Return its workflow ID.
+- Do not start another workflow.
+- Require a new authorized execution attempt if a previous workflow is terminally failed.
+
+Use appropriate database uniqueness or durable workflow identity rules.
 
 ---
 
-# 15. DOCUMENTATION REQUIREMENTS — MANDATORY
+# 12. PHASE 9 — PROGRESS STREAMING
 
-I want every architectural decision, research finding, implementation detail, and testing result documented.
+Priority: P1
 
-Documentation is a core deliverable, not an optional final step.
+Inspect the actual existing event infrastructure.
 
-First inspect:
+Do not assume that an endpoint is SSE merely because its name contains events.
 
-Docs/agentic-chat/
-Docs/agentic-chat/07-tool-registry-and-tool-reference.md
-Docs/agentic-chat/09-security-and-permissions.md
-Docs/agentic-chat/13-testing-strategy.md
-Docs/agentic-chat/17-future-enhancements.md
+The project has existing task event and event-stream functionality.
 
-Also inspect the main Docs/README.md.
+Verify its actual route, response type and frontend integration.
 
-Update existing documents where appropriate.
+Reuse the existing SSE infrastructure where appropriate.
 
-Do not create duplicate documentation for topics already documented.
+Target progress events:
 
-Create or update the following documentation structure, adapting names to the existing convention:
+```text
+WORKFLOW_QUEUED
+WORKFLOW_STARTED
+APPROVAL_VALIDATED
+WORKSPACE_INITIALIZED
+STEP_STARTED
+SYNTHESIS_STARTED
+SYNTHESIS_RETRY
+PATCH_VALIDATED
+PATCH_APPLIED
+STEP_COMPLETED
+TESTS_STARTED
+TESTS_COMPLETED
+REPAIR_STARTED
+REPAIR_COMPLETED
+VERIFICATION_STARTED
+VERIFICATION_COMPLETED
+DRAFT_PR_CREATED
+WORKFLOW_COMPLETED
+WORKFLOW_FAILED
+```
 
-Docs/tool-registry/
+Every event should include:
 
-00-existing-architecture-audit.md
+- task_id
+- workflow_id
+- event_type
+- timestamp
+- safe message
+- relevant step ID
+- sanitized payload
 
-Include:
+Events must be persisted or otherwise recoverable.
 
-- Current ToolRouter implementation.
-- Existing ToolDefinition.
-- Existing handler architecture.
-- WorkspaceToolPolicyBridge.
-- Existing policy integration.
-- Current invocation auditing.
-- Current security mechanisms.
-- Existing tests.
-- Exact architectural limitations.
-- Actual file references.
+SSE reconnection must not lose historical progress.
 
-01-requirements-and-scope.md
+Support:
 
-Include:
+- Last-Event-ID where applicable.
+- Reconnection.
+- Event ordering.
+- Keep-alive.
+- Authorization.
+- Task ownership.
+- Safe error handling.
+
+Do not emit secrets or raw LLM reasoning.
+
+---
+
+# 13. PHASE 10 — FRONTEND INTEGRATION
+
+Priority: P1
+
+Inspect:
+
+frontend/src/pages/RepositoryTaskStudio.tsx
+
+frontend/src/services/tasks.ts
+
+Update the execution flow.
+
+## 13.1 Current problem
+
+The frontend submits:
+
+```typescript
+executeTask(taskId, {
+    run_steps: true,
+    run_tests_after: true,
+    auto_repair: true
+});
+```
+
+The frontend should no longer wait for the entire autonomous workflow to finish.
+
+## 13.2 New behavior
+
+When a user approves and starts autonomous execution:
+
+1. Send execution request.
+2. Receive HTTP 202.
+3. Store workflow_id.
+4. Display queued/running status.
+5. Connect to task progress stream.
+6. Update UI from persisted events.
+7. Show synthesis attempts.
+8. Show current plan step.
+9. Show test and repair progress.
+10. Show verification result.
+11. Show final Draft PR result if authorized.
+
+Do not create a completely new dashboard if the existing RepositoryTaskStudio can support this.
+
+Reuse existing components and design conventions.
+
+## 13.3 Progress states
+
+Support:
+
+- QUEUED
+- RUNNING
+- SYNTHESIZING
+- VALIDATING
+- TESTING
+- REPAIRING
+- VERIFYING
+- WAITING_FOR_APPROVAL
+- COMPLETED
+- FAILED
+- CANCELLED
+
+Map these states to the existing task status system carefully.
+
+Do not introduce contradictory task and workflow statuses.
+
+## 13.4 Connection recovery
+
+If the browser refreshes:
+
+- Retrieve active workflow status.
+- Reconnect to progress events.
+- Restore current progress.
+- Avoid starting a duplicate workflow.
+
+If SSE disconnects, reconnect without losing prior progress.
+
+---
+
+# 14. PHASE 11 — CANDIDATE PATCH GENERATION
+
+Priority: P3 — FUTURE WORK
+
+Document this as a future extension.
+
+Do not implement it in the initial P0/P1 milestone unless the foundational implementation is complete and tested.
+
+Future design:
+
+- Generate 2–3 repair patch candidates.
+- Validate candidate structure.
+- Apply candidates in isolated workspace snapshots or isolated worktrees.
+- Run relevant tests.
+- Compare test outcomes.
+- Compare lint outcomes.
+- Compare regression results.
+- Select the best valid candidate.
+- Require human approval for scope expansion.
+
+Never apply multiple candidate patches to the same live workspace concurrently.
+
+Do not violate the existing three-attempt repair budget.
+
+Candidate generation must not multiply the task's token budget without an explicit budget allocation.
+
+Document:
+
+- Candidate isolation.
+- Resource limits.
+- Test comparison.
+- Selection criteria.
+- Failure behavior.
+- Cost considerations.
+
+---
+
+# 15. PHASE 12 — SECURITY REQUIREMENTS
+
+These are mandatory.
+
+## 15.1 Human approval
+
+Preserve ADR-010.
+
+No execution without valid approval.
+
+If the plan changes:
+
+- Invalidate previous approval.
+- Require new approval.
+- Prevent old workflows from continuing against the new plan.
+
+## 15.2 File scope
+
+No edit outside approved scope.
+
+No silent scope expansion.
+
+No LLM-generated path can override server-side path guards.
+
+## 15.3 Workspace isolation
+
+Preserve:
+
+- WorkspaceManager.
+- WorkspacePathGuard.
+- Task workspace isolation.
+- Workspace lifecycle checks.
+- Protected branch restrictions.
+
+## 15.4 LLM output safety
+
+Treat model output as untrusted.
+
+Validate all:
+
+- Paths.
+- Patch blocks.
+- Search matches.
+- Replacement content.
+- Syntax.
+- Lint results.
+- Final diffs.
+
+## 15.5 Resource limits
+
+Enforce:
+
+- Maximum synthesis attempts.
+- Maximum task iterations.
+- Existing execution budgets.
+- Existing repair attempt ceiling.
+- Maximum input size.
+- Maximum output size.
+- LLM timeout.
+- Tool timeout.
+- Workflow concurrency.
+
+## 15.6 Workflow security
+
+- Validate actor ownership.
+- Validate approval at execution time.
+- Validate plan version at every sensitive boundary.
+- Prevent duplicate execution.
+- Prevent unauthorized workflow resume.
+- Do not trust frontend status.
+- Do not expose raw internal errors.
+
+## 15.7 Publication
+
+Preserve the existing publication authorization requirement.
+
+The workflow may create a Draft PR only when the required authorization is present.
+
+Never merge automatically.
+
+---
+
+# 16. PHASE 13 — DATABASE AND PERSISTENCE
+
+Inspect existing models before adding new ones.
+
+Potential workflow metadata:
+
+- workflow_id
+- task_id
+- workflow_status
+- current_step
+- approved_plan_version
+- approved_base_revision
+- started_at
+- updated_at
+- completed_at
+- last_checkpoint
+- safe_error_summary
+
+Potential synthesis audit metadata:
+
+- synthesis_attempt_id
+- workflow_id
+- task_id
+- step_id
+- attempt_number
+- model/provider
+- patch_hash
+- validation_status
+- duration_ms
+- error_category
+
+Do not create redundant tables if DBOS and existing task execution records already provide the necessary persistence.
+
+Determine which system owns:
+
+1. Workflow execution state.
+2. Task business state.
+3. Step checkpoint state.
+4. Synthesis audit history.
+5. User-visible timeline events.
+
+These must have clearly defined responsibilities.
+
+Use Alembic migrations where database changes are required.
+
+Test migration upgrades and downgrades.
+
+---
+
+# 17. DOCUMENTATION — MANDATORY DELIVERABLE
+
+I want every research decision, architectural change, implementation detail and testing result documented.
+
+Documentation must be updated alongside code.
+
+First inspect existing Docs structure and avoid duplicating existing documentation.
+
+Create or update:
+
+Docs/autonomous-execution/
+
+## 00-existing-architecture-audit.md
+
+Document:
+
+- AgentExecutionLoop.
+- LoopDetector.
+- Existing action dispatch.
+- Existing payload handling.
+- Current synchronous execution.
+- Existing workflow chain.
+- Existing checkpoints.
+- Existing recovery.
+- Existing execution budgets.
+- Existing diff verification.
+- Frontend execution behavior.
+- DBOS proof of concept.
+- Existing SSE/event infrastructure.
+- Actual limitations.
+
+Include exact file and class references.
+
+## 01-requirements-and-scope.md
+
+Document:
 
 - Problem statement.
 - Functional requirements.
 - Non-functional requirements.
 - Security requirements.
 - Compatibility requirements.
-- Scope of this milestone.
-- Out-of-scope features.
+- P0/P1/P3 scope.
 - Acceptance criteria.
 
-02-research-and-design-decisions.md
+## 02-research-and-technical-decisions.md
 
-Document detailed technical research.
+Research and document:
 
-Include:
+### SWE-agent
 
-A. JSON Schema Draft 2020-12.
+- Constrained edit interfaces.
+- Search/replace editing.
+- Immediate validation feedback.
+- Why structured editing is preferable to unrestricted file generation.
 
-- Why standardized validation is needed.
-- Custom validation limitations.
-- Draft 2020-12 capabilities.
-- jsonschema library selection.
-- FormatChecker.
-- Local $ref handling.
-- External reference security.
-- Performance considerations.
+### Aider
 
-B. MCP tool architecture.
+- Search/replace edit blocks.
+- Unified diff approaches.
+- File-specific edit contracts.
+- Patch validation.
 
-- MCP tool definition concepts.
-- inputSchema.
-- outputSchema.
-- annotations.
-- Tool discovery.
-- Provider identity.
-- Trust boundaries.
-- Why MCP server metadata cannot determine authorization.
+### Agentless
 
-C. Versioning.
+- Multiple patch candidates.
+- Candidate evaluation.
+- Test-based selection.
+- Why this is deferred to P3.
 
-- Semantic versioning.
-- Schema fingerprints.
-- Compatibility.
-- Breaking changes.
-- Version retirement.
+### Reflexion
 
-D. Risk classification.
+- Feedback-based improvement.
+- Failure feedback.
+- Iterative correction.
 
-- readOnlyHint.
-- destructiveHint.
-- idempotentHint.
-- openWorldHint.
-- Internal risk tiers.
-- Human approval.
-- Policy integration.
+### Self-Refine
 
-E. Execution controls.
+- Initial generation.
+- Validation feedback.
+- Bounded correction.
+- Stopping criteria.
 
-- Timeout mechanisms.
-- Cancellation.
-- Subprocess termination.
-- Rate limiting.
-- Redis atomic operations.
-- Concurrency control.
+### Durable Execution
 
-F. Auditing.
+- DBOS.
+- Temporal comparison.
+- Existing DBOS integration.
+- Durable workflow steps.
+- Checkpointing.
+- Idempotency.
+- Recovery.
+- Replay behavior.
 
-- Existing audit architecture.
-- Required additional metadata.
-- Secret redaction.
-- Error classification.
+For each technology explain:
 
-G. Alternatives considered.
-
-For every major design decision explain:
-
-- What problem it solves.
-- Alternatives considered.
-- Why the selected approach is preferable.
+- What it does.
+- Why it is relevant.
+- What we are adopting.
+- What we are not adopting.
 - Tradeoffs.
 - Security implications.
-- Performance implications.
+- Cost implications.
 
-03-system-architecture.md
+Verify technical claims against official documentation and actual dependency versions.
 
-Include:
+Do not fabricate research citations.
 
-- Target architecture.
-- Component responsibilities.
-- Module structure.
-- Registry design.
-- Adapter design.
-- Execution lifecycle.
-- Data flow.
-- Security boundaries.
-- Error flow.
+## 03-edit-synthesizer-architecture.md
 
-Use Mermaid diagrams.
+Document:
 
-04-tool-definition-and-registry.md
+- Service responsibilities.
+- Input contract.
+- Output contract.
+- LLM integration.
+- Repository context.
+- File localization.
+- Patch generation.
+- Structured output.
+- Validation.
+- Error handling.
 
-Include:
+Include Mermaid diagrams.
 
-- Final ToolDefinition.
-- ToolAnnotations.
-- ToolRateLimit.
-- Registration.
-- Tool identity.
-- Version resolution.
-- Source identification.
-- Schema fingerprinting.
-- Enable/disable lifecycle.
+## 04-patch-validation-and-application.md
 
-05-schema-validation.md
+Document:
 
-Include:
+- Search/replace format.
+- Exact-match validation.
+- Multiple-block handling.
+- Path validation.
+- Stale-content detection.
+- Atomic patch application.
+- Syntax validation.
+- Lint validation.
+- Rollback behavior.
 
-- JSON Schema implementation.
-- Supported schema features.
-- Registration validation.
-- Input validation.
-- Output validation.
-- $ref policy.
-- Validation errors.
-- Test cases.
+## 05-plan-bound-edit-security.md
 
-06-execution-pipeline.md
+Document:
 
-Include detailed step-by-step execution logic.
-
-Explain each stage:
-
-- Registry resolution.
-- Input validation.
-- Context construction.
-- Authorization.
-- Risk evaluation.
-- Human approval.
-- Rate limiting.
-- Concurrency limiting.
-- Timeout enforcement.
-- Adapter execution.
-- Output validation.
-- Redaction.
-- Auditing.
-
-07-security-and-permissions.md
-
-Include:
-
-- Existing security controls.
-- New security controls.
-- Trusted adapter model.
-- Workspace authorization.
-- MCP trust boundary.
-- Plugin trust boundary.
-- SSRF prevention.
-- External reference restrictions.
-- Command restrictions.
-- Path restrictions.
-- Secret management.
-- Failure handling.
+- Approved plan scope.
+- Expected files.
+- Inspect versus modify permissions.
+- Server-side scope enforcement.
+- WorkspaceDiffVerifier integration.
+- Human re-approval.
+- ADR-010 compliance.
 - Threat model.
 
-08-database-and-auditing.md
+## 06-self-refinement-and-budget.md
 
-Include:
+Document:
 
-- Existing ToolInvocation model.
-- Database changes.
-- Migration details.
-- New audit fields.
-- Provider persistence.
-- Error categories.
-- Retention considerations.
-- Sensitive-data handling.
+- Maximum three synthesis attempts.
+- Initial attempt and two retries.
+- Feedback generation.
+- Error classification.
+- Token budget.
+- Loop detection.
+- Tool invocation auditing.
+- Failure behavior.
 
-09-testing-and-validation.md
+## 07-durable-workflow-architecture.md
 
-Include:
+Document:
+
+- DBOS integration.
+- Workflow definition.
+- Workflow steps.
+- Durable execution.
+- Stable workflow IDs.
+- Idempotency.
+- Retry behavior.
+- Crash recovery.
+- Database sessions.
+- Checkpoint integration.
+- Task status synchronization.
+
+## 08-api-and-frontend-integration.md
+
+Document:
+
+- HTTP 202.
+- Workflow submission.
+- Workflow status API.
+- SSE events.
+- Reconnection.
+- Frontend progress states.
+- Browser refresh recovery.
+- Duplicate submission protection.
+
+## 09-database-and-audit.md
+
+Document:
+
+- Existing models.
+- New fields.
+- New tables if any.
+- Migrations.
+- Synthesis attempt audit.
+- Workflow audit.
+- Timeline events.
+- Sensitive data handling.
+
+## 10-testing-and-validation.md
+
+Document:
 
 - Unit tests.
 - Integration tests.
 - Security tests.
-- Regression tests.
+- Durable workflow tests.
+- Recovery tests.
+- Frontend tests.
+- Migration tests.
 - Performance tests.
-- Test commands.
-- Test results.
-- Known limitations.
+- Actual commands and results.
 
-10-implementation-changelog.md
+## 11-implementation-changelog.md
 
-Maintain a chronological record of:
-
-- Date.
-- Phase.
-- Files changed.
-- Features implemented.
-- Decisions.
-- Tests executed.
-- Failures encountered.
-- Fixes.
-- Remaining work.
-
-11-future-mcp-and-plugin-integration.md
-
-Document:
-
-- Future MCP integration plan.
-- MCP client architecture.
-- Provider configuration.
-- Tool discovery.
-- Approval workflow.
-- External authentication.
-- Plugin architecture.
-- Provider monitoring.
-- Future implementation sequence.
-
-12-operations-and-troubleshooting.md
+Maintain chronological implementation history.
 
 Include:
 
-- Common validation failures.
-- Registration errors.
-- Provider errors.
-- Timeout behavior.
-- Redis rate-limit errors.
-- Audit failures.
-- Debugging instructions.
-- Operational configuration.
+- Date.
+- Phase.
+- Changes.
+- Files.
+- Tests.
+- Failures.
+- Fixes.
+- Decisions.
+- Remaining work.
 
-README.md
+## 12-future-candidate-patch-selection.md
 
-Create an index explaining:
+Document the P3 candidate patch architecture.
 
-- Purpose.
-- Architecture.
-- Document navigation.
-- Implementation status.
-- Current supported capabilities.
-- Future capabilities.
+## 13-operations-and-troubleshooting.md
 
-Documentation rules:
+Document:
 
-1. Use accurate file paths and class names.
-2. Include actual code examples from the implemented system.
-3. Include Mermaid diagrams.
-4. Explain why every major change exists.
-5. Document all configuration variables.
-6. Document all database migrations.
-7. Document all tests and their results.
-8. Clearly distinguish implemented features from planned features.
-9. Never claim a feature is implemented when it is only an interface or proposal.
-10. Update documentation as implementation progresses, not only at the end.
+- Workflow stuck states.
+- DBOS initialization errors.
+- Recovery failures.
+- Synthesis failures.
+- Patch mismatch.
+- Syntax failures.
+- Lint failures.
+- SSE disconnects.
+- Duplicate workflow submission.
+- Budget exhaustion.
+
+## README.md
+
+Create a complete documentation index.
+
+Also update existing:
+
+- Docs/agentic-chat/
+- Docs/engineering/13_architecture_decisions.md
+- Docs/engineering/14_changelog.md
+- Docs/README.md
+
+Only update the documents where relevant.
+
+Do not duplicate the same content across unrelated documentation files.
 
 ---
 
-# 16. TESTING REQUIREMENTS
+# 18. TESTING REQUIREMENTS
 
 Testing is mandatory.
 
-Inspect the existing tests first.
+Inspect the existing tests and add targeted coverage.
 
-Preserve and run relevant existing tests, especially:
+## 18.1 EditSynthesizer tests
 
-- backend/tests/test_tool_router.py
+Test:
+
+1. Successful generation.
+2. Invalid structured output.
+3. Missing search block.
+4. Missing replacement block.
+5. Exact single-match success.
+6. Zero-match rejection.
+7. Multiple-match rejection.
+8. Path traversal rejection.
+9. Forbidden file rejection.
+10. Stale content detection.
+11. Syntax validation failure.
+12. Ruff failure.
+13. ESLint failure where supported.
+14. Successful retry.
+15. Retry exhaustion.
+16. Token budget exhaustion.
+17. Provider timeout.
+18. Secret redaction.
+19. Per-file patch isolation.
+20. Atomic multi-block patch application.
+
+Use mocked LLM responses for deterministic unit tests.
+
+## 18.2 AgentExecutionLoop tests
+
+Test:
+
+- Caller payload takes priority.
+- Missing payload triggers synthesizer.
+- Payload from another step is never reused.
+- Read steps do not invoke synthesizer.
+- Delete steps do not invoke synthesizer.
+- Each file gets its own patch.
+- Plan-bound scope is enforced.
+- Existing dependency ordering remains correct.
+- Loop detection remains correct.
+- Existing maximum iteration behavior remains correct.
+- Synthesizer failures stop unsafe execution.
+
+## 18.3 Plan-bound security tests
+
+Test:
+
+- Approved file can be edited.
+- Unapproved file cannot be edited.
+- Path traversal cannot be edited.
+- Forbidden files cannot be edited.
+- Unexpected file in final diff is blocked.
+- Test files are not automatically exempt.
+- Markdown files are not automatically exempt.
+- Plan version changes invalidate approval.
+- Re-approval allows only the newly approved scope.
+- Delete operations remain restricted.
+
+## 18.4 Durable workflow tests
+
+Test:
+
+1. Workflow submission.
+2. HTTP 202 response.
+3. Workflow ID persistence.
+4. Duplicate submission.
+5. Workflow execution.
+6. Successful checkpoint.
+7. Simulated crash.
+8. Workflow recovery.
+9. Resume from checkpoint.
+10. No duplicate file modifications.
+11. No duplicate repair attempts.
+12. No duplicate Draft PR.
+13. Approval revalidation.
+14. Plan version invalidation.
+15. Budget preservation.
+16. Workflow failure reporting.
+17. Workflow status endpoint.
+18. Event persistence.
+19. SSE reconnection.
+20. Unauthorized workflow access.
+
+Use the existing DBOS test infrastructure where appropriate.
+
+A fake in-memory workflow is not sufficient proof of durability.
+
+## 18.5 Existing regression tests
+
+Preserve and run all relevant existing tests.
+
+At minimum inspect and run:
+
+- backend/tests/test_task_planner_and_executor_comprehensive.py
+- backend/tests/test_meet_w3_all_days.py
 - backend/tests/test_security_w3_tools.py
-- backend/tests/test_prit_w3_d3_workspace_execution.py
-- backend/tests/test_prit_w3_d4_restricted_test_runner.py
 - backend/tests/test_prit_w3_d5_verification_and_draft_pr.py
-- backend/tests/test_prit_w3_d7_acceptance.py
+- backend/tests/test_reliable_worker_architecture.py
 - backend/tests/test_week3_day3_day4_and_fixes.py
+- backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py
 
-Verify these exact paths exist before running them.
+Verify the paths before running them.
 
-Do not delete existing tests to make the suite pass.
+Do not remove existing tests.
 
-## 16.1 Registry tests
+Do not weaken assertions to make tests pass.
 
-Test:
+Run the wider backend suite where possible.
 
-- Successful registration.
-- Duplicate registration.
-- Conflicting version registration.
-- Unknown tool.
-- Disabled tool.
-- Invalid source.
-- Invalid risk tier.
-- Invalid timeout.
-- Invalid rate limit.
-- Schema fingerprint.
-- Version resolution.
-- Provider namespace collision.
-
-## 16.2 Schema validation tests
-
-Test:
-
-- Valid object.
-- Invalid property type.
-- Missing required field.
-- Invalid enum.
-- Invalid pattern.
-- Valid $defs.
-- Valid local $ref.
-- Invalid $ref.
-- oneOf.
-- anyOf.
-- allOf.
-- uniqueItems.
-- multipleOf.
-- minProperties.
-- maxProperties.
-- Format validation.
-- Malformed schema.
-- External reference rejection.
-- Excessive schema nesting.
-
-## 16.3 Execution tests
-
-Test:
-
-- Built-in adapter execution.
-- Input validation before handler execution.
-- Authorization denial.
-- Successful execution.
-- Invalid output.
-- Secret redaction.
-- Output size restriction.
-- Handler exception.
-- Internal TypeError.
-- No double execution.
-- Timeout.
-- Rate-limit rejection.
-- Concurrency-limit rejection.
-- Audit persistence.
-
-## 16.4 Security regression tests
-
-Specifically verify:
-
-1. External tools cannot claim trusted built-in identity.
-2. External tools cannot self-assign lower risk.
-3. MCP annotations do not bypass authorization.
-4. External adapters cannot bypass common validation.
-5. External adapters cannot bypass output sanitization.
-6. Invalid input never reaches handlers.
-7. Rate-limited requests never reach handlers.
-8. A failed authorization check always denies execution.
-9. Workspace paths remain restricted.
-10. Protected branch restrictions remain intact.
-11. Task ownership restrictions remain intact.
-12. Human publication approval remains mandatory.
-13. Secrets are not written into audit records.
-14. Timeouts do not cause duplicate execution.
-15. Provider name collisions cannot cause tool impersonation.
-
-## 16.5 Run the wider backend test suite
-
-Run:
-
-- Focused unit tests.
-- Existing security regression tests.
-- Relevant integration tests.
-- Database migration tests.
-- Full backend test suite where the environment permits.
-
-Record:
-
-- Number of tests passed.
-- Number of tests failed.
-- Number skipped.
-- Exact failure reasons.
-- Existing failures versus newly introduced failures.
-
-Never report tests as passing unless they were actually executed.
+Record exact failures.
 
 ---
 
-# 17. PERFORMANCE AND QUALITY REQUIREMENTS
+# 19. PERFORMANCE AND COST CONTROL
 
-This platform must remain efficient.
+This platform must remain cost-efficient.
 
-Avoid:
+Reuse existing model providers.
 
-- Recompiling schemas unnecessarily.
-- Recreating Redis clients for each call.
-- Repeated registry initialization.
-- Excessive database queries.
-- Unnecessary database tables.
-- Duplicate audit records.
-- Excessive logging.
-- Large tool outputs.
-- Blocking asynchronous execution.
-- Unbounded concurrent tool calls.
+Requirements:
 
-Measure performance before and after the refactor where possible.
+- No unnecessary LLM calls.
+- No full repository context in every prompt.
+- Limit generation retries to two after the initial attempt.
+- Cache or reuse relevant repository context only when revision-safe.
+- Use token budgets.
+- Use deterministic validation before requesting another LLM response.
+- Use focused lint checks.
+- Avoid unnecessary full test runs during synthesis.
+- Avoid unbounded parallel generation.
+- Do not run duplicate workflows.
+- Record actual token usage when available.
 
-Benchmark:
+Document:
 
-1. Tool registration.
-2. Tool resolution.
-3. Schema validation.
-4. Execution overhead.
-5. Audit persistence.
+- Average synthesis token consumption.
+- Maximum synthesis token budget.
+- Retry cost.
+- Workflow execution overhead.
+- Model/provider fallback behavior.
 
-Document results.
-
-Do not claim performance improvements without measurements.
+Do not invent cost estimates. Calculate them from actual provider pricing or clearly label assumptions.
 
 ---
 
-# 18. IMPLEMENTATION ORDER
+# 20. IMPLEMENTATION ORDER
 
-Follow this sequence.
+Follow the order below.
 
-Do not implement everything in one uncontrolled refactoring.
+## PHASE 0 — Existing architecture audit
 
-PHASE 0 — Existing code audit
+- Inspect source.
+- Inspect DBOS.
+- Inspect UI.
+- Inspect tests.
+- Inspect security boundaries.
+- Document findings.
 
-- Inspect files.
-- Map dependencies.
-- Identify existing tests.
-- Identify security boundaries.
-- Document the current architecture.
-- Record existing failures.
+## PHASE 1 — EditSynthesizer foundation
 
-PHASE 1 — Registry foundation
+- Create models.
+- Create service.
+- Integrate LLM provider.
+- Integrate code context.
+- Generate structured edits.
+- Add unit tests.
 
-- Expand ToolDefinition.
-- Introduce ToolAnnotations.
-- Introduce ToolRateLimit.
-- Introduce source metadata.
-- Introduce tool versioning.
-- Implement UnifiedToolRegistry.
-- Preserve compatibility.
+## PHASE 2 — Patch validation
 
-PHASE 2 — JSON Schema
+- Exact-match checks.
+- Path guard.
+- Stale-content protection.
+- Atomic patch application.
+- Syntax validation.
+- Lint validation.
 
-- Install jsonschema.
-- Implement SchemaValidator.
-- Validate schemas during registration.
-- Validate arguments.
-- Add output schema support.
-- Add schema tests.
+## PHASE 3 — Self-refinement
 
-PHASE 3 — Execution architecture
+- Feedback loop.
+- Maximum three attempts.
+- Budget integration.
+- Audit logging.
+- Timeline events.
 
-- Introduce explicit adapter interface.
-- Implement BuiltinWorkspaceAdapter.
-- Add MCP adapter boundary.
-- Add Plugin adapter boundary.
-- Refactor ToolRouter dispatch.
-- Remove TypeError-based fallback.
-- Preserve workspace policies.
+## PHASE 4 — AgentExecutionLoop integration
 
-PHASE 4 — Security and execution limits
+- Payload priority.
+- Remove cross-step fallback.
+- Integrate synthesizer.
+- Per-file patches.
+- Preserve loop detection.
+- Regression tests.
 
-- Introduce internal risk policy.
-- Introduce timeout manager.
-- Introduce Redis rate limiter.
-- Introduce concurrency controls.
-- Unify output sanitization.
-- Verify trusted adapter restrictions.
+## PHASE 5 — Plan-bound security
 
-PHASE 5 — Audit and database
+- Approved scope.
+- Server-side edit checks.
+- WorkspaceDiffVerifier integration.
+- Human re-approval.
+- Security tests.
 
-- Extend ToolInvocation where necessary.
-- Add migrations.
-- Update repository methods.
-- Update response schemas.
-- Verify audit correctness.
+## PHASE 6 — Durable workflow
 
-PHASE 6 — Orchestrator integration
+- Inspect DBOS POC.
+- Verify production initialization.
+- Implement durable workflow.
+- Integrate checkpoints.
+- Integrate recovery.
+- Implement idempotency.
 
-- Inject registry.
-- Remove unnecessary duplicate initialization.
-- Preserve agent execution.
-- Preserve existing task and workspace behavior.
+## PHASE 7 — API changes
 
-PHASE 7 — Testing
+- HTTP 202.
+- Workflow ID.
+- Workflow status endpoint.
+- Duplicate submission protection.
 
-- Run new tests.
-- Run existing regression tests.
-- Run security tests.
-- Run migration tests.
-- Run wider backend tests.
+## PHASE 8 — SSE and frontend
+
+- Progress events.
+- Reconnection.
+- Frontend workflow tracking.
+- Refresh recovery.
+- Execution status UI.
+
+## PHASE 9 — Database and audit
+
+- Models.
+- Migrations.
+- Repositories.
+- Workflow audit.
+- Synthesis audit.
+
+## PHASE 10 — Full regression and documentation
+
+- Run all relevant tests.
 - Fix regressions.
-
-PHASE 8 — Documentation and final review
-
-- Complete all documentation.
-- Update implementation changelog.
-- Update documentation index.
-- Verify diagrams.
-- Verify implementation status.
-- Produce final implementation report.
-
-You may adjust the order if the actual dependencies require it, but document why.
-
----
-
-# 19. STRICT SCOPE BOUNDARIES
-
-Implement now:
-
-- Unified Tool Registry.
-- Rich tool metadata.
-- JSON Schema Draft 2020-12 validation.
-- Input schema validation.
-- Optional output schema validation.
-- Tool versioning.
-- Source identification.
-- MCP-compatible annotations.
-- Internal risk classification.
-- Execution adapter architecture.
-- Built-in workspace adapter.
-- MCP adapter interface.
-- Plugin adapter interface.
-- Execution timeouts.
-- Rate limiting.
-- Concurrency controls where supported.
-- Common output sanitization.
-- Improved audit logging.
-- Regression testing.
+- Validate migrations.
+- Validate frontend.
 - Complete documentation.
+- Produce final report.
 
-Do NOT implement in this milestone:
-
-- Actual MCP server connections.
-- Automatic MCP server discovery over the network.
-- Arbitrary third-party plugin installation.
-- Arbitrary remote code execution.
-- New frontend MCP management screens.
-- External plugin marketplaces.
-- Unnecessary changes to the agent's LLM orchestration.
-- A complete rewrite of WorkspaceManager.
-- A replacement for PolicyEngine.
-
-These belong to future milestones.
+You may change the order only when actual technical dependencies require it. Document the reason.
 
 ---
 
-# 20. SECURITY RULES THAT MUST NEVER BE VIOLATED
+# 21. STRICT IMPLEMENTATION RULES
 
-1. Never weaken existing authorization.
-2. Never remove WorkspacePathGuard.
-3. Never remove command allowlists.
-4. Never remove dangerous flag restrictions.
-5. Never allow untrusted tools to become trusted built-in tools.
-6. Never trust external semantic annotations for authorization.
-7. Never allow MCP tools to bypass PolicyEngine.
-8. Never allow plugin tools to bypass common execution controls.
-9. Never expose credentials in logs.
-10. Never execute invalid arguments.
-11. Never retry destructive operations automatically.
-12. Never treat a timeout as proof that a remote operation failed.
-13. Never allow uncontrolled remote JSON Schema references.
-14. Never allow one task to access another task's workspace.
-15. Never bypass protected branch restrictions.
-16. Never bypass human publication approval.
-17. Never silently swallow security failures.
-18. Never claim a test passed without running it.
+1. Do not replace the existing AgentExecutionLoop.
+2. Do not remove LoopDetector.
+3. Do not remove execution budgets.
+4. Do not remove checkpoints.
+5. Do not remove recovery.
+6. Do not weaken ADR-010.
+7. Do not permit modifications outside approved scope.
+8. Do not reuse content from another step.
+9. Do not fabricate placeholder code.
+10. Do not trust unvalidated LLM output.
+11. Do not apply ambiguous search/replace blocks.
+12. Do not silently apply multiple occurrences.
+13. Do not apply stale patches.
+14. Do not retry destructive operations automatically.
+15. Do not pass live SQLAlchemy sessions to durable workflow arguments.
+16. Do not claim in-memory background tasks are durable.
+17. Do not duplicate DBOS initialization.
+18. Do not introduce another workflow engine.
+19. Do not duplicate existing SSE infrastructure.
+20. Do not change unrelated authentication or deployment architecture.
+21. Do not expose internal prompts or credentials.
+22. Do not automatically merge pull requests.
+23. Do not claim a feature is implemented until it is tested.
+24. Do not create unnecessary database tables.
+25. Do not skip documentation.
 
-If a requested change conflicts with an existing security guarantee, stop and document the conflict before implementing that change.
+If a security-sensitive design decision is unclear, document the conflict and request clarification rather than silently choosing a weaker implementation.
 
 ---
 
-# 21. DEFINITION OF DONE
+# 22. DEFINITION OF DONE
 
-The task is complete only when the following conditions are satisfied.
+## Autonomous code synthesis
 
-## Architecture
+- [ ] EditSynthesizer implemented.
+- [ ] Existing LLM provider reused.
+- [ ] Structured edit output implemented.
+- [ ] Per-file patches implemented.
+- [ ] Exact-match validation implemented.
+- [ ] Path guard integrated.
+- [ ] Stale-content validation implemented.
+- [ ] Syntax validation implemented.
+- [ ] Lint validation implemented.
+- [ ] Two bounded correction retries implemented.
+- [ ] Synthesis attempts audited.
 
-- [ ] Unified Tool Registry implemented.
-- [ ] ToolDefinition expanded.
-- [ ] Source and version management implemented.
-- [ ] Execution adapters implemented.
-- [ ] Existing workspace bridge integrated.
-- [ ] MCP adapter boundary documented.
-- [ ] Plugin adapter boundary documented.
+## Agent integration
 
-## Validation
+- [ ] Caller payload priority preserved.
+- [ ] Cross-step content fallback removed.
+- [ ] Missing payload triggers synthesis.
+- [ ] Multiple files handled correctly.
+- [ ] Existing loop detector preserved.
+- [ ] Existing execution budgets preserved.
 
-- [ ] Standard jsonschema validation implemented.
-- [ ] Draft 2020-12 used.
-- [ ] Registration-time schema validation implemented.
-- [ ] Input validation implemented.
-- [ ] Optional output validation implemented.
-- [ ] Remote reference resolution restricted.
+## Plan-bound editing
 
-## Execution
+- [ ] Approved file scope enforced.
+- [ ] Scope enforced before every modification.
+- [ ] Diff scope independently verified.
+- [ ] Unexpected files blocked.
+- [ ] Explicit re-approval implemented.
+- [ ] ADR-010 preserved.
 
-- [ ] Timeouts implemented.
-- [ ] Rate limits implemented.
-- [ ] Concurrency limits implemented or documented as unsupported.
-- [ ] Handler dispatch is explicit.
-- [ ] Double-execution issue fixed.
-- [ ] Common output sanitization implemented.
+## Durable workflow
 
-## Security
+- [ ] DBOS production integration verified.
+- [ ] Durable workflow implemented.
+- [ ] Stable workflow ID implemented.
+- [ ] HTTP 202 implemented.
+- [ ] Idempotent submission implemented.
+- [ ] Workflow status API implemented.
+- [ ] Checkpoints integrated.
+- [ ] Recovery integrated.
+- [ ] Database session lifecycle safe.
+- [ ] No duplicate destructive execution.
 
-- [ ] Existing workspace security preserved.
-- [ ] PolicyEngine integration preserved.
-- [ ] Risk classification implemented.
-- [ ] External provider trust boundary enforced.
-- [ ] Secret redaction preserved.
-- [ ] Approval checks preserved.
+## Progress and frontend
 
-## Auditing
-
-- [ ] Existing ToolInvocation preserved.
-- [ ] Required audit metadata added.
-- [ ] Database migrations tested.
-- [ ] Error categories standardized.
-- [ ] No credentials stored in audit records.
+- [ ] Progress events implemented.
+- [ ] SSE integration verified.
+- [ ] Reconnection supported.
+- [ ] Frontend updated.
+- [ ] Browser refresh recovery supported.
+- [ ] Duplicate workflow submissions prevented.
 
 ## Testing
 
-- [ ] New unit tests pass.
-- [ ] Existing tool router tests pass.
-- [ ] Existing security tests pass.
-- [ ] Workspace regression tests pass.
-- [ ] Database migration tests pass.
-- [ ] Wider backend test suite executed where possible.
+- [ ] EditSynthesizer tests pass.
+- [ ] Patch validation tests pass.
+- [ ] Plan scope tests pass.
+- [ ] Durable execution tests pass.
+- [ ] Crash recovery tests pass.
+- [ ] Existing regression tests pass.
+- [ ] Migration tests pass.
+- [ ] Frontend tests pass where available.
 
 ## Documentation
 
-- [ ] Existing documentation reviewed.
-- [ ] Architecture audit updated.
-- [ ] Research and design decisions documented.
-- [ ] Implementation explained.
-- [ ] Security explained.
-- [ ] Database changes documented.
-- [ ] Testing results documented.
-- [ ] Changelog updated.
-- [ ] Future MCP/plugin roadmap documented.
+- [ ] Architecture audit.
+- [ ] Research.
+- [ ] Design decisions.
+- [ ] Synthesizer implementation.
+- [ ] Patch validation.
+- [ ] Plan-bound security.
+- [ ] Durable workflow.
+- [ ] API and frontend.
+- [ ] Database and audit.
+- [ ] Testing results.
+- [ ] Changelog.
+- [ ] Future candidate patch architecture.
 
 ---
 
-# 22. FINAL IMPLEMENTATION REPORT
+# 23. FINAL IMPLEMENTATION REPORT
 
-At the end, provide a comprehensive report.
+At completion, provide:
 
-Use this structure:
+## A. Executive summary
 
-## A. Executive Summary
+Explain what was implemented.
 
-Explain what changed and why.
+## B. Existing architecture versus final architecture
 
-## B. Existing vs New Architecture
+Explain the major differences.
 
-Explain the previous architecture and final architecture.
-
-## C. Files Created
-
-List every new file and its responsibility.
-
-## D. Files Modified
-
-For each file explain:
-
-- What changed.
-- Why it changed.
-- Which functionality was affected.
-
-## E. Technical Implementation
+## C. EditSynthesizer implementation
 
 Explain:
 
-- Registry.
-- ToolDefinition.
-- Schema validation.
-- Versioning.
-- Annotations.
-- Risk policies.
-- Adapters.
-- Timeouts.
-- Rate limiting.
-- Output validation.
-- Auditing.
+- LLM integration.
+- Context preparation.
+- Localization.
+- Structured output.
+- Patch generation.
+- Validation.
+- Self-refinement.
 
-## F. Security Analysis
+## D. AgentExecutionLoop changes
 
-Explain existing security preservation and new protections.
+Explain payload priority, synthesis integration, per-file edits, and loop detection.
 
-## G. Database Changes
+## E. Plan-bound security
 
-List migrations and model changes.
+Explain how unauthorized file modifications are prevented and how re-approval works.
 
-## H. Testing Results
+## F. Durable execution
 
-Give actual test commands and results.
+Explain DBOS architecture, workflow IDs, durable steps, idempotency, checkpoints, and recovery.
 
-## I. Documentation Created/Updated
+## G. API and frontend
 
-List every documentation file.
+Explain 202 responses, status APIs, SSE and UI changes.
 
-## J. Remaining Issues
+## H. Database changes
 
-Clearly identify anything incomplete.
+List all models, tables and migrations.
 
-## K. Future MCP and Plugin Integration
+## I. Files created and modified
 
-Explain how the architecture supports future integration and what remains to be implemented.
+Give exact paths and responsibilities.
 
-## L. Final Acceptance Checklist
+## J. Testing results
 
-Mark each requirement:
+Give actual commands, passed/failed/skipped counts, and unresolved failures.
+
+## K. Documentation
+
+List every document created or updated.
+
+## L. Remaining limitations
+
+Clearly distinguish implemented capabilities from planned capabilities.
+
+## M. Final acceptance checklist
+
+Use:
 
 - COMPLETED
 - PARTIALLY COMPLETED
 - NOT COMPLETED
 - BLOCKED
 
-Do not mark an item completed without evidence.
+Do not mark something completed without implementation and test evidence.
 
 ---
 
-# 23. EXECUTION INSTRUCTIONS FOR ANTIGRAVITY
+# 24. START EXECUTION
 
-Follow these working rules throughout the task.
+Start with PHASE 0.
 
-1. Start by inspecting the actual repository.
-2. Read all relevant source files before modifying them.
-3. Read the existing documentation.
-4. Create the implementation audit first.
-5. Present the proposed file-level implementation plan.
-6. Implement incrementally.
-7. Keep changes focused on this feature.
-8. Update documentation alongside implementation.
-9. Run tests after each significant phase.
-10. Fix regressions before proceeding.
-11. Do not remove existing functionality to simplify implementation.
-12. Do not create unnecessary abstractions.
-13. Do not duplicate existing utilities.
-14. Do not invent configuration or database structures without inspecting the project.
-15. Do not silently skip failed tests.
-16. Do not leave placeholder implementations while claiming features are complete.
-17. Clearly document future-only adapter boundaries.
-18. Keep the code readable, typed and maintainable.
+First:
 
-If the implementation is too large for one working session, complete it in phases and maintain an accurate progress document so work can resume without repeating completed changes.
+1. Inspect the complete relevant implementation.
+2. Map the existing dependencies.
+3. Verify DBOS readiness.
+4. Identify the existing LLM provider and localization services.
+5. Inspect the real API and SSE routes.
+6. Inspect the current security boundaries.
+7. Inspect the existing tests.
+8. Write the architecture audit document.
+9. Produce the file-by-file implementation plan.
 
-Do not stop after the planning phase. Continue with implementation unless a genuine blocker requires my decision.
+Then continue with implementation.
 
-**MOST IMPORTANT: Preserve the existing working platform. The goal is to improve the architecture, not break or replace the existing system.**
+Do not stop at the audit or planning stage.
 
-Begin with PHASE 0: inspect the repository, audit the existing ToolRouter architecture, and document the findings. Then proceed through the implementation phases in order.
+If a phase is too large for one session, complete it incrementally and maintain an accurate implementation changelog and progress document.
+
+MOST IMPORTANT:
+
+The final system must be capable of taking a human-approved development plan, autonomously generating valid code changes, applying only authorized patches, executing tests, performing bounded repair, verifying the final diff, and surviving HTTP disconnections or backend restarts without losing workflow state.
+
+**The goal is genuine end-to-end autonomous software development with strict human approval, workspace isolation, plan-bound edits, durable execution, and complete auditability.**

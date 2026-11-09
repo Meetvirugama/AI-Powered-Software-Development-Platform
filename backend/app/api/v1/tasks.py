@@ -15,7 +15,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -249,6 +249,17 @@ class TaskAutonomousWorkflowRequest(BaseModel):
     publication_authorized: bool = Field(default=False)
     pr_title: str | None = Field(default=None, max_length=512)
     pr_body: str | None = Field(default=None, max_length=10000)
+    async_execution: bool = Field(default=False, description="Run workflow asynchronously via durable DBOS workflow and return HTTP 202.")
+
+
+class TaskWorkflowAcceptedResponse(BaseModel):
+    """HTTP 202 Accepted response for autonomous workflow submission."""
+
+    task_id: str
+    workflow_id: str
+    status: str = "QUEUED"
+    message: str = "Autonomous execution has been accepted."
+    status_url: str
 
 
 # ---------------------------------------------------------------------------
@@ -1543,13 +1554,54 @@ def check_task_invariants_endpoint(
 def run_autonomous_workflow_endpoint(
     task_id: UUID,
     request: Request,
+    response: Response,
     body: TaskAutonomousWorkflowRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     task, user_id = _owned_task(task_id, request, db)
     task_repo = TaskRepository(db)
-    orchestrator = get_task_execution_orchestrator(request.app.state)
 
+    # Check if async durable workflow execution was requested
+    is_async = (
+        (body and body.async_execution)
+        or request.headers.get("prefer") == "respond-async"
+        or request.query_params.get("async") == "true"
+    )
+
+    if is_async:
+        from ai.workflows import AutonomousWorkflowInput, submit_autonomous_workflow
+
+        plan = task_repo.get_approved_plan(task.id)
+        if not plan:
+            raise APIError(
+                status.HTTP_400_BAD_REQUEST,
+                ErrorCode.INVALID_REQUEST,
+                f"Task '{task_id}' has no approved plan. Approval gate violation (ADR-010).",
+            )
+
+        input_data = AutonomousWorkflowInput(
+            task_id=str(task.id),
+            actor_id=str(user_id) if user_id else None,
+            approved_plan_version=plan.plan_version,
+            approved_base_revision=task.base_revision,
+            step_payloads=body.step_payloads if body else {},
+            run_tests=body.run_tests if body else True,
+            auto_repair=body.auto_repair if body else True,
+            publication_authorized=body.publication_authorized if body else False,
+            pr_title=body.pr_title if body else None,
+            pr_body=body.pr_body if body else None,
+        )
+        wf_res, _ = submit_autonomous_workflow(input_data, background=True)
+        response.status_code = status.HTTP_202_ACCEPTED
+        return {
+            "task_id": str(task.id),
+            "workflow_id": wf_res.workflow_id,
+            "status": wf_res.status.value,
+            "message": "Autonomous execution has been accepted.",
+            "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
+        }
+
+    orchestrator = get_task_execution_orchestrator(request.app.state)
     return orchestrator.run_autonomous_post_approval_workflow(
         task=task,
         task_repo=task_repo,
@@ -1561,6 +1613,75 @@ def run_autonomous_workflow_endpoint(
         pr_title=body.pr_title if body else None,
         pr_body=body.pr_body if body else None,
     )
+
+
+@router.get(
+    "/{task_id}/workflow-status",
+    summary="Get durable workflow execution progress and status",
+)
+def get_task_workflow_status(
+    task_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, _ = _owned_task(task_id, request, db)
+    from ai.workflows.autonomous_task_workflow import (
+        _active_workflows,
+        _registry_lock,
+        _task_to_workflow,
+        get_active_workflow,
+    )
+
+    wf = get_active_workflow(str(task.id))
+    if not wf:
+        with _registry_lock:
+            wf_id = _task_to_workflow.get(str(task.id))
+            if wf_id:
+                wf = _active_workflows.get(wf_id)
+
+    if not wf:
+        is_completed = task.status in ("COMPLETED", "DRAFT_PR_CREATED", "VERIFIED")
+        return {
+            "task_id": str(task.id),
+            "workflow_id": f"wf-{task.id}",
+            "status": "COMPLETED" if is_completed else ("FAILED" if task.status == "FAILED" else "QUEUED"),
+            "current_step": None,
+            "completed_steps": [cp.step_name for cp in (task.checkpoints or [])],
+            "progress_percentage": 100 if is_completed else 0,
+            "verification": (
+                task.verification_results[-1]
+                if getattr(task, "verification_results", None)
+                else None
+            ),
+            "pull_request": None,
+            "error_summary": None,
+            "started_at": task.created_at.isoformat() if getattr(task, "created_at", None) else "",
+            "updated_at": task.updated_at.isoformat() if getattr(task, "updated_at", None) else "",
+            "completed_at": (
+                task.completed_at.isoformat()
+                if getattr(task, "completed_at", None)
+                else None
+            ),
+            "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
+        }
+
+    total_steps = 7
+    pct = int((len(wf.completed_steps) / total_steps) * 100) if total_steps else 0
+    return {
+        "task_id": str(task.id),
+        "workflow_id": wf.workflow_id,
+        "status": wf.status.value,
+        "current_step": wf.current_step,
+        "completed_steps": wf.completed_steps,
+        "progress_percentage": min(100, pct),
+        "verification": wf.verification,
+        "pull_request": wf.pull_request,
+        "error_summary": wf.error_summary,
+        "started_at": wf.started_at,
+        "updated_at": wf.updated_at,
+        "completed_at": wf.completed_at,
+        "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
+    }
 
 
 @router.get(
