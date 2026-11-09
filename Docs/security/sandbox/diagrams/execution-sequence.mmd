@@ -1,0 +1,21 @@
+sequenceDiagram
+    autonumber
+    actor Dev as Developer / AI Agent
+    participant API as API Server (App Service)
+    participant Client as RunnerClient
+    participant Runner as Runner Service (Linux VM)
+    participant Docker as Docker / gVisor Engine
+    participant Sandbox as Isolated Task Container
+
+    Dev->>API: Execute Plan / Run Tests (task_id)
+    API->>Client: execute_command(task_id, cmd, args)
+    Client->>Runner: POST /internal/v1/workspaces/{task_id}/exec<br/>(Bearer Token, command, args)
+    Runner->>Runner: Validate command allowlist & argument tokens
+    Runner->>Docker: docker run / exec with security profile<br/>(--network=none, --read-only, --user 10001)
+    Docker->>Sandbox: Execute command in /workspace
+    Sandbox-->>Docker: Output / Exit Code
+    Docker-->>Runner: Execution Stream (bounded to 100 KB)
+    Runner->>Runner: Redact secrets, parse metrics & duration
+    Runner-->>Client: 200 OK (WorkspaceCommandResult)
+    Client-->>API: Command Result
+    API-->>Dev: Verified Results

@@ -1,0 +1,21 @@
+graph TD
+    Client["Browser / Developer Web Client"] -->|HTTPS / WSS| Vercel["Vercel Frontend"]
+    Vercel -->|REST API / Bearer JWT| AppService["Azure App Service (B1/P1v2)<br/>FastAPI Orchestration & Background Worker"]
+    
+    AppService -->|PostgreSQL Wire Protocol| Supabase["Supabase DB (Postgres + pgvector)"]
+    AppService -->|Redis Protocol (TLS)| Upstash["Upstash Redis (Job queue & locks)"]
+    
+    AppService -->|Private VNet / Internal HTTPS<br/>X-Runner-Token Auth| RunnerVM["Dedicated Azure Linux Runner VM (Standard_B2s)<br/>Ubuntu 24.04 LTS"]
+    
+    subgraph RunnerHost["Runner VM Internal Architecture"]
+        RunnerService["FastAPI Runner Service (Port 8080)"]
+        DockerDaemon["Docker Daemon (dockerd)"]
+        gVisorDaemon["gVisor runsc runtime"]
+        Sandboxes["Per-Task Containers (Task-1...Task-N)"]
+        
+        RunnerService --> DockerDaemon
+        DockerDaemon --> gVisorDaemon
+        gVisorDaemon --> Sandboxes
+    end
+    
+    RunnerVM -.->|Firewall / NSG: Ingress 8080 only from App Service VNet| AppService

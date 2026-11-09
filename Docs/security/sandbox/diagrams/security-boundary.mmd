@@ -1,0 +1,32 @@
+graph LR
+    subgraph External["Untrusted Domain"]
+        RepoCode["Untrusted Git Repository Code<br/>(conftest.py, tests, npm scripts)"]
+    end
+
+    subgraph ContainerJail["Container Sandbox Boundary"]
+        FS_RO["Read-Only Root Filesystem (/)"]
+        TmpFS["tmpfs /tmp (noexec, nosuid, 512MB)"]
+        UserLimit["Non-Root UID 10001:10001"]
+        CapDrop["Linux Capabilities: ALL DROPPED"]
+        NoPriv["no-new-privileges: true"]
+        NetNone["Network: --network=none"]
+        CgroupCPU["CPU Limit: 2.0 vCPU"]
+        CgroupMem["RAM Limit: 4 GB"]
+        CgroupPID["PID Limit: 512"]
+    end
+
+    subgraph UserspaceKernel["gVisor Syscall Interception Boundary"]
+        Sentry["gVisor Sentry<br/>Userspace Syscall Emulation"]
+        Gofer["gVisor Gofer<br/>Secure Filesystem Proxy"]
+    end
+
+    subgraph HostProtected["Protected Host Resources (Inaccessible)"]
+        HostSecrets["Host Secrets & Environment<br/>(GEMINI_API_KEY, DB_PASS, JWT_SECRET)"]
+        DockerSock["Docker Socket (/var/run/docker.sock)"]
+        HostProc["Host /proc and Sibling Tasks"]
+        HostNet["Internal VNet & Cloud IMDS (169.254.169.254)"]
+    end
+
+    RepoCode --> ContainerJail
+    ContainerJail --> UserspaceKernel
+    UserspaceKernel -.->|Blocked| HostProtected

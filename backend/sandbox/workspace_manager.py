@@ -24,8 +24,11 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from sandbox.backend import SandboxBackend
 
 from app.core.config import PROJECT_ROOT
 from app.core.secret_redaction import redact
@@ -115,27 +118,38 @@ def _validate_ref_or_option(val: str | None, name: str = "ref") -> None:
 class WorkspaceManager:
     """Manages isolated working environments and Git worktrees for tasks."""
 
-    def __init__(self, base_workspaces_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        base_workspaces_dir: str | Path | None = None,
+        backend: SandboxBackend | None = None,
+    ) -> None:
         """Initialize the workspace manager.
 
         Args:
             base_workspaces_dir: Custom root for workspace sandboxes. Defaults to PROJECT_ROOT / .workspaces.
+            backend: Optional isolated sandbox execution backend (ContainerBackend, LocalSubprocessBackend, RunnerClient).
         """
         if base_workspaces_dir is not None:
             self._base_dir = Path(base_workspaces_dir).resolve()
         else:
             self._base_dir = (PROJECT_ROOT / DEFAULT_WORKSPACE_SUBDIR).resolve()
 
+        self._backend = backend
         self._workspaces: dict[str, WorkspaceMetadata] = {}
         self._monitors: dict[str, WorkspaceResourceMonitor] = {}
         self._timeline: dict[str, list[WorkspaceExecutionEvent]] = {}
-        self._command_runner = WorkspaceCommandRunner()
+        self._command_runner = WorkspaceCommandRunner(backend=self._backend)
         self._test_runner = WorkspaceTestRunner(command_runner=self._command_runner)
         self._test_history: dict[str, list[WorkspaceTestExecutionResult]] = {}
         self._diff_verifier = WorkspaceDiffVerifier()
         self._repo_roots: dict[str, Path] = {}
         self._task_locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
+
+    @property
+    def backend(self) -> SandboxBackend | None:
+        """Return the bound sandbox execution backend."""
+        return self._backend
 
     @property
     def base_directory(self) -> Path:

@@ -213,6 +213,27 @@ class Settings(BaseSettings):
     embedding_max_requests_per_minute: int = 120
     embedding_max_concurrency: int = 5
 
+    # --- Secure Sandbox & Runner Configuration (Issue #200 / F20) ---------
+    sandbox_backend: str = "local"
+    runner_base_url: str | None = None
+    runner_auth_secret: str | None = None
+    runner_request_timeout: float = 60.0
+    runner_allow_unauthenticated_dev: bool = False
+    sandbox_cpu_limit: float = 2.0
+    sandbox_memory_limit: str = "4g"
+    sandbox_pid_limit: int = 512
+    sandbox_disk_limit_mb: int = 500
+    sandbox_file_limit_mb: int = 5
+    sandbox_output_limit_bytes: int = 102_400
+    sandbox_default_timeout: int = 30
+    sandbox_max_lifetime: int = 3600
+    sandbox_idle_timeout: int = 600
+    sandbox_max_concurrent_tasks: int = 5
+    sandbox_runtime: str = "runc"
+    sandbox_python_image: str = "python:3.12-slim"
+    sandbox_node_image: str = "node:20-slim"
+    sandbox_use_gvisor: bool = True
+
     @property
     def is_production(self) -> bool:
         """Return True if application is running in production mode."""
@@ -307,6 +328,23 @@ class Settings(BaseSettings):
                         raise ValueError(
                             "Production configuration error: Remote production Redis connection must use TLS (rediss://)."
                         )
+
+            # Validate sandbox backend in production: never permit local host subprocess (F20)
+            clean_backend = (self.sandbox_backend or "").strip().lower()
+            if clean_backend in ("local", "subprocess", "localsubprocess"):
+                raise ValueError(
+                    "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
+                    "SANDBOX_BACKEND must be 'container' or 'runner'."
+                )
+            if clean_backend == "runner":
+                if not self.runner_base_url or not self.runner_base_url.strip():
+                    raise ValueError(
+                        "Production configuration error: RUNNER_BASE_URL must be configured when SANDBOX_BACKEND is 'runner'."
+                    )
+                if not self.runner_auth_secret or len(self.runner_auth_secret.strip()) < 16:
+                    raise ValueError(
+                        "Production configuration error: RUNNER_AUTH_SECRET must be configured with at least 16 characters in production."
+                    )
         return self
 
 

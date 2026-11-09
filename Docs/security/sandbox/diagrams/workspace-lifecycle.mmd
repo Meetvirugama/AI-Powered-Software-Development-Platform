@@ -1,0 +1,25 @@
+stateDiagram-v2
+    [*] --> NOT_CREATED
+    NOT_CREATED --> CREATING: create_workspace()
+    CREATING --> READY: Workspace & container initialized
+    CREATING --> FAILED: Provisioning error
+
+    READY --> INSTALLING_DEPENDENCIES: Phase A (Manifest detected)
+    INSTALLING_DEPENDENCIES --> DEPENDENCIES_INSTALLED: pip / npm install complete
+    INSTALLING_DEPENDENCIES --> FAILED: Dependency error / Timeout
+
+    DEPENDENCIES_INSTALLED --> EXECUTING: Phase B (Offline tests)
+    READY --> EXECUTING: Phase B (No new dependencies)
+
+    EXECUTING --> COLLECTING_RESULTS: Process completed
+    EXECUTING --> TIMED_OUT: Exceeded budget (kill process tree)
+    EXECUTING --> CANCELLED: User requested cancellation
+
+    COLLECTING_RESULTS --> COMPLETED: Exit code & diff captured
+    COLLECTING_RESULTS --> FAILED: Execution error
+
+    COMPLETED --> DESTROYED: Retention policy / destroy_workspace()
+    FAILED --> DESTROYED: Error cleanup
+    TIMED_OUT --> DESTROYED: Timeout cleanup
+    CANCELLED --> DESTROYED: Cancellation cleanup
+    DESTROYED --> [*]
