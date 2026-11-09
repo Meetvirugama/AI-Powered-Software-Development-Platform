@@ -171,9 +171,9 @@ class ContextBuilder:
         history: Sequence[ChatMessage | Mapping[str, Any] | Any] | None = None,
         related_files: Sequence[RepositoryFile] | None = None,
     ) -> AgentContext:
-        """Assemble token-bounded context for an LLM call."""
+        """Assemble token-bounded context for an LLM call using the effective token budget."""
         return build_chat_context(
-            max_tokens=self._max_tokens,
+            max_tokens=self.effective_max_tokens,
             overhead_tokens=self._overhead_tokens,
             chunks=chunks,
             memory=memory,
@@ -205,6 +205,23 @@ class ContextBuilder:
         revision: str | None = None,
     ) -> IntelligenceContext:
         """Build an enriched, token-bounded context for developer intelligence features."""
+        # Preserve explicitly configured ContextLimits settings; propagate builder defaults if unset
+        if limits is not None:
+            active_limits = limits
+            if active_limits.provider is None and active_limits.safety_factor is None:
+                if self._provider is not None:
+                    active_limits.provider = self._provider
+                if self._safety_factor is not None:
+                    active_limits.safety_factor = self._safety_factor
+            elif active_limits.provider is None and self._provider is not None:
+                active_limits.provider = self._provider
+        else:
+            active_limits = ContextLimits(
+                max_tokens=token_budget,
+                provider=self._provider,
+                safety_factor=self._safety_factor,
+            )
+
         return build_intelligence_context(
             target=target,
             related_symbols=related_symbols,
@@ -212,7 +229,7 @@ class ContextBuilder:
             repository_files=repository_files,
             project_rules=project_rules,
             token_budget=token_budget,
-            limits=limits,
+            limits=active_limits,
             revision=revision,
         )
 

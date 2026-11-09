@@ -51,7 +51,16 @@ from ai.context.token_budget import (
 )
 from ai.llm.client import LLMGateway
 from ai.llm.provider import LLMProvider
-from ai.llm.schemas import LLMRequest, LLMResponse, LLMToolRequest, LLMToolResponse, Message
+from ai.llm.schemas import (
+    LLMAuthenticationError,
+    LLMError,
+    LLMRequest,
+    LLMResponse,
+    LLMToolRequest,
+    LLMToolResponse,
+    LLMUnavailableError,
+    Message,
+)
 from ai.retrieval.base import CodeChunk
 from app.models.task import Task
 
@@ -154,17 +163,36 @@ class TestSafetyFactor:
         assert get_safety_factor(provider="openai", custom_factor=1.10) == 1.10
 
     def test_invalid_safety_factor_rejected(self):
-        """Zero or negative safety factor raises ValueError."""
-        with pytest.raises(ValueError, match="Safety factor must be positive"):
+        """Zero, negative, or non-finite safety factor raises ValueError."""
+        with pytest.raises(ValueError, match="Safety factor must be finite and positive"):
             get_safety_factor(custom_factor=0.0)
-        with pytest.raises(ValueError, match="Safety factor must be positive"):
+        with pytest.raises(ValueError, match="Safety factor must be finite and positive"):
             get_safety_factor(custom_factor=-1.15)
+        with pytest.raises(ValueError, match="Safety factor must be finite and positive"):
+            get_safety_factor(custom_factor=float("nan"))
+        with pytest.raises(ValueError, match="Safety factor must be finite and positive"):
+            get_safety_factor(custom_factor=float("inf"))
+        with pytest.raises(ValueError, match="Safety factor must be finite and positive"):
+            get_safety_factor(custom_factor=float("-inf"))
 
     def test_env_var_safety_factor_override(self, monkeypatch):
-        """AI_TOKEN_SAFETY_FACTOR environment variable overrides defaults."""
+        """AI_TOKEN_SAFETY_FACTOR environment variable overrides defaults, rejecting non-finite/non-positive values."""
         monkeypatch.setenv("AI_TOKEN_SAFETY_FACTOR", "1.30")
         assert get_safety_factor(provider="gemini") == 1.30
         assert get_safety_factor(provider="unknown") == 1.30
+
+        # Non-numeric, non-finite, or non-positive values should be ignored with fallback to provider defaults
+        monkeypatch.setenv("AI_TOKEN_SAFETY_FACTOR", "nan")
+        assert get_safety_factor(provider="gemini") == 1.15
+
+        monkeypatch.setenv("AI_TOKEN_SAFETY_FACTOR", "inf")
+        assert get_safety_factor(provider="gemini") == 1.15
+
+        monkeypatch.setenv("AI_TOKEN_SAFETY_FACTOR", "-1.2")
+        assert get_safety_factor(provider="gemini") == 1.15
+
+        monkeypatch.setenv("AI_TOKEN_SAFETY_FACTOR", "invalid_string")
+        assert get_safety_factor(provider="gemini") == 1.15
 
     def test_calculate_effective_budget(self):
         """calculate_effective_budget scales down configured budget by safety factor."""
@@ -348,6 +376,53 @@ class TestCalibrationTelemetry:
         response = await gateway.generate(request)
         assert response.content == "Success regardless of telemetry"
 
+    @pytest.mark.asyncio
+    async def test_llm_gateway_fallback_recomputes_estimated_tokens(self):
+        """When primary provider fails, fallback branch recomputes estimated_tokens for fallback provider."""
+        primary_provider = MagicMock(spec=LLMProvider)
+        primary_provider.provider_name = "gemini"
+        primary_provider.default_model = "gemini-1.5-flash"
+        primary_provider.generate = AsyncMock(
+            side_effect=LLMUnavailableError("Primary Gemini unavailable")
+        )
+
+        fallback_provider = MagicMock(spec=LLMProvider)
+        fallback_provider.provider_name = "openai"
+        fallback_provider.default_model = "gpt-4o-mini"
+        fallback_provider.generate = AsyncMock(
+            return_value=LLMResponse(
+                content="Fallback response",
+                model="gpt-4o-mini",
+                input_tokens=80,
+                output_tokens=15,
+            )
+        )
+
+        tracker = get_calibration_tracker()
+        tracker.clear()
+
+        gateway = LLMGateway(
+            provider=primary_provider,
+            fallback_provider=fallback_provider,
+            model_map={"gemini-1.5-flash": "gpt-4o-mini"},
+        )
+        request = LLMRequest.create(
+            model="gemini-1.5-flash",
+            messages=[Message(role="user", content="def calculate_total(): return 100")],
+            estimated_tokens=999,  # Primary estimate that must NOT leak to fallback
+        )
+        response = await gateway.generate(request)
+        assert response.content == "Fallback response"
+
+        samples = tracker.get_samples(provider="openai")
+        assert len(samples) == 1
+        sample = samples[0]
+        assert sample.provider == "openai"
+        assert sample.model == "gpt-4o-mini"
+        # Must NOT be 999 (the primary's estimate)
+        assert sample.estimated_tokens != 999
+        assert sample.actual_input_tokens == 80
+
 
 # ---------------------------------------------------------------------------
 # 4. Feature Context Builders Regression Tests
@@ -489,3 +564,82 @@ class TestFeatureContextBuildersRegression:
         assert "<<<REPO_DATA_START>>>" in rendered
         assert "<<<REPO_DATA_END>>>" in rendered
         assert "SECRET_KEY = 123" in rendered
+
+    def test_context_builder_build_uses_effective_budget(self):
+        """ContextBuilder.build() fits items within effective_max_tokens."""
+        builder = ContextBuilder(
+            max_context_tokens=1000,
+            overhead_tokens=100,
+            provider="gemini",
+        )
+        # 1000 / 1.15 = 869
+        assert builder.effective_max_tokens == 869
+
+        # Two chunks of 500 tokens each (total 1000 tokens)
+        # With effective budget 869 and overhead 100, available budget is 769.
+        # Only the first chunk (500 tokens) will fit; the second chunk (500 tokens) will be omitted.
+        c1 = CodeChunk(
+            id=uuid.uuid4(),
+            repository_id=uuid.uuid4(),
+            file_id=uuid.uuid4(),
+            symbol_id=None,
+            content="alpha beta gamma delta " * 125,
+            token_count=500,
+            start_line=1,
+            end_line=10,
+            content_hash="h1",
+            score=1.0,
+            file_path="f1.py",
+        )
+        c2 = CodeChunk(
+            id=uuid.uuid4(),
+            repository_id=uuid.uuid4(),
+            file_id=uuid.uuid4(),
+            symbol_id=None,
+            content="omega theta lambda sigma " * 125,
+            token_count=500,
+            start_line=1,
+            end_line=10,
+            content_hash="h2",
+            score=0.9,
+            file_path="f2.py",
+        )
+        ctx = builder.build(chunks=[c1, c2])
+        assert len(ctx.code_chunks) == 1
+        assert ctx.total_tokens <= builder.effective_max_tokens
+
+    def test_context_builder_intelligence_uses_effective_budget(self):
+        """ContextBuilder.build_intelligence_context() uses effective budget and preserves explicit limits."""
+        builder = ContextBuilder(provider="gemini", safety_factor=1.25)
+        target = TargetSnippet(
+            file_path="src/main.py",
+            content="def run(): pass",
+            start_line=1,
+            end_line=2,
+        )
+        sym = SymbolContext(
+            name="helper",
+            kind="function",
+            file_path="src/utils.py",
+            start_line=1,
+            end_line=5,
+            content="def helper(): return True",
+        )
+        # Without explicit limits, builder defaults are propagated (10,000 / 1.25 = 8000)
+        ctx1 = builder.build_intelligence_context(
+            target=target,
+            related_symbols=[sym],
+            token_budget=10_000,
+        )
+        assert ctx1.total_tokens <= 8000
+        assert ctx1.token_budget == 10_000
+
+        # With explicit limits, explicit settings are preserved
+        explicit_limits = ContextLimits(max_tokens=6000, provider="openai")
+        ctx2 = builder.build_intelligence_context(
+            target=target,
+            related_symbols=[sym],
+            limits=explicit_limits,
+        )
+        assert explicit_limits.effective_max_tokens == 6000
+        assert ctx2.token_budget == 6000

@@ -97,7 +97,7 @@ To ensure the safety factor is applied **consistently and exactly once** without
 
 $$\text{effective\_budget} = \left\lfloor \frac{\text{configured\_budget}}{\text{safety\_factor}} \right\rfloor$$
 
-Implemented in `calculate_effective_budget(budget, safety_factor=1.15, provider="gemini")`:
+Implemented in `calculate_effective_budget(budget, safety_factor=None, provider=None)`:
 
 ```python
 # Example: 10,000 configured token budget for Gemini
@@ -105,7 +105,7 @@ effective_budget = calculate_effective_budget(10_000, safety_factor=1.15)
 # Result: 8,695 tokens
 ```
 
-When greedy fitters (`fit_items`, `fit_history`) fit raw `cl100k_base` tokens up to `8,695`, the actual Gemini token consumption will stay strictly within $\approx 8,695 \times 1.15 = 10,000$ tokens.
+When greedy fitters (`fit_items`, `fit_history`) fit raw `cl100k_base` tokens up to `8,695`, the actual Gemini token consumption will generally stay within $\approx 8,695 \times 1.15 \approx 10,000$ tokens, providing a best-effort safety margin rather than an absolute mathematical guarantee against high-variance inputs.
 
 Additionally, `estimate_tokens(text, provider="gemini")` calculates:
 

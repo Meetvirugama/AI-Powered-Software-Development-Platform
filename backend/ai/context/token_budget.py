@@ -110,18 +110,25 @@ def get_safety_factor(
     4. DEFAULT_SAFETY_FACTOR (1.15)
     """
     if custom_factor is not None:
-        if custom_factor <= 0:
-            raise ValueError(f"Safety factor must be positive, got {custom_factor}")
+        if not math.isfinite(custom_factor) or custom_factor <= 0:
+            raise ValueError(f"Safety factor must be finite and positive, got {custom_factor}")
         return float(custom_factor)
 
     env_val = os.getenv("AI_TOKEN_SAFETY_FACTOR")
     if env_val:
         try:
             parsed = float(env_val)
-            if parsed > 0:
+            if math.isfinite(parsed) and parsed > 0:
                 return parsed
+            logger.warning(
+                "Invalid non-positive or non-finite AI_TOKEN_SAFETY_FACTOR '%s', ignoring.",
+                env_val,
+            )
         except ValueError:
-            pass
+            logger.warning(
+                "Failed to parse AI_TOKEN_SAFETY_FACTOR '%s', ignoring.",
+                env_val,
+            )
 
     if provider:
         norm_p = provider.strip().lower()

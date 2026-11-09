@@ -16,6 +16,7 @@ Architecture & System Contracts (team_rules.md):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -160,7 +161,8 @@ class LLMGateway:
         if estimated_tokens is None:
             try:
                 from ai.context.token_budget import estimate_messages_tokens
-                estimated_tokens = estimate_messages_tokens(
+                estimated_tokens = await asyncio.to_thread(
+                    estimate_messages_tokens,
                     request.messages,
                     provider=self._provider.provider_name,
                     model=request.model,
@@ -194,6 +196,18 @@ class LLMGateway:
                     effective_provider = self._fallback_provider
                     fallback_request = self._build_fallback_request(request)
                     effective_model = fallback_request.model
+                    # Recompute estimated_tokens for the effective fallback provider and model;
+                    # do not reuse the primary-provider estimate or request.estimated_tokens
+                    try:
+                        from ai.context.token_budget import estimate_messages_tokens
+                        estimated_tokens = await asyncio.to_thread(
+                            estimate_messages_tokens,
+                            fallback_request.messages,
+                            provider=self._fallback_provider.provider_name,
+                            model=fallback_request.model,
+                        )
+                    except Exception:
+                        estimated_tokens = None
                     response = await self._fallback_provider.generate(fallback_request)
                 else:
                     raise
@@ -290,7 +304,8 @@ class LLMGateway:
         if estimated_tokens is None:
             try:
                 from ai.context.token_budget import estimate_messages_tokens
-                estimated_tokens = estimate_messages_tokens(
+                estimated_tokens = await asyncio.to_thread(
+                    estimate_messages_tokens,
                     request.messages,
                     provider=self._provider.provider_name,
                     model=request.model,
@@ -323,6 +338,18 @@ class LLMGateway:
                     effective_provider = self._fallback_provider
                     fallback_request = self._build_fallback_tool_request(request)
                     effective_model = fallback_request.model
+                    # Recompute estimated_tokens for the effective fallback provider and model;
+                    # do not reuse the primary-provider estimate or request.estimated_tokens
+                    try:
+                        from ai.context.token_budget import estimate_messages_tokens
+                        estimated_tokens = await asyncio.to_thread(
+                            estimate_messages_tokens,
+                            fallback_request.messages,
+                            provider=self._fallback_provider.provider_name,
+                            model=fallback_request.model,
+                        )
+                    except Exception:
+                        estimated_tokens = None
                     response = await self._fallback_provider.generate_with_tools(fallback_request)
                 else:
                     raise
