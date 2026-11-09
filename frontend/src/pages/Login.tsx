@@ -17,7 +17,8 @@ export function Login() {
       sessionStorage.setItem('auth_redirect', redirectParam);
     }
     // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
-    window.location.href = `${API_BASE_URL}/auth/github/login`;
+    const callbackUrl = `${window.location.origin}/auth/callback`;
+    window.location.href = `${API_BASE_URL}/auth/github/login?redirect_url=${encodeURIComponent(callbackUrl)}`;
   }
 
   async function handleDevLogin() {
