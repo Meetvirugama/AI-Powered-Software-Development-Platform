@@ -129,6 +129,7 @@ class GitleaksFinding:
     engine: str = "gitleaks"
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert finding into normalized dictionary."""
         return {
             "rule_id": f"GITLEAKS-{self.rule_id}",
             "category": "secrets",
@@ -154,6 +155,7 @@ class GitleaksFinding:
         }
 
     def to_candidate_dict(self) -> dict[str, Any]:
+        """Convert finding into BugCandidate dictionary representation."""
         return {
             "candidate_id": f"cand-secret-{self.rule_id}-{self.start_line}",
             "rule_id": f"GITLEAKS-{self.rule_id}",
@@ -197,6 +199,7 @@ class GitleaksRunner:
         executable_path: str | None = None,
         timeout_seconds: int = 30,
     ) -> None:
+        """Initialize Gitleaks runner with CLI executable path and timeout."""
         self.executable_path = executable_path or shutil.which("gitleaks")
         self.timeout_seconds = timeout_seconds
 
@@ -244,19 +247,33 @@ class GitleaksRunner:
             if not stripped:
                 continue
 
+            matched_rules: list[tuple[dict[str, Any], str]] = []
+            line_secrets: set[str] = set()
+
             for rule in GITLEAKS_PATTERNS:
-                m = rule["pattern"].search(line)
-                if not m:
-                    continue
+                for m in rule["pattern"].finditer(line):
+                    secret_val = m.group(1)
+                    # Check for placeholder strings (ignore false positives)
+                    if _PLACEHOLDER_REGEX.search(secret_val) or _PLACEHOLDER_REGEX.search(line):
+                        continue
+                    line_secrets.add(secret_val)
+                    matched_rules.append((rule, secret_val))
 
-                secret_val = m.group(1)
-                # Check for placeholder strings (ignore false positives)
-                if _PLACEHOLDER_REGEX.search(secret_val) or _PLACEHOLDER_REGEX.search(line):
-                    continue
+            if not matched_rules:
+                continue
 
-                # STRICT REDACTION: mask the secret value in the evidence snippet
-                masked = self.mask_secret(secret_val)
-                redacted_evidence = line.replace(secret_val, masked).strip()
+            # STRICT REDACTION: mask every detected secret on that line across all rules
+            sanitized_evidence = line
+            for secret_val in sorted(line_secrets, key=len, reverse=True):
+                sanitized_evidence = sanitized_evidence.replace(secret_val, self.mask_secret(secret_val))
+            # Apply established shared redactor
+            sanitized_evidence = redact(sanitized_evidence).strip()
+
+            seen_rule_ids = set()
+            for rule, _ in matched_rules:
+                if rule["rule_id"] in seen_rule_ids:
+                    continue
+                seen_rule_ids.add(rule["rule_id"])
 
                 findings.append(
                     GitleaksFinding(
@@ -266,7 +283,7 @@ class GitleaksRunner:
                         file_path=file_path,
                         start_line=line_no,
                         end_line=line_no,
-                        evidence=redacted_evidence,
+                        evidence=sanitized_evidence,
                         cwe=rule.get("cwe", "CWE-798"),
                         confidence="high",
                     )
@@ -294,9 +311,8 @@ class GitleaksRunner:
         if self.is_available():
             try:
                 cli_res = self._run_cli_scan(workspace)
-                if cli_res.success:
-                    cli_res.execution_time_ms = (time.perf_counter() - start_time) * 1000
-                    return cli_res
+                cli_res.execution_time_ms = (time.perf_counter() - start_time) * 1000
+                return cli_res
             except Exception as exc:
                 logger.warning("gitleaks_cli_failed; falling back to internal secret scanner: %s", exc)
 
@@ -352,7 +368,7 @@ class GitleaksRunner:
                 tmp_report,
                 "--redact",  # Ask CLI to redact matches as well
             ]
-            subprocess.run(
+            proc = subprocess.run(
                 cmd,
                 cwd=str(workspace),
                 capture_output=True,
@@ -360,6 +376,19 @@ class GitleaksRunner:
                 timeout=self.timeout_seconds,
                 check=False,
             )
+
+            # Gitleaks exit codes: 0 = no leaks, 1 = leaks found (both are successful scans)
+            # Any code other than 0 or 1 indicates tool failure or fatal runtime error
+            if proc.returncode not in (0, 1):
+                err = redact((proc.stderr or proc.stdout or "").strip())
+                logger.warning("gitleaks_execution_failed: code=%d err=%s", proc.returncode, err)
+                return GitleaksScanResult(
+                    success=False,
+                    is_available=True,
+                    findings=[],
+                    error_message=f"Gitleaks process exited with code {proc.returncode}: {err}",
+                    diagnostics=[f"Process exit code: {proc.returncode}"] if err else [],
+                )
 
             # Read report
             report_text = Path(tmp_report).read_text(encoding="utf-8", errors="replace")

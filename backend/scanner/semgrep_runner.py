@@ -53,6 +53,7 @@ class SemgrepFinding:
     engine: str = "semgrep_ce"
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert finding into normalized dictionary."""
         return {
             "rule_id": self.rule_id,
             "category": self.category,
@@ -115,6 +116,7 @@ class SemgrepRunner:
         rules_path: str | Path | None = None,
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
+        """Initialize Semgrep runner with executable path, rules, and execution timeout."""
         self.executable_path = executable_path or shutil.which("semgrep")
         self.rules_path = Path(rules_path) if rules_path else DEFAULT_RULES_PATH
         self.timeout_seconds = timeout_seconds
@@ -142,25 +144,37 @@ class SemgrepRunner:
                 execution_time_ms=0.0,
             )
 
+        if not workspace_root:
+            return SemgrepScanResult(
+                success=False,
+                is_available=True,
+                findings=[],
+                error_message="workspace_root is required for Semgrep scans.",
+                diagnostics=["Missing workspace_root boundary specification."],
+            )
+
+        workspace = Path(workspace_root).resolve()
         target = Path(target_path)
-        workspace = Path(workspace_root).resolve() if workspace_root else (
-            target.parent.resolve() if target.is_file() else target.resolve()
-        )
+        if not target.is_absolute():
+            resolved_target = (workspace / target).resolve()
+        else:
+            resolved_target = target.resolve()
 
         # Enforce sandbox boundary: target must be inside workspace_root
         try:
-            resolved_target = target.resolve()
-            if workspace and not (resolved_target == workspace or workspace in resolved_target.parents):
+            if not (resolved_target == workspace or workspace in resolved_target.parents):
                 return SemgrepScanResult(
                     success=False,
                     is_available=True,
-                    error_message=f"Target path '{target}' escapes workspace root '{workspace}'.",
+                    findings=[],
+                    error_message=f"Target path '{target_path}' escapes workspace root '{workspace}'.",
                     diagnostics=["Security violation: path traversal outside workspace blocked."],
                 )
         except Exception as exc:
             return SemgrepScanResult(
                 success=False,
                 is_available=True,
+                findings=[],
                 error_message=f"Invalid target path: {exc}",
             )
 
@@ -171,7 +185,7 @@ class SemgrepRunner:
             str(self.rules_path),
             "--timeout",
             str(self.timeout_seconds),
-            str(target),
+            str(resolved_target),
         ]
         if extra_args:
             cmd.extend(extra_args)

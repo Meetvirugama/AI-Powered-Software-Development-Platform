@@ -68,6 +68,7 @@ class MultiLangFinding:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert multi-language security finding into dictionary representation."""
         return {
             "rule_id": self.rule_id,
             "category": self.category,
@@ -89,6 +90,7 @@ class MultiLangFinding:
         }
 
     def to_candidate_dict(self) -> dict[str, Any]:
+        """Convert finding into BugCandidate dictionary representation."""
         return {
             "candidate_id": f"cand-multilang-{self.rule_id}-{self.start_line}",
             "rule_id": self.rule_id,
@@ -333,6 +335,7 @@ class MultiLangSecurityScanner:
     ]
 
     def __init__(self) -> None:
+        """Initialize MultiLangSecurityScanner."""
         pass
 
     @staticmethod

@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+import packaging.version
+
 from app.core.secret_redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,7 @@ KNOWN_VULNERABILITY_CATALOG: list[dict[str, Any]] = [
     {
         "ecosystem": "npm",
         "package": "axios",
-        "vulnerable_version_regex": r"^0\.(?:[0-1][0-9]|20|21\.[01])$",
+        "vulnerable_version_regex": r"^0\.(?:[0-1]?[0-9]|20|21\.[01])$",
         "vulnerability_id": "GHSA-cph5-m8f7-6c5x",
         "cve": "CVE-2020-28168",
         "severity": "MEDIUM",
@@ -68,7 +70,7 @@ KNOWN_VULNERABILITY_CATALOG: list[dict[str, Any]] = [
     {
         "ecosystem": "PyPI",
         "package": "requests",
-        "vulnerable_version_regex": r"^(?:[01]\..*|2\.(?:[0-9]|1[0-9]|20)\..*|2\.20\.0)$",
+        "vulnerable_version_regex": r"^(?:[01]\..*|2\.(?:[0-9]|1[0-9])\..*|2\.20\.0)$",
         "vulnerability_id": "GHSA-x495-7934-6449",
         "cve": "CVE-2018-18074",
         "severity": "HIGH",
@@ -79,7 +81,7 @@ KNOWN_VULNERABILITY_CATALOG: list[dict[str, Any]] = [
     {
         "ecosystem": "PyPI",
         "package": "urllib3",
-        "vulnerable_version_regex": r"^(?:[01]\..*|2\.0\.[0-6])$",
+        "vulnerable_version_regex": r"^(?:0\..*|1\.(?:[0-9]|1[0-9]|2[0-5])\..*|1\.26\.(?:[0-9]|1[0-7])|2\.0\.[0-6])$",
         "vulnerability_id": "GHSA-v845-jxx5-vc9f",
         "cve": "CVE-2023-45803",
         "severity": "MEDIUM",
@@ -101,7 +103,7 @@ KNOWN_VULNERABILITY_CATALOG: list[dict[str, Any]] = [
     {
         "ecosystem": "Go",
         "package": "golang.org/x/crypto",
-        "vulnerable_version_regex": r"^v0\.0\.0-2020.*",
+        "vulnerable_version_regex": r"^v0\.0\.0-(?:201\d|20200[12]|2020030|20200310|20200311[01][0-6]|20200311170|20200311171[0-4]|202003111715[0-3]|2020031117154[0-5]).*",
         "vulnerability_id": "GHSA-x95h-979x-c66h",
         "cve": "CVE-2020-9283",
         "severity": "HIGH",
@@ -110,6 +112,52 @@ KNOWN_VULNERABILITY_CATALOG: list[dict[str, Any]] = [
         "advisory_url": "https://github.com/advisories/GHSA-x95h-979x-c66h",
     },
 ]
+
+
+def is_version_vulnerable(ecosystem: str, package: str, version_str: str, advisory: dict[str, Any]) -> bool:
+    """Check if installed version is affected by advisory using ecosystem-specific semantics."""
+    clean_ver = version_str.strip().lstrip("v")
+
+    if ecosystem == "Go":
+        # Check Go pseudo-versions: format v0.0.0-yyyymmddhhmmss-abcdef123456
+        ts_match = re.search(r"(\d{14})", version_str)
+        if ts_match:
+            installed_ts = int(ts_match.group(1))
+            fixed_ts_match = re.search(r"(\d{14})", advisory.get("fixed_version", ""))
+            if fixed_ts_match:
+                fixed_ts = int(fixed_ts_match.group(1))
+                return installed_ts < fixed_ts
+        try:
+            return packaging.version.parse(clean_ver) < packaging.version.parse(advisory["fixed_version"].lstrip("v"))
+        except Exception:
+            return False
+
+    try:
+        parsed = packaging.version.parse(clean_ver)
+    except Exception:
+        regex = advisory.get("vulnerable_version_regex")
+        return bool(regex and re.match(regex, version_str))
+
+    if package == "urllib3":
+        # GHSA-v845-jxx5-vc9f affected < 1.26.18 and >= 2.0.0, < 2.0.7
+        v1_fix = packaging.version.parse("1.26.18")
+        v2_min = packaging.version.parse("2.0.0")
+        v2_fix = packaging.version.parse("2.0.7")
+        if parsed < v1_fix:
+            return True
+        if v2_min <= parsed < v2_fix:
+            return True
+        return False
+
+    if "fixed_version" in advisory and advisory["fixed_version"]:
+        try:
+            fixed_ver = packaging.version.parse(advisory["fixed_version"].lstrip("v"))
+            return parsed < fixed_ver
+        except Exception:
+            pass
+
+    regex = advisory.get("vulnerable_version_regex")
+    return bool(regex and re.match(regex, version_str))
 
 
 @dataclass
@@ -130,6 +178,7 @@ class OSVFinding:
     ecosystem: str
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert finding into normalized dictionary."""
         return {
             "rule_id": f"SCA-OSV-{self.vulnerability_id}",
             "category": "supply_chain",
@@ -159,6 +208,7 @@ class OSVFinding:
         }
 
     def to_candidate_dict(self) -> dict[str, Any]:
+        """Convert finding into BugCandidate dictionary representation."""
         return {
             "candidate_id": f"cand-osv-{self.vulnerability_id}-{self.start_line}",
             "rule_id": f"SCA-OSV-{self.vulnerability_id}",
@@ -209,6 +259,7 @@ class OSVScannerRunner:
         executable_path: str | None = None,
         timeout_seconds: int = 30,
     ) -> None:
+        """Initialize OSV-Scanner runner with executable path and timeout."""
         self.executable_path = executable_path or shutil.which("osv-scanner")
         self.timeout_seconds = timeout_seconds
 
@@ -318,6 +369,7 @@ class OSVScannerRunner:
         return findings
 
     def _scan_package_lock_json(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan npm package-lock.json content for known vulnerable dependencies."""
         findings: list[OSVFinding] = []
         try:
             data = json.loads(content)
@@ -346,7 +398,7 @@ class OSVScannerRunner:
             pkg = advisory["package"]
             if pkg in packages:
                 ver = packages[pkg]
-                if re.match(advisory["vulnerable_version_regex"], ver):
+                if is_version_vulnerable(advisory["ecosystem"], pkg, ver, advisory):
                     # Locate line in content
                     line_no = 1
                     for idx, line in enumerate(lines, 1):
@@ -372,6 +424,7 @@ class OSVScannerRunner:
         return findings
 
     def _scan_requirements_txt(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan Python requirements.txt content for known vulnerable package versions."""
         findings: list[OSVFinding] = []
         lines = content.splitlines()
 
@@ -389,7 +442,7 @@ class OSVScannerRunner:
                 if advisory["ecosystem"] != "PyPI":
                     continue
                 if advisory["package"].lower() == pkg_name:
-                    if re.match(advisory["vulnerable_version_regex"], ver):
+                    if is_version_vulnerable(advisory["ecosystem"], advisory["package"], ver, advisory):
                         findings.append(
                             OSVFinding(
                                 package_name=m.group(1),
@@ -409,6 +462,7 @@ class OSVScannerRunner:
         return findings
 
     def _scan_pom_xml(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan Java pom.xml content for vulnerable dependency declarations."""
         findings: list[OSVFinding] = []
         for advisory in KNOWN_VULNERABILITY_CATALOG:
             if advisory["ecosystem"] != "Maven":
@@ -422,7 +476,7 @@ class OSVScannerRunner:
             m = pat.search(content)
             if m:
                 ver = m.group(1).strip()
-                if re.match(advisory["vulnerable_version_regex"], ver):
+                if is_version_vulnerable(advisory["ecosystem"], advisory["package"], ver, advisory):
                     line_no = content[: m.start()].count("\n") + 1
                     findings.append(
                         OSVFinding(
@@ -443,6 +497,7 @@ class OSVScannerRunner:
         return findings
 
     def _scan_go_sum(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan Go go.sum dependency hashes for vulnerable module versions."""
         findings: list[OSVFinding] = []
         lines = content.splitlines()
 
@@ -457,7 +512,7 @@ class OSVScannerRunner:
                 if advisory["ecosystem"] != "Go":
                     continue
                 if advisory["package"] == pkg:
-                    if re.match(advisory["vulnerable_version_regex"], ver):
+                    if is_version_vulnerable(advisory["ecosystem"], pkg, ver, advisory):
                         findings.append(
                             OSVFinding(
                                 package_name=pkg,
@@ -487,9 +542,20 @@ class OSVScannerRunner:
             timeout=self.timeout_seconds,
             check=False,
         )
+        if (not proc.stdout or not proc.stdout.strip()) and proc.returncode not in (0, 1):
+            err_msg = redact((proc.stderr or "").strip())
+            return OSVScanResult(
+                success=False,
+                is_available=True,
+                findings=[],
+                error_message=f"OSV scanner exited with code {proc.returncode}: {err_msg}",
+                diagnostics=[f"Process exit code: {proc.returncode}"] if err_msg else [],
+            )
+
         return self._parse_cli_json(proc.stdout, workspace)
 
     def _parse_cli_json(self, stdout: str, workspace: Path) -> OSVScanResult:
+        """Parse osv-scanner JSON output into normalized OSVFinding objects."""
         if not stdout or not stdout.strip():
             return OSVScanResult(success=True, is_available=True, findings=[])
 

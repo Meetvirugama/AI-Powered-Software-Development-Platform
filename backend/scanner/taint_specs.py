@@ -31,6 +31,7 @@ class TaintSpecEntry(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name_safety(cls, val: str) -> str:
+        """Validate specification identifier name to prevent command/path injection."""
         stripped = val.strip()
         if not _IDENTIFIER_PATTERN.match(stripped):
             raise ValueError(f"Invalid specification identifier '{stripped}'. Must match {_IDENTIFIER_PATTERN.pattern}")
@@ -61,6 +62,20 @@ class RepositoryTaintSpec(BaseModel):
         """Safely register validated specifications into the active TaintAnalyzer."""
         if not self.is_active or not self.validate_specification_safety():
             return 0
+
+        # Copy existing mappings and sets onto the analyzer instance to prevent
+        # mutating shared class/global structures across analyzers.
+        for attr in ("SOURCE_PATTERNS", "SANITIZERS"):
+            if hasattr(taint_analyzer, attr):
+                shared_map = getattr(taint_analyzer, attr)
+                if isinstance(shared_map, dict):
+                    setattr(taint_analyzer, attr, shared_map.copy())
+
+        for attr in ("SQL_SINKS", "CMD_SINKS", "PATH_SINKS", "SSRF_SINKS"):
+            if hasattr(taint_analyzer, attr):
+                shared_set = getattr(taint_analyzer, attr)
+                if isinstance(shared_set, (set, frozenset)):
+                    setattr(taint_analyzer, attr, set(shared_set).copy())
 
         registered_count = 0
         # Register custom sources

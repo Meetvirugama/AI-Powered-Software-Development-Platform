@@ -50,9 +50,9 @@ from app.services.test_generation_orchestrator import (
     validate_generated_test_syntax,
 )
 from scanner.ast_rules import ASTBugAnalyzer
-from scanner.gitleaks_runner import GitleaksRunner
+from scanner.gitleaks_runner import GitleaksFinding, GitleaksRunner
 from scanner.multilang_security_scanner import MultiLangSecurityScanner
-from scanner.osv_runner import OSVScannerRunner
+from scanner.osv_runner import OSVFinding, OSVScannerRunner
 from scanner.semgrep_runner import SemgrepRunner
 from scanner.taint_analyzer import TaintAnalyzer
 
@@ -86,6 +86,7 @@ class InFixtureRetriever(Retriever):
     """Retriever operating over an in-memory collection of indexed CodeChunks."""
 
     def __init__(self, chunks: list[CodeChunk], mode: str = "lexical") -> None:
+        """Initialize in-fixture retriever with code chunks and search mode."""
         self.chunks = chunks
         self.mode = mode
 
@@ -96,6 +97,7 @@ class InFixtureRetriever(Retriever):
         top_k: int = 10,
         **kwargs: Any,
     ) -> list[CodeChunk]:
+        """Retrieve top matching code chunks for query against in-memory index."""
         query_words = set(query.lower().split())
         scored: list[tuple[float, CodeChunk]] = []
 
@@ -692,11 +694,13 @@ def run_expanded_security_benchmark() -> dict[str, Any]:
     lang_stats: dict[str, dict[str, int]] = {}
 
     def _get_cwe_counter(cwe_id: str) -> dict[str, int]:
+        """Retrieve or initialize metric counter dictionary for given CWE identifier."""
         if cwe_id not in cwe_stats:
             cwe_stats[cwe_id] = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
         return cwe_stats[cwe_id]
 
     def _get_lang_counter(lang_id: str) -> dict[str, int]:
+        """Retrieve or initialize metric counter dictionary for given language."""
         if lang_id not in lang_stats:
             lang_stats[lang_id] = {"tp": 0, "fp": 0, "fn": 0, "tn": 0}
         return lang_stats[lang_id]
@@ -705,6 +709,7 @@ def run_expanded_security_benchmark() -> dict[str, Any]:
     fn = 0
 
     def _scan_all_engines(case_file: str, case_code: str, case_lang: str) -> list[Any]:
+        """Execute all relevant static security engines against given test case snippet."""
         findings: list[Any] = []
         # Multi-language rules
         findings.extend(multilang.scan_code(case_code, file_path=case_file, language=case_lang))
@@ -718,13 +723,58 @@ def run_expanded_security_benchmark() -> dict[str, Any]:
             findings.extend(f_ast)
         return findings
 
+    def _finding_matches_fixture(f: Any, expected_cwe: str, expected_category: str) -> bool:
+        """Verify whether finding matches expected fixture CWE and category."""
+        f_cat = getattr(f, "category", None)
+        if f_cat is None and hasattr(f, "to_dict"):
+            f_cat = f.to_dict().get("category")
+        elif f_cat is None:
+            if isinstance(f, OSVFinding):
+                f_cat = "supply_chain"
+            elif isinstance(f, GitleaksFinding):
+                f_cat = "secrets"
+            else:
+                f_cat = "security"
+
+        f_cwe = getattr(f, "cwe", None)
+        if isinstance(f_cwe, list):
+            f_cwes = set(f_cwe)
+        elif isinstance(f_cwe, str):
+            f_cwes = {f_cwe}
+        else:
+            f_cwes = set()
+
+        if hasattr(f, "metadata") and isinstance(f.metadata, dict):
+            m_cwe = f.metadata.get("cwe")
+            if isinstance(m_cwe, str):
+                f_cwes.add(m_cwe)
+            elif isinstance(m_cwe, list):
+                f_cwes.update(m_cwe)
+
+        # Explicit mappings for finding types without an explicit CWE attribute
+        if isinstance(f, OSVFinding) or f_cat == "supply_chain":
+            f_cwes.add("CWE-1395")
+        if isinstance(f, GitleaksFinding) or f_cat == "secrets":
+            f_cwes.add("CWE-798")
+
+        cat_matches = (expected_category == f_cat) or (
+            expected_category == "security" and f_cat in ("security", "vuln")
+        )
+        cwe_matches = (expected_cwe in f_cwes)
+        return cat_matches and cwe_matches
+
     # Evaluate positive defect cases
     for case in EXPANDED_SECURITY_BENCHMARK_CASES:
-        cwe_counter = _get_cwe_counter(case["cwe"])
+        expected_cwe = case["cwe"]
+        expected_cat = case.get("expected_category", "security")
+        cwe_counter = _get_cwe_counter(expected_cwe)
         lang_counter = _get_lang_counter(case["language"])
         findings = _scan_all_engines(case["file"], case["code"], case["language"])
 
-        if len(findings) >= 1:
+        # Score as true positive only when finding matches expected CWE and category
+        matching = [f for f in findings if _finding_matches_fixture(f, expected_cwe, expected_cat)]
+
+        if len(matching) >= 1:
             tp += 1
             cwe_counter["tp"] += 1
             lang_counter["tp"] += 1

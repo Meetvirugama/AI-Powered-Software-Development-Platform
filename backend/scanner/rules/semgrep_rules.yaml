@@ -114,7 +114,7 @@ rules:
     patterns:
       - pattern-either:
           - pattern: $EL.innerHTML = $INPUT
-          - pattern: dangerouslySetInnerHTML={{ __html: $INPUT }}
+          - pattern: 'dangerouslySetInnerHTML={{ __html: $INPUT }}'
 
   - id: js-weak-crypto-md5
     languages: [javascript, typescript]

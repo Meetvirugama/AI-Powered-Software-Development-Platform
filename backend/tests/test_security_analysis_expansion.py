@@ -109,16 +109,25 @@ def test_semgrep_sandbox_boundary_rejection(tmp_path: Path):
 
 
 def test_semgrep_rule_yaml_configuration_valid():
-    """The default semgrep_rules.yaml rule file exists and contains valid license metadata."""
+    """The default semgrep_rules.yaml rule file exists and contains valid license metadata and valid YAML."""
+    import yaml
     from scanner.semgrep_runner import DEFAULT_RULES_PATH
     assert DEFAULT_RULES_PATH.is_file()
     text = DEFAULT_RULES_PATH.read_text(encoding="utf-8")
     assert "MIT License" in text
-    assert "rules:" in text
-    assert "py-sqli-format-string" in text
-    assert "js-exec-command-injection" in text
-    assert "go-cmd-injection-exec" in text
-    assert "java-cmd-injection-runtime-exec" in text
+    
+    parsed = yaml.safe_load(text)
+    assert isinstance(parsed, dict)
+    assert "rules" in parsed
+    assert isinstance(parsed["rules"], list)
+    assert len(parsed["rules"]) > 0
+
+    rule_ids = {r.get("id") for r in parsed["rules"] if isinstance(r, dict)}
+    assert "py-sqli-format-string" in rule_ids
+    assert "js-exec-command-injection" in rule_ids
+    assert "go-cmd-injection-exec" in rule_ids
+    assert "java-cmd-injection-runtime-exec" in rule_ids
+    assert "js-xss-inner-html" in rule_ids
 
 
 # ===========================================================================
@@ -481,3 +490,158 @@ def test_expanded_security_benchmark_suite():
         assert cwe_id in cwes
         assert cwes[cwe_id]["true_positives"] >= 1
         assert cwes[cwe_id]["precision"] >= 0.85
+
+
+# ===========================================================================
+# 8. Regression & CodeRabbit Comment Resolution Tests
+# ===========================================================================
+
+def test_semgrep_requires_workspace_root_and_resolves_relative_path(tmp_path: Path):
+    """Semgrep requires workspace_root and resolves relative targets against it."""
+    runner = SemgrepRunner(executable_path="semgrep")
+    with patch.object(runner, "is_available", return_value=True):
+        # Missing workspace_root returns failure
+        res_no_ws = runner.scan_path(target_path="relative/path.py")
+        assert res_no_ws.success is False
+        assert "workspace_root is required" in (res_no_ws.error_message or "")
+
+        # Valid relative target inside workspace resolves properly
+        ws = tmp_path / "my_project"
+        ws.mkdir()
+        target_file = ws / "subdir" / "code.py"
+        target_file.parent.mkdir()
+        target_file.write_text("print('hello')")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout='{"results":[]}', stderr="")
+            res_ok = runner.scan_path(target_path="subdir/code.py", workspace_root=ws)
+            assert res_ok.success is True
+            # Verify absolute resolved path was passed to subprocess
+            cmd_called = mock_run.call_args[0][0]
+            assert str(target_file.resolve()) in cmd_called
+
+
+def test_candidate_discovery_semgrep_temp_file_isolation(tmp_path: Path):
+    """BugCandidateDiscoveryService creates isolated temp file and remaps findings to original path."""
+    discovery_svc = BugCandidateDiscoveryService()
+    runner = discovery_svc.semgrep_runner
+
+    with patch.object(runner, "is_available", return_value=True), \
+         patch.object(runner, "scan_path") as mock_scan:
+        mock_scan.return_value = MagicMock(
+            success=True,
+            findings=[
+                SemgrepFinding(
+                    rule_id="py-sqli-format-string",
+                    category="security",
+                    severity="HIGH",
+                    message="SQL injection",
+                    file_path="/tmp/random/scan_target.py",
+                    start_line=10,
+                    end_line=10,
+                    evidence="cursor.execute(...)",
+                )
+            ]
+        )
+        candidates = discovery_svc._discover_semgrep_candidates(
+            code="cursor.execute(f'SELECT * FROM {tbl}')",
+            file_path="src/database.py",
+        )
+        assert len(candidates) == 1
+        # Crucial check: finding file_path must be remapped to original file_path
+        assert candidates[0].file_path == "src/database.py"
+
+
+def test_gitleaks_multiple_secrets_on_single_line_masked():
+    """GitleaksRunner masks every detected secret on a line in the evidence field."""
+    runner = GitleaksRunner()
+    line = 'OPENAI="sk-proj-0123456789abcdefghijklmnopqrstuv" GITHUB="ghp_0123456789abcdefghijklmnopqrstuvwxyz"'
+    findings = runner.scan_text(line, file_path="multi_secret.py")
+    assert len(findings) == 2
+    for f in findings:
+        # Neither raw secret can be in evidence
+        assert "sk-proj-0123456789abcdefghijklmnopqrstuv" not in f.evidence
+        assert "ghp_0123456789abcdefghijklmnopqrstuvwxyz" not in f.evidence
+        assert "***REDACTED***" in f.evidence
+
+
+def test_gitleaks_nonzero_nonone_exit_code_reports_failure(tmp_path: Path):
+    """Gitleaks scan_workspace returns failure on exit code != 0 and != 1."""
+    runner = GitleaksRunner(executable_path="gitleaks")
+    with patch.object(runner, "is_available", return_value=True), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="fatal error: invalid flag")
+        res = runner.scan_workspace(workspace_root=tmp_path)
+        assert res.success is False
+        assert "Gitleaks process exited with code 2" in (res.error_message or "")
+
+
+def test_osv_version_bounds_urllib3_and_go():
+    """OSV fallback correctly differentiates vulnerable and fixed versions."""
+    from scanner.osv_runner import is_version_vulnerable
+
+    # urllib3: 1.26.18+ and 2.0.7+ are fixed
+    adv_urllib3 = {"fixed_version": "2.0.7"}
+    assert is_version_vulnerable("PyPI", "urllib3", "1.26.17", adv_urllib3) is True
+    assert is_version_vulnerable("PyPI", "urllib3", "1.26.18", adv_urllib3) is False
+    assert is_version_vulnerable("PyPI", "urllib3", "1.26.19", adv_urllib3) is False
+    assert is_version_vulnerable("PyPI", "urllib3", "2.0.6", adv_urllib3) is True
+    assert is_version_vulnerable("PyPI", "urllib3", "2.0.7", adv_urllib3) is False
+    assert is_version_vulnerable("PyPI", "urllib3", "2.1.0", adv_urllib3) is False
+
+    # axios: 0.21.2+ is fixed
+    adv_axios = {"fixed_version": "0.21.2"}
+    assert is_version_vulnerable("npm", "axios", "0.21.1", adv_axios) is True
+    assert is_version_vulnerable("npm", "axios", "0.21.2", adv_axios) is False
+    assert is_version_vulnerable("npm", "axios", "1.6.0", adv_axios) is False
+
+    # requests: 2.20.1+ is fixed
+    adv_requests = {"fixed_version": "2.20.1"}
+    assert is_version_vulnerable("PyPI", "requests", "2.20.0", adv_requests) is True
+    assert is_version_vulnerable("PyPI", "requests", "2.20.1", adv_requests) is False
+    assert is_version_vulnerable("PyPI", "requests", "2.31.0", adv_requests) is False
+
+    # Go pseudo-versions: commit timestamp comparison
+    adv_go = {"fixed_version": "v0.0.0-20200311171546-f6437b7f87e7"}
+    assert is_version_vulnerable("Go", "golang.org/x/crypto", "v0.0.0-20200101000000-abcdef", adv_go) is True
+    assert is_version_vulnerable("Go", "golang.org/x/crypto", "v0.0.0-20200311171546-f6437b7f87e7", adv_go) is False
+    assert is_version_vulnerable("Go", "golang.org/x/crypto", "v0.0.0-20201221181555-eec23a3978ad", adv_go) is False
+
+
+def test_osv_cli_nonzero_exit_code_reports_failure(tmp_path: Path):
+    """OSVScannerRunner _run_cli_scan treats exit code not in (0, 1) with empty stdout as failure."""
+    runner = OSVScannerRunner(executable_path="osv-scanner")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=127, stdout="", stderr="command not found")
+        res = runner._run_cli_scan(workspace=tmp_path, lockfiles=[])
+        assert res.success is False
+        assert "exited with code 127" in (res.error_message or "")
+
+
+def test_taint_specs_does_not_mutate_shared_analyzer_state():
+    """Applying repository taint specs copies shared dicts/sets so mutations stay local to that instance."""
+    class DummyAnalyzer:
+        SOURCE_PATTERNS = {"global_source": ("global_source", "desc")}
+        SANITIZERS = {"global_sanitizer": "cat"}
+        SQL_SINKS = {"global_sql"}
+
+    analyzer_1 = DummyAnalyzer()
+    analyzer_2 = DummyAnalyzer()
+
+    spec = RepositoryTaintSpec(
+        sources=[TaintSpecEntry(name="custom_source", category="source")],
+        sanitizers=[TaintSpecEntry(name="custom_sanitizer", category="sanitizer")],
+        sinks=[TaintSpecEntry(name="custom_sink", category="sql")],
+    )
+
+    registered = spec.apply_to_taint_analyzer(analyzer_1)
+    assert registered == 3
+    assert "custom_source" in analyzer_1.SOURCE_PATTERNS
+    assert "custom_sanitizer" in analyzer_1.SANITIZERS
+    assert "custom_sink" in analyzer_1.SQL_SINKS
+
+    # Analyzer 2 must NOT have analyzer 1's custom specifications!
+    assert "custom_source" not in analyzer_2.SOURCE_PATTERNS
+    assert "custom_sanitizer" not in analyzer_2.SANITIZERS
+    assert "custom_sink" not in analyzer_2.SQL_SINKS
+    assert "custom_source" not in DummyAnalyzer.SOURCE_PATTERNS

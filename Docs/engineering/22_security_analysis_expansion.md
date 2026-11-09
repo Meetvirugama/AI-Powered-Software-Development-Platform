@@ -45,8 +45,8 @@ flowchart TD
 ### Invariants Maintained:
 1. **Two-Pass BugInvestigator**: AI-assisted investigation continues to operate on candidate findings, verifying preconditions and counterevidence before marking findings as confirmed.
 2. **Deterministic Pre-Filtering**: Static scanners filter out noise and identify concrete file/line/column coordinates before LLM tokens are expended.
-3. **Graceful Fallback**: If external binaries (`semgrep`, `osv-scanner`, `gitleaks`) are not installed on the host or runner container, the system falls back seamlessly to embedded fallback engines without failing the scan.
-4. **Boundary Isolation**: All external CLI tools execute strictly inside designated repository workspace boundaries managed by `WorkspaceCommandRunner`.
+3. **Graceful Availability Reporting & Fallbacks**: If external binaries are not installed, `SemgrepRunner` reports `is_available = False` while internal AST and multi-language rules proceed; for OSV-Scanner and Gitleaks, embedded offline catalogs and heuristic regexes provide zero-setup scanning.
+4. **Boundary Isolation**: External CLI runners execute direct, scoped `subprocess.run` calls strictly anchored to workspace roots (`cwd=workspace_root`), enforcing directory traversal checks and bounded execution timeouts.
 
 ---
 
@@ -75,13 +75,13 @@ Provides deterministic multi-language static analysis across JavaScript, TypeScr
 Integrates Semgrep Community Edition (CE) as an additional deterministic static analysis engine.
 
 - **Configuration File**: `backend/scanner/rules/semgrep_rules.yaml`
-- **Execution Mode**: `semgrep scan --config <rules_path> --json --quiet` executed via `WorkspaceCommandRunner`.
+- **Execution Mode**: Direct subprocess invocation: `semgrep --json --config <rules_path> --timeout <timeout_seconds> <target_path>` with `cwd=workspace_root`.
 - **Sandbox Security**:
   - Command allowlisted in `backend/sandbox/constants.py`: `"semgrep"` added to `ALLOWED_COMMAND_TEMPLATES`.
-  - Target path validated against `repo_root` to prevent directory traversal outside workspace boundaries.
+  - Target path resolved and validated against `workspace_root` to prevent directory traversal outside workspace boundaries.
   - Strict timeout enforcement (default: 30.0 seconds).
-- **Graceful Degradation**:
-  - If `semgrep` binary is not present in `PATH`, `SemgrepRunner.run()` logs an informational notice and returns an empty result with `is_available = False`, allowing other scanners to proceed unhindered.
+- **Graceful Availability Handling**:
+  - If `semgrep` binary is not present in `PATH`, `SemgrepRunner.scan_path()` logs an informational notice and returns an empty result with `is_available = False`, allowing other scanners to proceed unhindered.
 - **Normalization**:
   - Semgrep JSON results are parsed into `SemgrepFinding` objects and mapped to `AnalysisFinding` with rule ID, severity, CWE tag, lines, and redacted code snippets.
 
@@ -96,8 +96,8 @@ Detects known vulnerabilities in third-party dependencies across multiple packag
   - **Maven / Java**: `pom.xml`
   - **Go Modules**: `go.sum`
 - **Execution Model**:
-  - If `osv-scanner` binary is installed in sandbox allowlist: runs `osv-scanner --format=json --lockfile=<file>`.
-  - If `osv-scanner` is missing or fails: falls back to an embedded offline vulnerability catalog indexed by package name and semver ranges.
+  - If `osv-scanner` binary is installed: executes direct subprocess: `osv-scanner --json -r <workspace>` with `cwd=workspace`.
+  - If `osv-scanner` is missing or fails: falls back to an embedded offline vulnerability catalog evaluated using ecosystem-specific version-bound comparisons.
 - **Normalization**:
   - Normalizes findings into `category="supply_chain"`, with rule ID formatted as `SCA-OSV-<VULN_ID>` (e.g. `SCA-OSV-GHSA-c2qf-rxjj-qqgw`).
   - Populates remediation advice with recommended upgrade versions.
@@ -106,6 +106,10 @@ Detects known vulnerabilities in third-party dependencies across multiple packag
 
 ### 3.4 Secret Detection: Gitleaks (`backend/scanner/gitleaks_runner.py`)
 Detects hardcoded secrets, API tokens, and private keys with non-negotiable data protection guarantees.
+
+- **Execution Model**:
+  - When CLI binary is available: executes direct subprocess `gitleaks detect --no-git --source <workspace> --report-format json --report-path <tmp_report> --redact` with `cwd=workspace`.
+  - In-memory / snippet scanning uses built-in pattern matching and strict multi-match evidence redaction.
 
 - **Detection Capabilities**:
   - OpenAI API Keys (`sk-[a-zA-Z0-9]{48}`)
@@ -143,30 +147,24 @@ To allow developers to define project-specific entry points (sources), danger zo
 ```python
 spec = RepositoryTaintSpec(
     repository_id="repo-123",
-    custom_sources=[
+    sources=[
         TaintSpecEntry(
             name="request.body.custom_param",
-            identifier="request.body.custom_param",
-            kind="source",
-            language="python",
+            category="source",
             description="Custom incoming RPC body field",
         )
     ],
-    custom_sinks=[
+    sinks=[
         TaintSpecEntry(
             name="internal_db_execute",
-            identifier="internal_db_execute",
-            kind="sink",
-            language="python",
+            category="sql",
             description="Raw DB execution wrapper",
         )
     ],
-    custom_sanitizers=[
+    sanitizers=[
         TaintSpecEntry(
             name="clean_raw_identifier",
-            identifier="clean_raw_identifier",
-            kind="sanitizer",
-            language="python",
+            category="sanitizer",
             description="Identifier escaping helper",
         )
     ],
@@ -175,7 +173,7 @@ spec = RepositoryTaintSpec(
 
 ### Safety and Validation
 - Identifiers are validated against alphanumeric and dot/underscore patterns to prevent regex injection or code execution.
-- Invalid or maliciously crafted taint specifications are rejected at configuration loading time.
+- Specifications are verified via `validate_specification_safety()`; inactive or invalid specifications are safely ignored during registration into `TaintAnalyzer`.
 
 ---
 

@@ -8,7 +8,9 @@ configuration checks, and change-risk heuristics) to produce normalized BugCandi
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import re
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 from uuid import UUID
@@ -41,6 +43,7 @@ class BugCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert candidate to standard dictionary representation."""
         return {
             "candidate_id": self.candidate_id,
             "rule_id": self.rule_id,
@@ -71,6 +74,7 @@ class BugCandidateDiscoveryService:
         osv_runner: OSVScannerRunner | None = None,
         gitleaks_runner: GitleaksRunner | None = None,
     ) -> None:
+        """Initialize candidate discovery service with configured scanners."""
         self.static_scanner = static_scanner or StaticBugScanner()
         self.taint_analyzer = taint_analyzer or TaintAnalyzer()
         self.rule_registry = rule_registry or RuleRegistry.get_instance()
@@ -242,26 +246,40 @@ class BugCandidateDiscoveryService:
         if not self.semgrep_runner.is_available():
             return []
 
-        res = self.semgrep_runner.scan_path(target_path=file_path, workspace_root=workspace_root)
+        suffix = Path(file_path).suffix or ".txt"
+        base_name = Path(file_path).name or f"scan_target{suffix}"
+
         candidates: list[BugCandidate] = []
-        for f in res.findings:
-            cand_dict = f.to_candidate_dict()
-            candidates.append(
-                BugCandidate(
-                    candidate_id=cand_dict["candidate_id"],
-                    rule_id=cand_dict["rule_id"],
-                    file_path=cand_dict["file_path"],
-                    start_line=cand_dict["start_line"],
-                    end_line=cand_dict["end_line"],
-                    category=cand_dict["category"],
-                    severity=cand_dict["severity"],
-                    evidence=cand_dict["evidence"],
-                    source_type=cand_dict["source_type"],
-                    confidence=cand_dict["confidence"],
-                    remediation=cand_dict["remediation"],
-                    metadata=cand_dict["metadata"],
-                )
-            )
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_file = Path(tmp_dir) / base_name
+                tmp_file.write_text(code, encoding="utf-8")
+
+                res = self.semgrep_runner.scan_path(target_path=tmp_file, workspace_root=tmp_dir)
+                if not res.success:
+                    return candidates
+
+                for f in res.findings:
+                    cand_dict = f.to_candidate_dict()
+                    candidates.append(
+                        BugCandidate(
+                            candidate_id=cand_dict["candidate_id"],
+                            rule_id=cand_dict["rule_id"],
+                            file_path=file_path,
+                            start_line=cand_dict["start_line"],
+                            end_line=cand_dict["end_line"],
+                            category=cand_dict["category"],
+                            severity=cand_dict["severity"],
+                            evidence=cand_dict["evidence"],
+                            source_type=cand_dict["source_type"],
+                            confidence=cand_dict["confidence"],
+                            remediation=cand_dict["remediation"],
+                            metadata=cand_dict["metadata"],
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("semgrep_candidate_discovery_failed: %s", exc)
+
         return candidates
 
     def _discover_osv_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
