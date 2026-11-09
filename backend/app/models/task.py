@@ -121,6 +121,8 @@ class ToolInvocationStatus(str, enum.Enum):
     BLOCKED = "BLOCKED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
+    RATE_LIMITED = "RATE_LIMITED"
 
 
 class TestRunStatus(str, enum.Enum):
@@ -671,15 +673,25 @@ class ToolInvocation(TimestampedModel, Base):
     )
     tool_name: Mapped[str] = mapped_column(String(128), index=True, nullable=False)
     sanitized_arguments: Mapped[Optional[dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # ALLOWED, BLOCKED, COMPLETED, FAILED
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)  # ALLOWED, BLOCKED, COMPLETED, FAILED, TIMEOUT, RATE_LIMITED
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     output_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tool_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    tool_source: Mapped[str] = mapped_column(String(32), default="builtin", nullable=False)
+    provider_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    risk_tier: Mapped[str] = mapped_column(String(16), default="low", nullable=False)
+    schema_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    execution_timeout_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    execution_timed_out: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    rate_limit_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    error_category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     task: Mapped["Task"] = relationship("Task", back_populates="tool_invocations")
 
     __table_args__ = (
         Index("ix_tool_invocations_task_created", "task_id", "created_at"),
         Index("ix_tool_invocations_task_tool", "task_id", "tool_name"),
+        Index("ix_tool_invocations_risk_tier", "risk_tier"),
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -692,6 +704,15 @@ class ToolInvocation(TimestampedModel, Base):
             "status": self.status,
             "duration_ms": self.duration_ms,
             "output_summary": self.output_summary,
+            "tool_version": self.tool_version,
+            "tool_source": self.tool_source,
+            "provider_id": self.provider_id,
+            "risk_tier": self.risk_tier,
+            "schema_fingerprint": self.schema_fingerprint,
+            "execution_timeout_s": self.execution_timeout_s,
+            "execution_timed_out": self.execution_timed_out,
+            "rate_limit_status": self.rate_limit_status,
+            "error_category": self.error_category,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
