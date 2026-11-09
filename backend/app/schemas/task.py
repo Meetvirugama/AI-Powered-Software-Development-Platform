@@ -606,16 +606,82 @@ class TaskApprovalRequest(BaseModel):
     feedback: Optional[str] = Field(None, description="Optional feedback or rejection reason")
 
 
+class ToolApprovalRequest(BaseModel):
+    """Request to authorize execution of a high-risk tool."""
+
+    tool_name: str = Field(..., min_length=1, max_length=128)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    risk_tier: Optional[str] = None
+    expires_in_seconds: Optional[int] = Field(None, ge=1)
+
+
+class ToolApprovalDecisionRequest(BaseModel):
+    """Decision payload to approve or reject a pending tool approval."""
+
+    feedback: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class MCPElicitationRequest(BaseModel):
+    """Request from an external MCP server for structured user elicitation."""
+
+    session_id: str = Field(..., min_length=1, max_length=128)
+    elicitation_type: Literal["form", "url"]
+    prompt: Optional[str] = None
+    schema_definition: Optional[dict[str, Any]] = Field(None, alias="schema")
+    url: Optional[str] = None
+    purpose: Optional[str] = None
+    expires_in_seconds: Optional[int] = Field(None, ge=1)
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class MCPElicitationResponseSubmit(BaseModel):
+    """User response to a pending MCP elicitation."""
+
+    session_id: str = Field(..., min_length=1, max_length=128)
+    action: str = Field("submit", description="submit or cancel")
+    data: Optional[dict[str, Any]] = None
+
+
+class MCPElicitationCancelRequest(BaseModel):
+    """Cancellation of a pending MCP elicitation."""
+
+    session_id: str = Field(..., min_length=1, max_length=128)
+    reason: Optional[str] = None
+
+
 class TaskApprovalResponse(BaseModel):
-    """Immutable task approval outcome."""
+    """Immutable task approval outcome for plans, tools, and MCP elicitations."""
+
+    model_config = ConfigDict(extra="allow")
 
     approval_id: str
+    id: Optional[str] = None
     task_id: str
-    plan_version: int
+    plan_version: Optional[int] = None
     user_id: Optional[str] = None
     decision: str
     feedback: Optional[str] = None
     created_at: Optional[str] = None
+    approval_type: str = "plan"
+    tool_name: Optional[str] = None
+    argument_hash: Optional[str] = None
+    sanitized_arguments: Optional[dict[str, Any]] = None
+    risk_level: Optional[str] = None
+    status: Optional[str] = None
+    expires_at: Optional[str] = None
+    consumed_at: Optional[str] = None
+    session_id: Optional[str] = None
+    elicitation_type: Optional[str] = None
+    elicitation_payload: Optional[dict[str, Any]] = None
+    elicitation_response: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="after")
+    def _sync_ids(self) -> "TaskApprovalResponse":
+        if not self.id:
+            self.id = self.approval_id
+        return self
 
 
 class TaskCheckpointResponse(BaseModel):
@@ -866,6 +932,11 @@ __all__ = [
     "TaskPlanCreateRequest",
     "TaskPlanResponse",
     "TaskApprovalRequest",
+    "ToolApprovalRequest",
+    "ToolApprovalDecisionRequest",
+    "MCPElicitationRequest",
+    "MCPElicitationResponseSubmit",
+    "MCPElicitationCancelRequest",
     "TaskApprovalResponse",
     "TaskCheckpointResponse",
     "TaskEventResponse",

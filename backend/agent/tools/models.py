@@ -15,8 +15,41 @@ from typing import Any, Literal
 _SEMVER_PATTERN = re.compile(r"^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[\da-z\-]+(?:\.[\da-z\-]+)*)?(?:\+[\da-z\-]+(?:\.[\da-z\-]+)*)?$", re.IGNORECASE)
 _TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\.\:\-]{1,128}$")
 
-RiskTier = Literal["low", "medium", "high", "critical"]
+RiskTier = Literal[
+    "low",
+    "medium",
+    "high",
+    "critical",
+    "read-only",
+    "local-write",
+    "write-external",
+]
 RateLimitScope = Literal["user", "task", "provider", "global"]
+
+RISK_TIER_WEIGHTS: dict[str, int] = {
+    "read-only": 10,
+    "low": 10,
+    "local-write": 20,
+    "medium": 20,
+    "write-external": 30,
+    "high": 30,
+    "critical": 40,
+}
+
+APPROVAL_REQUIRED_THRESHOLD = 30  # write-external or higher
+
+
+def is_approval_required(risk_tier: str | None) -> bool:
+    """Determine if a tool execution requires explicit human approval.
+
+    Tools with risk tier >= 'write-external' (weight >= 30: write-external, high, critical)
+    require explicit human approval bound to the exact tool name and canonical argument hash.
+    Missing or unknown risk tiers safe-deny by requiring human approval.
+    """
+    if not risk_tier:
+        return True
+    weight = RISK_TIER_WEIGHTS.get(str(risk_tier).lower(), APPROVAL_REQUIRED_THRESHOLD)
+    return weight >= APPROVAL_REQUIRED_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -125,8 +158,9 @@ class ToolDefinition:
         if not _SEMVER_PATTERN.match(version.strip()):
             raise ValueError(f"Tool '{name}' has invalid semantic version '{version}'. Must follow SemVer (e.g. '1.0.0')")
 
-        if risk_tier not in ("low", "medium", "high", "critical"):
-            raise ValueError(f"Tool '{name}' has invalid risk_tier '{risk_tier}'. Must be low, medium, high, or critical")
+        valid_tiers = ("low", "medium", "high", "critical", "read-only", "local-write", "write-external")
+        if risk_tier not in valid_tiers:
+            raise ValueError(f"Tool '{name}' has invalid risk_tier '{risk_tier}'. Must be one of {valid_tiers}")
 
         if timeout_s <= 0:
             raise ValueError(f"Tool '{name}' timeout_s must be positive, got {timeout_s}")
