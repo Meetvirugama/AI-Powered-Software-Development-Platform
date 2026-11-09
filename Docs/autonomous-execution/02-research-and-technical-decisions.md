@@ -53,3 +53,4 @@ To design an effective, robust autonomous code synthesis and durable execution e
 - **Workflow Scope:** Wrap the multi-stage post-approval workflow (`execute` $\rightarrow$ `checkpoint` $\rightarrow$ `test` $\rightarrow$ `repair` $\rightarrow$ `verify` $\rightarrow$ `draft_pr`) as durable DBOS steps.
 - **Database Session Isolation:** Never pass live SQLAlchemy ORM sessions into durable step arguments. Steps receive serializable identifiers (`task_id`, `actor_id`, etc.) and open fresh sessions via `SessionLocal()`.
 - **Fault-Tolerant Fallback:** In environments where DBOS is uninitialized or in test mocks, the workflow engine falls back to a tested sequential execution runner with equivalent checkpointing and status tracking.
+

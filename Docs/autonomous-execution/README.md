@@ -37,3 +37,4 @@ This documentation suite details the end-to-end architecture enabling the platfo
 ### REST Endpoints
 - `POST /api/v1/tasks/{task_id}/run-workflow` (Accepts `async_execution=True` -> `HTTP 202 Accepted`)
 - `GET /api/v1/tasks/{task_id}/workflow-status` (Returns active status, current step, and progress percentage)
+

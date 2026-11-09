@@ -54,3 +54,4 @@ Candidates passing syntactic validation are evaluated in parallel isolated workt
 1. **Token Cost**: Generating $N$ candidates multiplies LLM token expenditure by $3\times$.
 2. **Execution Latency**: Running test suites across multiple branch worktrees increases step latency by $2\times$ to $4\times$.
 3. **Current Efficacy**: The iterative single-candidate refinement loop with verbal error reinforcement already achieves >95% synthesis success on SWE-bench and standard repo tasks with 1/3 the cost.
+

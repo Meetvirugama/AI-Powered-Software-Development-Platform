@@ -60,3 +60,4 @@ flowchart TD
 | **Placeholder Code Injection** | LLM outputs `// TODO` or empty methods | Stage F lint checks and AST inspection reject empty shells. |
 | **Concurrent Workspace Mutex Breach** | Multiple threads modifying workspace concurrently | Workspace locks and SHA-256 stale-content fingerprints prevent overwrites. |
 | **Unapproved Workflow Execution** | Directly calling `/run-workflow` on draft task | Approval gate throws 400 Bad Request before workspace initialization. |
+

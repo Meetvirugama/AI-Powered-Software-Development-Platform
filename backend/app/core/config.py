@@ -196,7 +196,9 @@ class Settings(BaseSettings):
     # Comma-separated list of frontend origins allowed to call the API with
     # cookies. Never use "*" here: browsers reject "*" with credentials, and it
     # would let any website read API responses on a logged-in user's behalf.
-    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allowed_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000"
+    )
     cors_origin_regex: str | None = None
     frontend_url: str | None = None
     rate_limit_enabled: bool = True
@@ -247,6 +249,15 @@ class Settings(BaseSettings):
             if clean_front and clean_front not in origins:
                 origins.append(clean_front)
         return [o for o in origins if o != "*"]
+
+    @property
+    def effective_cors_origin_regex(self) -> str | None:
+        """In development mode, permit any localhost / 127.0.0.1 port to avoid dev port collision CORS issues."""
+        if self.cors_origin_regex is not None:
+            return self.cors_origin_regex
+        if not self.is_production:
+            return r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$"
+        return None
 
     @property
     def effective_cookie_samesite(self) -> str:
@@ -332,10 +343,13 @@ class Settings(BaseSettings):
             # Validate sandbox backend in production: never permit local host subprocess (F20)
             clean_backend = (self.sandbox_backend or "").strip().lower()
             if clean_backend in ("local", "subprocess", "localsubprocess"):
-                raise ValueError(
-                    "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
-                    "SANDBOX_BACKEND must be 'container' or 'runner'."
-                )
+                if "sandbox_backend" in self.model_fields_set:
+                    raise ValueError(
+                        "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
+                        "SANDBOX_BACKEND must be 'container' or 'runner'."
+                    )
+                else:
+                    self.sandbox_backend = "container"
             if clean_backend == "runner":
                 if not self.runner_base_url or not self.runner_base_url.strip():
                     raise ValueError(

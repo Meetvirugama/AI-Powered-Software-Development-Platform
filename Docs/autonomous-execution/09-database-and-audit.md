@@ -39,3 +39,4 @@ Every milestone emits a `TaskEvent` row:
 
 - No destructive database alterations were required; existing SQLAlchemy models (`Task`, `TaskPlan`, `TaskApproval`, `TaskCheckpoint`, `TaskEvent`) already provided structured JSONB columns (`state_data`, `payload`, `metadata`) that cleanly house workflow execution metadata.
 - `TaskRepository` was enhanced with `get_approved_plan(task_id)` to query the active approved plan version without breaking existing queries.
+

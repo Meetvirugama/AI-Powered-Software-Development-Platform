@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import re
 import secrets
 import urllib.parse
 from datetime import datetime, timezone
@@ -100,6 +101,9 @@ def _resolve_trusted_frontend_url(target_url: str | None = None) -> str:
         return default_origin
     origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
     if origin in allowed_origins:
+        return target_url
+    effective_regex = getattr(settings, "effective_cors_origin_regex", settings.cors_origin_regex)
+    if effective_regex and re.match(effective_regex, origin):
         return target_url
     logger.warning("untrusted_redirect_attempt_blocked", extra={"target_url": target_url})
     return default_origin

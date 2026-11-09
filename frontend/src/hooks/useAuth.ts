@@ -35,8 +35,8 @@ export function useAuth() {
       setUser(currentUser);
       setSessionError(null);
     } catch (err: unknown) {
-      const errorObj = err as { code?: string; message?: string } | undefined;
-      const isUnauthorized = errorObj?.code === 'UNAUTHORIZED';
+      const errorObj = err as { code?: string; message?: string; status?: number } | undefined;
+      const isUnauthorized = errorObj?.code === 'UNAUTHORIZED' || errorObj?.status === 401;
 
       if (isUnauthorized) {
         clearUser();
