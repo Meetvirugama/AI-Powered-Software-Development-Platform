@@ -258,6 +258,14 @@ class LLMRequest(BaseModel):
         default=None,
         description="Optional correlation identifier for tracing.",
     )
+    estimated_tokens: int | None = Field(
+        default=None,
+        description="Optional estimated prompt tokens for calibration telemetry.",
+    )
+    feature: str | None = Field(
+        default=None,
+        description="Optional feature or workflow category for calibration telemetry.",
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -271,6 +279,8 @@ class LLMRequest(BaseModel):
         response_schema: type[BaseModel] | None = None,
         response_format: dict[str, Any] | None = None,
         request_id: str | None = None,
+        estimated_tokens: int | None = None,
+        feature: str | None = None,
         **kwargs: Any,
     ) -> LLMRequest:
         """Convenience constructor that normalizes heterogeneous message sequences."""
@@ -283,6 +293,8 @@ class LLMRequest(BaseModel):
             response_schema=response_schema,
             response_format=response_format,
             request_id=request_id,
+            estimated_tokens=estimated_tokens,
+            feature=feature,
             **kwargs,
         )
 
@@ -539,6 +551,14 @@ class LLMToolRequest(BaseModel):
         default=None,
         description="Optional correlation identifier for tracing.",
     )
+    estimated_tokens: int | None = Field(
+        default=None,
+        description="Optional estimated prompt tokens for calibration telemetry.",
+    )
+    feature: str | None = Field(
+        default=None,
+        description="Optional feature or workflow category for calibration telemetry.",
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
@@ -552,6 +572,8 @@ class LLMToolRequest(BaseModel):
         temperature: float = 0.0,
         max_tokens: int = 1024,
         request_id: str | None = None,
+        estimated_tokens: int | None = None,
+        feature: str | None = None,
         **kwargs: Any,
     ) -> LLMToolRequest:
         """Convenience constructor that normalizes heterogeneous message sequences."""
@@ -564,6 +586,8 @@ class LLMToolRequest(BaseModel):
             temperature=temperature,
             max_tokens=max_tokens,
             request_id=request_id,
+            estimated_tokens=estimated_tokens,
+            feature=feature,
             **kwargs,
         )
 

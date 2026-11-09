@@ -16,6 +16,7 @@ Architecture & System Contracts (team_rules.md):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -155,6 +156,20 @@ class LLMGateway:
         effective_provider = self._provider
         effective_model = request.model
 
+        # Determine estimated input token count for calibration (Issue #189)
+        estimated_tokens = getattr(request, "estimated_tokens", None)
+        if estimated_tokens is None:
+            try:
+                from ai.context.token_budget import estimate_messages_tokens
+                estimated_tokens = await asyncio.to_thread(
+                    estimate_messages_tokens,
+                    request.messages,
+                    provider=self._provider.provider_name,
+                    model=request.model,
+                )
+            except Exception:
+                estimated_tokens = None
+
         try:
             try:
                 response = await self._provider.generate(request)
@@ -181,6 +196,18 @@ class LLMGateway:
                     effective_provider = self._fallback_provider
                     fallback_request = self._build_fallback_request(request)
                     effective_model = fallback_request.model
+                    # Recompute estimated_tokens for the effective fallback provider and model;
+                    # do not reuse the primary-provider estimate or request.estimated_tokens
+                    try:
+                        from ai.context.token_budget import estimate_messages_tokens
+                        estimated_tokens = await asyncio.to_thread(
+                            estimate_messages_tokens,
+                            fallback_request.messages,
+                            provider=self._fallback_provider.provider_name,
+                            model=fallback_request.model,
+                        )
+                    except Exception:
+                        estimated_tokens = None
                     response = await self._fallback_provider.generate(fallback_request)
                 else:
                     raise
@@ -200,6 +227,30 @@ class LLMGateway:
 
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000.0
+            from datetime import datetime, timezone
+            from ai.context.token_budget import (
+                calculate_calibration_ratio,
+                get_calibration_tracker,
+            )
+
+            iso_ts = datetime.now(timezone.utc).isoformat()
+            actual_input_tokens = response.input_tokens if response else None
+            ratio = calculate_calibration_ratio(estimated_tokens, actual_input_tokens)
+            feature_cat = getattr(request, "feature", None)
+
+            try:
+                tracker = get_calibration_tracker()
+                tracker.record_sample(
+                    provider=effective_provider.provider_name,
+                    model=effective_model,
+                    estimated_tokens=estimated_tokens,
+                    actual_input_tokens=actual_input_tokens,
+                    feature=feature_cat,
+                    timestamp=iso_ts,
+                )
+            except Exception as calib_exc:
+                logger.warning("token_calibration_recording_failed", extra={"error": str(calib_exc)})
+
             logger.info(
                 "llm_call",
                 extra={
@@ -214,6 +265,10 @@ class LLMGateway:
                     "input_tokens": response.input_tokens if response else None,
                     "output_tokens": response.output_tokens if response else None,
                     "total_tokens": response.total_tokens if response else None,
+                    "estimated_input_tokens": estimated_tokens,
+                    "actual_input_tokens": actual_input_tokens,
+                    "estimated_to_actual_ratio": ratio,
+                    "timestamp": iso_ts,
                     "latency_ms": round(latency_ms, 2),
                     "success": success,
                     "error_type": error_type,
@@ -244,6 +299,20 @@ class LLMGateway:
         effective_provider = self._provider
         effective_model = request.model
 
+        # Determine estimated input token count for calibration (Issue #189)
+        estimated_tokens = getattr(request, "estimated_tokens", None)
+        if estimated_tokens is None:
+            try:
+                from ai.context.token_budget import estimate_messages_tokens
+                estimated_tokens = await asyncio.to_thread(
+                    estimate_messages_tokens,
+                    request.messages,
+                    provider=self._provider.provider_name,
+                    model=request.model,
+                )
+            except Exception:
+                estimated_tokens = None
+
         try:
             try:
                 response = await self._provider.generate_with_tools(request)
@@ -269,6 +338,18 @@ class LLMGateway:
                     effective_provider = self._fallback_provider
                     fallback_request = self._build_fallback_tool_request(request)
                     effective_model = fallback_request.model
+                    # Recompute estimated_tokens for the effective fallback provider and model;
+                    # do not reuse the primary-provider estimate or request.estimated_tokens
+                    try:
+                        from ai.context.token_budget import estimate_messages_tokens
+                        estimated_tokens = await asyncio.to_thread(
+                            estimate_messages_tokens,
+                            fallback_request.messages,
+                            provider=self._fallback_provider.provider_name,
+                            model=fallback_request.model,
+                        )
+                    except Exception:
+                        estimated_tokens = None
                     response = await self._fallback_provider.generate_with_tools(fallback_request)
                 else:
                     raise
@@ -288,6 +369,30 @@ class LLMGateway:
 
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000.0
+            from datetime import datetime, timezone
+            from ai.context.token_budget import (
+                calculate_calibration_ratio,
+                get_calibration_tracker,
+            )
+
+            iso_ts = datetime.now(timezone.utc).isoformat()
+            actual_input_tokens = response.input_tokens if response else None
+            ratio = calculate_calibration_ratio(estimated_tokens, actual_input_tokens)
+            feature_cat = getattr(request, "feature", None)
+
+            try:
+                tracker = get_calibration_tracker()
+                tracker.record_sample(
+                    provider=effective_provider.provider_name,
+                    model=effective_model,
+                    estimated_tokens=estimated_tokens,
+                    actual_input_tokens=actual_input_tokens,
+                    feature=feature_cat,
+                    timestamp=iso_ts,
+                )
+            except Exception as calib_exc:
+                logger.warning("token_calibration_recording_failed", extra={"error": str(calib_exc)})
+
             logger.info(
                 "llm_tool_call",
                 extra={
@@ -304,6 +409,10 @@ class LLMGateway:
                     "input_tokens": response.input_tokens if response else None,
                     "output_tokens": response.output_tokens if response else None,
                     "total_tokens": response.total_tokens if response else None,
+                    "estimated_input_tokens": estimated_tokens,
+                    "actual_input_tokens": actual_input_tokens,
+                    "estimated_to_actual_ratio": ratio,
+                    "timestamp": iso_ts,
                     "latency_ms": round(latency_ms, 2),
                     "success": success,
                     "error_type": error_type,

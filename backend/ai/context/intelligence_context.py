@@ -43,7 +43,7 @@ def build_intelligence_context(
         4. Repository inventory & conventions
     """
     active_limits = limits or ContextLimits(max_tokens=token_budget)
-    max_tokens = active_limits.max_tokens
+    effective_budget = active_limits.effective_max_tokens
 
     # Check for missing or empty target
     if not target or not getattr(target, "content", "").strip():
@@ -63,7 +63,7 @@ def build_intelligence_context(
             ],
             status=ContextStatus.MISSING_TARGET,
             total_tokens=0,
-            token_budget=max_tokens,
+            token_budget=active_limits.max_tokens,
             revision=revision,
         )
 
@@ -93,15 +93,15 @@ def build_intelligence_context(
     safe_files = list(repository_files or [])[: active_limits.max_files]
     safe_rules = list(project_rules or [])[: active_limits.max_rules]
 
-    # Step 1: Measure target code tokens
+    # Step 1: Measure target code tokens against effective budget
     target_tokens = count_tokens(target.content)
-    if target_tokens > max_tokens:
+    if target_tokens > effective_budget:
         status = ContextStatus.OVERSIZED
         missing_records.append(
             MissingContextInfo(
                 file_path=target.file_path,
                 symbol_name=target.symbol_name,
-                reason=f"Target snippet ({target_tokens} tokens) exceeds context budget ({max_tokens} tokens)",
+                reason=f"Target snippet ({target_tokens} tokens) exceeds effective context budget ({effective_budget} tokens)",
                 suggested_action="Narrow the selected line range or symbol scope",
             )
         )
@@ -114,11 +114,11 @@ def build_intelligence_context(
             missing_context=missing_records,
             status=status,
             total_tokens=target_tokens,
-            token_budget=max_tokens,
+            token_budget=active_limits.max_tokens,
             revision=revision,
         )
 
-    remaining = max_tokens - target_tokens
+    remaining = effective_budget - target_tokens
 
     # Step 2: Fit related symbols & callers within remaining budget
     fitted_symbols: list[SymbolContext] = []
@@ -154,7 +154,7 @@ def build_intelligence_context(
     if missing_records and status == ContextStatus.COMPLETE:
         status = ContextStatus.PARTIAL
 
-    total = max_tokens - remaining
+    total = effective_budget - remaining
     return IntelligenceContext(
         target=target,
         related_symbols=fitted_symbols,
@@ -164,7 +164,7 @@ def build_intelligence_context(
         missing_context=missing_records,
         status=status,
         total_tokens=total,
-        token_budget=max_tokens,
+        token_budget=active_limits.max_tokens,
         revision=revision,
     )
 
