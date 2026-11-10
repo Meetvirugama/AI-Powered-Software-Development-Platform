@@ -475,15 +475,18 @@ def calculate_grounding_confidence(
     related_symbols_verified: bool,
     critical_context_missing: bool,
     ungrounded_ratio: float = 0.0,
+    initial_confidence: str = "high",
 ) -> str:
     """Calculates multi-signal deterministic grounding confidence (task.md §5 Problem 3 & §6.B)."""
     if not target_found or not source_references_valid or ungrounded_ratio > 0.5:
         return "low"
-    if critical_context_missing or ungrounded_ratio > 0.2:
+    if critical_context_missing:
         return "low"
+    if ungrounded_ratio > 0.0:
+        return "medium" if initial_confidence == "high" else "low"
     if not related_symbols_verified:
         return "medium"
-    return "high"
+    return initial_confidence if initial_confidence in ("high", "medium", "low") else "high"
 
 
 def ground_explanation_sources(
@@ -538,13 +541,24 @@ def ground_explanation_sources(
 
     # Multi-signal confidence calibration (task.md §6.B)
     ungrounded_ratio = ungrounded_count / len(raw_sources) if raw_sources else 0.0
-    target_found = resolved.file_record is not None or (resolved.target is not None and not resolved.indexed_paths)
+    target_found = (
+        resolved.file_record is not None
+        or (
+            resolved.target is not None
+            and (not resolved.indexed_paths or resolved.target.path in resolved.indexed_paths)
+        )
+    )
     source_references_valid = len(grounded_sources) > 0 or not raw_sources
     critical_context_missing = any(
         "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
         for m in merged_missing
     )
-    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files or not resolved.indexed_paths)
+    related_symbols_verified = bool(
+        resolved.resolved_symbol
+        or resolved.related_files
+        or not resolved.indexed_paths
+        or len(grounded_sources) > 0
+    )
 
     confidence = calculate_grounding_confidence(
         target_found=target_found,
@@ -552,6 +566,7 @@ def ground_explanation_sources(
         related_symbols_verified=related_symbols_verified,
         critical_context_missing=critical_context_missing,
         ungrounded_ratio=ungrounded_ratio,
+        initial_confidence=explanation.confidence,
     )
 
     # Guarantee that when a real target file was resolved, its grounded citation is attached

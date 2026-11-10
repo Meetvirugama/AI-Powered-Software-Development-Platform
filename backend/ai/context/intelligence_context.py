@@ -101,7 +101,7 @@ def build_intelligence_context(
             MissingContextInfo(
                 file_path=target.file_path,
                 symbol_name=target.symbol_name,
-                reason=f"Target snippet ({target_tokens} tokens) exceeds effective context budget ({effective_budget} tokens)",
+                reason=f"Target snippet ({target_tokens} tokens) exceeds context budget (effective limit: {effective_budget} tokens)",
                 suggested_action="Narrow the selected line range or symbol scope",
             )
         )

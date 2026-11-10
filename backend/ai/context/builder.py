@@ -172,8 +172,19 @@ class ContextBuilder:
         related_files: Sequence[RepositoryFile] | None = None,
     ) -> AgentContext:
         """Assemble token-bounded context for an LLM call using the effective token budget."""
+        import os
+
+        if (
+            self._provider is None
+            and self._safety_factor is None
+            and not os.getenv("AI_TOKEN_SAFETY_FACTOR")
+        ):
+            budget_tokens = self._max_tokens
+        else:
+            budget_tokens = self.effective_max_tokens
+
         return build_chat_context(
-            max_tokens=self.effective_max_tokens,
+            max_tokens=budget_tokens,
             overhead_tokens=self._overhead_tokens,
             chunks=chunks,
             memory=memory,
