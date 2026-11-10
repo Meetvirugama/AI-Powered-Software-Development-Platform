@@ -269,7 +269,7 @@ async def get_analysis_runs_summary(
 async def export_analysis_runs_dataset(
     repository_id: UUID,
     request: Request,
-    format: str = Query(default="jsonl", regex="^(jsonl|json)$", description="Export format: 'jsonl' (default) or 'json'"),
+    format: str = Query(default="jsonl", pattern="^(jsonl|json)$", description="Export format: 'jsonl' (default) or 'json'"),
     feature_type: AnalysisFeatureType | None = Query(default=None, description="Filter by feature type"),
     status: str | None = Query(default=None, description="Filter by status (e.g. COMPLETED, FAILED)"),
     include_feedback_only: bool = Query(default=False, description="When true, only exports runs that contain user feedback"),
