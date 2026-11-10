@@ -66,6 +66,53 @@ class TestExecutionVerifier:
         )
         self._iteration_orchestrator = iteration_orchestrator or TestIterationOrchestrator()
 
+    @staticmethod
+    def _check_safety_policy(test_content: str, proposed_test_path: str = "") -> list[str]:
+        """Inspect generated test code for dangerous execution or filesystem primitives before sandbox runs."""
+        import ast
+        import re
+
+        violations: list[str] = []
+        norm_path = (proposed_test_path or "").replace("\\", "/").strip("/")
+        if norm_path:
+            base_name = norm_path.rsplit("/", 1)[-1].lower()
+            if base_name in {
+                "pyproject.toml",
+                "setup.py",
+                "package.json",
+                "dockerfile",
+                ".env",
+                "requirements.txt",
+            }:
+                violations.append(
+                    f"Safety policy violation: proposed_test_path '{proposed_test_path}' targets a protected project file."
+                )
+
+        content = test_content or ""
+        dangerous_patterns = (
+            (r"\bos\s*\.\s*(?:system|popen|spawn[lv]?[pe]?|exec[lv]?[pe]?|remove|unlink|rmdir)\s*\(", "os command/file destruction call"),
+            (r"\bsubprocess\s*\.\s*(?:run|Popen|call|check_output|check_call)\s*\(", "subprocess execution call"),
+            (r"\bshutil\s*\.\s*rmtree\s*\(", "shutil.rmtree call"),
+            (r"\b(?:eval|exec|__import__)\s*\(", "dynamic code execution primitive"),
+            (r"\bpty\s*\.\s*spawn\s*\(", "pty.spawn call"),
+        )
+        for pattern, label in dangerous_patterns:
+            if re.search(pattern, content):
+                violations.append(f"Safety policy violation: forbidden {label} detected in generated test code.")
+
+        try:
+            tree = ast.parse(content)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "__import__", "compile"}:
+                        msg = f"Safety policy violation: forbidden builtin '{node.func.id}()' in AST."
+                        if msg not in violations:
+                            violations.append(msg)
+        except SyntaxError:
+            pass
+
+        return violations
+
     def verify_generated_test(
         self,
         *,
@@ -83,8 +130,26 @@ class TestExecutionVerifier:
         raw_logs: list[str] = []
 
         # -------------------------------------------------------------------
-        # Stage 1: Static Validation Check
+        # Stage 1: Static Validation & Safety Policy Check
         # -------------------------------------------------------------------
+        safety_violations = self._check_safety_policy(result.test_content, result.proposed_test_path)
+        if safety_violations:
+            reasons.extend(safety_violations)
+            return result.model_copy(
+                update={
+                    "verification_status": "REJECTED",
+                    "verification_reasons": reasons,
+                    "execution_attempted": False,
+                    "execution_status": "NOT_EXECUTED",
+                    "iteration_report": IterationReport(
+                        total_rounds=1,
+                        rounds=[],
+                        stopping_reason="Safety policy violation; execution rejected.",
+                        final_coverage_achieved=None,
+                    ),
+                }
+            )
+
         if not result.syntax_valid:
             reasons.append(
                 f"Static validation failed: {'; '.join(result.validation_errors) or 'Syntax error'}"

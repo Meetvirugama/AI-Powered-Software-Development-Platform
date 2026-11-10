@@ -473,6 +473,8 @@ class AnalysisRunHistoryService(BaseHistoryService):
                 test_output = getattr(run, "test_output", None) or (run.get("test_output") if isinstance(run, dict) else None)
                 error_msg = getattr(run, "error_message", None) or (run.get("error_message") if isinstance(run, dict) else None)
 
+                from app.core.secret_redaction import redact, redact_obj
+
                 record = {
                     "id": run_id,
                     "repository_id": run_repo_id,
@@ -487,21 +489,21 @@ class AnalysisRunHistoryService(BaseHistoryService):
                     },
                     "output": {
                         "findings_count": findings_count if findings_count is not None else len(finding_items),
-                        "result_payload": res_payload,
-                        "test_output": test_output,
+                        "result_payload": redact_obj(res_payload),
+                        "test_output": redact(test_output) if test_output else None,
                     },
-                    "findings": finding_items,
-                    "feedback_summary": {
+                    "findings": redact_obj(finding_items),
+                    "feedback_summary": redact_obj({
                         "has_feedback": has_feedback,
                         "total_feedback": len(feedback_entries),
                         "by_type": feedback_counts,
                         "entries": feedback_entries,
-                    },
+                    }),
                     "metadata": {
                         "created_at": created_dt.isoformat() if hasattr(created_dt, "isoformat") else str(created_dt or ""),
                         "completed_at": completed_dt.isoformat() if hasattr(completed_dt, "isoformat") else (str(completed_dt) if completed_dt else None),
                         "duration_seconds": duration_sec,
-                        "error_message": error_msg,
+                        "error_message": redact(error_msg) if error_msg else None,
                     },
                 }
                 records.append(record)

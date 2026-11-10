@@ -103,15 +103,28 @@ class LocalSubprocessBackend(SandboxBackend):
         self._monitors[task_id] = WorkspaceResourceMonitor(workspace_root=ws_path)
 
         if base_repo_path and base_repo_path.exists():
-            # Directory copy or worktree initialization
+            resolved_repo = base_repo_path.resolve()
+            # Directory copy or worktree initialization (reject escaping symlinks)
             for item in base_repo_path.iterdir():
                 if item.name == ".git":
                     continue
+                if item.is_symlink():
+                    try:
+                        target_resolved = item.resolve()
+                        if not target_resolved.is_relative_to(resolved_repo):
+                            logger.warning(
+                                "Skipping escaping symlink during workspace copy: %s -> %s",
+                                item,
+                                target_resolved,
+                            )
+                            continue
+                    except Exception:
+                        continue
                 dest = ws_path / item.name
                 if item.is_dir():
                     shutil.copytree(item, dest, symlinks=True, dirs_exist_ok=True)
                 else:
-                    shutil.copy2(item, dest)
+                    shutil.copy2(item, dest, follow_symlinks=False)
 
         return ws_path
 
@@ -129,9 +142,10 @@ class LocalSubprocessBackend(SandboxBackend):
         ws_path = self._resolve_task_root(task_id)
         exec_cwd = (cwd or ws_path).resolve()
 
-        # Enforce that exec_cwd stays inside the task workspace
+        # Enforce that exec_cwd stays strictly inside the task workspace (prevent sibling-prefix bypass)
         WorkspacePathGuard.validate_workspace_root(ws_path)
-        if not str(exec_cwd).startswith(str(ws_path)):
+        ws_resolved = ws_path.resolve()
+        if exec_cwd != ws_resolved and not exec_cwd.is_relative_to(ws_resolved):
             raise SandboxSecurityError(
                 f"Execution working directory '{exec_cwd}' escapes workspace root '{ws_path}'."
             )
