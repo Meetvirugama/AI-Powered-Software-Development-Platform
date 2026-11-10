@@ -16,8 +16,12 @@ export function Login() {
     if (redirectParam && typeof sessionStorage !== 'undefined') {
       sessionStorage.setItem('auth_redirect', redirectParam);
     }
-    // Full browser navigation — backend handles OAuth + sets httpOnly cookie.
-    window.location.href = `${API_BASE_URL}/auth/github/login`;
+    const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    const callbackUrl = currentOrigin ? `${currentOrigin}/auth/callback` : '';
+    const loginUrl = callbackUrl
+      ? `${API_BASE_URL}/auth/github/login?redirect_url=${encodeURIComponent(callbackUrl)}`
+      : `${API_BASE_URL}/auth/github/login`;
+    window.location.href = loginUrl;
   }
 
   async function handleDevLogin() {

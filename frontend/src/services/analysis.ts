@@ -229,6 +229,35 @@ export async function getAnalysisRunsSummary(
 }
 
 /**
+ * Export historical analysis runs and user feedback as an evaluation dataset (Issue #195).
+ *
+ * Calls GET /api/v1/repositories/{repository_id}/analysis-runs/export
+ *
+ * @param repositoryId The UUID of the authorized repository.
+ * @param params Query filtering options (format, feature_type, status, include_feedback_only, limit).
+ * @returns Blob representing the dataset file (JSONL, JSON, or Langfuse).
+ */
+export async function exportAnalysisRunsDataset(
+  repositoryId: string,
+  params?: {
+    format?: 'jsonl' | 'json' | 'langfuse';
+    feature_type?: AnalysisRunFeatureType;
+    status?: string;
+    include_feedback_only?: boolean;
+    limit?: number;
+  }
+): Promise<Blob> {
+  const response = await apiClient.get<Blob>(
+    `/repositories/${repositoryId}/analysis-runs/export`,
+    {
+      params,
+      responseType: 'blob',
+    }
+  );
+  return response.data;
+}
+
+/**
  * Submit developer feedback for a review finding (useful, not_useful, false_positive, etc.).
  *
  * Calls POST /api/v1/analysis-runs/{run_id}/findings/{finding_id}/feedback

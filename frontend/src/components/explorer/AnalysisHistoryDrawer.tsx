@@ -13,9 +13,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  Download,
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
-import { getAnalysisRuns, getAnalysisRun } from '../../services/analysis';
+import { getAnalysisRuns, getAnalysisRun, exportAnalysisRunsDataset } from '../../services/analysis';
 import {
   reconstructAnalysisResult,
   type ReopenedAnalysisResult,
@@ -23,6 +24,7 @@ import {
 import { cn } from '../../lib/utils';
 import type {
   AnalysisFeatureType,
+  AnalysisRunFeatureType,
   AnalysisRunSummary,
   AnalysisTarget,
   CodeExplanation,
@@ -110,6 +112,37 @@ export function AnalysisHistoryDrawer({
 
   const [reopeningId, setReopeningId] = useState<string | null>(null);
   const [unavailableMessage, setUnavailableMessage] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportFeedbackOnly, setExportFeedbackOnly] = useState(false);
+
+  async function handleExportDataset(format: 'jsonl' | 'json' | 'langfuse' = 'jsonl') {
+    if (!repositoryId) return;
+    setIsExporting(true);
+    setShowExportMenu(false);
+    try {
+      const blob = await exportAnalysisRunsDataset(repositoryId, {
+        format,
+        feature_type: featureFilter !== 'all' ? (featureFilter as AnalysisRunFeatureType) : undefined,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        include_feedback_only: exportFeedbackOnly,
+      });
+      const url = window.URL.createObjectURL(blob);
+      const ext = format === 'json' ? 'json' : 'jsonl';
+      const suffix = format === 'langfuse' ? '-langfuse' : '';
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `analysis-eval-${repositoryId}${suffix}.${ext}`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export dataset:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  }
 
   // Sync initialFeature when drawer opens via render-phase state adjustment
   const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
@@ -212,14 +245,75 @@ export function AnalysisHistoryDrawer({
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-            aria-label="Close analysis history drawer"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Export Dataset Button & Dropdown (Issue #195) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowExportMenu((prev) => !prev)}
+                disabled={isExporting || isLoading}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/70 bg-background/80 hover:bg-accent text-foreground transition-colors disabled:opacity-50 cursor-pointer"
+                title="Export evaluation dataset for model regression & calibration (Issue #195)"
+              >
+                <Download className="h-3 w-3" />
+                <span>{isExporting ? 'Exporting…' : 'Export'}</span>
+              </button>
+
+              {showExportMenu && (
+                <div className="absolute right-0 top-full mt-1.5 w-52 rounded-lg border border-border bg-card shadow-lg p-2 z-50 space-y-2">
+                  <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">
+                    Evaluation Dataset (Issue #195)
+                  </div>
+                  <div className="space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => handleExportDataset('jsonl')}
+                      className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent flex items-center justify-between cursor-pointer"
+                    >
+                      <span>JSONL (Plain)</span>
+                      <span className="text-[10px] text-muted-foreground font-mono">.jsonl</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExportDataset('langfuse')}
+                      className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent flex items-center justify-between cursor-pointer"
+                    >
+                      <span>Langfuse Dataset</span>
+                      <span className="text-[10px] text-primary font-mono">Langfuse</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleExportDataset('json')}
+                      className="w-full text-left px-2 py-1.5 text-xs rounded hover:bg-accent flex items-center justify-between cursor-pointer"
+                    >
+                      <span>JSON Array</span>
+                      <span className="text-[10px] text-muted-foreground font-mono">.json</span>
+                    </button>
+                  </div>
+                  <div className="border-t border-border/60 pt-1.5 px-1">
+                    <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={exportFeedbackOnly}
+                        onChange={(e) => setExportFeedbackOnly(e.target.checked)}
+                        className="rounded border-border"
+                      />
+                      <span>Feedback only</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              aria-label="Close analysis history drawer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Filter Toolbar */}

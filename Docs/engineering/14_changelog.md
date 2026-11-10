@@ -1182,3 +1182,33 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/autonomous-execution/`, `Docs/engineering/13_architecture_decisions.md` (ADR-015), `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch7] 2026-11-10 — Evaluation Dataset Export from Analysis History (Issue #195 / F15)
+**Type:** Feature / Evaluation / MLOps  
+**Developer:** Meet Virugama & Parth  
+**Changes:**
+- `backend/app/services/analysis_run_history_service.py`:
+  - Implemented `export_evaluation_records` to structure developer intelligence runs (explanations, bugs, tests, reviews) into standardized evaluation samples with input coordinates, output results, findings, and attached user feedback.
+  - Implemented `export_evaluation_dataset` supporting `jsonl` (plain JSONL), `langfuse` (Langfuse-compatible dataset items with `input`, `expected_output`, and `metadata`), `json` (formatted array), and `records`.
+  - Added multi-tenant isolation, alias normalization (`code_review` -> `review`), and `include_feedback_only` filtering.
+- `backend/app/api/v1/analysis/history.py`:
+  - Added `GET /api/v1/repositories/{repository_id}/analysis-runs/export` endpoint with format selection, feature filtering, status filtering, and streaming attachment headers.
+- `backend/app/schemas/analysis.py`:
+  - Added `"code_review": "review"` mapping to `_FEATURE_TYPE_ALIASES`.
+- `frontend/src/services/analysis.ts`:
+  - Added `exportAnalysisRunsDataset` client method for non-blocking file downloads.
+- `frontend/src/components/explorer/AnalysisHistoryDrawer.tsx`:
+  - Added one-click **Export** dataset dropdown menu in the drawer header with JSONL, Langfuse, and JSON options and feedback filtering.
+- `backend/tests/test_analysis_run_export.py`:
+  - 9 comprehensive unit and HTTP integration tests validating JSONL, JSON, Langfuse format, aliases, multi-tenant isolation, error handling, and client downloads.
+- `frontend/src/test/analysisHistoryExport.test.tsx`:
+  - 3 unit tests verifying UI drawer export button, dropdown menu, and download triggers.
+- `Docs/engineering/24_analysis_history_evaluation_export.md`:
+  - Authored full technical architecture specification.
+
+**Impact:** Historical developer intelligence interactions and user feedback are now directly exportable into benchmark regression datasets and Langfuse evaluation suites for continuous LLM calibration.
+
+**Related Docs:** `Docs/engineering/24_analysis_history_evaluation_export.md`, `Docs/README.md`
+
+
