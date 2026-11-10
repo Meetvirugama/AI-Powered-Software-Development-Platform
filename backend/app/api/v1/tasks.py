@@ -1743,20 +1743,3 @@ def create_repository_task(
 ) -> TaskDetailResponse:
     payload.repository_id = repository_id
     return create_task(payload=payload, request=request, db=db)
-
-
-# Route aliases for repo_id compatibility with Verification Gate 3.2
-repo_tasks_router.add_api_route(
-    "/{repo_id}/tasks",
-    list_repository_tasks,
-    methods=["GET"],
-    response_model=PaginatedTaskListResponse,
-    include_in_schema=False,
-)
-repo_tasks_router.add_api_route(
-    "/{repo_id}/tasks",
-    create_repository_task,
-    methods=["POST"],
-    response_model=TaskDetailResponse,
-    include_in_schema=False,
-)

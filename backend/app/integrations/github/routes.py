@@ -22,6 +22,7 @@ import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -35,6 +36,7 @@ from app.integrations.github.schemas import (
     PRMetadata,
     PullRequestDiffResponse,
     PullRequestInfo,
+    RemoteIssueInfo,
     TaskDiffRanges,
 )
 from app.integrations.github.service import GitHubSourceService
@@ -288,3 +290,95 @@ async def get_task_diff_ranges_endpoint(
         user_id=_request_user_id(request),
     )
     return TaskDiffRanges.model_validate(redact_obj(summary.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Remote Issues Browsing (Issue #196)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{repository_id}/source/issues",
+    response_model=list[RemoteIssueInfo],
+    summary="List remote repository issues",
+    description="List live remote issues for an authorized repository from GitHub.",
+)
+async def list_remote_issues(
+    repository_id: UUID,
+    request: Request,
+    state: str = Query(default="open", pattern="^(open|closed|all)$"),
+    per_page: int = Query(default=30, ge=1, le=100),
+    page: int = Query(default=1, ge=1),
+    db: Session = Depends(get_db),
+) -> list[RemoteIssueInfo]:
+    service = GitHubSourceService(db)
+    items = await service.list_issues(
+        repository_id,
+        _request_user_id(request),
+        state=state,
+        per_page=per_page,
+        page=page,
+    )
+    return [RemoteIssueInfo.model_validate(redact_obj(item.model_dump(mode="json"))) for item in items]
+
+
+@router.get(
+    "/{repository_id}/source/issues/{issue_number}",
+    response_model=RemoteIssueInfo,
+    summary="Get remote issue detail",
+    description="Retrieve details and body for a specific remote GitHub issue.",
+)
+async def get_remote_issue(
+    repository_id: UUID,
+    issue_number: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RemoteIssueInfo:
+    if issue_number < 1:
+        raise APIError(
+            400,
+            ErrorCode.INVALID_REQUEST,
+            "Issue number must be a positive integer.",
+        )
+    service = GitHubSourceService(db)
+    item = await service.get_issue_detail(
+        repository_id,
+        _request_user_id(request),
+        issue_number,
+    )
+    return RemoteIssueInfo.model_validate(redact_obj(item.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Deprecated Duplicate Task Execution Surfaces (Issue #196)
+# ---------------------------------------------------------------------------
+
+@router.api_route(
+    "/{repository_id}/source/task/{action:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    deprecated=True,
+    summary="Deprecated duplicate task execution surface",
+    description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
+    include_in_schema=True,
+)
+async def deprecated_task_source_endpoint(
+    repository_id: UUID,
+    action: str,
+    request: Request,
+) -> JSONResponse:
+    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
+    canonical_target = "/api/v1/tasks"
+    return JSONResponse(
+        status_code=410,
+        content={
+            "error": "DEPRECATED_ENDPOINT",
+            "message": (
+                f"The /api/v1/repositories/{repository_id}/source/task/{action} endpoint has been deprecated "
+                f"and consolidated. Please use the canonical /api/v1/tasks execution API."
+            ),
+            "canonical_endpoint": canonical_target,
+        },
+        headers={
+            "X-Canonical-Endpoint": canonical_target,
+            "Deprecation": "true",
+        },
+    )
