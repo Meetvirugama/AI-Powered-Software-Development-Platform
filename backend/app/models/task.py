@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -497,7 +497,7 @@ class TaskPlan(TimestampedModel, Base):
 
 
 class TaskApproval(TimestampedModel, Base):
-    """Immutable human approval or rejection record for a specific plan version."""
+    """Immutable human approval or rejection record for a specific plan version, tool invocation, or MCP elicitation."""
 
     __tablename__ = "task_approvals"
 
@@ -511,7 +511,7 @@ class TaskApproval(TimestampedModel, Base):
         index=True,
         nullable=True,
     )
-    plan_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         index=True,
@@ -519,8 +519,28 @@ class TaskApproval(TimestampedModel, Base):
     )
     plan_hash: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     base_revision: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
-    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # APPROVED / REJECTED
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)  # APPROVED / REJECTED / PENDING / EXPIRED / CONSUMED
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Tool and MCP extensions
+    approval_type: Mapped[str] = mapped_column(String(32), default="plan", nullable=False)
+    tool_name: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    argument_hash: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    sanitized_arguments: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    risk_level: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="approved", index=True, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(128), index=True, nullable=True)
+    elicitation_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    elicitation_payload: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
+    elicitation_response: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=True
+    )
 
     task: Mapped["Task"] = relationship("Task", back_populates="approvals")
     user: Mapped[Optional["User"]] = relationship("User")
@@ -545,14 +565,10 @@ class TaskApproval(TimestampedModel, Base):
         Index("ix_task_approvals_task_plan", "task_id", "plan_version"),
     )
 
-
-# ---------------------------------------------------------------------------
-# 3. Workspace & Execution Tracking
-# ---------------------------------------------------------------------------
-
     def to_dict(self) -> dict[str, Any]:
         """Convert TaskApproval model to canonical response envelope dictionary."""
         return {
+            "id": str(self.id),
             "approval_id": str(self.id),
             "task_id": str(self.task_id),
             "plan_version": self.plan_version,
@@ -560,6 +576,18 @@ class TaskApproval(TimestampedModel, Base):
             "feedback": self.feedback,
             "approved_by": str(self.user_id) if self.user_id else None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "approval_type": self.approval_type,
+            "tool_name": self.tool_name,
+            "argument_hash": self.argument_hash,
+            "sanitized_arguments": self.sanitized_arguments,
+            "risk_level": self.risk_level,
+            "status": self.status,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "consumed_at": self.consumed_at.isoformat() if self.consumed_at else None,
+            "session_id": self.session_id,
+            "elicitation_type": self.elicitation_type,
+            "elicitation_payload": self.elicitation_payload,
+            "elicitation_response": self.elicitation_response,
         }
 
 
