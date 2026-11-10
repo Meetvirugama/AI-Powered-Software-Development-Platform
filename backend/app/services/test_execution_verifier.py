@@ -207,20 +207,56 @@ class TestExecutionVerifier:
                     }
                 )
 
-            ws_root = Path(ws_meta.workspace_path)
+            ws_root = Path(ws_meta.workspace_path).resolve()
 
-            # Populate workspace files
+            def _resolve_safe_ws_file(rel_path: str) -> Path:
+                raw_str = (rel_path or "").strip()
+                if not raw_str:
+                    raise ValueError("Empty workspace file path is not allowed.")
+                p_rel = Path(raw_str)
+                if p_rel.is_absolute() or ".." in p_rel.parts:
+                    raise ValueError(f"Unsafe path '{rel_path}' escapes workspace boundary.")
+                cand = ws_root / p_rel
+                if cand.is_symlink() or cand.parent.is_symlink():
+                    raise ValueError(f"Symlink path '{rel_path}' is prohibited in sandbox verification.")
+                resolved_cand = cand.resolve()
+                if not resolved_cand.is_relative_to(ws_root):
+                    raise ValueError(f"Resolved path '{rel_path}' escapes workspace root.")
+                return resolved_cand
+
+            # Populate workspace files with strict path containment
+            try:
+                target_full_path = _resolve_safe_ws_file(target_path)
+                test_full_path = _resolve_safe_ws_file(result.proposed_test_path)
+                resolved_existing: list[tuple[Path, str]] = []
+                if existing_files:
+                    for rel_p, content in existing_files.items():
+                        resolved_existing.append((_resolve_safe_ws_file(rel_p), content))
+            except ValueError as path_err:
+                reasons.append(f"Safety policy violation: {path_err}")
+                return result.model_copy(
+                    update={
+                        "verification_status": "REJECTED",
+                        "verification_reasons": reasons,
+                        "execution_attempted": False,
+                        "execution_status": "NOT_EXECUTED",
+                        "iteration_report": IterationReport(
+                            total_rounds=1,
+                            rounds=[],
+                            stopping_reason=f"Safety policy violation: {path_err}",
+                            final_coverage_achieved=None,
+                        ),
+                    }
+                )
+
             # 1. Write target source file
-            target_full_path = ws_root / target_path
             target_full_path.parent.mkdir(parents=True, exist_ok=True)
             target_full_path.write_text(target_source_code, encoding="utf-8")
 
             # 2. Write existing mock or dependency files if provided
-            if existing_files:
-                for rel_p, content in existing_files.items():
-                    fp = ws_root / rel_p
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    fp.write_text(content, encoding="utf-8")
+            for fp, content in resolved_existing:
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                fp.write_text(content, encoding="utf-8")
 
             # ---------------------------------------------------------------
             # Stage 4a: Baseline Coverage Measurement
@@ -233,7 +269,6 @@ class TestExecutionVerifier:
             )
 
             # Write generated test code to proposed_test_path
-            test_full_path = ws_root / result.proposed_test_path
             test_full_path.parent.mkdir(parents=True, exist_ok=True)
             test_full_path.write_text(result.test_content, encoding="utf-8")
 

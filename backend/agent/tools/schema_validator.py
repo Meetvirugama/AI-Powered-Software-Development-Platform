@@ -219,6 +219,58 @@ class _FallbackDraft202012Validator:
                         validator_value=maximum,
                     )
                 )
+            excl_min = schema.get("exclusiveMinimum")
+            if isinstance(excl_min, (int, float)) and instance <= excl_min:
+                errors.append(
+                    _FallbackError(
+                        validator="exclusiveMinimum",
+                        message=f"{instance} is less than or equal to the minimum of {excl_min}",
+                        path=deque(_path),
+                        validator_value=excl_min,
+                    )
+                )
+            excl_max = schema.get("exclusiveMaximum")
+            if isinstance(excl_max, (int, float)) and instance >= excl_max:
+                errors.append(
+                    _FallbackError(
+                        validator="exclusiveMaximum",
+                        message=f"{instance} is greater than or equal to the maximum of {excl_max}",
+                        path=deque(_path),
+                        validator_value=excl_max,
+                    )
+                )
+
+        any_of = schema.get("anyOf")
+        if isinstance(any_of, list) and any_of:
+            if not any(
+                isinstance(sub, dict) and len(self.iter_errors(instance, sub, _path)) == 0
+                for sub in any_of
+            ):
+                errors.append(
+                    _FallbackError(
+                        validator="anyOf",
+                        message=f"{instance!r} is not valid under any of the given schemas",
+                        path=deque(_path),
+                        validator_value=any_of,
+                    )
+                )
+
+        one_of = schema.get("oneOf")
+        if isinstance(one_of, list) and one_of:
+            valid_count = sum(
+                1
+                for sub in one_of
+                if isinstance(sub, dict) and len(self.iter_errors(instance, sub, _path)) == 0
+            )
+            if valid_count != 1:
+                errors.append(
+                    _FallbackError(
+                        validator="oneOf",
+                        message=f"{instance!r} is not valid under exactly one of the given schemas",
+                        path=deque(_path),
+                        validator_value=one_of,
+                    )
+                )
 
         if isinstance(instance, dict):
             required = schema.get("required")

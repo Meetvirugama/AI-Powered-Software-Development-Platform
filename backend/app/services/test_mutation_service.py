@@ -165,6 +165,39 @@ class _ASTConstantMutator(ast.NodeTransformer):
         return node
 
 
+class _ASTLogicalMutator(ast.NodeTransformer):
+    """Mutates logical boolean operators (and <-> or)."""
+
+    REPLACEMENTS = {
+        ast.And: ast.Or,
+        ast.Or: ast.And,
+    }
+
+    def __init__(self, target_line: int | None = None) -> None:
+        super().__init__()
+        self.target_line = target_line
+        self.mutated = False
+        self.operator_name = ""
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> ast.AST:
+        self.generic_visit(node)
+        if self.mutated:
+            return node
+
+        op_cls = node.op.__class__
+        if (self.target_line is None or node.lineno == self.target_line) and op_cls in self.REPLACEMENTS:
+            self.operator_name = f"BoolOp:{op_cls.__name__}->{self.REPLACEMENTS[op_cls].__name__}"
+            self.mutated = True
+            return ast.copy_location(
+                ast.BoolOp(
+                    op=self.REPLACEMENTS[op_cls](),
+                    values=node.values,
+                ),
+                node,
+            )
+        return node
+
+
 class MutationTestingService:
     """Offline mutation testing engine for test verification and quality benchmarking."""
 
@@ -192,65 +225,36 @@ class MutationTestingService:
                 break
             orig_line = lines[line_no - 1] if 0 < line_no <= len(lines) else ""
 
-            # Try comparison mutator
-            comp_mut = _ASTComparisonMutator(target_line=line_no)
-            new_tree = comp_mut.visit(ast.parse(source_code))
-            if comp_mut.mutated:
-                mutant_code = ast.unparse(new_tree)
-                if mutant_code != source_code:
-                    mutant_idx += 1
-                    mutants.append(
-                        CodeMutant(
-                            mutant_id=f"MUT-{mutant_idx:03d}",
-                            operator_type=comp_mut.operator_name,
-                            line_number=line_no,
-                            original_code=orig_line.strip(),
-                            mutated_code=lines[line_no - 1].strip() if 0 < line_no <= len(lines) else "",
-                            full_source=mutant_code,
+            for mutator_cls in (
+                _ASTComparisonMutator,
+                _ASTArithmeticMutator,
+                _ASTConstantMutator,
+                _ASTLogicalMutator,
+            ):
+                if len(mutants) >= max_mutants:
+                    break
+                mutator = mutator_cls(target_line=line_no)
+                new_tree = mutator.visit(ast.parse(source_code))
+                if mutator.mutated:
+                    mutant_code = ast.unparse(new_tree)
+                    if mutant_code != source_code:
+                        mutant_idx += 1
+                        mutated_lines = mutant_code.splitlines()
+                        mutated_line_str = (
+                            mutated_lines[line_no - 1].strip()
+                            if 0 < line_no <= len(mutated_lines)
+                            else mutant_code.strip()
                         )
-                    )
-
-            if len(mutants) >= max_mutants:
-                break
-
-            # Try arithmetic mutator
-            arith_mut = _ASTArithmeticMutator(target_line=line_no)
-            new_tree = arith_mut.visit(ast.parse(source_code))
-            if arith_mut.mutated:
-                mutant_code = ast.unparse(new_tree)
-                if mutant_code != source_code:
-                    mutant_idx += 1
-                    mutants.append(
-                        CodeMutant(
-                            mutant_id=f"MUT-{mutant_idx:03d}",
-                            operator_type=arith_mut.operator_name,
-                            line_number=line_no,
-                            original_code=orig_line.strip(),
-                            mutated_code=lines[line_no - 1].strip() if 0 < line_no <= len(lines) else "",
-                            full_source=mutant_code,
+                        mutants.append(
+                            CodeMutant(
+                                mutant_id=f"MUT-{mutant_idx:03d}",
+                                operator_type=mutator.operator_name,
+                                line_number=line_no,
+                                original_code=orig_line.strip(),
+                                mutated_code=mutated_line_str,
+                                full_source=mutant_code,
+                            )
                         )
-                    )
-
-            if len(mutants) >= max_mutants:
-                break
-
-            # Try constant mutator
-            const_mut = _ASTConstantMutator(target_line=line_no)
-            new_tree = const_mut.visit(ast.parse(source_code))
-            if const_mut.mutated:
-                mutant_code = ast.unparse(new_tree)
-                if mutant_code != source_code:
-                    mutant_idx += 1
-                    mutants.append(
-                        CodeMutant(
-                            mutant_id=f"MUT-{mutant_idx:03d}",
-                            operator_type=const_mut.operator_name,
-                            line_number=line_no,
-                            original_code=orig_line.strip(),
-                            mutated_code=lines[line_no - 1].strip() if 0 < line_no <= len(lines) else "",
-                            full_source=mutant_code,
-                        )
-                    )
 
         return mutants
 
