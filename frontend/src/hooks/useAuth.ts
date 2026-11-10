@@ -27,7 +27,7 @@ export function useAuth() {
   // Start resolved immediately so child components don't re-fetch.
   const [isLoading, setIsLoading] = useState(() => user === null && !isAuthenticated);
 
-  const checkSession = useCallback(async () => {
+  const checkSession = useCallback(async (retryCount = 0) => {
     setIsLoading(true);
     setSessionError(null);
     try {
@@ -41,6 +41,10 @@ export function useAuth() {
       if (isUnauthorized) {
         clearUser();
         setSessionError(null);
+      } else if (retryCount < 2) {
+        // Auto-retry transient connection errors during initial server startup
+        await new Promise((resolve) => setTimeout(resolve, 800));
+        return await checkSession(retryCount + 1);
       } else {
         // Network or 5xx server error: keep local user if already present, but surface retryable error
         setSessionError(

@@ -45,6 +45,7 @@ from app.integrations.github.schemas import (
     PullRequestDiffResponse,
     PullRequestFile,
     PullRequestInfo,
+    RemoteIssueInfo,
     SourceReference,
     TaskBranchIsolationResponse,
     TreeEntry,
@@ -441,6 +442,12 @@ class GitHubSourceService:
                 ref=resolved_ref,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -493,6 +500,12 @@ class GitHubSourceService:
                 page=page,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -593,6 +606,12 @@ class GitHubSourceService:
                 pr_number,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -686,6 +705,12 @@ class GitHubSourceService:
                 page=page,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -694,6 +719,140 @@ class GitHubSourceService:
             ) from exc
 
         return [self._parse_pull_request(pr) for pr in data]
+
+    # ----- Remote Issue Browsing (Issue #196) -------------------------------
+
+    async def list_issues(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        *,
+        state: str = "open",
+        per_page: int = 30,
+        page: int = 1,
+    ) -> list[RemoteIssueInfo]:
+        """List remote issues for an authorized repository (Issue #196)."""
+        repository = self._get_authorized_repository(repository_id, user_id)
+        client = await self._get_client(repository)
+
+        try:
+            data = await client.list_issues(
+                repository.owner,
+                repository.name,
+                state=state,
+                per_page=per_page,
+                page=page,
+            )
+        except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
+            raise APIError(
+                502,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                f"GitHub API error: {exc}",
+                retryable=exc.retryable,
+            ) from exc
+
+        # Filter out pull requests which GitHub returns under /issues endpoint
+        issues: list[RemoteIssueInfo] = []
+        for item in data:
+            if isinstance(item, dict) and not item.get("pull_request"):
+                issues.append(self._parse_issue(item))
+        return issues
+
+    async def get_issue_detail(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        issue_number: int,
+    ) -> RemoteIssueInfo:
+        """Get detail for a specific remote issue from an authorized repository (Issue #196)."""
+        if not isinstance(issue_number, int) or issue_number < 1:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Issue number must be a positive integer.",
+            )
+
+        repository = self._get_authorized_repository(repository_id, user_id)
+        client = await self._get_client(repository)
+
+        try:
+            data = await client.get_issue(
+                repository.owner,
+                repository.name,
+                issue_number,
+            )
+        except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Issue #{issue_number} was not found in repository {repository.owner}/{repository.name}.",
+                ) from exc
+            raise APIError(
+                502,
+                ErrorCode.SERVICE_UNAVAILABLE,
+                f"GitHub API error: {exc}",
+                retryable=exc.retryable,
+            ) from exc
+
+        return self._parse_issue(data)
+
+    async def get_issue(
+        self,
+        repository_id: UUID,
+        user_id: UUID,
+        issue_number: int,
+    ) -> Any:
+        """Compatibility wrapper returning GitHubIssueData for IssueToTaskAdapter."""
+        from app.integrations.github.base import GitHubIssueData
+
+        detail = await self.get_issue_detail(repository_id, user_id, issue_number)
+        return GitHubIssueData(
+            number=detail.number,
+            title=detail.title,
+            body=detail.body or "",
+            state=detail.state,
+            html_url=detail.html_url or "",
+            labels=detail.labels,
+            author=detail.author,
+            is_pull_request=detail.is_pull_request,
+        )
+
+    @staticmethod
+    def _parse_issue(data: dict) -> RemoteIssueInfo:
+        """Parse remote issue metadata from the GitHub API response."""
+        from app.core.secret_redaction import redact
+
+        user = data.get("user", {})
+        raw_body = data.get("body")
+        raw_labels = data.get("labels", [])
+        labels_list: list[str] = []
+        for lbl in raw_labels:
+            if isinstance(lbl, dict):
+                labels_list.append(redact(lbl.get("name", "")))
+            elif isinstance(lbl, str):
+                labels_list.append(redact(lbl))
+
+        return RemoteIssueInfo(
+            number=data.get("number", 0),
+            title=redact(data.get("title", "")),
+            state=data.get("state", "open"),
+            body=redact(raw_body) if raw_body else None,
+            author=user.get("login") if isinstance(user, dict) else None,
+            labels=labels_list,
+            html_url=data.get("html_url"),
+            created_at=data.get("created_at"),
+            updated_at=data.get("updated_at"),
+            closed_at=data.get("closed_at"),
+            comments_count=data.get("comments", 0),
+            is_pull_request=bool("pull_request" in data),
+        )
 
     # ----- Week 3 Day 3: Task Branch Isolation & Base Revision Validation ----
 

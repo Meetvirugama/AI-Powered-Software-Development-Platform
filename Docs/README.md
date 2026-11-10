@@ -67,6 +67,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [22. Security Analysis Expansion](./engineering/22_security_analysis_expansion.md) — Broader Security Analysis & Multi-Scanner Architecture (Issue #191).
 - [23. Tool Permission Approval & MCP Elicitation](./engineering/23_tool_approval_and_mcp_elicitation.md) — Tool Permission Approval Gate and MCP Elicitation (Issue #199).
 - [24. Analysis History Evaluation Export](./engineering/24_analysis_history_evaluation_export.md) — Evaluation Dataset Export from Analysis History (Issue #195).
+- [25. GitHub Source Browsing & Consolidation](./engineering/25_github_source_browsing_and_consolidation.md) — Live remote issue browsing, PR demuxing, and duplicate execution surface consolidation (Issue #196).
 - [26. Project Memory Entries & MCP Resources](./engineering/26_project_memory_entries.md) — Episodic Project Memory, Semantic Search & MCP Resources (Issue #217 / F36).
 
 ---
