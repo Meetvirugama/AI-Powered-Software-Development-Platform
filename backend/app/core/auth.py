@@ -68,7 +68,20 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
     except APIError:
         raise
     except Exception as exc:
-        if "timeout" in str(exc).lower() or "timed out" in str(exc).lower():
+        # If async client failed due to closed or mismatched event loop, fall back to synchronous client
+        err_msg = str(exc).lower()
+        if "loop" in err_msg or "closed" in err_msg:
+            import app.core.redis as r_mod
+            r_mod._async_redis_client = None
+            try:
+                from app.core.redis import get_redis as sync_get_redis
+                sync_client = sync_get_redis()
+                if sync_client is not None:
+                    return bool(await asyncio.to_thread(sync_client.exists, key))
+            except Exception:
+                pass
+
+        if "timeout" in err_msg or "timed out" in err_msg:
             logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
         else:
             logger.warning("auth_blocklist_check_failed", extra={"jti": jti, "error": str(exc)})

@@ -117,7 +117,7 @@ class ExecutionVerifier:
                         )
 
         # 3. Check Action-Specific Evidence
-        if action_type in ("test", "command"):
+        if action_type in ("test", "command", "verify", "validate"):
             if isinstance(step_output, dict):
                 exit_code = step_output.get("exit_code")
                 if exit_code is not None and exit_code != 0:

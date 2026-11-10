@@ -50,10 +50,10 @@ fi
 
 if [ -n "$LSOF_CMD" ]; then
     for p in 8000 5173 5174; do
-        PID=$($LSOF_CMD -i :"$p" -sTCP:LISTEN -t 2>/dev/null || true)
-        if [ -n "$PID" ]; then
-            echo "Notice: Freeing occupied port $p (PID: $PID)..."
-            kill -9 $PID 2>/dev/null || true
+        PIDS=$($LSOF_CMD -i :"$p" -t 2>/dev/null || true)
+        if [ -n "$PIDS" ]; then
+            echo "Notice: Freeing occupied port $p (PIDs: $PIDS)..."
+            echo "$PIDS" | xargs kill -9 2>/dev/null || true
             sleep 0.5
         fi
     done
@@ -76,7 +76,7 @@ trap cleanup SIGINT SIGTERM
 
 # 6. Start Backend (Uvicorn with auto-reload)
 echo "Starting Backend API on http://localhost:8000..."
-$UVICORN_BIN main:app --reload --host 0.0.0.0 --port 8000 &
+$UVICORN_BIN main:app --reload --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 1 --timeout-keep-alive 5 &
 BACKEND_PID=$!
 
 # 7. Start Frontend (Vite)

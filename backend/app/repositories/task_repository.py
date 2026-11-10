@@ -343,6 +343,24 @@ class TaskRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def get(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[Task]:
+        """Fetch task by ID (alias for get_task)."""
+        return self.get_task(task_id, repository_id=repository_id, user_id=user_id)
+
+    def get_by_id(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+        user_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[Task]:
+        """Fetch task by ID (alias for get_task)."""
+        return self.get_task(task_id, repository_id=repository_id, user_id=user_id)
+
     def get_task_for_user(
         self,
         task_id: uuid.UUID | str,
@@ -2336,7 +2354,7 @@ class TaskRepository:
         t_uuid = _ensure_uuid(task_id)
         if t_uuid is None:
             return None
-        task = self.get_by_id(t_uuid)
+        task = self.get_task(t_uuid)
         if not task or not task.approved_plan_version:
             return None
         return self.get_plan_by_version(task.id, task.approved_plan_version)
