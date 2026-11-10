@@ -40,14 +40,24 @@ if [ ! -f "frontend/.env.local" ]; then
     echo "VITE_API_BASE_URL=http://localhost:8000/api/v1" > frontend/.env.local
 fi
 
-# 4. Check for and free stale processes on ports 8000 and 5173 if needed
-for p in 8000 5173; do
-    if command -v /usr/sbin/lsof &>/dev/null && /usr/sbin/lsof -i :"$p" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        echo "Notice: Freeing occupied port $p..."
-        kill -9 $(/usr/sbin/lsof -i :"$p" -sTCP:LISTEN -t) 2>/dev/null || true
-        sleep 0.5
-    fi
-done
+# 4. Check for and free stale processes on ports 8000, 5173, and 5174 if needed
+LSOF_CMD=""
+if command -v lsof &>/dev/null; then
+    LSOF_CMD="lsof"
+elif [ -x "/usr/sbin/lsof" ]; then
+    LSOF_CMD="/usr/sbin/lsof"
+fi
+
+if [ -n "$LSOF_CMD" ]; then
+    for p in 8000 5173 5174; do
+        PID=$($LSOF_CMD -i :"$p" -sTCP:LISTEN -t 2>/dev/null || true)
+        if [ -n "$PID" ]; then
+            echo "Notice: Freeing occupied port $p (PID: $PID)..."
+            kill -9 $PID 2>/dev/null || true
+            sleep 0.5
+        fi
+    done
+fi
 
 # 5. Run database migrations if database is configured
 echo "Applying database migrations..."
@@ -73,6 +83,15 @@ BACKEND_PID=$!
 echo "Starting Frontend UI on http://localhost:5173..."
 (cd frontend && npm run dev -- --host 0.0.0.0 --port 5173) &
 FRONTEND_PID=$!
+
+echo "Waiting for backend services to initialize..."
+for i in {1..25}; do
+    if curl -s -f http://127.0.0.1:8000/api/v1/health/ready >/dev/null 2>&1; then
+        echo "Backend services are healthy and ready."
+        break
+    fi
+    sleep 1
+done
 
 echo ""
 echo "===================================================================="
