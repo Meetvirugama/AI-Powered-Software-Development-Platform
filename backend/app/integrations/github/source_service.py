@@ -442,6 +442,12 @@ class GitHubSourceService:
                 ref=resolved_ref,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -494,6 +500,12 @@ class GitHubSourceService:
                 page=page,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -594,6 +606,12 @@ class GitHubSourceService:
                 pr_number,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -687,6 +705,12 @@ class GitHubSourceService:
                 page=page,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,
@@ -720,6 +744,12 @@ class GitHubSourceService:
                 page=page,
             )
         except GitHubAPIError as exc:
+            if exc.status_code == 404:
+                raise APIError(
+                    404,
+                    ErrorCode.NOT_FOUND,
+                    f"Repository {repository.owner}/{repository.name} was not found on GitHub.",
+                ) from exc
             raise APIError(
                 502,
                 ErrorCode.SERVICE_UNAVAILABLE,

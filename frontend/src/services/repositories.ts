@@ -19,6 +19,7 @@ import type {
   PaginatedRepositoryFileResponse,
   RepositoryDependency,
   RepositoryFileContent,
+  RemoteIssueInfo,
 } from '../types/api';
 
 export interface ListRepositoriesParams {
@@ -169,4 +170,40 @@ export async function getRepositoryFileContent(
   );
   return response.data;
 }
+
+/**
+ * List remote issues for an authorized repository from GitHub (F16 - Issue #196).
+ *
+ * GET /api/v1/repositories/:repositoryId/source/issues
+ */
+export async function listRemoteSourceIssues(
+  repositoryId: string,
+  params?: {
+    state?: 'open' | 'closed' | 'all';
+    per_page?: number;
+    page?: number;
+  },
+): Promise<RemoteIssueInfo[]> {
+  const response = await apiClient.get<RemoteIssueInfo[]>(
+    `/repositories/${repositoryId}/source/issues`,
+    { params },
+  );
+  return response.data;
+}
+
+/**
+ * Get detail for a specific remote GitHub issue (F16 - Issue #196).
+ *
+ * GET /api/v1/repositories/:repositoryId/source/issues/:issueNumber
+ */
+export async function getRemoteSourceIssue(
+  repositoryId: string,
+  issueNumber: number,
+): Promise<RemoteIssueInfo> {
+  const response = await apiClient.get<RemoteIssueInfo>(
+    `/repositories/${repositoryId}/source/issues/${issueNumber}`,
+  );
+  return response.data;
+}
+
 

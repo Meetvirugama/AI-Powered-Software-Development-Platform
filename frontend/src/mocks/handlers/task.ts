@@ -3925,4 +3925,92 @@ export const taskHandlers = [
 
     return HttpResponse.json(response, { status: 200 });
   }),
+
+  // --------------------------------------------------------------------------
+  // F16 - Issue #196: Source Issues Browsing & Deprecated Execution Surfaces
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/repositories/:repositoryId/source/issues', ({ request }) => {
+    const url = new URL(request.url);
+    const state = url.searchParams.get('state') || 'open';
+    return HttpResponse.json([
+      {
+        number: 101,
+        title: 'Mock remote issue from GitHub',
+        state,
+        body: 'Issue body retrieved live from GitHub source service.',
+        author: 'octocat',
+        labels: ['bug', 'frontend'],
+        html_url: 'https://github.com/example/repo/issues/101',
+        created_at: '2026-11-10T00:00:00Z',
+        updated_at: '2026-11-10T00:00:00Z',
+        closed_at: null,
+        comments_count: 2,
+        is_pull_request: false,
+      },
+    ], { status: 200 });
+  }),
+
+  http.get('*/api/v1/repositories/:repositoryId/source/issues/:issueNumber', ({ params }) => {
+    const issueNumber = Number(params.issueNumber);
+    if (isNaN(issueNumber) || issueNumber < 1) {
+      return HttpResponse.json(
+        { error: { code: 'INVALID_REQUEST', message: 'Issue number must be a positive integer.' } },
+        { status: 400 }
+      );
+    }
+    if (issueNumber === 404) {
+      return HttpResponse.json(
+        { error: { code: 'NOT_FOUND', message: 'Issue not found.' } },
+        { status: 404 }
+      );
+    }
+    return HttpResponse.json({
+      number: issueNumber,
+      title: `Mock remote issue #${issueNumber}`,
+      state: 'open',
+      body: 'Detailed report for issue.',
+      author: 'octocat',
+      labels: ['bug'],
+      html_url: `https://github.com/example/repo/issues/${issueNumber}`,
+      created_at: '2026-11-10T00:00:00Z',
+      updated_at: '2026-11-10T00:00:00Z',
+      closed_at: null,
+      comments_count: 1,
+      is_pull_request: false,
+    }, { status: 200 });
+  }),
+
+  http.all('*/api/v1/repositories/:repositoryId/source/task/:action', () => {
+    return HttpResponse.json(
+      {
+        error: 'DEPRECATED_ENDPOINT',
+        message: 'The /source/task/* endpoints have been deprecated. Please use canonical /api/v1/tasks.',
+        canonical_endpoint: '/api/v1/tasks',
+      },
+      {
+        status: 410,
+        headers: {
+          'X-Canonical-Endpoint': '/api/v1/tasks',
+          'Deprecation': 'true',
+        },
+      }
+    );
+  }),
+
+  http.all('*/api/v1/repositories/:repositoryId/source/task-workspace/:action', () => {
+    return HttpResponse.json(
+      {
+        error: 'DEPRECATED_ENDPOINT',
+        message: 'The /source/task-workspace/* endpoints have been deprecated. Please use canonical /api/v1/tasks.',
+        canonical_endpoint: '/api/v1/tasks',
+      },
+      {
+        status: 410,
+        headers: {
+          'X-Canonical-Endpoint': '/api/v1/tasks',
+          'Deprecation': 'true',
+        },
+      }
+    );
+  }),
 ];

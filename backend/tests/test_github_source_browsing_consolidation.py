@@ -308,3 +308,36 @@ def test_api_deprecated_duplicate_task_execution_surfaces(client, repo_setup: di
         body = resp.json()
         assert body["error"] == "DEPRECATED_ENDPOINT"
         assert "consolidated" in body["message"]
+
+        # Also verify /source/task-workspace/*
+        resp_ws = client.post(
+            f"/api/v1/repositories/{repo.id}/source/task-workspace/{action}",
+            headers=headers,
+            json={"task_id": str(uuid.uuid4())},
+        )
+        assert resp_ws.status_code == 410
+        assert resp_ws.headers.get("x-canonical-endpoint") == "/api/v1/tasks"
+        assert resp_ws.headers.get("deprecation") == "true"
+        body_ws = resp_ws.json()
+        assert body_ws["error"] == "DEPRECATED_ENDPOINT"
+        assert "consolidated" in body_ws["message"]
+
+
+@pytest.mark.asyncio
+async def test_source_service_list_issues_repo_not_found_404(db_session: Session, repo_setup: dict):
+    """Verify list_issues raises 404 when repository is not found on GitHub."""
+    from app.integrations.github.client import GitHubAPIError
+
+    service = GitHubSourceService(db_session)
+    repo = repo_setup["repo"]
+    user = repo_setup["user"]
+
+    mock_client = AsyncMock()
+    mock_client.list_issues = AsyncMock(side_effect=GitHubAPIError("Not Found", status_code=404))
+
+    with patch.object(service, "_get_client", AsyncMock(return_value=mock_client)):
+        with pytest.raises(APIError) as exc_info:
+            await service.list_issues(repo.id, user.id)
+
+        assert exc_info.value.status_code == 404
+        assert "not found on GitHub" in str(exc_info.value.message)

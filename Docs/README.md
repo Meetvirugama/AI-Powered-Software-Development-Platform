@@ -60,6 +60,13 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
 - [17. GitHub Webhook Automation Design](./engineering/17_github_webhook_automation_design.md) — Durable webhook queue, lease worker, and event state machine.
 - [17. JWT & OAuth Hardening Architecture](./engineering/17_jwt_oauth_hardening.md) — Comprehensive reference for token rotation and security contracts.
+- [18. Repository Deletion & Cleanup Audit](./engineering/18_repository_deletion_audit.md) — Multi-tenant cleanup and cascading deletion policies.
+- [19. Background Worker Architecture](./engineering/19_background_worker_architecture.md) — Distributed sync workers, lease heartbeats, and queue reliability.
+- [20. DBOS Transact Distributed Workflow Evaluation](./engineering/20_dbos_transact_evaluation.md) — Durable execution engine evaluation and state persistence.
+- [21. Provider Token Budget Calibration](./engineering/21_provider_token_budget_calibration.md) — LLM token limits, context window calibration, and cost budgeting.
+- [22. Broader Security Analysis & Remediation](./engineering/22_security_analysis_expansion.md) — In-depth security analysis and vulnerability mitigation.
+- [23. Tool Approval & MCP Elicitation Architecture](./engineering/23_tool_approval_and_mcp_elicitation.md) — Human approval gate for tool permission escalation and MCP elicitation.
+- [25. GitHub Source Browsing & Consolidation](./engineering/25_github_source_browsing_and_consolidation.md) — Live remote issue browsing, PR demuxing, and duplicate execution surface consolidation.
 
 ---
 

@@ -1182,3 +1182,38 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/autonomous-execution/`, `Docs/engineering/13_architecture_decisions.md` (ADR-015), `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch8] 2026-11-10 — GitHub Source Browsing & Execution Surface Consolidation (Issue #196)
+**Type:** Feature / Refactor / Consolidation  
+**Developer:** Parth & Meet Virugama  
+**Changes:**
+- `backend/app/integrations/github/source_service.py`:
+  - Added `list_issues`, `get_issue_detail`, and compatibility `get_issue` for `IssueToTaskAdapter`.
+  - Implemented pull request demuxing to filter out PRs from the issue stream while preserving PR metadata.
+  - Added consistent 404 handling when upstream repositories are not found on GitHub.
+- `backend/app/integrations/github/schemas.py`:
+  - Added `RemoteIssueInfo` schema.
+- `backend/app/integrations/github/routes.py`:
+  - Added `GET /api/v1/repositories/{id}/source/issues` and `GET /api/v1/repositories/{id}/source/issues/{issue_number}`.
+  - Deprecated legacy duplicate execution endpoints under `/source/task/*` and `/source/task-workspace/*` with `HTTP 410 Gone` and `X-Canonical-Endpoint: /api/v1/tasks`.
+- `backend/app/api/v1/tasks.py`:
+  - Deleted unreachable `/{repo_id}/tasks` route aliases.
+- `frontend/src/types/api.ts`:
+  - Added `RemoteIssueInfo` TypeScript interface.
+- `frontend/src/services/repositories.ts`:
+  - Added `listRemoteSourceIssues` and `getRemoteSourceIssue` client functions.
+- `frontend/src/mocks/handlers/task.ts`:
+  - Added MSW mock handlers for remote issues and 410 deprecated execution endpoints.
+- `backend/tests/test_github_source_browsing_consolidation.py`:
+  - Added 7 unit and integration tests covering issue listing, PR filtering, issue detail lookup, API endpoints, deprecation headers, and 404/invalid number handling.
+- `frontend/src/test/sourceIssuesBrowsing.test.ts`:
+  - Added 6 frontend tests verifying client methods and MSW mock doubles.
+- `Docs/engineering/25_github_source_browsing_and_consolidation.md`:
+  - Authored comprehensive architectural and interface specification.
+
+**Impact:** Eliminates duplicate task execution surfaces across the codebase, provides first-class remote issue browsing through GitHubSourceService, and cleans up dead route aliases.
+
+**Related Docs:** `Docs/engineering/25_github_source_browsing_and_consolidation.md`, `Docs/README.md`
+
+

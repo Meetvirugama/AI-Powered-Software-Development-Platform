@@ -12,8 +12,12 @@ GET  /api/v1/repositories/{id}/source/commits                      — Commit li
 GET  /api/v1/repositories/{id}/source/commits/{sha}                — Commit detail
 GET  /api/v1/repositories/{id}/source/pulls                        — Pull-request list
 GET  /api/v1/repositories/{id}/source/pulls/{pr}/diff              — PR diff
+GET  /api/v1/repositories/{id}/source/issues                       — Issue list (remote GitHub issues)
+GET  /api/v1/repositories/{id}/source/issues/{issue_number}        — Issue detail (remote GitHub issue)
 GET  /api/v1/repositories/{id}/source/pr-metadata/{task_id}        — Retrieve prepared PR metadata
 GET  /api/v1/repositories/{id}/source/diff-ranges/task/{task_id}   — Get task workspace diff ranges
+ALL  /api/v1/repositories/{id}/source/task/*                       — Deprecated execution surface (410 Gone)
+ALL  /api/v1/repositories/{id}/source/task-workspace/*             — Deprecated workspace execution surface (410 Gone)
 """
 
 from __future__ import annotations
@@ -360,6 +364,14 @@ async def get_remote_issue(
     description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
     include_in_schema=True,
 )
+@router.api_route(
+    "/{repository_id}/source/task-workspace/{action:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    deprecated=True,
+    summary="Deprecated duplicate task workspace execution surface",
+    description="Deprecated duplicate task workspace endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
+    include_in_schema=True,
+)
 async def deprecated_task_source_endpoint(
     repository_id: UUID,
     action: str,
@@ -367,13 +379,14 @@ async def deprecated_task_source_endpoint(
 ) -> JSONResponse:
     """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
     canonical_target = "/api/v1/tasks"
+    path = request.url.path
     return JSONResponse(
         status_code=410,
         content={
             "error": "DEPRECATED_ENDPOINT",
             "message": (
-                f"The /api/v1/repositories/{repository_id}/source/task/{action} endpoint has been deprecated "
-                f"and consolidated. Please use the canonical /api/v1/tasks execution API."
+                f"The endpoint {path} has been deprecated and consolidated. "
+                f"Please use the canonical /api/v1/tasks execution API."
             ),
             "canonical_endpoint": canonical_target,
         },
