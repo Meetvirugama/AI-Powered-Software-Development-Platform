@@ -77,6 +77,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "g4d5e6f7a8b9",  # extend tool_invocations audit fields (Issue #201)
     "h5e6f7a8b9c0",  # extend task_approvals for tool and MCP (Issue #199)
     "i6f7a8b9c0d1",  # add memory_entries embedding and hnsw (Issue #217)
+    "j7a8b9c0d1e2",  # modernize code_symbols and symbol_edges for provenance, resolution status, and ranking
 )
 
 
