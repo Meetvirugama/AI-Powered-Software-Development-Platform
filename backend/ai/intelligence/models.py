@@ -71,6 +71,7 @@ class GraphNode(BaseModel):
     end_line: int = 1
     signature: str | None = None
     parent_id: str | None = None
+    importance_score: float = 0.0
 
 
 class GraphEdge(BaseModel):
@@ -80,6 +81,9 @@ class GraphEdge(BaseModel):
     target: str = Field(description="Target symbol ID or name")
     type: Literal["calls", "imports", "extends", "implements", "tests", "uses"] = "calls"
     confidence: float = 1.0
+    provenance: str = "tree_sitter"
+    resolution_status: str = "resolved"
+    weight: float = 1.0
 
 
 class EntryPointMetadata(BaseModel):
