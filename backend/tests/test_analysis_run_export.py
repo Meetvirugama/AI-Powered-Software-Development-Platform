@@ -375,3 +375,61 @@ def test_export_endpoint_via_client(client, db_session: Session, sample_data: di
     assert len(fb_data) == 1
     assert fb_data[0]["id"] == str(sample_data["run_bugs"].id)
 
+    # 4. Test Langfuse format export endpoint
+    resp_lf = client.get(
+        f"/api/v1/repositories/{repo_id}/analysis-runs/export?format=langfuse",
+        headers=headers,
+    )
+    assert resp_lf.status_code == 200
+    assert "application/x-ndjson" in resp_lf.headers["content-type"]
+    assert f'filename="analysis-eval-{repo_id}-langfuse.jsonl"' in resp_lf.headers["content-disposition"]
+    lf_lines = [l for l in resp_lf.text.strip().split("\n") if l.strip()]
+    assert len(lf_lines) == 3
+    sample_lf = json.loads(lf_lines[0])
+    assert "input" in sample_lf
+    assert "expected_output" in sample_lf
+    assert "metadata" in sample_lf
+
+
+def test_export_evaluation_dataset_langfuse_format(db_session: Session, sample_data: dict):
+    """Test exporting runs formatted specifically for Langfuse datasets (input, expected_output, metadata)."""
+    service = AnalysisRunHistoryService()
+    repo1_id = sample_data["repo1"].id
+
+    lf_output = service.export_evaluation_dataset(
+        repo1_id,
+        format="langfuse",
+        db=db_session,
+    )
+
+    assert isinstance(lf_output, str)
+    lines = [l for l in lf_output.strip().split("\n") if l.strip()]
+    assert len(lines) == 3
+
+    items = [json.loads(l) for l in lines]
+    bug_item = next(i for i in items if i["id"] == str(sample_data["run_bugs"].id))
+
+    # Verify Langfuse dataset item schema
+    assert bug_item["input"]["feature_type"] == "detect_bugs"
+    assert bug_item["input"]["target_path"] == "src/auth/tokens.py"
+    assert "findings" in bug_item["expected_output"]
+    assert bug_item["expected_output"]["findings_count"] == 2
+    assert bug_item["metadata"]["repository_id"] == str(repo1_id)
+    assert bug_item["metadata"]["feedback_summary"]["has_feedback"] is True
+
+
+def test_export_evaluation_records_with_code_review_alias(db_session: Session, sample_data: dict):
+    """Test that 'code_review' shorthand alias maps correctly to 'review' feature type."""
+    service = AnalysisRunHistoryService()
+    repo1_id = sample_data["repo1"].id
+
+    review_records = service.export_evaluation_records(
+        repo1_id,
+        feature_type="code_review",
+        db=db_session,
+    )
+    assert len(review_records) == 1
+    assert review_records[0]["id"] == str(sample_data["run_review"].id)
+    assert review_records[0]["feature_type"] == "review"
+
+

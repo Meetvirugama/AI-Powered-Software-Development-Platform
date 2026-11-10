@@ -251,7 +251,7 @@ async def get_analysis_runs_summary(
     "/repositories/{repository_id}/analysis-runs/export",
     responses={
         200: {
-            "description": "Evaluation dataset in JSONL or JSON format for regression testing & LLM evaluation.",
+            "description": "Evaluation dataset in JSONL, JSON, or Langfuse format for regression testing & LLM evaluation.",
             "content": {
                 "application/x-ndjson": {},
                 "application/json": {},
@@ -261,7 +261,7 @@ async def get_analysis_runs_summary(
     },
     summary="Export analysis runs and user feedback as an evaluation dataset (Issue #195)",
     description=(
-        "Export historical analysis runs with findings and user feedback into standard JSONL or JSON formats "
+        "Export historical analysis runs with findings and user feedback into standard JSONL, JSON, or Langfuse formats "
         "for regression evaluation datasets (e.g., Langfuse datasets). Supports filtering by feature_type, status, "
         "and feedback presence."
     ),
@@ -269,7 +269,7 @@ async def get_analysis_runs_summary(
 async def export_analysis_runs_dataset(
     repository_id: UUID,
     request: Request,
-    format: str = Query(default="jsonl", pattern="^(jsonl|json)$", description="Export format: 'jsonl' (default) or 'json'"),
+    format: str = Query(default="jsonl", pattern="^(jsonl|json|langfuse)$", description="Export format: 'jsonl' (default), 'json', or 'langfuse'"),
     feature_type: AnalysisFeatureType | None = Query(default=None, description="Filter by feature type"),
     status: str | None = Query(default=None, description="Filter by status (e.g. COMPLETED, FAILED)"),
     include_feedback_only: bool = Query(default=False, description="When true, only exports runs that contain user feedback"),
@@ -331,11 +331,30 @@ async def export_analysis_runs_dataset(
             })
         if format == "jsonl":
             content = "\n".join(json.dumps(rec, default=str) for rec in records)
+        elif format == "langfuse":
+            langfuse_items = [
+                {
+                    "id": rec["id"],
+                    "input": {"feature_type": rec["feature_type"], **rec["input"]},
+                    "expected_output": {"findings_count": rec["output"]["findings_count"], "findings": rec["findings"]},
+                    "metadata": {"repository_id": rec["repository_id"], "status": rec["status"], **rec["metadata"]},
+                }
+                for rec in records
+            ]
+            content = "\n".join(json.dumps(item, default=str) for item in langfuse_items)
         else:
             content = json.dumps(records, default=str, indent=2)
 
-    media_type = "application/x-ndjson" if format == "jsonl" else "application/json"
-    filename = f"analysis-eval-{repository_id}.{format}"
+    if format == "langfuse":
+        media_type = "application/x-ndjson"
+        filename = f"analysis-eval-{repository_id}-langfuse.jsonl"
+    elif format == "jsonl":
+        media_type = "application/x-ndjson"
+        filename = f"analysis-eval-{repository_id}.jsonl"
+    else:
+        media_type = "application/json"
+        filename = f"analysis-eval-{repository_id}.json"
+
     return Response(
         content=content,
         media_type=media_type,
