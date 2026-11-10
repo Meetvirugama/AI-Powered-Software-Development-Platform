@@ -288,6 +288,7 @@ def resolve_target_and_build_context(
                         start_line=sym.start_line,
                         end_line=sym.end_line,
                         content=sym.signature or "",
+                        importance_score=float(getattr(sym, "importance_score", 0.0) or 0.0),
                     )
                 )
 
@@ -305,12 +306,16 @@ def resolve_target_and_build_context(
                     .all()
                 )
                 neighbor_ids = {
-                    (
-                        e.target_symbol_id
-                        if e.source_symbol_id == resolved_symbol.id
-                        else e.source_symbol_id
-                    )
+                    nid
                     for e in edges
+                    for nid in (
+                        (
+                            e.target_symbol_id
+                            if e.source_symbol_id == resolved_symbol.id
+                            else e.source_symbol_id
+                        ),
+                    )
+                    if nid is not None
                 }
                 if neighbor_ids:
                     neighbor_syms: list[CodeSymbol] = (
@@ -331,6 +336,7 @@ def resolve_target_and_build_context(
                                 start_line=nsym.start_line,
                                 end_line=nsym.end_line,
                                 content=nsym.signature or "",
+                                importance_score=float(getattr(nsym, "importance_score", 0.0) or 0.0),
                             )
                         )
             except Exception:

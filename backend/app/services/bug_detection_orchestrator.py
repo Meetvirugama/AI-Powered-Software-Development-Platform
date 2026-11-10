@@ -361,6 +361,8 @@ def resolve_bug_target_and_build_context(
                 .all()
             )
             for edge in caller_edges:
+                if edge.source_symbol_id is None:
+                    continue
                 caller_sym = db.query(CodeSymbol).filter(CodeSymbol.id == edge.source_symbol_id).first()
                 if caller_sym:
                     caller_chunk = (
@@ -384,6 +386,7 @@ def resolve_bug_target_and_build_context(
                             start_line=caller_sym.start_line,
                             end_line=caller_sym.end_line,
                             content=content_snippet,
+                            importance_score=float(getattr(caller_sym, "importance_score", 0.0) or 0.0),
                         )
                     )
                     if caller_path not in related_file_paths and caller_path != safe_path:

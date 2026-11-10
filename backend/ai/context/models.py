@@ -261,6 +261,7 @@ class SymbolContext:
     end_line: int
     content: str = ""
     score: float = 1.0
+    importance_score: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -275,6 +276,7 @@ class SymbolContext:
             end_line=data.get("end_line", 1),
             content=data.get("content", ""),
             score=data.get("score", 1.0),
+            importance_score=float(data.get("importance_score", 0.0) or 0.0),
         )
 
 

@@ -554,9 +554,10 @@ async def resolve_review_target_and_build_context(
                         .all()
                     )
                     neighbor_ids = {
-                        e.source_symbol_id for e in edges
-                    } | {
-                        e.target_symbol_id for e in edges
+                        nid
+                        for e in edges
+                        for nid in (e.source_symbol_id, e.target_symbol_id)
+                        if nid is not None
                     }
                     if neighbor_ids:
                         caller_syms: list[CodeSymbol] = (
@@ -577,6 +578,7 @@ async def resolve_review_target_and_build_context(
                                     start_line=csym.start_line,
                                     end_line=csym.end_line,
                                     content=csym.signature or "",
+                                    importance_score=float(getattr(csym, "importance_score", 0.0) or 0.0),
                                 )
                             )
         except Exception:

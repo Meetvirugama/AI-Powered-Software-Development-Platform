@@ -217,6 +217,8 @@ class SymbolGraphExpander:
         all_neighbors: set[UUID] = set()
 
         for row in edge_rows:
+            if row[0] is None or row[1] is None:
+                continue
             src = UUID(str(row[0])) if not isinstance(row[0], UUID) else row[0]
             tgt = UUID(str(row[1])) if not isinstance(row[1], UUID) else row[1]
 
@@ -243,11 +245,14 @@ class SymbolGraphExpander:
             f"""
             SELECT cc.id, cc.repository_id, cc.file_id, cc.symbol_id,
                    cc.content, cc.token_count, cc.start_line, cc.end_line,
-                   cc.content_hash, rf.path AS file_path
+                   cc.content_hash, rf.path AS file_path,
+                   COALESCE(cs.importance_score, 0.0) AS importance_score
             FROM code_chunks cc
             JOIN repository_files rf ON cc.file_id = rf.id
+            LEFT JOIN code_symbols cs ON cc.symbol_id = cs.id
             WHERE cc.repository_id = :repo_id
               AND cc.symbol_id IN ({chunk_in_clause})
+            ORDER BY COALESCE(cs.importance_score, 0.0) DESC
             LIMIT :max_expanded
             """
         )
@@ -265,6 +270,8 @@ class SymbolGraphExpander:
             if chunk_id in candidate_chunk_ids:
                 continue  # Deduplicate against initial candidates
 
+            imp_score = float(r[10] or 0.0) if len(r) > 10 and r[10] is not None else None
+            base_graph_score = round(0.5 + 0.05 * min(1.0, max(0.0, imp_score or 0.0)), 6)
             expanded_chunks.append(
                 CodeChunk(
                     id=chunk_id,
@@ -276,9 +283,10 @@ class SymbolGraphExpander:
                     start_line=int(r[6] or 1),
                     end_line=int(r[7] or 1),
                     content_hash=str(r[8] or ""),
-                    score=0.5,
-                    graph_score=0.5,
+                    score=base_graph_score,
+                    graph_score=base_graph_score,
                     file_path=str(r[9] or ""),
+                    importance_score=imp_score,
                 )
             )
 
