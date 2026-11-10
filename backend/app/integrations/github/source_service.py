@@ -741,6 +741,13 @@ class GitHubSourceService:
         issue_number: int,
     ) -> RemoteIssueInfo:
         """Get detail for a specific remote issue from an authorized repository (Issue #196)."""
+        if not isinstance(issue_number, int) or issue_number < 1:
+            raise APIError(
+                400,
+                ErrorCode.INVALID_REQUEST,
+                "Issue number must be a positive integer.",
+            )
+
         repository = self._get_authorized_repository(repository_id, user_id)
         client = await self._get_client(repository)
 
