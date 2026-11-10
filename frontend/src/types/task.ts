@@ -347,12 +347,49 @@ export interface TaskApproval {
   id?: string;
   approval_id?: string;
   task_id: string;
-  plan_version: number;
-  decision: 'APPROVED' | 'REJECTED';
+  plan_version?: number;
+  decision: 'APPROVED' | 'REJECTED' | 'PENDING' | 'EXPIRED' | 'CONSUMED' | string;
   notes?: string;
   comment?: string;
+  feedback?: string;
+  reason?: string;
   user_id?: string;
   created_at: string;
+  approval_type?: 'plan' | 'tool' | 'mcp_elicitation' | string;
+  tool_name?: string;
+  argument_hash?: string;
+  sanitized_arguments?: Record<string, unknown>;
+  risk_level?: string;
+  status?: 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed' | string;
+  expires_at?: string;
+  consumed_at?: string;
+  session_id?: string;
+  elicitation_type?: 'form' | 'url' | string;
+  elicitation_payload?: Record<string, unknown>;
+  elicitation_response?: Record<string, unknown>;
+}
+
+export interface ToolApprovalRequestPayload {
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  risk_tier?: string;
+  expires_in_seconds?: number;
+}
+
+export interface MCPElicitationRequestPayload {
+  session_id: string;
+  elicitation_type: 'form' | 'url';
+  prompt?: string;
+  schema?: Record<string, unknown>;
+  url?: string;
+  purpose?: string;
+  expires_in_seconds?: number;
+}
+
+export interface MCPElicitationResponsePayload {
+  session_id: string;
+  action: 'submit' | 'cancel' | string;
+  data?: Record<string, unknown>;
 }
 
 // ============================================================================

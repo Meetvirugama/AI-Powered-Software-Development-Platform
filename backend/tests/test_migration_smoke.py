@@ -74,6 +74,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "e1f2a3b4c5d6",  # durable github webhook events and repo automation (Issue #182)
     "e8f9a0b1c2d3",  # code search text and index generation tracking (Issue #187)
     "f3c4d5e6a7b8",  # harden repository deletion cascades (Issue #183)
+    "g4d5e6f7a8b9",  # extend tool_invocations audit fields (Issue #201)
+    "h5e6f7a8b9c0",  # extend task_approvals for tool and MCP (Issue #199)
 )
 
 
@@ -230,9 +232,9 @@ def test_alembic_chain_is_unbroken_and_acyclic() -> None:
     revisions: dict[str, str | None] = {}
     for py_file in migration_files:
         content = py_file.read_text(encoding="utf-8")
-        rev_match = re.search(r'revision:\s*(?:str\s*=\s*)?["\']([a-f0-9]+)["\']', content)
+        rev_match = re.search(r'revision:\s*(?:str\s*=\s*)?["\']([a-z0-9_]+)["\']', content)
         down_match = re.search(
-            r'down_revision:\s*(?:[A-Za-z0-9_, \[\]\|]*\s*=\s*)?(?:["\']([a-f0-9]+)["\']|None)',
+            r'down_revision:\s*(?:[A-Za-z0-9_, \[\]\|]*\s*=\s*)?(?:["\']([a-z0-9_]+)["\']|None)',
             content,
         )
         if rev_match:

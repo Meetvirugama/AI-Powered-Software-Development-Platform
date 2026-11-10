@@ -18,7 +18,7 @@ import {
   type TaskDetailResponse,
   type TaskListResponse,
   type TaskPlan,
-  type PlanApproval,
+  type TaskApproval,
   type TaskEvent,
   type TaskEventListResponse,
   type GitHubIssue,
@@ -46,7 +46,7 @@ import {
 interface MockDatabase {
   tasks: Map<string, TaskDetailResponse>;
   plans: Map<string, Map<number, TaskPlan>>;
-  approvals: Map<string, PlanApproval[]>;
+  approvals: Map<string, TaskApproval[]>;
   events: Map<string, TaskEvent[]>;
   tests: Map<string, TaskTestResultsResponse>;
   verifications: Map<string, VerificationResult>;
@@ -63,7 +63,7 @@ const DEFAULT_REPO_ID = 'repo-1';
 function createInitialSeedData(): MockDatabase {
   const tasks = new Map<string, TaskDetailResponse>();
   const plans = new Map<string, Map<number, TaskPlan>>();
-  const approvals = new Map<string, PlanApproval[]>();
+  const approvals = new Map<string, TaskApproval[]>();
   const events = new Map<string, TaskEvent[]>();
   const tests = new Map<string, TaskTestResultsResponse>();
   const verifications = new Map<string, VerificationResult>();
@@ -258,6 +258,8 @@ function createInitialSeedData(): MockDatabase {
       task_id: task2.task_id,
       plan_version: 1,
       decision: 'APPROVED',
+      status: 'approved',
+      approval_type: 'execution',
       user_id: 'lead_architect',
       notes: 'Approved without objections. Proceed with workspace setup.',
       created_at: '2026-10-28T09:30:00.000Z',
@@ -2203,6 +2205,8 @@ export const taskHandlers = [
       task_id: taskId,
       plan_version: payload.plan_version,
       decision: 'APPROVED',
+      status: 'approved',
+      approval_type: 'execution',
       user_id: payload.approved_by || 'Human Reviewer',
       notes: payload.notes || 'Plan approved.',
       created_at: now,
@@ -2308,8 +2312,10 @@ export const taskHandlers = [
       task_id: taskId,
       plan_version: payload.plan_version,
       decision: 'REJECTED',
+      status: 'rejected',
+      approval_type: 'execution',
       user_id: payload.rejected_by || 'Human Reviewer',
-      reason: payload.reason || 'Plan rejected.',
+      notes: payload.reason || 'Plan rejected.',
       created_at: now,
     });
     db.approvals.set(taskId, taskApprovals);
@@ -2327,6 +2333,395 @@ export const taskHandlers = [
     db.events.set(taskId, taskEvents);
 
     return HttpResponse.json(task, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7a. GET /api/v1/tasks/:taskId/approvals — List All Task Approvals
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/approvals', ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const url = new URL(request.url);
+    const approvalType = url.searchParams.get('approval_type');
+    const status = url.searchParams.get('status');
+
+    let items = db.approvals.get(taskId) || [];
+    if (approvalType) {
+      items = items.filter((a) => a.approval_type === approvalType);
+    }
+    if (status) {
+      items = items.filter((a) => a.status === status.toLowerCase());
+    }
+    return HttpResponse.json(items, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7b. GET /api/v1/tasks/:taskId/tool-approvals — List Tool Approvals
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/tool-approvals', ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const url = new URL(request.url);
+    const status = url.searchParams.get('status');
+
+    let items = (db.approvals.get(taskId) || []).filter((a) => a.approval_type === 'tool');
+    if (status) {
+      items = items.filter((a) => a.status === status.toLowerCase());
+    }
+    return HttpResponse.json(items, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7c. POST /api/v1/tasks/:taskId/tool-approvals/request — Request Tool Approval
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/tool-approvals/request', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      tool_name?: string;
+      arguments?: Record<string, unknown>;
+      risk_tier?: string;
+      expires_in_seconds?: number;
+    };
+    if (!body.tool_name) {
+      return HttpResponse.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'tool_name is required', retryable: false } },
+        { status: 400 }
+      );
+    }
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + (body.expires_in_seconds || 3600) * 1000).toISOString();
+    const approvalId = nextApprovalId();
+
+    const sanitized = JSON.parse(JSON.stringify(body.arguments || {}));
+    for (const key of Object.keys(sanitized)) {
+      if (/token|secret|password|api_key|auth/i.test(key)) {
+        sanitized[key] = '[REDACTED]';
+      }
+    }
+
+    const newApproval: TaskApproval = {
+      id: approvalId,
+      task_id: taskId,
+      approval_type: 'tool',
+      tool_name: body.tool_name,
+      argument_hash: `sha256:mock-${Date.now()}`,
+      sanitized_arguments: sanitized,
+      risk_level: body.risk_tier || 'write-external',
+      status: 'pending',
+      decision: 'PENDING',
+      expires_at: expiresAt,
+      created_at: now,
+    };
+
+    const taskApprovals = db.approvals.get(taskId) || [];
+    taskApprovals.push(newApproval);
+    db.approvals.set(taskId, taskApprovals);
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'TOOL_APPROVAL_REQUESTED',
+      description: `Tool approval requested for ${body.tool_name} (risk: ${newApproval.risk_level})`,
+      details: { approval_id: approvalId, tool_name: body.tool_name },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(newApproval, { status: 201 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7d. POST /api/v1/tasks/:taskId/tool-approvals/:approvalId/approve — Approve Tool
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/tool-approvals/:approvalId/approve', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const approvalId = String(params.approvalId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as { feedback?: string };
+    const taskApprovals = db.approvals.get(taskId) || [];
+    const approval = taskApprovals.find((a) => a.id === approvalId && a.approval_type === 'tool');
+    if (!approval) {
+      return HttpResponse.json(
+        { error: { code: 'APPROVAL_NOT_FOUND', message: `Tool approval '${approvalId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    if (approval.status !== 'pending') {
+      return HttpResponse.json(
+        { error: { code: 'APPROVAL_CONFLICT', message: `Tool approval is already '${approval.status}'.`, retryable: false } },
+        { status: 409 }
+      );
+    }
+    const now = new Date().toISOString();
+    approval.status = 'approved';
+    approval.decision = 'APPROVED';
+    approval.notes = body.feedback || 'Tool execution approved.';
+    approval.user_id = 'Human Reviewer';
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'TOOL_APPROVED',
+      description: `Tool approval granted for ${approval.tool_name}`,
+      details: { approval_id: approvalId, tool_name: approval.tool_name },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(approval, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7e. POST /api/v1/tasks/:taskId/tool-approvals/:approvalId/reject — Reject Tool
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/tool-approvals/:approvalId/reject', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const approvalId = String(params.approvalId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as { reason?: string };
+    const taskApprovals = db.approvals.get(taskId) || [];
+    const approval = taskApprovals.find((a) => a.id === approvalId && a.approval_type === 'tool');
+    if (!approval) {
+      return HttpResponse.json(
+        { error: { code: 'APPROVAL_NOT_FOUND', message: `Tool approval '${approvalId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    if (approval.status !== 'pending') {
+      return HttpResponse.json(
+        { error: { code: 'APPROVAL_CONFLICT', message: `Tool approval is already '${approval.status}'.`, retryable: false } },
+        { status: 409 }
+      );
+    }
+    const now = new Date().toISOString();
+    approval.status = 'rejected';
+    approval.decision = 'REJECTED';
+    approval.notes = body.reason || 'Tool execution rejected.';
+    approval.user_id = 'Human Reviewer';
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'TOOL_REJECTED',
+      description: `Tool approval rejected for ${approval.tool_name}: ${approval.notes}`,
+      details: { approval_id: approvalId, tool_name: approval.tool_name, reason: approval.notes },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(approval, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7f. GET /api/v1/tasks/:taskId/mcp/elicitations — List MCP Elicitations
+  // --------------------------------------------------------------------------
+  http.get('*/api/v1/tasks/:taskId/mcp/elicitations', ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const url = new URL(request.url);
+    const sessionId = url.searchParams.get('session_id');
+    const status = url.searchParams.get('status');
+
+    let items = (db.approvals.get(taskId) || []).filter((a) => a.approval_type === 'mcp_elicitation');
+    if (sessionId) items = items.filter((a) => a.session_id === sessionId);
+    if (status) items = items.filter((a) => a.status === status.toLowerCase());
+    return HttpResponse.json(items, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7g. POST /api/v1/tasks/:taskId/mcp/elicitations/request — Request MCP Elicitation
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/mcp/elicitations/request', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      session_id?: string;
+      elicitation_type?: 'form' | 'url';
+      payload?: Record<string, unknown>;
+    };
+    if (!body.session_id || !body.elicitation_type) {
+      return HttpResponse.json(
+        { error: { code: 'VALIDATION_ERROR', message: 'session_id and elicitation_type required', retryable: false } },
+        { status: 400 }
+      );
+    }
+    const now = new Date().toISOString();
+    const approvalId = nextApprovalId();
+    const newElicitation: TaskApproval = {
+      id: approvalId,
+      task_id: taskId,
+      approval_type: 'mcp_elicitation',
+      session_id: body.session_id,
+      elicitation_type: body.elicitation_type,
+      elicitation_payload: body.payload || {},
+      status: 'pending',
+      decision: 'PENDING',
+      created_at: now,
+    };
+
+    const taskApprovals = db.approvals.get(taskId) || [];
+    taskApprovals.push(newElicitation);
+    db.approvals.set(taskId, taskApprovals);
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'MCP_ELICITATION_REQUESTED',
+      description: `MCP ${body.elicitation_type.toUpperCase()} elicitation requested`,
+      details: { approval_id: approvalId, elicitation_type: body.elicitation_type },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(newElicitation, { status: 201 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7h. POST /api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/respond — Submit MCP Response
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/respond', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const elicitationId = String(params.elicitationId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as {
+      session_id?: string;
+      action?: string;
+      data?: Record<string, unknown>;
+    };
+    const taskApprovals = db.approvals.get(taskId) || [];
+    const elicitation = taskApprovals.find((a) => a.id === elicitationId && a.approval_type === 'mcp_elicitation');
+    if (!elicitation) {
+      return HttpResponse.json(
+        { error: { code: 'ELICITATION_NOT_FOUND', message: `Elicitation '${elicitationId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    if (elicitation.status !== 'pending') {
+      return HttpResponse.json(
+        { error: { code: 'ELICITATION_CONFLICT', message: `Elicitation is already '${elicitation.status}'.`, retryable: false } },
+        { status: 409 }
+      );
+    }
+    const now = new Date().toISOString();
+    elicitation.status = 'approved';
+    elicitation.decision = 'APPROVED';
+    elicitation.elicitation_response = body.data || {};
+    elicitation.notes = `MCP response submitted: ${body.action || 'submit'}`;
+    elicitation.user_id = 'Human Reviewer';
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'MCP_ELICITATION_RESPONDED',
+      description: `MCP elicitation responded (${body.action || 'submit'})`,
+      details: { approval_id: elicitationId },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(elicitation, { status: 200 });
+  }),
+
+  // --------------------------------------------------------------------------
+  // 7i. POST /api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/cancel — Cancel MCP Elicitation
+  // --------------------------------------------------------------------------
+  http.post('*/api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/cancel', async ({ params, request }) => {
+    const taskId = String(params.taskId);
+    const elicitationId = String(params.elicitationId);
+    const task = getTaskFromStore(taskId);
+    if (!task) {
+      return HttpResponse.json(
+        { error: { code: 'TASK_NOT_FOUND', message: `Task '${taskId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    const body = (await request.json().catch(() => ({}))) as { session_id?: string; reason?: string };
+    const taskApprovals = db.approvals.get(taskId) || [];
+    const elicitation = taskApprovals.find((a) => a.id === elicitationId && a.approval_type === 'mcp_elicitation');
+    if (!elicitation) {
+      return HttpResponse.json(
+        { error: { code: 'ELICITATION_NOT_FOUND', message: `Elicitation '${elicitationId}' not found.`, retryable: false } },
+        { status: 404 }
+      );
+    }
+    if (elicitation.status !== 'pending') {
+      return HttpResponse.json(
+        { error: { code: 'ELICITATION_CONFLICT', message: `Elicitation is already '${elicitation.status}'.`, retryable: false } },
+        { status: 409 }
+      );
+    }
+    const now = new Date().toISOString();
+    elicitation.status = 'rejected';
+    elicitation.decision = 'REJECTED';
+    elicitation.notes = body.reason || 'MCP elicitation cancelled by user.';
+    elicitation.user_id = 'Human Reviewer';
+
+    const taskEvents = db.events.get(taskId) || [];
+    taskEvents.push({
+      id: nextEventId(),
+      task_id: taskId,
+      event_type: 'MCP_ELICITATION_CANCELLED',
+      description: `MCP elicitation cancelled: ${elicitation.notes}`,
+      details: { approval_id: elicitationId },
+      created_at: now,
+    });
+    db.events.set(taskId, taskEvents);
+
+    return HttpResponse.json(elicitation, { status: 200 });
   }),
 
   // --------------------------------------------------------------------------

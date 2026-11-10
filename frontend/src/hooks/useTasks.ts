@@ -30,9 +30,14 @@ import {
   recoverTask,
   importGitHubIssue,
   listRepositoryIssues,
+  fetchTaskApprovals,
+  approveToolExecution,
+  rejectToolExecution,
+  respondMCPElicitation,
 } from '../services/tasks';
 import {
   isExecutionActive,
+  type TaskApproval,
   type TaskCreateRequest,
   type TaskDetailResponse,
   type TaskListFilterParams,
@@ -495,6 +500,68 @@ export function useRecoverTask(taskId: string) {
       queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
       queryClient.invalidateQueries({ queryKey: taskKeys.workspace(taskId) });
       queryClient.invalidateQueries({ queryKey: taskKeys.verification(taskId) });
+    },
+  });
+}
+
+/**
+ * Query hook to fetch all approvals (plans, tools, MCP elicitations) for a task.
+ */
+export function useTaskApprovals(taskId: string, approvalType?: string, status?: string) {
+  return useQuery<TaskApproval[], ApiError>({
+    queryKey: ['task-approvals', taskId, approvalType, status],
+    queryFn: () => fetchTaskApprovals(taskId, approvalType, status),
+    enabled: Boolean(taskId),
+    staleTime: 5000,
+  });
+}
+
+/**
+ * Mutation hook to approve a high-risk tool execution.
+ */
+export function useApproveTool(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskApproval, ApiError, { approvalId: string; feedback?: string }>({
+    mutationFn: ({ approvalId, feedback }) => approveToolExecution(taskId, approvalId, feedback),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task-approvals', taskId] });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+    },
+  });
+}
+
+/**
+ * Mutation hook to reject a high-risk tool execution.
+ */
+export function useRejectTool(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<TaskApproval, ApiError, { approvalId: string; reason?: string }>({
+    mutationFn: ({ approvalId, reason }) => rejectToolExecution(taskId, approvalId, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task-approvals', taskId] });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
+    },
+  });
+}
+
+/**
+ * Mutation hook to respond to an MCP form/URL elicitation.
+ */
+export function useRespondMCPElicitation(taskId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    TaskApproval,
+    ApiError,
+    { elicitationId: string; sessionId: string; action: string; data?: Record<string, unknown> }
+  >({
+    mutationFn: ({ elicitationId, sessionId, action, data }) =>
+      respondMCPElicitation(taskId, elicitationId, { session_id: sessionId, action, data }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['task-approvals', taskId] });
+      queryClient.invalidateQueries({ queryKey: taskKeys.events(taskId) });
     },
   });
 }

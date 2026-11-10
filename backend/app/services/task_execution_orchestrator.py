@@ -93,7 +93,7 @@ from sandbox.exceptions import (
     WorkspaceRepairBudgetExhaustedError,
     WorkspaceStateError,
 )
-from sandbox.tool_policy_bridge import WorkspaceToolPolicyBridge, register_workspace_tools
+from sandbox.tool_policy_bridge import CANONICAL_TOOL_METADATA, WorkspaceToolPolicyBridge, register_workspace_tools
 from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -589,6 +589,37 @@ class TaskExecutionOrchestrator:
                 output_summary=f"Blocked by API tool policy: {reason}",
             )
             raise APIError(403, code, reason)
+
+        # F19: Human approval gate for tools with risk tier >= write-external (or high/critical)
+        tool_risk: str | None = None
+        if hasattr(self.tool_router, "registry") and self.tool_router.registry:
+            entry = self.tool_router.registry.get_entry(tool_name)
+            if entry and entry.definition:
+                tool_risk = entry.definition.risk_tier
+        if not tool_risk:
+            tool_risk = CANONICAL_TOOL_METADATA.get(tool_name, {}).get("risk_tier")
+
+        from app.services.tool_approval_gate import tool_approval_gate_service
+        try:
+            tool_approval_gate_service.verify_and_consume_tool(
+                session=task_repo.session,
+                task=task,
+                tool_name=tool_name,
+                arguments=arguments,
+                user_id=actor_id,
+                risk_tier=tool_risk,
+            )
+        except APIError as exc:
+            task_repo.record_tool_invocation(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                tool_name=tool_name,
+                arguments=redact_obj(dict(arguments or {})),
+                status=ToolInvocationStatus.BLOCKED,
+                duration_ms=0,
+                output_summary=f"Blocked by tool approval gate: {exc.message}",
+            )
+            raise
 
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
