@@ -482,7 +482,10 @@ class GroqProvider(LLMProvider):
         if not choices:
             raise LLMUnavailableError("Groq response contained no choices.", provider=self.provider_name)
 
-        content = choices[0].get("message", {}).get("content", "")
+        msg = choices[0].get("message", {})
+        content = msg.get("content", "")
+        if not content and msg.get("reasoning"):
+            content = msg.get("reasoning", "")
         if not content:
             raise LLMUnavailableError("Groq response message contained no content.", provider=self.provider_name)
         usage = data.get("usage", {})
