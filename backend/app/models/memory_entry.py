@@ -1,7 +1,9 @@
 import enum
 import uuid
+from typing import Any
 
-from sqlalchemy import Enum, ForeignKey, String, Text
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import Enum, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -30,3 +32,15 @@ class MemoryEntry(TimestampedModel, Base):
     content: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String)
     status: Mapped[MemoryStatus] = mapped_column(Enum(MemoryStatus), default=MemoryStatus.active)
+    embedding: Mapped[Any] = mapped_column(Vector(768), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_memory_entries_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+

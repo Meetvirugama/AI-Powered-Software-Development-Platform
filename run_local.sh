@@ -40,11 +40,20 @@ if [ ! -f "frontend/.env.local" ]; then
     echo "VITE_API_BASE_URL=http://localhost:8000/api/v1" > frontend/.env.local
 fi
 
-# 4. Run database migrations if database is configured
+# 4. Check for and free stale processes on ports 8000 and 5173 if needed
+for p in 8000 5173; do
+    if command -v /usr/sbin/lsof &>/dev/null && /usr/sbin/lsof -i :"$p" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo "Notice: Freeing occupied port $p..."
+        kill -9 $(/usr/sbin/lsof -i :"$p" -sTCP:LISTEN -t) 2>/dev/null || true
+        sleep 0.5
+    fi
+done
+
+# 5. Run database migrations if database is configured
 echo "Applying database migrations..."
 $PYTHON_BIN -m alembic -c backend/alembic.ini upgrade head || echo "Database migration notice: Continuing local startup."
 
-# 5. Trap Ctrl+C (SIGINT) and SIGTERM to kill all background processes cleanly
+# 6. Trap Ctrl+C (SIGINT) and SIGTERM to kill all background processes cleanly
 cleanup() {
     echo ""
     echo "Shutting down local servers..."

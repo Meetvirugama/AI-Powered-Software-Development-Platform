@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { FileCode, Sparkles, History, MessageSquare, Maximize2 } from 'lucide-react';
+import { FileCode, Sparkles, History, MessageSquare, Maximize2, Brain } from 'lucide-react';
 import type { RepositoryFile } from '../../types/api';
 
 export interface WorkbenchHeaderProps {
@@ -7,6 +7,7 @@ export interface WorkbenchHeaderProps {
   selectedFile: RepositoryFile | null;
   onOpenHistory: () => void;
   onOpenFullscreen: () => void;
+  onOpenMemory?: () => void;
 }
 
 export function WorkbenchHeader({
@@ -14,6 +15,7 @@ export function WorkbenchHeader({
   selectedFile,
   onOpenHistory,
   onOpenFullscreen,
+  onOpenMemory,
 }: WorkbenchHeaderProps) {
   return (
     <div className="h-11 bg-muted/30 px-3 sm:px-4 border-b border-border flex items-center justify-between shrink-0">
@@ -30,6 +32,30 @@ export function WorkbenchHeader({
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0">
+        {/* Project Memory Drawer Trigger (F36 / Issue #217) */}
+        {onOpenMemory && (
+          <button
+            type="button"
+            onClick={onOpenMemory}
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 border border-purple-500/30 transition-colors"
+            title="Project Memory & Knowledge (F36)"
+          >
+            <Brain className="h-3 w-3" />
+            <span className="hidden sm:inline">Memory</span>
+          </button>
+        )}
+
+        {/* Universal Analysis History Trigger */}
+        <button
+          type="button"
+          onClick={onOpenHistory}
+          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          title="View Analysis History & Reopen Past Runs"
+        >
+          <History className="h-3 w-3 text-primary" />
+          <span className="hidden sm:inline">History</span>
+        </button>
+
         {selectedFile && (
           <>
             {/* Quick Open in Explain Studio */}
@@ -41,17 +67,6 @@ export function WorkbenchHeader({
               <Sparkles className="h-3 w-3" />
               <span className="hidden sm:inline">Explain in Studio</span>
             </Link>
-
-            {/* Universal Analysis History Trigger */}
-            <button
-              type="button"
-              onClick={onOpenHistory}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-              title="View Analysis History & Reopen Past Runs"
-            >
-              <History className="h-3 w-3 text-primary" />
-              <span className="hidden sm:inline">History</span>
-            </button>
 
             <Link
               to={`/app/repositories/${repositoryId}/chat?file=${encodeURIComponent(selectedFile.path)}`}

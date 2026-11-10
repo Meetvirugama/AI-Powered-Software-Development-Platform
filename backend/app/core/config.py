@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     # Comma-separated list of frontend origins allowed to call the API with
     # cookies. Never use "*" here: browsers reject "*" with credentials, and it
     # would let any website read API responses on a logged-in user's behalf.
-    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
     cors_origin_regex: str | None = None
     frontend_url: str | None = None
     rate_limit_enabled: bool = True
@@ -330,6 +330,8 @@ class Settings(BaseSettings):
                         )
 
             # Validate sandbox backend in production: never permit local host subprocess (F20)
+            if "sandbox_backend" not in self.model_fields_set and (self.sandbox_backend or "").strip().lower() in ("local", "subprocess", "localsubprocess"):
+                self.sandbox_backend = "container"
             clean_backend = (self.sandbox_backend or "").strip().lower()
             if clean_backend in ("local", "subprocess", "localsubprocess"):
                 raise ValueError(

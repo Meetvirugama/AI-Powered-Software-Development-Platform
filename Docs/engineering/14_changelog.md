@@ -1184,6 +1184,35 @@ ecover_interrupted_tasks.
 
 ---
 
+### [Post-Week3-Batch7] 2026-11-10 — Evaluation Dataset Export from Analysis History (Issue #195 / F15)
+**Type:** Feature / Evaluation / MLOps  
+**Developer:** Meet Virugama & Parth  
+**Changes:**
+- `backend/app/services/analysis_run_history_service.py`:
+  - Implemented `export_evaluation_records` to structure developer intelligence runs (explanations, bugs, tests, reviews) into standardized evaluation samples with input coordinates, output results, findings, and attached user feedback.
+  - Implemented `export_evaluation_dataset` supporting `jsonl` (plain JSONL), `langfuse` (Langfuse-compatible dataset items with `input`, `expected_output`, and `metadata`), `json` (formatted array), and `records`.
+  - Added multi-tenant isolation, alias normalization (`code_review` -> `review`), and `include_feedback_only` filtering.
+- `backend/app/api/v1/analysis/history.py`:
+  - Added `GET /api/v1/repositories/{repository_id}/analysis-runs/export` endpoint with format selection, feature filtering, status filtering, and streaming attachment headers.
+- `backend/app/schemas/analysis.py`:
+  - Added `"code_review": "review"` mapping to `_FEATURE_TYPE_ALIASES`.
+- `frontend/src/services/analysis.ts`:
+  - Added `exportAnalysisRunsDataset` client method for non-blocking file downloads.
+- `frontend/src/components/explorer/AnalysisHistoryDrawer.tsx`:
+  - Added one-click **Export** dataset dropdown menu in the drawer header with JSONL, Langfuse, and JSON options and feedback filtering.
+- `backend/tests/test_analysis_run_export.py`:
+  - 9 comprehensive unit and HTTP integration tests validating JSONL, JSON, Langfuse format, aliases, multi-tenant isolation, error handling, and client downloads.
+- `frontend/src/test/analysisHistoryExport.test.tsx`:
+  - 3 unit tests verifying UI drawer export button, dropdown menu, and download triggers.
+- `Docs/engineering/24_analysis_history_evaluation_export.md`:
+  - Authored full technical architecture specification.
+
+**Impact:** Historical developer intelligence interactions and user feedback are now directly exportable into benchmark regression datasets and Langfuse evaluation suites for continuous LLM calibration.
+
+**Related Docs:** `Docs/engineering/24_analysis_history_evaluation_export.md`, `Docs/README.md`
+
+---
+
 ### [Post-Week3-Batch8] 2026-11-10 — GitHub Source Browsing & Execution Surface Consolidation (Issue #196)
 **Type:** Feature / Refactor / Consolidation  
 **Developer:** Parth & Meet Virugama  
@@ -1215,5 +1244,43 @@ ecover_interrupted_tasks.
 **Impact:** Eliminates duplicate task execution surfaces across the codebase, provides first-class remote issue browsing through GitHubSourceService, and cleans up dead route aliases.
 
 **Related Docs:** `Docs/engineering/25_github_source_browsing_and_consolidation.md`, `Docs/README.md`
+
+---
+
+### [Post-Week3-Batch9] 2026-11-10 — Project Memory Entries, Semantic Retrieval & MCP Resources (Issue #217 / F36)
+**Type:** Feature / Episodic Memory / MCP  
+**Developer:** Parth & Meet Virugama  
+**Changes:**
+- `backend/app/models/memory_entry.py` & Alembic Migration `i6f7a8b9c0d1_add_memory_entries_embedding_and_hnsw.py`:
+  - Added `embedding vector(768)` nullable column and HNSW cosine distance index `ix_memory_entries_embedding_hnsw` to `memory_entries`.
+- `backend/app/repositories/memory_repository.py`:
+  - Implemented `semantic_search_entries` utilizing pgvector cosine operator `<=>` (with in-memory fallback for non-Postgres environments) and strict repository isolation.
+  - Implemented CRUD and multi-criteria filtering operations.
+- `backend/app/services/memory_service.py`:
+  - Implemented Reflexion-style automated writers: `record_task_completion_memory`, `record_task_failure_memory`, and `record_architectural_rule` with idempotency deduplication.
+  - Implemented Model Context Protocol (MCP 2025-11-25) resource exposure: `list_mcp_resources` and `resolve_mcp_resource` (`memory://repo/{id}/rules`, `decisions`, `task-summaries`, `failures`, `all`).
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Wired automated memory writers to record task completion memories upon passing independent verification and task failure memories upon verification rejection or exhausted repair attempts.
+- `backend/app/api/v1/memories.py`:
+  - Mounted CRUD, automated writers, pgvector `/semantic-search`, and `/mcp-resources` endpoints with tenant ownership checks.
+- `frontend/src/types/memory.ts` & `frontend/src/services/memory.ts`:
+  - Defined memory TypeScript types and client functions for CRUD, rule pinning, and MCP inspection.
+- `frontend/src/mocks/handlers/memory.ts`:
+  - Added MSW mock handlers for all project memory and MCP routes.
+- `frontend/src/components/explorer/ProjectMemoryPanel.tsx`:
+  - Built interactive Project Memory management panel with category tabs, real-time search, rule pinning, inline edit/delete, and MCP resource URI inspector.
+- `frontend/src/pages/RepositoryDetail.tsx` & `WorkbenchHeader.tsx`:
+  - Added memory toggle button to the workbench toolbar to open the Project Memory panel.
+- `backend/tests/test_project_memory_service.py`:
+  - 7 comprehensive tests covering repository CRUD, automated writers, multi-tenant boundary checks, semantic vector search, and MCP resource resolution.
+- `frontend/src/test/projectMemory.test.tsx`:
+  - 10 unit and integration tests verifying service calls, badge rendering, category filtering, rule pinning, and MCP URI copying.
+- `Docs/engineering/26_project_memory_entries.md`:
+  - Authored complete architecture specification.
+
+**Impact:** The platform now maintains persistent episodic memory across tasks, preventing repetitive failures, enforcing pinned architectural standards, and exposing memory to external tools and agents via MCP.
+
+**Related Docs:** `Docs/engineering/26_project_memory_entries.md`, `Docs/README.md`
+
 
 
