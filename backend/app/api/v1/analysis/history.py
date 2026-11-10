@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.v1.analysis.common import (
@@ -244,7 +244,110 @@ async def get_analysis_runs_summary(
 
 
 # ---------------------------------------------------------------------------
-# 3. Get Analysis Run Detail (GET /api/v1/analysis-runs/{run_id})
+# 3. Export Analysis Runs Dataset (GET /api/v1/repositories/{repository_id}/analysis-runs/export)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/repositories/{repository_id}/analysis-runs/export",
+    responses={
+        200: {
+            "description": "Evaluation dataset in JSONL or JSON format for regression testing & LLM evaluation.",
+            "content": {
+                "application/x-ndjson": {},
+                "application/json": {},
+            },
+        },
+        **ANALYSIS_ERROR_RESPONSES,
+    },
+    summary="Export analysis runs and user feedback as an evaluation dataset (Issue #195)",
+    description=(
+        "Export historical analysis runs with findings and user feedback into standard JSONL or JSON formats "
+        "for regression evaluation datasets (e.g., Langfuse datasets). Supports filtering by feature_type, status, "
+        "and feedback presence."
+    ),
+)
+async def export_analysis_runs_dataset(
+    repository_id: UUID,
+    request: Request,
+    format: str = Query(default="jsonl", regex="^(jsonl|json)$", description="Export format: 'jsonl' (default) or 'json'"),
+    feature_type: AnalysisFeatureType | None = Query(default=None, description="Filter by feature type"),
+    status: str | None = Query(default=None, description="Filter by status (e.g. COMPLETED, FAILED)"),
+    include_feedback_only: bool = Query(default=False, description="When true, only exports runs that contain user feedback"),
+    limit: int = Query(default=1000, ge=1, le=5000, description="Maximum number of runs to export"),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Export analysis runs and feedback as evaluation dataset for the authorized repository."""
+    await _owned_repository_async(repository_id, request, db)
+    normalized_feature_type = normalize_analysis_feature_type(feature_type)
+
+    run_service = getattr(request.app.state, "analysis_run_service", None)
+    if run_service is None or not hasattr(run_service, "export_evaluation_dataset"):
+        from app.services.analysis_run_history_service import AnalysisRunHistoryService
+        run_service = AnalysisRunHistoryService()
+
+    try:
+        content = run_service.export_evaluation_dataset(
+            repository_id=repository_id,
+            format=format,
+            feature_type=normalized_feature_type,
+            status=status,
+            include_feedback_only=include_feedback_only,
+            limit=limit,
+            db=db,
+        )
+    except Exception as exc:
+        logger.warning(f"Error exporting evaluation dataset via run_service: {exc}")
+        # Fallback to in-memory history if present
+        import json
+        history_store: dict[str, dict[str, Any]] = getattr(
+            request.app.state, "_analysis_run_history", {}
+        )
+        records = []
+        for r in history_store.values():
+            if str(r.get("repository_id")) != str(repository_id):
+                continue
+            if normalized_feature_type and normalize_analysis_feature_type(r.get("feature_type")) != normalized_feature_type:
+                continue
+            if status and r.get("status") != status:
+                continue
+            findings = r.get("findings") or []
+            feedback_entries = [
+                f.get("metadata", {}).get("feedback")
+                for f in findings
+                if isinstance(f, dict) and isinstance(f.get("metadata"), dict) and f.get("metadata", {}).get("feedback")
+            ]
+            if include_feedback_only and not feedback_entries:
+                continue
+            records.append({
+                "id": str(r.get("id", "")),
+                "repository_id": str(repository_id),
+                "feature_type": r.get("feature_type"),
+                "status": r.get("status"),
+                "input": {"target_path": r.get("target_path")},
+                "output": {"findings_count": len(findings)},
+                "findings": findings,
+                "feedback_summary": {"has_feedback": len(feedback_entries) > 0, "total_feedback": len(feedback_entries)},
+                "metadata": {"created_at": str(r.get("created_at", ""))},
+            })
+        if format == "jsonl":
+            content = "\n".join(json.dumps(rec, default=str) for rec in records)
+        else:
+            content = json.dumps(records, default=str, indent=2)
+
+    media_type = "application/x-ndjson" if format == "jsonl" else "application/json"
+    filename = f"analysis-eval-{repository_id}.{format}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# 4. Get Analysis Run Detail (GET /api/v1/analysis-runs/{run_id})
 # ---------------------------------------------------------------------------
 
 @router.get(
