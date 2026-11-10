@@ -585,9 +585,15 @@ async def resolve_review_target_and_build_context(
     project_rules: list[str] = []
     if payload.options.include_context and hasattr(db, "query"):
         try:
+            from app.models.memory_entry import MemoryStatus
+
             memories: list[MemoryEntry] = (
                 db.query(MemoryEntry)
-                .filter(MemoryEntry.repository_id == repository_id)
+                .filter(
+                    MemoryEntry.repository_id == repository_id,
+                    MemoryEntry.status == MemoryStatus.active,
+                )
+                .order_by(MemoryEntry.confidence.desc())
                 .limit(10)
                 .all()
             )

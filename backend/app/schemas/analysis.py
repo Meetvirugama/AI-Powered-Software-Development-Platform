@@ -1080,6 +1080,19 @@ class ReviewTarget(BaseModel):
     base_revision: str | None = Field(default=None, max_length=128)
     head_revision: str | None = Field(default=None, max_length=128)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_code_target_to_file(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_type = str(data.get("type") or "").strip().lower()
+            if raw_type in ("range", "symbol") and (data.get("path") or data.get("file_path")):
+                d = dict(data)
+                d["type"] = "file"
+                if "path" not in d and "file_path" in d:
+                    d["path"] = d["file_path"]
+                return d
+        return data
+
     @model_validator(mode="after")
     def _validate_review_target(self) -> "ReviewTarget":
         if self.type == "file":
