@@ -109,6 +109,18 @@ class ProjectMemoryService:
         clean_rule = redact(rule_content.strip())
         clean_source = redact(source.strip()) if source else "user_pinned"
 
+        # Idempotency check: if exact active rule already exists, return it to prevent duplication
+        existing_rules, _ = self.repo.search_entries(
+            repository_id=repository_id,
+            query=clean_rule,
+            type_=MemoryType.rule,
+            status=MemoryStatus.active,
+            limit=10,
+        )
+        for r in existing_rules:
+            if r.content.strip().lower() == clean_rule.lower():
+                return r
+
         return self.repo.create_entry(
             repository_id=repository_id,
             type_=MemoryType.rule,

@@ -178,6 +178,14 @@ def test_automated_memory_writers(db_session: Session, memory_test_setup: dict):
     assert rule_entry.source == "postmortem_review"
     assert "explicit TTL" in rule_entry.content
 
+    # Idempotency check: recording identical rule returns same entry
+    duplicate_rule = service.record_architectural_rule(
+        repository_id=repo.id,
+        rule_content="All Redis locks must specify an explicit TTL.",
+        source="another_postmortem",
+    )
+    assert duplicate_rule.id == rule_entry.id
+
 
 def test_multi_tenant_repository_isolation(db_session: Session, memory_test_setup: dict):
     """Ensure memories created in repo1 are never visible or accessible in repo2."""
