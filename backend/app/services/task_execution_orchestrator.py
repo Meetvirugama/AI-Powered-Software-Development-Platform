@@ -874,6 +874,18 @@ class TaskExecutionOrchestrator:
                     event_type="RETRY_BUDGET_EXHAUSTED",
                     summary=task.error_message,
                 )
+                try:
+                    from app.services.memory_service import ProjectMemoryService
+                    mem_svc = ProjectMemoryService(task_repo.session)
+                    mem_svc.record_task_failure_memory(
+                        repository_id=task.repository_id,
+                        task_id=task.id,
+                        title=task.title or f"Task {task.id}",
+                        failure_reason=task.error_message or "Repair budget exhausted",
+                        repair_attempts_used=task.repair_attempts_used,
+                    )
+                except Exception as mem_err:
+                    logger.debug("Project memory repair failure recording skipped: %s", mem_err)
 
         return outcome
 
@@ -1470,6 +1482,22 @@ class TaskExecutionOrchestrator:
                         "status": overall_status,
                     },
                 )
+            # Automatically record task completion memory (F36 / Issue #217)
+            try:
+                from app.services.memory_service import ProjectMemoryService
+                mem_svc = ProjectMemoryService(task_repo.session)
+                repair_count = len(task_repo.list_repair_records(task.id))
+                changed_files = [f for req_d in (task.requirements or []) for f in (req_d.get("target_files") or [])]
+                mem_svc.record_task_completion_memory(
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    title=task.title or f"Task {task.id}",
+                    verification_summary=f"Independent verification passed ({overall_status}) at revision {verified_rev_sha[:12]}.",
+                    repair_attempts_used=repair_count,
+                    files_changed=changed_files,
+                )
+            except Exception as mem_err:
+                logger.debug("Project memory task completion recording skipped: %s", mem_err)
         else:
             fail_summary = (
                 f"Independent verification failed with {len(blocking_findings)} blocking finding(s). "
@@ -1488,6 +1516,20 @@ class TaskExecutionOrchestrator:
                         "blocking_count": len(blocking_findings),
                     },
                 )
+            # Automatically record task failure memory (F36 / Issue #217)
+            try:
+                from app.services.memory_service import ProjectMemoryService
+                mem_svc = ProjectMemoryService(task_repo.session)
+                repair_count = len(task_repo.list_repair_records(task.id))
+                mem_svc.record_task_failure_memory(
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    title=task.title or f"Task {task.id}",
+                    failure_reason=fail_summary,
+                    repair_attempts_used=repair_count,
+                )
+            except Exception as mem_err:
+                logger.debug("Project memory task failure recording skipped: %s", mem_err)
 
         return ver_schema
 

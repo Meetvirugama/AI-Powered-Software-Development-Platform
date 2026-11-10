@@ -327,3 +327,154 @@ def test_api_memory_endpoints(client, db_session: Session, memory_test_setup: di
         headers=headers,
     )
     assert resp_deleted.status_code == 404
+
+
+def test_semantic_vector_search_and_ranking(db_session: Session, memory_test_setup: dict):
+    """Test pgvector cosine similarity retrieval, threshold filtering, and multi-tenant scoping."""
+    repo1 = memory_test_setup["repo1"]
+    repo2 = memory_test_setup["repo2"]
+    service = ProjectMemoryService(db_session)
+
+    # Synthetic 768-dim vectors
+    v_sql = [1.0 if i == 0 else 0.0 for i in range(768)]
+    v_redis = [1.0 if i == 1 else 0.0 for i in range(768)]
+    v_query = [0.9 if i == 0 else (0.1 if i == 1 else 0.0) for i in range(768)]
+
+    e1 = service.create_memory(
+        repository_id=repo1.id,
+        type_=MemoryType.rule,
+        content="Always use parameterized SQL queries in repositories.",
+        source="rule_engine",
+        embedding=v_sql,
+    )
+    e2 = service.create_memory(
+        repository_id=repo1.id,
+        type_=MemoryType.rule,
+        content="Redis distributed locks must use explicit expiration TTL.",
+        source="rule_engine",
+        embedding=v_redis,
+    )
+
+    # Search repo1 using vector closer to SQL
+    matches = service.semantic_search_project_memory(
+        repository_id=repo1.id,
+        query_vector=v_query,
+        limit=5,
+    )
+    assert len(matches) == 2
+    # First match must be the SQL entry due to higher cosine similarity
+    top_entry, top_sim = matches[0]
+    assert top_entry.id == e1.id
+    assert top_sim > matches[1][1]
+
+    # Verify multi-tenant isolation: repo2 semantic search returns nothing
+    repo2_matches = service.semantic_search_project_memory(
+        repository_id=repo2.id,
+        query_vector=v_query,
+    )
+    assert len(repo2_matches) == 0
+
+
+def test_mcp_memory_resource_exposure(db_session: Session, memory_test_setup: dict):
+    """Test MCP resource enumeration and resolution for memory://repo/{id}/rules (Issue #217)."""
+    repo1 = memory_test_setup["repo1"]
+    service = ProjectMemoryService(db_session)
+
+    service.record_architectural_rule(
+        repository_id=repo1.id,
+        rule_content="Rule 1: Always validate JWT signatures against trusted JWKS.",
+        source="security_rfc",
+    )
+    service.record_architectural_rule(
+        repository_id=repo1.id,
+        rule_content="Rule 2: Never log plaintext tokens or secrets.",
+        source="security_rfc",
+    )
+    service.record_task_failure_memory(
+        repository_id=repo1.id,
+        task_id=uuid.uuid4(),
+        title="Flaky network test suite",
+        failure_reason="Socket timeout during Redis failover test.",
+    )
+
+    # 1. Enumerate MCP resources
+    resources = service.list_mcp_resources(repo1.id)
+    assert len(resources) == 5
+    slugs = [r.metadata["resource_slug"] for r in resources if r.metadata]
+    assert "rules" in slugs
+    assert "failures" in slugs
+    assert "all" in slugs
+
+    # 2. Resolve rules MCP resource
+    rules_res = service.resolve_mcp_resource(repo1.id, "rules")
+    assert rules_res.uri == f"memory://repo/{repo1.id}/rules"
+    assert rules_res.entries_count >= 2
+    assert "Always validate JWT signatures" in rules_res.text
+    assert "Never log plaintext tokens" in rules_res.text
+    assert rules_res.mimeType == "text/markdown"
+
+    # 3. Resolve failures MCP resource
+    failures_res = service.resolve_mcp_resource(repo1.id, "failures")
+    assert failures_res.uri == f"memory://repo/{repo1.id}/failures"
+    assert failures_res.entries_count >= 1
+    assert "Socket timeout during Redis failover" in failures_res.text
+
+
+def test_api_semantic_and_mcp_endpoints(client, db_session: Session, memory_test_setup: dict, monkeypatch):
+    """Test REST API for semantic search and MCP resource exposure."""
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-12345-secure-32bytes!")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
+    from app.core.security import create_access_token
+
+    u1 = memory_test_setup["u1"]
+    u2 = memory_test_setup["u2"]
+    repo1 = memory_test_setup["repo1"]
+    token1, _ = create_access_token(user_id=str(u1.id))
+    token2, _ = create_access_token(user_id=str(u2.id))
+    headers1 = {"Authorization": f"Bearer {token1}"}
+    headers2 = {"Authorization": f"Bearer {token2}"}
+
+    # Pin a rule
+    client.post(
+        f"/api/v1/repositories/{repo1.id}/memories/rules",
+        headers=headers1,
+        json={"rule": "Strict HTTPS enforcement across all endpoints.", "source": "mcp_test"},
+    )
+
+    # Test MCP resources list
+    resp_mcp_list = client.get(
+        f"/api/v1/repositories/{repo1.id}/memories/mcp-resources",
+        headers=headers1,
+    )
+    assert resp_mcp_list.status_code == 200
+    mcp_data = resp_mcp_list.json()
+    assert len(mcp_data["resources"]) >= 5
+
+    # Test MCP specific resource
+    resp_mcp_rules = client.get(
+        f"/api/v1/repositories/{repo1.id}/memories/mcp-resources/rules",
+        headers=headers1,
+    )
+    assert resp_mcp_rules.status_code == 200
+    rule_res = resp_mcp_rules.json()
+    assert rule_res["uri"] == f"memory://repo/{repo1.id}/rules"
+    assert "Strict HTTPS enforcement" in rule_res["text"]
+
+    # Test multi-tenant boundary: user 2 cannot read user 1's MCP resource
+    resp_unauth = client.get(
+        f"/api/v1/repositories/{repo1.id}/memories/mcp-resources/rules",
+        headers=headers2,
+    )
+    assert resp_unauth.status_code == 404
+
+    # Test semantic search endpoint
+    vec = [1.0 if i == 0 else 0.0 for i in range(768)]
+    resp_sem = client.post(
+        f"/api/v1/repositories/{repo1.id}/memories/semantic-search",
+        headers=headers1,
+        json={"query_vector": vec, "limit": 10},
+    )
+    assert resp_sem.status_code == 200
+    assert "results" in resp_sem.json()
+

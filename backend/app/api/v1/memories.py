@@ -1,4 +1,4 @@
-"""Project Memory Management & Automated Writers API (Issue #217).
+"""Project Memory Management, Automated Writers & MCP Resource API (Issue #217).
 
 Endpoints:
 - POST   /api/v1/repositories/{repository_id}/memories
@@ -9,6 +9,9 @@ Endpoints:
 - POST   /api/v1/repositories/{repository_id}/memories/automated/task-completion
 - POST   /api/v1/repositories/{repository_id}/memories/automated/task-failure
 - POST   /api/v1/repositories/{repository_id}/memories/rules
+- POST   /api/v1/repositories/{repository_id}/memories/semantic-search
+- GET    /api/v1/repositories/{repository_id}/memories/mcp-resources
+- GET    /api/v1/repositories/{repository_id}/memories/mcp-resources/{resource_slug}
 """
 
 from __future__ import annotations
@@ -24,11 +27,16 @@ from app.core.errors import APIError, ErrorCode
 from app.models.memory_entry import MemoryStatus, MemoryType
 from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.memory import (
+    MCPMemoryResource,
+    MCPMemoryResourcesListResponse,
     MemoryEntryCreate,
     MemoryEntryResponse,
     MemoryEntryUpdate,
     PaginatedMemoryEntriesResponse,
     ProjectRuleCreateRequest,
+    SemanticSearchRequest,
+    SemanticSearchResponse,
+    SemanticSearchResultItem,
     TaskCompletionMemoryRequest,
     TaskFailureMemoryRequest,
 )
@@ -81,6 +89,7 @@ def create_memory_entry(
         content=payload.content,
         source=payload.source,
         status=payload.status,
+        embedding=payload.embedding,
     )
     return MemoryEntryResponse.from_orm_model(entry)
 
@@ -118,70 +127,6 @@ def list_memory_entries(
         total=total,
         items=[MemoryEntryResponse.from_orm_model(item) for item in items],
     )
-
-
-@router.get(
-    "/{entry_id}",
-    response_model=MemoryEntryResponse,
-    summary="Get a specific memory entry",
-)
-def get_memory_entry(
-    repository_id: UUID,
-    entry_id: UUID,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
-    service = ProjectMemoryService(db)
-    entry = service.get_memory(entry_id, repository_id=repository_id)
-    if entry is None:
-        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
-    return MemoryEntryResponse.from_orm_model(entry)
-
-
-@router.patch(
-    "/{entry_id}",
-    response_model=MemoryEntryResponse,
-    summary="Update a project memory entry",
-)
-def update_memory_entry(
-    repository_id: UUID,
-    entry_id: UUID,
-    payload: MemoryEntryUpdate,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
-    service = ProjectMemoryService(db)
-    entry = service.update_memory(
-        entry_id=entry_id,
-        repository_id=repository_id,
-        content=payload.content,
-        status=payload.status,
-        type_=payload.type,
-        source=payload.source,
-    )
-    if entry is None:
-        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
-    return MemoryEntryResponse.from_orm_model(entry)
-
-
-@router.delete(
-    "/{entry_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a project memory entry",
-)
-def delete_memory_entry(
-    repository_id: UUID,
-    entry_id: UUID,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> None:
-    _verify_owned_repository(repository_id, request, db)
-    service = ProjectMemoryService(db)
-    deleted = service.delete_memory(entry_id, repository_id=repository_id)
-    if not deleted:
-        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
 
 
 # ---------------------------------------------------------------------------
@@ -259,3 +204,152 @@ def pin_architectural_rule_endpoint(
         source=payload.source,
     )
     return MemoryEntryResponse.from_orm_model(entry)
+
+
+# ---------------------------------------------------------------------------
+# Semantic Vector Search (F36 / Issue #217)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/semantic-search",
+    response_model=SemanticSearchResponse,
+    summary="Semantic cosine search over memory embeddings",
+    description="Search repository memories using pgvector cosine similarity matching.",
+)
+def semantic_search_memory_endpoint(
+    repository_id: UUID,
+    payload: SemanticSearchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SemanticSearchResponse:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    matched = service.semantic_search_project_memory(
+        repository_id=repository_id,
+        query_vector=payload.query_vector,
+        type_=payload.type,
+        status=payload.status,
+        limit=payload.limit,
+        min_similarity=payload.min_similarity,
+    )
+    results = [
+        SemanticSearchResultItem(
+            entry=MemoryEntryResponse.from_orm_model(entry),
+            similarity=round(score, 4),
+        )
+        for entry, score in matched
+    ]
+    return SemanticSearchResponse(
+        query_limit=payload.limit,
+        total_results=len(results),
+        results=results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Model Context Protocol (MCP) Resource Endpoints (Issue #217)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/mcp-resources",
+    response_model=MCPMemoryResourcesListResponse,
+    summary="List exposed MCP memory resources",
+    description="Enumerate Model Context Protocol memory resources (e.g. memory://repo/{id}/rules).",
+)
+def list_mcp_resources_endpoint(
+    repository_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MCPMemoryResourcesListResponse:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    resources = service.list_mcp_resources(repository_id)
+    return MCPMemoryResourcesListResponse(resources=resources)
+
+
+@router.get(
+    "/mcp-resources/{resource_slug}",
+    response_model=MCPMemoryResource,
+    summary="Resolve a specific MCP memory resource",
+    description="Read memory contents formatted as an MCP markdown resource (e.g. 'rules', 'failures', 'all').",
+)
+def get_mcp_resource_endpoint(
+    repository_id: UUID,
+    resource_slug: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MCPMemoryResource:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    return service.resolve_mcp_resource(repository_id, resource_slug)
+
+
+# ---------------------------------------------------------------------------
+# Individual Memory Item CRUD Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{entry_id}",
+    response_model=MemoryEntryResponse,
+    summary="Get a specific memory entry",
+)
+def get_memory_entry(
+    repository_id: UUID,
+    entry_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MemoryEntryResponse:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    entry = service.get_memory(entry_id, repository_id=repository_id)
+    if entry is None:
+        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
+    return MemoryEntryResponse.from_orm_model(entry)
+
+
+@router.patch(
+    "/{entry_id}",
+    response_model=MemoryEntryResponse,
+    summary="Update a project memory entry",
+)
+def update_memory_entry(
+    repository_id: UUID,
+    entry_id: UUID,
+    payload: MemoryEntryUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> MemoryEntryResponse:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    entry = service.update_memory(
+        entry_id=entry_id,
+        repository_id=repository_id,
+        content=payload.content,
+        status=payload.status,
+        type_=payload.type,
+        source=payload.source,
+        embedding=payload.embedding,
+    )
+    if entry is None:
+        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
+    return MemoryEntryResponse.from_orm_model(entry)
+
+
+@router.delete(
+    "/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a project memory entry",
+)
+def delete_memory_entry(
+    repository_id: UUID,
+    entry_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> None:
+    _verify_owned_repository(repository_id, request, db)
+    service = ProjectMemoryService(db)
+    deleted = service.delete_memory(entry_id, repository_id=repository_id)
+    if not deleted:
+        raise APIError(404, ErrorCode.NOT_FOUND, "Memory entry not found.")
+
+

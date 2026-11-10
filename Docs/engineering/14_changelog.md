@@ -1211,4 +1211,42 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/24_analysis_history_evaluation_export.md`, `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch8] 2026-11-10 — Project Memory Entries, Semantic Retrieval & MCP Resources (Issue #217 / F36)
+**Type:** Feature / Episodic Memory / MCP  
+**Developer:** Parth & Meet Virugama  
+**Changes:**
+- `backend/app/models/memory_entry.py` & Alembic Migration `i6f7a8b9c0d1_add_memory_entries_embedding_and_hnsw.py`:
+  - Added `embedding vector(768)` nullable column and HNSW cosine distance index `ix_memory_entries_embedding_hnsw` to `memory_entries`.
+- `backend/app/repositories/memory_repository.py`:
+  - Implemented `semantic_search_entries` utilizing pgvector cosine operator `<=>` (with in-memory fallback for non-Postgres environments) and strict repository isolation.
+  - Implemented CRUD and multi-criteria filtering operations.
+- `backend/app/services/memory_service.py`:
+  - Implemented Reflexion-style automated writers: `record_task_completion_memory`, `record_task_failure_memory`, and `record_architectural_rule` with idempotency deduplication.
+  - Implemented Model Context Protocol (MCP 2025-11-25) resource exposure: `list_mcp_resources` and `resolve_mcp_resource` (`memory://repo/{id}/rules`, `decisions`, `task-summaries`, `failures`, `all`).
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Wired automated memory writers to record task completion memories upon passing independent verification and task failure memories upon verification rejection or exhausted repair attempts.
+- `backend/app/api/v1/memories.py`:
+  - Mounted CRUD, automated writers, pgvector `/semantic-search`, and `/mcp-resources` endpoints with tenant ownership checks.
+- `frontend/src/types/memory.ts` & `frontend/src/services/memory.ts`:
+  - Defined memory TypeScript types and client functions for CRUD, rule pinning, and MCP inspection.
+- `frontend/src/mocks/handlers/memory.ts`:
+  - Added MSW mock handlers for all project memory and MCP routes.
+- `frontend/src/components/explorer/ProjectMemoryPanel.tsx`:
+  - Built interactive Project Memory management panel with category tabs, real-time search, rule pinning, inline edit/delete, and MCP resource URI inspector.
+- `frontend/src/pages/RepositoryDetail.tsx` & `WorkbenchHeader.tsx`:
+  - Added memory toggle button to the workbench toolbar to open the Project Memory panel.
+- `backend/tests/test_project_memory_service.py`:
+  - 7 comprehensive tests covering repository CRUD, automated writers, multi-tenant boundary checks, semantic vector search, and MCP resource resolution.
+- `frontend/src/test/projectMemory.test.tsx`:
+  - 10 unit and integration tests verifying service calls, badge rendering, category filtering, rule pinning, and MCP URI copying.
+- `Docs/engineering/26_project_memory_entries.md`:
+  - Authored complete architecture specification.
+
+**Impact:** The platform now maintains persistent episodic memory across tasks, preventing repetitive failures, enforcing pinned architectural standards, and exposing memory to external tools and agents via MCP.
+
+**Related Docs:** `Docs/engineering/26_project_memory_entries.md`, `Docs/README.md`
+
+
 
