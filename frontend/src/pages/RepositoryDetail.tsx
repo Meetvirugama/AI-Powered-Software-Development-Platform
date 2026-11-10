@@ -19,6 +19,7 @@ import { RepositoryHeader } from '../components/explorer/RepositoryHeader';
 import { RepositorySyncCard } from '../components/explorer/RepositorySyncCard';
 import { RepositoryMetricsSidebar } from '../components/explorer/RepositoryMetricsSidebar';
 import { WorkbenchHeader } from '../components/explorer/WorkbenchHeader';
+import { ProjectMemoryPanel } from '../components/explorer/ProjectMemoryPanel';
 import { FilePreviewModal } from '../components/explorer/FilePreviewModal';
 import { ArrowLeft } from 'lucide-react';
 import type { RepositoryFile } from '../types/api';
@@ -44,6 +45,7 @@ export function RepositoryDetail() {
   const [userSelectedFile, setUserSelectedFile] = useState<RepositoryFile | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
+  const [isMemoryPanelOpen, setIsMemoryPanelOpen] = useState(false);
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [_reviewTarget, setReviewTarget] = useState<{ type: 'file' | 'commit' | 'pr'; path?: string }>({
     type: 'file',
@@ -296,6 +298,7 @@ export function RepositoryDetail() {
                 selectedFile={selectedFile}
                 onOpenHistory={() => setIsHistoryDrawerOpen(true)}
                 onOpenFullscreen={() => setShowModal(true)}
+                onOpenMemory={() => setIsMemoryPanelOpen(true)}
               />
 
               {/* Workbench Split Workspace */}
@@ -384,6 +387,15 @@ export function RepositoryDetail() {
           navigate(`/app/repositories/${id}/review`);
         }}
       />
+
+      {/* Project Memory & Knowledge Management Panel (F36 / Issue #217) */}
+      {id && (
+        <ProjectMemoryPanel
+          isOpen={isMemoryPanelOpen}
+          onClose={() => setIsMemoryPanelOpen(false)}
+          repositoryId={id}
+        />
+      )}
 
       {/* Fullscreen Code Preview Modal */}
       {showModal && selectedFile && id && (
