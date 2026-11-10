@@ -273,12 +273,25 @@ class OSVScannerRunner:
         if not workspace_root.is_dir():
             return lockfiles
 
-        for root, dirs, files in os.walk(workspace_root):
-            # Prune excluded directories
-            dirs[:] = [d for d in dirs if d not in {".git", "node_modules", "vendor", ".venv", "__pycache__"}]
+        resolved_root = workspace_root.resolve()
+        for root, dirs, files in os.walk(workspace_root, followlinks=False):
+            # Prune excluded and symlinked directories
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in {".git", "node_modules", "vendor", ".venv", "__pycache__"}
+                and not (Path(root) / d).is_symlink()
+            ]
             for f in files:
                 if f in SUPPORTED_LOCKFILES:
-                    lockfiles.append(Path(root) / f)
+                    candidate = Path(root) / f
+                    if candidate.is_symlink():
+                        continue
+                    try:
+                        if candidate.resolve().is_relative_to(resolved_root):
+                            lockfiles.append(candidate)
+                    except Exception:
+                        continue
         return lockfiles
 
     def scan_workspace(
@@ -331,10 +344,10 @@ class OSVScannerRunner:
             )
             findings.extend(file_findings)
 
-        # Deduplicate on (package_name, vulnerability_id)
-        deduped: dict[tuple[str, str], OSVFinding] = {}
+        # Deduplicate on (package_name, installed_version, vulnerability_id)
+        deduped: dict[tuple[str, str, str], OSVFinding] = {}
         for f in findings:
-            key = (f.package_name, f.vulnerability_id)
+            key = (f.package_name, f.installed_version, f.vulnerability_id)
             if key not in deduped:
                 deduped[key] = f
 
@@ -359,8 +372,14 @@ class OSVScannerRunner:
 
         if filename == "package-lock.json":
             findings.extend(self._scan_package_lock_json(file_path, content))
+        elif filename in ("yarn.lock", "pnpm-lock.yaml"):
+            findings.extend(self._scan_yarn_or_pnpm_lock(file_path, content))
         elif filename == "requirements.txt":
             findings.extend(self._scan_requirements_txt(file_path, content))
+        elif filename == "poetry.lock":
+            findings.extend(self._scan_poetry_lock(file_path, content))
+        elif filename == "pipfile.lock":
+            findings.extend(self._scan_pipfile_lock(file_path, content))
         elif filename == "pom.xml":
             findings.extend(self._scan_pom_xml(file_path, content))
         elif filename == "go.sum":
@@ -376,30 +395,41 @@ class OSVScannerRunner:
         except Exception:
             return findings
 
-        # npm lockfile v1 vs v2/v3
-        packages: dict[str, str] = {}
+        # Collect all installed versions per package across top-level and nested node_modules
+        packages: dict[str, list[str]] = {}
         if "packages" in data and isinstance(data["packages"], dict):
             for pkg_key, pkg_info in data["packages"].items():
-                if not isinstance(pkg_info, dict):
+                if not isinstance(pkg_info, dict) or not pkg_key:
                     continue
-                name = pkg_info.get("name") or pkg_key.replace("node_modules/", "")
+                name = pkg_info.get("name") or pkg_key.split("node_modules/")[-1]
                 ver = pkg_info.get("version")
                 if name and ver:
-                    packages[name] = str(ver)
-        if "dependencies" in data and isinstance(data["dependencies"], dict):
-            for name, dep_info in data["dependencies"].items():
-                if isinstance(dep_info, dict) and "version" in dep_info:
-                    packages[name] = str(dep_info["version"])
+                    ver_list = packages.setdefault(name, [])
+                    if str(ver) not in ver_list:
+                        ver_list.append(str(ver))
+
+        def _collect_deps(deps_dict: Any) -> None:
+            if not isinstance(deps_dict, dict):
+                return
+            for name, dep_info in deps_dict.items():
+                if isinstance(dep_info, dict):
+                    if "version" in dep_info:
+                        ver_list = packages.setdefault(name, [])
+                        if str(dep_info["version"]) not in ver_list:
+                            ver_list.append(str(dep_info["version"]))
+                    if "dependencies" in dep_info:
+                        _collect_deps(dep_info["dependencies"])
+
+        if "dependencies" in data:
+            _collect_deps(data["dependencies"])
 
         lines = content.splitlines()
         for advisory in KNOWN_VULNERABILITY_CATALOG:
             if advisory["ecosystem"] != "npm":
                 continue
             pkg = advisory["package"]
-            if pkg in packages:
-                ver = packages[pkg]
+            for ver in packages.get(pkg, []):
                 if is_version_vulnerable(advisory["ecosystem"], pkg, ver, advisory):
-                    # Locate line in content
                     line_no = 1
                     for idx, line in enumerate(lines, 1):
                         if f'"{pkg}"' in line or f"node_modules/{pkg}" in line:
@@ -421,6 +451,127 @@ class OSVScannerRunner:
                             ecosystem="npm",
                         )
                     )
+        return findings
+
+    def _scan_yarn_or_pnpm_lock(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan yarn.lock or pnpm-lock.yaml content for vulnerable npm packages."""
+        findings: list[OSVFinding] = []
+        for advisory in KNOWN_VULNERABILITY_CATALOG:
+            if advisory["ecosystem"] != "npm":
+                continue
+            pkg = advisory["package"]
+            patterns = [
+                re.compile(rf'(?:^|\s|["\'/]){re.escape(pkg)}@([0-9]+\.[0-9]+\.[0-9]+[^\s"\':,]*)', re.MULTILINE),
+                re.compile(rf'["\']?{re.escape(pkg)}@[^:\n]+:\s*\n\s*version\s+["\']?([0-9]+\.[0-9]+\.[0-9]+[^\s"\']*)["\']?', re.MULTILINE),
+            ]
+            seen_vers: set[str] = set()
+            for pat in patterns:
+                for m in pat.finditer(content):
+                    ver = m.group(1).strip()
+                    if ver in seen_vers:
+                        continue
+                    seen_vers.add(ver)
+                    if is_version_vulnerable("npm", pkg, ver, advisory):
+                        line_no = content[: m.start()].count("\n") + 1
+                        findings.append(
+                            OSVFinding(
+                                package_name=pkg,
+                                installed_version=ver,
+                                vulnerability_id=advisory["vulnerability_id"],
+                                cve=advisory.get("cve"),
+                                severity=advisory["severity"],
+                                fixed_version=advisory["fixed_version"],
+                                file_path=file_path,
+                                start_line=line_no,
+                                end_line=line_no,
+                                summary=advisory["summary"],
+                                advisory_url=advisory["advisory_url"],
+                                ecosystem="npm",
+                            )
+                        )
+        return findings
+
+    def _scan_poetry_lock(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan poetry.lock TOML blocks (`[[package]]`) for vulnerable PyPI dependencies."""
+        findings: list[OSVFinding] = []
+        blocks = content.split("[[package]]")
+        for block in blocks[1:]:
+            name_m = re.search(r'^\s*name\s*=\s*["\']([^"\']+)["\']', block, re.MULTILINE)
+            ver_m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', block, re.MULTILINE)
+            if not name_m or not ver_m:
+                continue
+            pkg_name = name_m.group(1).strip()
+            ver = ver_m.group(1).strip()
+            for advisory in KNOWN_VULNERABILITY_CATALOG:
+                if advisory["ecosystem"] != "PyPI":
+                    continue
+                if advisory["package"].lower() == pkg_name.lower():
+                    if is_version_vulnerable("PyPI", advisory["package"], ver, advisory):
+                        idx = content.find(block)
+                        line_no = content[:idx].count("\n") + 1 if idx >= 0 else 1
+                        findings.append(
+                            OSVFinding(
+                                package_name=pkg_name,
+                                installed_version=ver,
+                                vulnerability_id=advisory["vulnerability_id"],
+                                cve=advisory.get("cve"),
+                                severity=advisory["severity"],
+                                fixed_version=advisory["fixed_version"],
+                                file_path=file_path,
+                                start_line=line_no,
+                                end_line=line_no,
+                                summary=advisory["summary"],
+                                advisory_url=advisory["advisory_url"],
+                                ecosystem="PyPI",
+                            )
+                        )
+        return findings
+
+    def _scan_pipfile_lock(self, file_path: str, content: str) -> list[OSVFinding]:
+        """Scan Pipfile.lock JSON sections (`default` and `develop`) for vulnerable PyPI packages."""
+        findings: list[OSVFinding] = []
+        try:
+            data = json.loads(content)
+        except Exception:
+            return findings
+
+        lines = content.splitlines()
+        for section in ("default", "develop"):
+            sec_dict = data.get(section)
+            if not isinstance(sec_dict, dict):
+                continue
+            for pkg_name, pkg_info in sec_dict.items():
+                if not isinstance(pkg_info, dict):
+                    continue
+                raw_ver = str(pkg_info.get("version") or "").lstrip("=").strip()
+                if not raw_ver:
+                    continue
+                for advisory in KNOWN_VULNERABILITY_CATALOG:
+                    if advisory["ecosystem"] != "PyPI":
+                        continue
+                    if advisory["package"].lower() == pkg_name.lower():
+                        if is_version_vulnerable("PyPI", advisory["package"], raw_ver, advisory):
+                            line_no = 1
+                            for idx, ln in enumerate(lines, 1):
+                                if f'"{pkg_name}"' in ln:
+                                    line_no = idx
+                                    break
+                            findings.append(
+                                OSVFinding(
+                                    package_name=pkg_name,
+                                    installed_version=raw_ver,
+                                    vulnerability_id=advisory["vulnerability_id"],
+                                    cve=advisory.get("cve"),
+                                    severity=advisory["severity"],
+                                    fixed_version=advisory["fixed_version"],
+                                    file_path=file_path,
+                                    start_line=line_no,
+                                    end_line=line_no,
+                                    summary=advisory["summary"],
+                                    advisory_url=advisory["advisory_url"],
+                                    ecosystem="PyPI",
+                                )
+                            )
         return findings
 
     def _scan_requirements_txt(self, file_path: str, content: str) -> list[OSVFinding]:

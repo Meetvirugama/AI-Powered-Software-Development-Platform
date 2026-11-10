@@ -120,6 +120,25 @@ class ContainerBackend(SandboxBackend):
 
         if base_repo_path and base_repo_path.exists():
             resolved_repo = base_repo_path.resolve()
+
+            def _ignore_escaping_symlinks(src_dir: str, names: list[str]) -> set[str]:
+                ignored: set[str] = set()
+                for name in names:
+                    p = Path(src_dir) / name
+                    if p.is_symlink():
+                        try:
+                            target_res = p.resolve()
+                            if not target_res.is_relative_to(resolved_repo):
+                                logger.warning(
+                                    "Skipping nested escaping symlink during container workspace copy: %s -> %s",
+                                    p,
+                                    target_res,
+                                )
+                                ignored.add(name)
+                        except Exception:
+                            ignored.add(name)
+                return ignored
+
             for item in base_repo_path.iterdir():
                 if item.name == ".git":
                     continue
@@ -137,7 +156,13 @@ class ContainerBackend(SandboxBackend):
                         continue
                 dest = ws_path / item.name
                 if item.is_dir():
-                    shutil.copytree(item, dest, symlinks=True, dirs_exist_ok=True)
+                    shutil.copytree(
+                        item,
+                        dest,
+                        symlinks=True,
+                        ignore=_ignore_escaping_symlinks,
+                        dirs_exist_ok=True,
+                    )
                 else:
                     shutil.copy2(item, dest, follow_symlinks=False)
 
