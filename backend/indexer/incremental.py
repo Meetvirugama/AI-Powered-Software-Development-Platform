@@ -191,7 +191,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists = repo_check.first() if hasattr(repo_check, "first") else None
+        repo_exists = (repo_check.first() is not None) if hasattr(repo_check, "first") else True
         if not repo_exists:
             logger.warning("indexing_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
@@ -549,7 +549,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists_snap = repo_check_snap.first() if hasattr(repo_check_snap, "first") else None
+        repo_exists_snap = (repo_check_snap.first() is not None) if hasattr(repo_check_snap, "first") else True
         if not repo_exists_snap:
             logger.warning("indexing_snapshot_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             if session is not None and hasattr(session, "rollback"):
@@ -612,7 +612,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists_commit = repo_check_commit.first() if hasattr(repo_check_commit, "first") else None
+        repo_exists_commit = (repo_check_commit.first() is not None) if hasattr(repo_check_commit, "first") else True
         if not repo_exists_commit:
             logger.warning("indexing_commit_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             # Clean up any snapshot directory that was published before repository deletion was discovered

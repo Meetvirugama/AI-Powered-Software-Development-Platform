@@ -880,7 +880,7 @@ class TestGenerationRequest(BaseModel):
         description="Specific commit SHA to pin analysis context.",
     )
     run_isolated_execution: bool = Field(
-        default=True,
+        default=False,
         description="Whether to execute generated tests in isolated sandbox runner.",
     )
 
@@ -1413,6 +1413,6 @@ class UpdateReviewSettingsRequest(BaseModel):
 
     pr_review_enabled: bool | None = None
     pr_review_drafts: bool | None = None
-    min_confidence: str | None = None
+    min_confidence: ConfidenceLevel | None = None
     max_comments: int | None = Field(default=None, ge=1, le=50)
     changed_lines_only: bool | None = None

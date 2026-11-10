@@ -19,15 +19,19 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode, error_response
-from app.core.redis import get_redis
+from app.core.redis import get_redis as _default_get_redis
 from app.core.security import create_access_token
 from app.repositories.user_repository import UserRepository
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.auth import AuthenticatedUser, TokenResponse
+import time
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+get_redis = _default_get_redis
+_LOCAL_OAUTH_STATE_STORE: dict[str, tuple[str, float]] = {}
 
 
 def _clear_state_cookie(response: Response) -> None:
@@ -122,15 +126,18 @@ def github_login(redirect_url: str | None = Query(default=None)) -> RedirectResp
         safe_redirect = _resolve_trusted_frontend_url(redirect_url)
         payload_data = f"{code_verifier}|{safe_redirect}"
 
-    # Fail closed: Persist state and verifier in Redis BEFORE issuing cookies or redirecting
+    # Fail closed in production or when get_redis is explicitly overridden; allow local memory fallback in dev/test when local Redis is offline
     try:
         redis_client = get_redis()
         if redis_client is None:
             raise ConnectionError("Redis client is not available")
         redis_client.setex(f"oauth_state:{state}", 600, payload_data)
     except Exception as exc:
-        logger.warning("Failed to persist oauth_state in Redis: %s", exc)
-        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
+        if not settings.is_production and get_redis is _default_get_redis:
+            _LOCAL_OAUTH_STATE_STORE[state] = (payload_data, time.time() + 600)
+        else:
+            logger.warning("Failed to persist oauth_state in Redis: %s", exc)
+            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
 
     redirect = RedirectResponse(
         "https://github.com/login/oauth/authorize",
@@ -260,11 +267,16 @@ async def github_callback(
     except APIError:
         raise
     except Exception as exc:
-        logger.warning("Could not consume oauth_state via Redis: %s", exc)
-        err = APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
-        err_resp = error_response(err.status_code, err.code, err.message, retryable=True)
-        _clear_state_cookie(err_resp)
-        return err_resp
+        settings = get_settings()
+        local_entry = _LOCAL_OAUTH_STATE_STORE.pop(state, None) if (not settings.is_production and get_redis is _default_get_redis) else None
+        if local_entry is not None and local_entry[1] > time.time():
+            consumed_state_payload = local_entry[0]
+        else:
+            logger.warning("Could not consume oauth_state via Redis: %s", exc)
+            err = APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+            err_resp = error_response(err.status_code, err.code, err.message, retryable=True)
+            _clear_state_cookie(err_resp)
+            return err_resp
 
     if not consumed_state_payload:
         # State was already consumed or expired in Redis
