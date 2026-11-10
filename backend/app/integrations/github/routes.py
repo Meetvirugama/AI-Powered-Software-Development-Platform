@@ -33,6 +33,8 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
 from app.integrations.github.schemas import (
+    AgentBranchRequest,
+    AgentBranchResponse,
     CommitDetail,
     CommitListResponse,
     FileContentResponse,
@@ -236,6 +238,40 @@ async def get_pull_request_diff(
         pr_number,
     )
     return PullRequestDiffResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Agent branch creation (Compatibility endpoint for task execution)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/agent-branch",
+    response_model=AgentBranchResponse,
+    summary="Create agent branch for task execution",
+    description="Creates or validates an isolated agent/task-{id} branch. Canonical endpoint is /api/v1/tasks/{id}/branch.",
+    deprecated=True,
+)
+async def create_agent_branch_endpoint(
+    repository_id: UUID,
+    payload: AgentBranchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> AgentBranchResponse:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    result = await service.on_task_executing(
+        repository_id=repository_id,
+        task_id=payload.task_id,
+        base_branch=payload.base_branch,
+        user_id=_request_user_id(request),
+    )
+    return AgentBranchResponse(
+        branch_name=result.branch_name,
+        base_branch=result.base_branch,
+        base_sha=result.base_sha,
+        status=result.status,
+    )
 
 
 # ---------------------------------------------------------------------------
