@@ -1323,6 +1323,7 @@ _FEATURE_TYPE_ALIASES: dict[str, str] = {
     "generate_tests": "generate_tests",
     "explain": "explain",
     "review": "review",
+    "code_review": "review",
 }
 
 

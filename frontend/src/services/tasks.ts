@@ -147,6 +147,127 @@ export async function rejectTaskPlan(
 }
 
 /**
+ * Fetch all approval records (plans, tools, MCP elicitations) for a task.
+ * GET /api/v1/tasks/:taskId/approvals
+ */
+export async function fetchTaskApprovals(
+  taskId: string,
+  approvalType?: string,
+  status?: string
+): Promise<TaskApproval[]> {
+  const params: Record<string, string> = {};
+  if (approvalType) params.approval_type = approvalType;
+  if (status) params.status = status;
+  const response = await apiClient.get<TaskApproval[]>(`/tasks/${taskId}/approvals`, { params });
+  return response.data;
+}
+
+/**
+ * Fetch tool approvals for a task.
+ * GET /api/v1/tasks/:taskId/tool-approvals
+ */
+export async function fetchToolApprovals(
+  taskId: string,
+  status?: string
+): Promise<TaskApproval[]> {
+  const params: Record<string, string> = {};
+  if (status) params.status = status;
+  const response = await apiClient.get<TaskApproval[]>(`/tasks/${taskId}/tool-approvals`, { params });
+  return response.data;
+}
+
+/**
+ * Request explicit human approval for high-risk tool.
+ * POST /api/v1/tasks/:taskId/tool-approvals/request
+ */
+export async function requestToolApproval(
+  taskId: string,
+  payload: { tool_name: string; arguments: Record<string, unknown>; risk_tier?: string; expires_in_seconds?: number }
+): Promise<TaskApproval> {
+  const response = await apiClient.post<TaskApproval>(`/tasks/${taskId}/tool-approvals/request`, payload);
+  return response.data;
+}
+
+/**
+ * Approve a pending tool execution.
+ * POST /api/v1/tasks/:taskId/tool-approvals/:approvalId/approve
+ */
+export async function approveToolExecution(
+  taskId: string,
+  approvalId: string,
+  feedback?: string
+): Promise<TaskApproval> {
+  const response = await apiClient.post<TaskApproval>(`/tasks/${taskId}/tool-approvals/${approvalId}/approve`, {
+    feedback,
+  });
+  return response.data;
+}
+
+/**
+ * Reject a pending tool execution.
+ * POST /api/v1/tasks/:taskId/tool-approvals/:approvalId/reject
+ */
+export async function rejectToolExecution(
+  taskId: string,
+  approvalId: string,
+  reason?: string
+): Promise<TaskApproval> {
+  const response = await apiClient.post<TaskApproval>(`/tasks/${taskId}/tool-approvals/${approvalId}/reject`, {
+    reason,
+  });
+  return response.data;
+}
+
+/**
+ * Fetch MCP elicitations for a task.
+ * GET /api/v1/tasks/:taskId/mcp/elicitations
+ */
+export async function fetchMCPElicitations(
+  taskId: string,
+  sessionId?: string,
+  status?: string
+): Promise<TaskApproval[]> {
+  const params: Record<string, string> = {};
+  if (sessionId) params.session_id = sessionId;
+  if (status) params.status = status;
+  const response = await apiClient.get<TaskApproval[]>(`/tasks/${taskId}/mcp/elicitations`, { params });
+  return response.data;
+}
+
+/**
+ * Respond to an MCP elicitation (submit data or confirm URL).
+ * POST /api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/respond
+ */
+export async function respondMCPElicitation(
+  taskId: string,
+  elicitationId: string,
+  payload: { session_id: string; action: string; data?: Record<string, unknown> }
+): Promise<TaskApproval> {
+  const response = await apiClient.post<TaskApproval>(
+    `/tasks/${taskId}/mcp/elicitations/${elicitationId}/respond`,
+    payload
+  );
+  return response.data;
+}
+
+/**
+ * Cancel an MCP elicitation.
+ * POST /api/v1/tasks/:taskId/mcp/elicitations/:elicitationId/cancel
+ */
+export async function cancelMCPElicitation(
+  taskId: string,
+  elicitationId: string,
+  sessionId: string,
+  reason?: string
+): Promise<TaskApproval> {
+  const response = await apiClient.post<TaskApproval>(
+    `/tasks/${taskId}/mcp/elicitations/${elicitationId}/cancel`,
+    { session_id: sessionId, reason }
+  );
+  return response.data;
+}
+
+/**
  * Dispatch task for workspace execution.
  * POST /api/v1/tasks/:taskId/execute
  */

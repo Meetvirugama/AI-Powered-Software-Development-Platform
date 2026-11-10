@@ -291,3 +291,308 @@ class AnalysisRunHistoryService(BaseHistoryService):
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.sanitize_sensitive_data_in_history(repository_id=repository_id)
+
+    # -----------------------------------------------------------------------
+    # 7. Evaluation Dataset Export (Issue #195)
+    # -----------------------------------------------------------------------
+
+    def export_evaluation_records(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+        include_feedback_only: bool = False,
+        limit: int = 1000,
+        db: Optional[Session] = None,
+    ) -> list[dict[str, Any]]:
+        """Extract structured evaluation records for regression datasets (Issue #195).
+
+        Formats runs, findings, and attached user feedback into standardized evaluation samples
+        suitable for regression testing and evaluation pipelines (e.g. Langfuse datasets).
+        """
+        import json
+        from app.schemas.analysis import normalize_analysis_feature_type
+
+        normalized_feature = None
+        if feature_type:
+            raw_feat = getattr(feature_type, "value", feature_type)
+            try:
+                normalized_feature = normalize_analysis_feature_type(str(raw_feat))
+            except ValueError:
+                normalized_feature = str(raw_feat)
+
+        with self._get_session(db) as session:
+            repo = AnalysisRunRepository(session)
+            runs, _ = repo.list_by_repository(
+                repository_id,
+                feature_type=normalized_feature,
+                status=status,
+                offset=0,
+                limit=limit,
+            )
+
+            records: list[dict[str, Any]] = []
+            for run in runs:
+                feat = (
+                    getattr(run, "feature_type", None)
+                    or (run.get("feature_type") if isinstance(run, dict) else "explain")
+                )
+                if hasattr(feat, "value"):
+                    feat = feat.value
+                try:
+                    normalized_feat = normalize_analysis_feature_type(str(feat)) or feat
+                except ValueError:
+                    normalized_feat = feat
+
+                stat = (
+                    getattr(run, "status", None)
+                    or (run.get("status") if isinstance(run, dict) else "COMPLETED")
+                )
+                if hasattr(stat, "value"):
+                    stat = stat.value
+
+                # Extract findings and look for feedback
+                finding_items: list[dict[str, Any]] = []
+                feedback_entries: list[dict[str, Any]] = []
+                feedback_counts: dict[str, int] = {}
+
+                raw_findings = (
+                    getattr(run, "findings", None)
+                    or (run.get("findings") if isinstance(run, dict) else [])
+                    or []
+                )
+
+                for f in raw_findings:
+                    if isinstance(f, dict):
+                        meta = f.get("finding_metadata") or f.get("metadata") or {}
+                        f_id = str(f.get("id", ""))
+                        cat = f.get("category", "general")
+                        sev = f.get("severity", "MEDIUM")
+                        title = f.get("title", "")
+                        desc = f.get("description", "")
+                        file_path = f.get("file_path", "")
+                        s_line = f.get("start_line")
+                        e_line = f.get("end_line")
+                        rev = f.get("source_revision")
+                        sym = f.get("symbol_name")
+                        evid = f.get("evidence", "")
+                        sug_fix = f.get("suggested_fix")
+                        conf = f.get("confidence", "medium")
+                        is_unc = bool(f.get("is_uncertain", False))
+                        is_new = bool(f.get("is_new_in_change", True))
+                        src_type = f.get("source_type", "AI")
+                        rule_id = f.get("rule_id")
+                    else:
+                        meta = getattr(f, "finding_metadata", None) or {}
+                        f_id = str(getattr(f, "id", ""))
+                        cat = getattr(f, "category", "general")
+                        sev = getattr(f, "severity", "MEDIUM")
+                        title = getattr(f, "title", "")
+                        desc = getattr(f, "description", "")
+                        file_path = getattr(f, "file_path", "")
+                        s_line = getattr(f, "start_line", None)
+                        e_line = getattr(f, "end_line", None)
+                        rev = getattr(f, "source_revision", None)
+                        sym = getattr(f, "symbol_name", None)
+                        evid = getattr(f, "evidence", "")
+                        sug_fix = getattr(f, "suggested_fix", None)
+                        conf = getattr(f, "confidence", "medium")
+                        is_unc = bool(getattr(f, "is_uncertain", False))
+                        is_new = bool(getattr(f, "is_new_in_change", True))
+                        src_type = getattr(f, "source_type", "AI")
+                        rule_id = getattr(f, "rule_id", None)
+
+                    if not isinstance(meta, dict) and hasattr(meta, "to_dict"):
+                        meta = meta.to_dict()
+                    elif not isinstance(meta, dict):
+                        meta = {}
+
+                    fb = meta.get("feedback")
+                    if fb and isinstance(fb, dict):
+                        feedback_entries.append(fb)
+                        fb_type = str(fb.get("feedback_type", "unspecified")).lower()
+                        feedback_counts[fb_type] = feedback_counts.get(fb_type, 0) + 1
+
+                    finding_dict = {
+                        "id": f_id,
+                        "category": cat,
+                        "severity": sev,
+                        "title": title,
+                        "description": desc,
+                        "file_path": file_path,
+                        "start_line": s_line,
+                        "end_line": e_line,
+                        "source_revision": rev,
+                        "symbol_name": sym,
+                        "evidence": evid,
+                        "suggested_fix": sug_fix,
+                        "confidence": conf,
+                        "is_uncertain": is_unc,
+                        "is_new_in_change": is_new,
+                        "source_type": src_type,
+                        "rule_id": rule_id,
+                        "feedback": fb,
+                    }
+                    finding_items.append(finding_dict)
+
+                # Check for run-level feedback in result_payload
+                res_payload = (
+                    getattr(run, "result_payload", None)
+                    or (run.get("result_payload") if isinstance(run, dict) else {})
+                    or {}
+                )
+                if isinstance(res_payload, dict):
+                    run_fb = res_payload.get("feedback") or res_payload.get("user_feedback")
+                    if run_fb and isinstance(run_fb, dict):
+                        feedback_entries.append(run_fb)
+                        fb_type = str(run_fb.get("feedback_type", "unspecified")).lower()
+                        feedback_counts[fb_type] = feedback_counts.get(fb_type, 0) + 1
+
+                has_feedback = len(feedback_entries) > 0
+                if include_feedback_only and not has_feedback:
+                    continue
+
+                created_dt = getattr(run, "created_at", None) or (run.get("created_at") if isinstance(run, dict) else None)
+                completed_dt = getattr(run, "completed_at", None) or (run.get("completed_at") if isinstance(run, dict) else None)
+                duration_sec: Optional[float] = None
+                if created_dt and completed_dt and hasattr(completed_dt, "__sub__"):
+                    try:
+                        duration_sec = round((completed_dt - created_dt).total_seconds(), 3)
+                    except Exception:
+                        duration_sec = None
+
+                run_id = str(getattr(run, "id", None) or (run.get("id") if isinstance(run, dict) else ""))
+                run_repo_id = str(getattr(run, "repository_id", None) or (run.get("repository_id") if isinstance(run, dict) else repository_id))
+                target_path = getattr(run, "target_path", None) or (run.get("target_path") if isinstance(run, dict) else None)
+                target_symbol = getattr(run, "target_symbol", None) or (run.get("target_symbol") if isinstance(run, dict) else None)
+                start_line = getattr(run, "start_line", None) or (run.get("start_line") if isinstance(run, dict) else None)
+                end_line = getattr(run, "end_line", None) or (run.get("end_line") if isinstance(run, dict) else None)
+                source_revision = getattr(run, "source_revision", None) or (run.get("source_revision") if isinstance(run, dict) else None)
+                findings_count = getattr(run, "findings_count", None) or (run.get("findings_count") if isinstance(run, dict) else len(finding_items))
+                test_output = getattr(run, "test_output", None) or (run.get("test_output") if isinstance(run, dict) else None)
+                error_msg = getattr(run, "error_message", None) or (run.get("error_message") if isinstance(run, dict) else None)
+
+                record = {
+                    "id": run_id,
+                    "repository_id": run_repo_id,
+                    "feature_type": normalized_feat,
+                    "status": stat,
+                    "input": {
+                        "target_path": target_path,
+                        "target_symbol": target_symbol,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "source_revision": source_revision,
+                    },
+                    "output": {
+                        "findings_count": findings_count if findings_count is not None else len(finding_items),
+                        "result_payload": res_payload,
+                        "test_output": test_output,
+                    },
+                    "findings": finding_items,
+                    "feedback_summary": {
+                        "has_feedback": has_feedback,
+                        "total_feedback": len(feedback_entries),
+                        "by_type": feedback_counts,
+                        "entries": feedback_entries,
+                    },
+                    "metadata": {
+                        "created_at": created_dt.isoformat() if hasattr(created_dt, "isoformat") else str(created_dt or ""),
+                        "completed_at": completed_dt.isoformat() if hasattr(completed_dt, "isoformat") else (str(completed_dt) if completed_dt else None),
+                        "duration_seconds": duration_sec,
+                        "error_message": error_msg,
+                    },
+                }
+                records.append(record)
+
+            return records
+
+    def export_evaluation_dataset(
+        self,
+        repository_id: uuid.UUID | str,
+        *,
+        format: str = "jsonl",
+        feature_type: Optional[str] = None,
+        status: Optional[str] = None,
+        include_feedback_only: bool = False,
+        limit: int = 1000,
+        db: Optional[Session] = None,
+    ) -> str | list[dict[str, Any]]:
+        """Export analysis runs and feedback as a dataset in JSONL, JSON, or Langfuse format (Issue #195).
+
+        Supported formats:
+        - 'jsonl': Newline-delimited JSON string (standard for regression datasets)
+        - 'json': Pretty-formatted JSON string array
+        - 'langfuse' / 'langfuse_jsonl': Newline-delimited JSON formatted for Langfuse dataset items (input, expected_output, metadata)
+        - 'langfuse_json': Formatted JSON array for Langfuse datasets
+        - 'records': Raw Python list of dictionaries
+        """
+        import json
+
+        records = self.export_evaluation_records(
+            repository_id,
+            feature_type=feature_type,
+            status=status,
+            include_feedback_only=include_feedback_only,
+            limit=limit,
+            db=db,
+        )
+
+        fmt = (format or "jsonl").strip().lower()
+        if fmt == "jsonl":
+            return "\n".join(json.dumps(r, default=str) for r in records)
+        elif fmt == "json":
+            return json.dumps(records, default=str, indent=2)
+        elif fmt in ("langfuse", "langfuse_jsonl", "langfuse-jsonl"):
+            langfuse_items = []
+            for r in records:
+                langfuse_items.append({
+                    "id": r["id"],
+                    "input": {
+                        "feature_type": r["feature_type"],
+                        **r["input"],
+                    },
+                    "expected_output": {
+                        "findings_count": r["output"]["findings_count"],
+                        "findings": r["findings"],
+                        "result_payload": r["output"]["result_payload"],
+                        "test_output": r["output"]["test_output"],
+                    },
+                    "metadata": {
+                        "repository_id": r["repository_id"],
+                        "status": r["status"],
+                        "feedback_summary": r["feedback_summary"],
+                        **r["metadata"],
+                    },
+                })
+            return "\n".join(json.dumps(item, default=str) for item in langfuse_items)
+        elif fmt in ("langfuse_json", "langfuse-json"):
+            langfuse_items = []
+            for r in records:
+                langfuse_items.append({
+                    "id": r["id"],
+                    "input": {
+                        "feature_type": r["feature_type"],
+                        **r["input"],
+                    },
+                    "expected_output": {
+                        "findings_count": r["output"]["findings_count"],
+                        "findings": r["findings"],
+                        "result_payload": r["output"]["result_payload"],
+                        "test_output": r["output"]["test_output"],
+                    },
+                    "metadata": {
+                        "repository_id": r["repository_id"],
+                        "status": r["status"],
+                        "feedback_summary": r["feedback_summary"],
+                        **r["metadata"],
+                    },
+                })
+            return json.dumps(langfuse_items, default=str, indent=2)
+        elif fmt == "records":
+            return records
+        else:
+            raise ValueError(
+                f"Unsupported dataset export format '{format}'. Supported: 'jsonl', 'json', 'langfuse', 'records'"
+            )
