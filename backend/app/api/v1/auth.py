@@ -411,6 +411,11 @@ def logout(request: Request) -> Response:
         if redis_client is None:
             raise ConnectionError("Redis client is not available")
         redis_client.setex(f"auth:blocklist:{request.state.token_jti}", ttl, "1")
+        try:
+            from app.core.auth import revoke_token_in_cache
+            revoke_token_in_cache(request.state.token_jti)
+        except Exception:
+            pass
     except Exception as exc:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Logout service is unavailable.", retryable=True) from exc
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -16,6 +17,22 @@ from app.core.redis import get_redis, get_redis_async
 from app.core.security import decode_access_token
 
 logger = logging.getLogger(__name__)
+
+# Short-lived in-memory cache and in-flight deduplicator for token revocation checks
+# Prevents connection pool starvation and timeout errors when browsers fire parallel requests
+_BLOCKLIST_CACHE: dict[str, tuple[bool, float]] = {}  # jti -> (is_revoked, expires_at)
+_IN_FLIGHT_CHECKS: dict[str, asyncio.Future] = {}
+
+
+def revoke_token_in_cache(jti: str) -> None:
+    """Mark a token as revoked in the local memory cache."""
+    _BLOCKLIST_CACHE[jti] = (True, time.monotonic() + 300.0)
+
+
+def clear_blocklist_cache() -> None:
+    """Clear memory blocklist cache (primarily for tests)."""
+    _BLOCKLIST_CACHE.clear()
+    _IN_FLIGHT_CHECKS.clear()
 
 
 PUBLIC_PATHS = {
@@ -37,6 +54,49 @@ PUBLIC_PATHS = {
 
 async def _is_token_blocklisted_async(jti: str) -> bool:
     """Check if token jti is revoked without blocking the async event loop."""
+    from app.core.redis import get_redis as default_get_redis
+    is_live_environment = (get_redis is default_get_redis)
+
+    now = time.monotonic()
+    if is_live_environment:
+        cached = _BLOCKLIST_CACHE.get(jti)
+        if cached is not None:
+            is_revoked, expires_at = cached
+            if now < expires_at:
+                return is_revoked
+
+        # In-flight deduplication: if an identical check is already in-progress, join it
+        existing_fut = _IN_FLIGHT_CHECKS.get(jti)
+        if existing_fut is not None and not existing_fut.done():
+            try:
+                return await asyncio.shield(existing_fut)
+            except Exception:
+                pass
+
+    loop = asyncio.get_running_loop()
+    fut = loop.create_future() if is_live_environment else None
+    if fut is not None:
+        _IN_FLIGHT_CHECKS[jti] = fut
+
+    try:
+        res = await _check_redis_blocklist(jti, is_live_environment)
+        if fut is not None and not fut.done():
+            fut.set_result(res)
+        if is_live_environment:
+            # Revoked tokens stay revoked (300s); valid tokens are cached 5s to absorb parallel bursts
+            ttl = 300.0 if res else 5.0
+            _BLOCKLIST_CACHE[jti] = (res, time.monotonic() + ttl)
+        return res
+    except Exception as exc:
+        if fut is not None and not fut.done():
+            fut.set_exception(exc)
+        raise
+    finally:
+        if is_live_environment:
+            _IN_FLIGHT_CHECKS.pop(jti, None)
+
+
+async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
     key = f"auth:blocklist:{jti}"
     try:
         from app.core.redis import get_redis as default_get_redis
@@ -50,19 +110,30 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
     if client is None:
         logger.warning("auth_blocklist_missing_client", extra={"jti": jti})
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+
     try:
         exists_fn = getattr(client, "exists", None)
         if exists_fn is None:
             logger.warning("auth_blocklist_missing_exists", extra={"jti": jti})
             raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+
+        timeout_sec = 2.5
         if inspect.iscoroutinefunction(exists_fn):
-            res = await asyncio.wait_for(exists_fn(key), timeout=1.5)
+            res = await asyncio.wait_for(exists_fn(key), timeout=timeout_sec)
         else:
-            res = await asyncio.wait_for(asyncio.to_thread(exists_fn, key), timeout=1.5)
+            res = await asyncio.wait_for(asyncio.to_thread(exists_fn, key), timeout=timeout_sec)
             if inspect.isawaitable(res):
-                res = await asyncio.wait_for(res, timeout=1.5)
+                res = await asyncio.wait_for(res, timeout=timeout_sec)
         return bool(res)
     except (TimeoutError, asyncio.TimeoutError) as exc:
+        if is_live_environment:
+            try:
+                from app.core.redis import get_redis as sync_get_redis
+                sync_client = sync_get_redis()
+                if sync_client is not None:
+                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=2.0))
+            except Exception:
+                pass
         logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
     except APIError:
