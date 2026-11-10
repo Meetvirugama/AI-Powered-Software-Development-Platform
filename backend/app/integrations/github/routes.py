@@ -33,8 +33,12 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
 from app.integrations.github.schemas import (
+    AgentBranchRequest,
+    AgentBranchResponse,
     CommitDetail,
     CommitListResponse,
+    CommitStagingRequest,
+    CommitStagingResponse,
     FileContentResponse,
     FileTreeResponse,
     PRMetadata,
@@ -239,8 +243,121 @@ async def get_pull_request_diff(
 
 
 # ---------------------------------------------------------------------------
-# PR Metadata (Consumed by frontend/src/services/tasks.ts)
+# Agent branch creation (Day 3 execution transition)
 # ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/agent-branch",
+    response_model=AgentBranchResponse,
+    status_code=200,
+    summary="Create agent branch for task execution",
+    description="Triggered when task transitions to EXECUTING. Creates agent/task-{task_id} from main.",
+)
+async def create_agent_branch_endpoint(
+    repository_id: UUID,
+    request: Request,
+    body: AgentBranchRequest | None = None,
+    task_id: str | None = Query(default=None, min_length=1, description="Task ID transitioning to EXECUTING"),
+    base_branch: str | None = Query(default=None, description="Optional base branch (defaults to repo default)"),
+    db: Session = Depends(get_db),
+) -> AgentBranchResponse:
+    from app.services.git_branch import GitBranchService
+
+    effective_task_id = (body.task_id if body else None) or task_id
+    if not effective_task_id:
+        raise APIError(422, ErrorCode.INVALID_REQUEST, "task_id is required in request body or query parameter.")
+    effective_base_branch = (body.base_branch if body and body.base_branch is not None else None) or base_branch
+
+    service = GitBranchService(db)
+    info = await service.on_task_executing(
+        repository_id=repository_id,
+        task_id=effective_task_id,
+        user_id=_request_user_id(request),
+        base_branch=effective_base_branch,
+    )
+    return AgentBranchResponse(
+        branch_name=info.branch_name,
+        base_branch=info.base_branch,
+        base_sha=info.base_sha,
+        status=info.status,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Day 4: Commit Staging
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/commit",
+    response_model=CommitStagingResponse,
+    summary="Stage and commit agent workspace changes",
+    description="Creates a local Git commit on the agent branch in the workspace. No remote push is executed.",
+)
+async def commit_workspace_changes_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: CommitStagingRequest,
+    db: Session = Depends(get_db),
+) -> CommitStagingResponse:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    result = await service.commit(
+        workspace_path=payload.workspace_path,
+        commit_message=payload.commit_message,
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        user_id=_request_user_id(request),
+        files=payload.files,
+        author_name=payload.author_name,
+        author_email=payload.author_email,
+        allow_empty=payload.allow_empty,
+    )
+    resp = CommitStagingResponse(
+        commit_sha=result.commit_sha,
+        branch=result.branch,
+        message=result.message,
+        files_changed=result.files_changed,
+        insertions=result.insertions,
+        deletions=result.deletions,
+        pushed=result.pushed,
+    )
+    return CommitStagingResponse.model_validate(redact_obj(resp.model_dump(mode="json")))
+
+
+# ---------------------------------------------------------------------------
+# Day 5: PR Metadata Preparation & Retrieval
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/{repository_id}/source/pr-metadata",
+    response_model=PRMetadata,
+    summary="Prepare and persist PR metadata",
+    description="Collects and stores branch, commit, test, and verification summaries required for Week 3 PR opening.",
+)
+def prepare_pr_metadata_endpoint(
+    repository_id: UUID,
+    request: Request,
+    payload: PRMetadata,
+    db: Session = Depends(get_db),
+) -> PRMetadata:
+    from app.services.git_branch import GitBranchService
+
+    service = GitBranchService(db)
+    meta = service.prepare_pr_metadata(
+        task_id=payload.task_id,
+        repository_id=repository_id,
+        branch=payload.branch,
+        base_branch=payload.base_branch,
+        changed_files=payload.changed_files,
+        commit_message=payload.commit_message,
+        test_summary=payload.test_summary,
+        verification_summary=payload.verification_summary,
+        user_id=_request_user_id(request),
+        status=payload.status,
+    )
+    return PRMetadata.model_validate(redact_obj(meta.model_dump(mode="json")))
+
 
 @router.get(
     "/{repository_id}/source/pr-metadata/{task_id}",
@@ -356,28 +473,7 @@ async def get_remote_issue(
 # Deprecated Duplicate Task Execution Surfaces (Issue #196)
 # ---------------------------------------------------------------------------
 
-@router.api_route(
-    "/{repository_id}/source/task/{action:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    deprecated=True,
-    summary="Deprecated duplicate task execution surface",
-    description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=True,
-)
-@router.api_route(
-    "/{repository_id}/source/task-workspace/{action:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    deprecated=True,
-    summary="Deprecated duplicate task workspace execution surface",
-    description="Deprecated duplicate task workspace endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=True,
-)
-async def deprecated_task_source_endpoint(
-    repository_id: UUID,
-    action: str,
-    request: Request,
-) -> JSONResponse:
-    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
+def _build_deprecated_task_source_response(request: Request) -> JSONResponse:
     canonical_target = "/api/v1/tasks"
     path = request.url.path
     return JSONResponse(
@@ -395,3 +491,37 @@ async def deprecated_task_source_endpoint(
             "Deprecation": "true",
         },
     )
+
+
+@router.api_route(
+    "/{repository_id}/source/task/{action:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    deprecated=True,
+    summary="Deprecated duplicate task execution surface",
+    description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
+    include_in_schema=True,
+)
+async def deprecated_task_source_endpoint(
+    repository_id: UUID,
+    action: str,
+    request: Request,
+) -> JSONResponse:
+    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
+    return _build_deprecated_task_source_response(request)
+
+
+@router.api_route(
+    "/{repository_id}/source/task-workspace/{action:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    deprecated=True,
+    summary="Deprecated duplicate task workspace execution surface",
+    description="Deprecated duplicate task workspace endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
+    include_in_schema=True,
+)
+async def deprecated_task_workspace_source_endpoint(
+    repository_id: UUID,
+    action: str,
+    request: Request,
+) -> JSONResponse:
+    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
+    return _build_deprecated_task_source_response(request)
