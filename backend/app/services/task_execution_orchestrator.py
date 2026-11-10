@@ -218,13 +218,15 @@ class TaskExecutionOrchestrator:
     def ensure_workspace_loaded(
         self,
         task: AgentTask,
-        task_repo: TaskRepository,
+        task_repo: TaskRepository | None = None,
     ) -> WorkspaceMetadata | None:
         """Ensure in-memory WorkspaceManager is synchronized with the database Workspace record if present."""
         task_id_str = str(task.id)
         meta = self.workspace_manager.get_workspace(task_id_str)
         if meta is not None:
             return meta
+        if task_repo is None:
+            return None
 
         db_ws = task_repo.get_workspace_record(task.id)
         if db_ws is None:
@@ -1486,7 +1488,7 @@ class TaskExecutionOrchestrator:
             try:
                 from app.services.memory_service import ProjectMemoryService
                 mem_svc = ProjectMemoryService(task_repo.session)
-                repair_count = len(task_repo.list_repair_records(task.id))
+                repair_count = len(task_repo.list_repair_attempts(task.id))
                 changed_files = [f for req_d in (task.requirements or []) for f in (req_d.get("target_files") or [])]
                 mem_svc.record_task_completion_memory(
                     repository_id=task.repository_id,
@@ -1520,7 +1522,7 @@ class TaskExecutionOrchestrator:
             try:
                 from app.services.memory_service import ProjectMemoryService
                 mem_svc = ProjectMemoryService(task_repo.session)
-                repair_count = len(task_repo.list_repair_records(task.id))
+                repair_count = len(task_repo.list_repair_attempts(task.id))
                 mem_svc.record_task_failure_memory(
                     repository_id=task.repository_id,
                     task_id=task.id,

@@ -1962,10 +1962,15 @@ def get_task_workflow_status(
                 wf = _active_workflows.get(wf_id)
 
     if not wf:
-        is_completed = task.status in ("COMPLETED", "DRAFT_PR_CREATED", "VERIFIED")
+        is_completed = task.status in (
+            "COMPLETED",
+            "DRAFT_PR_CREATED",
+            "VERIFIED",
+            "READY_FOR_PUBLICATION",
+        )
         latest_ver = None
         if getattr(task, "verification_results", None):
-            ver_obj = task.verification_results[-1]
+            ver_obj = task.verification_results[0]
             latest_ver = (
                 ver_obj.to_dict()
                 if hasattr(ver_obj, "to_dict")
@@ -1975,6 +1980,21 @@ def get_task_workflow_status(
                     "summary": redact(getattr(ver_obj, "summary", "") or ""),
                 }
             )
+        pr_dict = None
+        pr_obj = getattr(task, "pull_request", None)
+        if pr_obj is not None:
+            pr_dict = (
+                pr_obj.to_dict()
+                if hasattr(pr_obj, "to_dict")
+                else {
+                    "pr_id": str(getattr(pr_obj, "id", "")),
+                    "pr_number": getattr(pr_obj, "pr_number", None),
+                    "pr_url": getattr(pr_obj, "pr_url", None),
+                    "is_draft": getattr(pr_obj, "is_draft", True),
+                    "title": redact(getattr(pr_obj, "title", "") or ""),
+                }
+            )
+        err_summary = redact(task.error_message) if getattr(task, "error_message", None) else None
         return redact_obj({
             "task_id": str(task.id),
             "workflow_id": f"wf-{task.id}",
@@ -1983,8 +2003,8 @@ def get_task_workflow_status(
             "completed_steps": [cp.step_name for cp in (task.checkpoints or [])],
             "progress_percentage": 100 if is_completed else 0,
             "verification": latest_ver,
-            "pull_request": None,
-            "error_summary": None,
+            "pull_request": pr_dict,
+            "error_summary": err_summary,
             "started_at": task.created_at.isoformat() if getattr(task, "created_at", None) else "",
             "updated_at": task.updated_at.isoformat() if getattr(task, "updated_at", None) else "",
             "completed_at": (
