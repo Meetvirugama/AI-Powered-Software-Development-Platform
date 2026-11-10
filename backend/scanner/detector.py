@@ -26,8 +26,12 @@ class LanguageDetector:
             '.cxx': 'C++',
         }
 
-    def detect(self, file_info: FileInfo, root_path: str | Path | None = None) -> str:
-        raw_path = (file_info.path or "").strip()
+    def detect(self, file_info: FileInfo | str | Path, root_path: str | Path | None = None) -> str:
+        raw_path = (
+            (file_info.path or "")
+            if hasattr(file_info, "path")
+            else str(file_info or "")
+        ).strip()
         if not raw_path or "\x00" in raw_path:
             return 'unknown'
 
