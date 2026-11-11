@@ -13,6 +13,7 @@ from ai.services.ai_quality_evaluator import AIQualityEvaluator
 from ai.services.bounded_repair_loop import (
     BoundedRepairLoop,
     BoundedRepairOutcome,
+    LLMRepairSynthesizer,
 )
 from ai.services.bug_detection_engine import BugDetectionEngine
 from ai.services.code_review_engine import AICodeReviewEngine
@@ -85,6 +86,7 @@ __all__ = [
     "ExecutionRecoveryService",
     "ExecutionVerifier",
     "IssueToTaskAdapter",
+    "LLMRepairSynthesizer",
     "LatencyPercentiles",
     "LoopDetectedError",
     "PlanCompletenessReport",

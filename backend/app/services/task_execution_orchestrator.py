@@ -189,6 +189,7 @@ class TaskExecutionOrchestrator:
         self.repair_loop = BoundedRepairLoop(
             workspace_manager=self.workspace_manager,
             test_runner=self.workspace_manager.test_runner,
+            edit_synthesizer=self.edit_synthesizer,
         )
         self.requirement_verifier = RequirementToCodeVerifier()
         self.static_scanner = BuiltinStaticBugScanner()

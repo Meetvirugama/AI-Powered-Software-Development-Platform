@@ -1307,6 +1307,46 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/27_branch_commit_push_draft_pr_publication.md`, `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch11] 2026-11-11 — Bounded Self-Repair Loop & Anti-Reward Hacking (Issue #205 / F24)
+**Type:** Feature / AI Architecture / Safety  
+**Developer:** Prit Zania  
+**Changes:**
+- `backend/ai/services/llm_repair_synthesizer.py`:
+  - Implemented `LLMRepairSynthesizer` replacing the legacy hardcoded placeholder diff (`def handler(): pass -> return True`).
+  - Integrated `EditSynthesizer` (F22) for structured SEARCH/REPLACE block generation, exact match validation, dry-run in-memory patch application, AST syntax validation, and unified diff output.
+  - Implemented `format_reflexion_memory` for multi-turn verbal reinforcement history (Reflexion P-19 & Self-Refine P-20).
+  - Implemented spectrum-based fault localization (`identify_target_file_and_line`, AgentFL) extracting workspace application frames from tracebacks rather than mistakenly targeting test files.
+  - Built robust deterministic fallback generating attempt-differentiated, targeted code repairs with anti-cycling hash variation when LLM gateway is offline.
+- `backend/app/schemas/repair.py`:
+  - Added `FailureClassification = Literal["infra", "test-bug", "code-bug"]`.
+  - Added `failure_classification` to `DiagnosedFailure`.
+  - Added `primary_classification` to `TracebackDiagnosisResult`.
+- `backend/app/services/repair_service.py`:
+  - Implemented `is_test_file`, `extract_application_frames_from_traceback`, `classify_failure`, and `classify_diagnosis`.
+  - Added Gate 8: Anti-Reward Hacking Gate to `RepairPatchValidator.validate_patch`: strictly forbids modifying test files to force a test pass during repair unless the approved plan scope explicitly whitelists the test file (`allow_test_edits=True`).
+- `backend/ai/prompts/repair_code_system.txt` & `__init__.py`:
+  - Created and registered `repair_code_system` prompt template enforcing minimal code repairs, Reflexion memory adherence, and anti-reward hacking constraints.
+- `backend/ai/services/bounded_repair_loop.py`:
+  - Replaced placeholder stub in `_synthesize_patch` with `LLMRepairSynthesizer` delegation.
+  - Enforced immediate halt on infrastructure failures (`TIMEOUT`, `ENVIRONMENT_ERROR`, missing binaries) without consuming repair attempts.
+  - Wired Reflexion memory and anti-reward hacking parameters through `run_repair_cycle`.
+  - Enhanced `_extract_patched_content` to apply multi-hunk unified diffs with high fidelity.
+- `backend/ai/services/__init__.py`:
+  - Exported `LLMRepairSynthesizer`.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Wired shared `edit_synthesizer` into `BoundedRepairLoop`.
+- `backend/tests/test_bounded_repair_loop_f24.py`:
+  - Authored 14 comprehensive unit and regression tests verifying LLM repair synthesis, Reflexion memory, anti-reward hacking rejection, fault localization, 3-attempt ceiling, and E2E recovery.
+- `Docs/engineering/28_bounded_self_repair_loop.md`:
+  - Authored complete architecture, control flow, sequence diagrams, and security specification.
+
+**Impact:** Resolves autonomous recovery loops by replacing placeholder stubs with real LLM-driven repair synthesis, enforcing multi-turn Reflexion memory, preventing reward hacking against test suites, and guaranteeing strict 3-attempt budget containment.
+
+**Related Docs:** `Docs/engineering/28_bounded_self_repair_loop.md`, `Docs/README.md`
+
+
 
 
 
