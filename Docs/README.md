@@ -69,6 +69,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [24. Analysis History Evaluation Export](./engineering/24_analysis_history_evaluation_export.md) — Evaluation Dataset Export from Analysis History (Issue #195).
 - [25. GitHub Source Browsing & Consolidation](./engineering/25_github_source_browsing_and_consolidation.md) — Live remote issue browsing, PR demuxing, and duplicate execution surface consolidation (Issue #196).
 - [26. Project Memory Entries & MCP Resources](./engineering/26_project_memory_entries.md) — Episodic Project Memory, Semantic Search & MCP Resources (Issue #217 / F36).
+- [27. Branch, Commit, Push, and Draft PR Publication](./engineering/27_branch_commit_push_draft_pr_publication.md) — Host-Side Git Operations & Credential Isolation Architecture (Issue #207 / F26).
 
 ---
 

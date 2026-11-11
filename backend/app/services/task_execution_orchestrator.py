@@ -1799,11 +1799,29 @@ class TaskExecutionOrchestrator:
                     stale_res.message or "Workspace base revision is stale relative to remote HEAD.",
                 )
 
+        # Resolve installation token host-side for authenticated remote push (F26 credential isolation)
+        host_installation_token: str | None = None
+        try:
+            from app.models.repository import Repository
+            from app.models.github_installation import GitHubInstallation
+            repo_obj = task.repository or (task_repo.session.get(Repository, task.repository_id) if task.repository_id else None)
+            if repo_obj and getattr(repo_obj, "installation_id", None):
+                inst = task_repo.session.scalars(
+                    select(GitHubInstallation).where(
+                        GitHubInstallation.installation_id == str(repo_obj.installation_id)
+                    )
+                ).first()
+                if inst and getattr(inst, "access_token", None):
+                    host_installation_token = inst.access_token
+        except Exception:
+            host_installation_token = None
+
         push_req = WorkspacePushRequest(
             task_id=str(task.id),
             branch_name=target_branch,
             remote_name=remote_name,
             publication_authorized=True,
+            installation_token=host_installation_token,
         )
 
         ws_path = Path(meta.workspace_path)

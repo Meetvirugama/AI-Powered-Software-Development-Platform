@@ -39,6 +39,14 @@ from sandbox.constants import (
     MAX_COMMAND_OUTPUT_BYTES,
     MAX_TIMEOUT_SECONDS,
 )
+
+FORBIDDEN_SANDBOX_GIT_SUBCOMMANDS: tuple[str, ...] = (
+    "push",
+    "pull",
+    "fetch",
+    "remote",
+    "clone",
+)
 from sandbox.exceptions import (
     WorkspaceCommandError,
     WorkspaceCommandTimeoutError,
@@ -202,6 +210,17 @@ class WorkspaceCommandRunner:
                         raise WorkspacePolicyViolationError(
                             f"Argument '{arg_str}' contains forbidden shell operator or token: '{token}'"
                         )
+
+        # F26 / Credential Isolation: Git network commands (push, pull, fetch, remote, clone)
+        # must never execute inside the sandbox container. Git push runs host-side exclusively.
+        if base_exec == "git" and arguments:
+            for arg in arguments:
+                arg_clean = str(arg).strip().lower()
+                if arg_clean in FORBIDDEN_SANDBOX_GIT_SUBCOMMANDS:
+                    raise WorkspacePolicyViolationError(
+                        f"Git network command '{arg_clean}' is strictly forbidden inside the sandbox container. "
+                        f"Git push and remote operations run exclusively host-side from the API host (F26)."
+                    )
 
     def sanitize_environment(
         self,
