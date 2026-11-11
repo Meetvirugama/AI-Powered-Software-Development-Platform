@@ -4,6 +4,8 @@ Gemini Embedding Provider — Google Gemini REST API Client.
 Responsibilities:
 - Embeds text and code chunks using Google's `gemini-embedding-001` model.
 - Supports specified output dimensionality (default: 768 to match pgvector schema).
+- Supports official Gemini taskType values (`RETRIEVAL_DOCUMENT` for corpus indexing,
+  `CODE_RETRIEVAL_QUERY` for code search queries) and EmbeddingProfile v2.
 - Automatic round-robin key rotation across free-tier API keys on rate-limits (HTTP 429).
 - Translates Google API errors into structured `EmbeddingError` hierarchy.
 - Connection pooling via shared or managed `httpx.AsyncClient`.
@@ -17,13 +19,16 @@ import logging
 import os
 from collections.abc import Sequence
 from itertools import cycle
+from typing import Any
 
 import httpx
 
 from .client import (
     AuthenticationError,
     EmbeddingError,
+    EmbeddingProfile,
     EmbeddingProvider,
+    GeminiTaskType,
     InvalidRequestError,
     ProviderUnavailableError,
     RateLimitError,
@@ -46,6 +51,24 @@ def _redact_key(text: str, key: str) -> str:
     return text.replace(key, "[REDACTED]")
 
 
+def _normalize_task_type(task_type: GeminiTaskType | str | None) -> str | None:
+    if task_type is None:
+        return None
+    if isinstance(task_type, GeminiTaskType):
+        return task_type.value
+    val = str(task_type).strip().upper()
+    if not val:
+        return None
+    # Validate against official GeminiTaskType enum values
+    valid_values = {item.value for item in GeminiTaskType}
+    if val not in valid_values:
+        raise ValueError(
+            f"Unsupported Gemini embedding taskType {task_type!r}. "
+            f"Must be one of: {sorted(valid_values)}"
+        )
+    return val
+
+
 class GeminiEmbeddingProvider(EmbeddingProvider):
     """
     Concrete EmbeddingProvider for Google Gemini Embeddings API.
@@ -56,6 +79,11 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         dimensions: Expected output dimensionality (default: 768).
         timeout: Per-request timeout in seconds (default: 30.0).
         client: Optional shared `httpx.AsyncClient` for connection pooling.
+        max_retries: Maximum retry attempts per sub-batch (default: 3).
+        profile_version: Profile version ('v1' or 'v2'; default 'v1' for legacy callers, 'v2' when configured).
+        task_type: Optional explicit default `taskType` for generic `embed`/`embed_batch` calls.
+        document_task_type: Verified Gemini taskType for indexing documents (`RETRIEVAL_DOCUMENT`).
+        query_task_type: Verified Gemini taskType for code search queries (`CODE_RETRIEVAL_QUERY`).
     """
 
     def __init__(
@@ -66,6 +94,10 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
         client: httpx.AsyncClient | None = None,
         max_retries: int = _MAX_RETRIES,
+        profile_version: str = "v1",
+        task_type: GeminiTaskType | str | None = None,
+        document_task_type: GeminiTaskType | str = GeminiTaskType.RETRIEVAL_DOCUMENT,
+        query_task_type: GeminiTaskType | str = GeminiTaskType.CODE_RETRIEVAL_QUERY,
     ) -> None:
         if api_keys:
             valid_keys = [k.strip() for k in api_keys if k and k.strip()]
@@ -84,6 +116,37 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
         self._max_retries = max_retries
+        self._profile_version = profile_version
+        self._task_type = _normalize_task_type(task_type)
+        self._document_task_type = (
+            _normalize_task_type(document_task_type) or GeminiTaskType.RETRIEVAL_DOCUMENT.value
+        )
+        self._query_task_type = (
+            _normalize_task_type(query_task_type) or GeminiTaskType.CODE_RETRIEVAL_QUERY.value
+        )
+
+    @classmethod
+    def v2(
+        cls,
+        api_keys: Sequence[str] | None = None,
+        model: str = _DEFAULT_MODEL,
+        dimensions: int = _DEFAULT_DIMENSIONS,
+        timeout: float = _DEFAULT_TIMEOUT_SECONDS,
+        client: httpx.AsyncClient | None = None,
+        max_retries: int = _MAX_RETRIES,
+    ) -> GeminiEmbeddingProvider:
+        """Factory constructing a v2 GeminiEmbeddingProvider with verified task types."""
+        return cls(
+            api_keys=api_keys,
+            model=model,
+            dimensions=dimensions,
+            timeout=timeout,
+            client=client,
+            max_retries=max_retries,
+            profile_version="v2",
+            document_task_type=GeminiTaskType.RETRIEVAL_DOCUMENT,
+            query_task_type=GeminiTaskType.CODE_RETRIEVAL_QUERY,
+        )
 
     @property
     def embedding_dimensions(self) -> int:
@@ -96,6 +159,36 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    @property
+    def document_task_type(self) -> str:
+        return self._document_task_type
+
+    @property
+    def query_task_type(self) -> str:
+        return self._query_task_type
+
+    @property
+    def profile(self) -> EmbeddingProfile:
+        if self._profile_version == "v2":
+            return EmbeddingProfile.v2_gemini(
+                model=self._model,
+                dimensions=self._dimensions,
+                document_task_type=self._document_task_type,
+                query_task_type=self._query_task_type,
+                active_task_type=self._task_type or self._document_task_type,
+            )
+        return EmbeddingProfile(
+            provider=self.provider_name,
+            model=self._model,
+            dimensions=self._dimensions,
+            normalization=True,
+            distance_metric="cosine",
+            profile_version=self._profile_version,
+            document_task_type=self._task_type,
+            query_task_type=self._task_type,
+            active_task_type=self._task_type,
+        )
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._external_client is not None:
@@ -110,19 +203,36 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
     def _next_key(self) -> str:
         return next(self._key_cycle)
 
-    async def embed(self, text: str) -> list[float]:
+    async def embed(self, text: str, *, task_type: GeminiTaskType | str | None = None) -> list[float]:
         """Embed a single text snippet."""
-        results = await self.embed_batch([text])
+        results = await self.embed_batch([text], task_type=task_type)
         if not results:
             raise EmbeddingError("Gemini returned empty embeddings for text.", provider=self.provider_name)
         return results[0]
 
-    async def embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed repository document/code chunks with taskType=RETRIEVAL_DOCUMENT."""
+        return await self.embed_batch(texts, task_type=self._document_task_type)
+
+    async def embed_query(self, text: str) -> list[float]:
+        """Embed a search query with taskType=CODE_RETRIEVAL_QUERY."""
+        results = await self.embed_batch([text], task_type=self._query_task_type)
+        if not results:
+            raise EmbeddingError("Gemini returned empty embeddings for query.", provider=self.provider_name)
+        return results[0]
+
+    async def embed_batch(
+        self,
+        texts: Sequence[str],
+        *,
+        task_type: GeminiTaskType | str | None = None,
+    ) -> list[list[float]]:
         """
         Embed a sequence of texts using Gemini's batchEmbedContents endpoint.
 
         Args:
             texts: List of strings to embed.
+            task_type: Optional taskType override for this batch.
 
         Returns:
             List of float vectors, length matching `texts`, each with length `embedding_dimensions`.
@@ -130,31 +240,41 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
         if not texts:
             return []
 
+        resolved_task_type = _normalize_task_type(task_type) or self._task_type
+        if resolved_task_type is None and self._profile_version == "v2":
+            resolved_task_type = self._document_task_type
+
         # Gemini batchEmbedContents endpoint handles up to 100 per call
-        # Chunk if texts > 100
         text_list = list(texts)
         if len(text_list) > 100:
             results: list[list[float]] = []
             for i in range(0, len(text_list), 100):
                 chunk = text_list[i : i + 100]
-                chunk_embeddings = await self._embed_batch_direct(chunk)
+                chunk_embeddings = await self._embed_batch_direct(chunk, task_type=resolved_task_type)
                 results.extend(chunk_embeddings)
             return results
 
-        return await self._embed_batch_direct(text_list)
+        return await self._embed_batch_direct(text_list, task_type=resolved_task_type)
 
-    async def _embed_batch_direct(self, texts: list[str]) -> list[list[float]]:
+    async def _embed_batch_direct(
+        self,
+        texts: list[str],
+        *,
+        task_type: str | None = None,
+    ) -> list[list[float]]:
         """Embed up to 100 texts in a single batchEmbedContents call with retry & key rotation."""
-        payload = {
-            "requests": [
-                {
-                    "model": self._model,
-                    "content": {"parts": [{"text": t}]},
-                    "outputDimensionality": self._dimensions,
-                }
-                for t in texts
-            ]
-        }
+        requests_payload: list[dict[str, Any]] = []
+        for t in texts:
+            req_item: dict[str, Any] = {
+                "model": self._model,
+                "content": {"parts": [{"text": t}]},
+                "outputDimensionality": self._dimensions,
+            }
+            if task_type:
+                req_item["taskType"] = task_type
+            requests_payload.append(req_item)
+
+        payload = {"requests": requests_payload}
 
         client = self._get_client()
         last_error: EmbeddingError | None = None
@@ -198,7 +318,6 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                     if retry_after and retry_after > 0:
                         await asyncio.sleep(retry_after)
                     elif attempt >= len(self._api_keys):
-                        # All keys have been tried at least once; pause to let rate limit window reset
                         await asyncio.sleep(min(1.5 * (attempt // len(self._api_keys) + 1), 8.0))
                     else:
                         await asyncio.sleep(0.3)
@@ -226,7 +345,6 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                     )
 
             except (StopIteration, StopAsyncIteration):
-                # When mock side_effects are exhausted in tests
                 break
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 safe_err = _redact_key(str(exc), api_key)
@@ -235,7 +353,6 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                     provider=self.provider_name,
                 )
 
-            # Backoff before next attempt for non-429 retryable errors
             if attempt < max_attempts:
                 wait_time = min(_BACKOFF_BASE_SECONDS * (1.5 ** (attempt - 1)), 8.0)
                 logger.info(
