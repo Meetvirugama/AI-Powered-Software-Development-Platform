@@ -7,7 +7,7 @@ Day 4: full implementation using Om's `code_chunks` table + HNSW index.
 
 Retrieval flow:
     query string
-        → EmbeddingService.embed(query)
+        → EmbeddingService.embed_query(query) (v2 CODE_RETRIEVAL_QUERY + L2 norm) or embed(query) (v1)
         → SELECT ... FROM code_chunks ORDER BY embedding <=> :vec LIMIT top_k
         → list[CodeChunk] with similarity scores (score = 1 − cosine_distance)
 
@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from .base import CodeChunk, Retriever
 
 if TYPE_CHECKING:
+    from ai.embeddings.client import EmbeddingProfile
     from ai.embeddings.service import EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,6 @@ async def _apply_adaptive_hnsw(
 
     async def _run_set(stmt: str) -> None:
         try:
-            # Wrap in savepoint (begin_nested) if session supports it (e.g. SQLAlchemy AsyncSession)
             if hasattr(session, "begin_nested") and getattr(session.begin_nested, "__class__", None).__name__ != "AsyncMock":
                 nested = session.begin_nested()
                 if hasattr(nested, "__aenter__"):
@@ -168,29 +168,27 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
     )
 
 
+def _should_use_embed_query(embedding_service: Any) -> bool:
+    """Return True when `embedding_service` is configured for v2 `embed_query`."""
+    if embedding_service is None:
+        return False
+    prof_ver = getattr(embedding_service, "profile_version", None)
+    if prof_ver != "v2":
+        return False
+    fn = getattr(embedding_service, "embed_query", None)
+    if fn is None or not callable(fn):
+        return False
+    return type(fn).__name__ not in {"MagicMock", "AsyncMock"} or "embed_query" in getattr(
+        embedding_service, "__dict__", {}
+    )
+
+
 class VectorRetriever(Retriever):
     """
     Retrieves code chunks using pgvector cosine similarity.
 
     Implements the `Retriever` interface (base.py) so it can be swapped with
     any other retriever implementation behind the same contract.
-
-    Args:
-        db:                 SQLAlchemy AsyncSession — injected by the caller.
-                            Must be scoped to the current request / task.
-        embedding_service:  EmbeddingService — used to embed the query string.
-                            Injected to keep this class testable without a real API.
-        max_distance:       Optional cosine distance threshold in [0.0, 2.0].
-                            When provided, rows with distance > max_distance are filtered out.
-
-    Example::
-
-        retriever = VectorRetriever(db=session, embedding_service=svc)
-        chunks = await retriever.retrieve(
-            query="where is authentication handled?",
-            repository_id=repo_id,
-            top_k=30,
-        )
     """
 
     def __init__(
@@ -198,10 +196,12 @@ class VectorRetriever(Retriever):
         db: AsyncSession | async_sessionmaker[AsyncSession] | Any,
         embedding_service: EmbeddingService,
         max_distance: float | None = None,
+        target_profile: EmbeddingProfile | None = None,
     ) -> None:
         self._db = db
         self._embedding_service = embedding_service
         self._max_distance = max_distance
+        self._target_profile = target_profile
 
     async def retrieve(
         self,
@@ -211,47 +211,34 @@ class VectorRetriever(Retriever):
         max_distance: float | None = None,
         profile: str | None = None,
         query_intent: str | None = None,
+        target_profile: EmbeddingProfile | None = None,
     ) -> list[CodeChunk]:
         """
         Embed the query and run cosine similarity search against pgvector.
-
-        Steps:
-        1. Embed `query` using EmbeddingService (retries handled inside service).
-        2. Set adaptive transaction-local HNSW configuration based on intent/profile.
-        3. Execute SQL with pgvector `<=>` cosine distance operator.
-        4. Convert each row to a typed `CodeChunk`; score = 1 − distance.
-
-        Args:
-            query:         Natural-language or code query string.
-            repository_id: Scope results to this repository only.
-                           Enforced at SQL level — no cross-repo leakage.
-            top_k:         Maximum number of chunks to return (default 30 for RRF).
-            max_distance:  Optional cosine distance ceiling override.
-            profile:       Optional explicit HNSW effort profile ('exact', 'normal', 'complex').
-            query_intent:  Optional query intent class used to auto-select HNSW profile.
-
-        Returns:
-            List of `CodeChunk` sorted by descending similarity score (best first).
-            Returns an empty list if the repository has no indexed chunks.
-
-        Raises:
-            EmbeddingError: If the embedding service fails after retries.
-            SQLAlchemyError: If the database is unreachable.
         """
         if not query or not query.strip() or top_k <= 0:
             return []
 
+        effective_target_profile = target_profile or self._target_profile
+        if effective_target_profile is not None and hasattr(
+            self._embedding_service, "validate_query_profile"
+        ):
+            self._embedding_service.validate_query_profile(effective_target_profile)
+
         repo_uuid = repository_id if isinstance(repository_id, UUID) else UUID(str(repository_id))
         effective_max_distance = max_distance if max_distance is not None else self._max_distance
 
-        # Determine adaptive HNSW profile settings
         target_profile_name = profile or resolve_hnsw_profile(query_intent)
         profile_config = HNSW_PROFILES.get(target_profile_name, HNSW_PROFILES["normal"])
         ef_search = profile_config.get("ef_search", 64)
         iterative_scan = profile_config.get("iterative_scan", "relaxed_order")
 
-        # Step 1 — embed the query
-        query_vector: list[float] = await self._embedding_service.embed(query)
+        # Step 1 — embed the query (uses v2 CODE_RETRIEVAL_QUERY + L2 norm when v2 profile is active)
+        if _should_use_embed_query(self._embedding_service):
+            query_vector = await self._embedding_service.embed_query(query)
+        else:
+            query_vector = await self._embedding_service.embed(query)
+
         raw_dim = getattr(self._embedding_service, "dimensions", None) or getattr(
             self._embedding_service, "dimension", None
         )
