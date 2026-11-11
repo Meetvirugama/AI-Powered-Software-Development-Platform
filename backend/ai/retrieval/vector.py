@@ -117,7 +117,11 @@ _VECTOR_SEARCH_SQL = text(
         end_line,
         content_hash,
         (embedding <=> CAST(:query_vec AS vector)) AS distance,
-        COALESCE(metadata->>'file_path', '') AS file_path
+        COALESCE(metadata->>'file_path', '') AS file_path,
+        COALESCE(
+            (SELECT cs.importance_score FROM code_symbols cs WHERE cs.id = code_chunks.symbol_id),
+            0.0
+        ) AS importance_score
     FROM code_chunks
     WHERE repository_id = :repository_id
       AND embedding IS NOT NULL
@@ -146,6 +150,7 @@ def _vec_to_pg_literal(vector: list[float], expected_dim: int | None = None) -> 
 
 def _row_to_chunk(row: object, score: float) -> CodeChunk:
     """Map a SQLAlchemy Row object to a typed CodeChunk dataclass."""
+    raw_imp = getattr(row, "importance_score", None)
     return CodeChunk(
         id=row.id,  # type: ignore[attr-defined]
         repository_id=row.repository_id,  # type: ignore[attr-defined]
@@ -159,6 +164,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         score=score,
         file_path=row.file_path or "",  # type: ignore[attr-defined]
         vector_similarity=score,
+        importance_score=float(raw_imp) if raw_imp is not None else None,
     )
 
 

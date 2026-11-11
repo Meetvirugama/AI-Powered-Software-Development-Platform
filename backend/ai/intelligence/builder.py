@@ -103,6 +103,7 @@ class RepositoryIntelligenceBuilder:
             s_start = int(getattr(s, "start_line", 1) or 1)
             s_end = int(getattr(s, "end_line", s_start) or s_start)
             s_sig = getattr(s, "signature", None)
+            s_imp = float(getattr(s, "importance_score", 0.0) or 0.0)
 
             node = GraphNode(
                 id=s_id,
@@ -112,6 +113,7 @@ class RepositoryIntelligenceBuilder:
                 start_line=s_start,
                 end_line=s_end,
                 signature=s_sig,
+                importance_score=s_imp,
             )
             symbol_nodes.append(node)
 
@@ -132,8 +134,13 @@ class RepositoryIntelligenceBuilder:
 
         for e in edges:
             src_id = str(getattr(e, "source_symbol_id", getattr(e, "source_id", getattr(e, "source", ""))))
-            tgt_id = str(getattr(e, "target_symbol_id", getattr(e, "target_id", getattr(e, "target", ""))))
+            raw_tgt = getattr(e, "target_symbol_id", getattr(e, "target_id", getattr(e, "target", None)))
+            tgt_id = str(raw_tgt) if raw_tgt is not None else str(getattr(e, "target_name", "") or "")
+            if not src_id or not tgt_id:
+                continue
             e_type = str(getattr(e, "edge_type", getattr(e, "type", "calls"))).lower()
+            if e_type == "inherits":
+                e_type = "extends"
             if e_type not in ("calls", "imports", "extends", "implements", "tests", "uses"):
                 e_type = "calls"
 
@@ -145,7 +152,10 @@ class RepositoryIntelligenceBuilder:
                         source=src_id,
                         target=tgt_id,
                         type=e_type,  # type: ignore[arg-type]
-                        confidence=1.0,
+                        confidence=float(getattr(e, "confidence", 1.0) or 1.0),
+                        provenance=str(getattr(e, "provenance", "tree_sitter") or "tree_sitter"),
+                        resolution_status=str(getattr(e, "resolution_status", "resolved") or "resolved"),
+                        weight=float(getattr(e, "weight", 1.0) or 1.0),
                     )
                 )
 

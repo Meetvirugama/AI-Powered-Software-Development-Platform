@@ -318,7 +318,7 @@ async def export_analysis_runs_dataset(
             ]
             if include_feedback_only and not feedback_entries:
                 continue
-            records.append({
+            records.append(redact_obj({
                 "id": str(r.get("id", "")),
                 "repository_id": str(repository_id),
                 "feature_type": r.get("feature_type"),
@@ -328,7 +328,7 @@ async def export_analysis_runs_dataset(
                 "findings": findings,
                 "feedback_summary": {"has_feedback": len(feedback_entries) > 0, "total_feedback": len(feedback_entries)},
                 "metadata": {"created_at": str(r.get("created_at", ""))},
-            })
+            }))
         if format == "jsonl":
             content = "\n".join(json.dumps(rec, default=str) for rec in records)
         elif format == "langfuse":

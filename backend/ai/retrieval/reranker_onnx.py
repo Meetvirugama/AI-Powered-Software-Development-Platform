@@ -109,7 +109,10 @@ class ONNXCrossEncoderReranker:
             pairs = [(query, c.content) for c in candidates]
             # Tokenize inputs
             if callable(self._tokenizer):
-                import numpy as np
+                try:
+                    import numpy as np  # type: ignore[import-not-found]
+                except ImportError:
+                    np = None  # type: ignore[assignment]
 
                 encoded = self._tokenizer(
                     [p[0] for p in pairs],
@@ -128,15 +131,30 @@ class ONNXCrossEncoderReranker:
 
                 outputs = self._session.run(None, inputs)
                 out_arr = outputs[0]
-                if not hasattr(out_arr, "tolist"):
-                    out_arr = np.array(out_arr)
-                squeezed = out_arr.squeeze()
-                if hasattr(squeezed, "tolist"):
-                    raw_scores = squeezed.tolist()
+                if np is not None and hasattr(np, "array"):
+                    if not hasattr(out_arr, "tolist"):
+                        out_arr = np.array(out_arr)
+                    squeezed = out_arr.squeeze()
+                    if hasattr(squeezed, "tolist"):
+                        raw_scores = squeezed.tolist()
+                    else:
+                        raw_scores = [float(squeezed)]
+                    if isinstance(raw_scores, (int, float)):
+                        raw_scores = [float(raw_scores)]
                 else:
-                    raw_scores = [float(squeezed)]
-                if isinstance(raw_scores, (int, float)):
-                    raw_scores = [float(raw_scores)]
+                    def _flatten_scores(val: Any) -> list[float]:
+                        if isinstance(val, (int, float)):
+                            return [float(val)]
+                        if hasattr(val, "tolist"):
+                            return _flatten_scores(val.tolist())
+                        if isinstance(val, (list, tuple)):
+                            flat: list[float] = []
+                            for item in val:
+                                flat.extend(_flatten_scores(item))
+                            return flat
+                        return [float(val)]
+
+                    raw_scores = _flatten_scores(out_arr)
             else:
                 # If mock tokenizer without __call__, fallback
                 raw_scores = [c.score for c in candidates]

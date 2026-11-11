@@ -195,6 +195,13 @@ class RRFFusion:
                 else:
                     # Preserve individual source scores from different passes
                     existing = chunk_map[chunk.id]
+                    existing_imp = getattr(existing, "importance_score", None)
+                    new_imp = getattr(chunk, "importance_score", None)
+                    merged_imp = (
+                        max(float(existing_imp), float(new_imp))
+                        if existing_imp is not None and new_imp is not None
+                        else (new_imp if new_imp is not None else existing_imp)
+                    )
                     chunk_map[chunk.id] = dataclasses.replace(
                         existing,
                         vector_similarity=(
@@ -207,9 +214,34 @@ class RRFFusion:
                             if chunk.lexical_rank is not None
                             else existing.lexical_rank
                         ),
+                        graph_score=(
+                            chunk.graph_score
+                            if chunk.graph_score is not None
+                            else existing.graph_score
+                        ),
+                        importance_score=merged_imp,
                     )
 
-        sorted_ids = sorted(scores, key=lambda cid: (-scores[cid], str(cid)))
+        # Secondary ranking signal from repository-scoped PageRank (`importance_score` in [0.0, 1.0]):
+        # Bounded at 0.01 * (1 / (k + 1)) (~0.000164 for k=60), which is strictly smaller than a
+        # single-rank RRF step (1/61 - 1/62 = 0.000264), so semantic/lexical rank order ALWAYS
+        # dominates while ties and near-ties resolve in favor of architecturally important symbols
+        # and missing/None scores fall back cleanly to 0.0 without altering baseline RRF scores.
+        max_imp_bonus = 0.01 / (k + 1)
+        for cid, chunk in chunk_map.items():
+            raw_imp = getattr(chunk, "importance_score", None)
+            if raw_imp is not None and raw_imp > 0.0:
+                clamped_imp = min(1.0, max(0.0, float(raw_imp)))
+                scores[cid] += max_imp_bonus * clamped_imp
+
+        sorted_ids = sorted(
+            scores,
+            key=lambda cid: (
+                -round(scores[cid], 6),
+                -(getattr(chunk_map[cid], "importance_score", None) or 0.0),
+                str(cid),
+            ),
+        )
         top_ids = sorted_ids[:top_n]
 
         fused: list[CodeChunk] = [

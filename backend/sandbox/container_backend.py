@@ -119,14 +119,52 @@ class ContainerBackend(SandboxBackend):
         self._monitors[task_id] = WorkspaceResourceMonitor(workspace_root=ws_path)
 
         if base_repo_path and base_repo_path.exists():
+            resolved_repo = base_repo_path.resolve()
+
+            def _ignore_escaping_symlinks(src_dir: str, names: list[str]) -> set[str]:
+                ignored: set[str] = set()
+                for name in names:
+                    p = Path(src_dir) / name
+                    if p.is_symlink():
+                        try:
+                            target_res = p.resolve()
+                            if not target_res.is_relative_to(resolved_repo):
+                                logger.warning(
+                                    "Skipping nested escaping symlink during container workspace copy: %s -> %s",
+                                    p,
+                                    target_res,
+                                )
+                                ignored.add(name)
+                        except Exception:
+                            ignored.add(name)
+                return ignored
+
             for item in base_repo_path.iterdir():
                 if item.name == ".git":
                     continue
+                if item.is_symlink():
+                    try:
+                        target_resolved = item.resolve()
+                        if not target_resolved.is_relative_to(resolved_repo):
+                            logger.warning(
+                                "Skipping escaping symlink during container workspace copy: %s -> %s",
+                                item,
+                                target_resolved,
+                            )
+                            continue
+                    except Exception:
+                        continue
                 dest = ws_path / item.name
                 if item.is_dir():
-                    shutil.copytree(item, dest, symlinks=True, dirs_exist_ok=True)
+                    shutil.copytree(
+                        item,
+                        dest,
+                        symlinks=True,
+                        ignore=_ignore_escaping_symlinks,
+                        dirs_exist_ok=True,
+                    )
                 else:
-                    shutil.copy2(item, dest)
+                    shutil.copy2(item, dest, follow_symlinks=False)
 
         return ws_path
 
@@ -182,11 +220,16 @@ class ContainerBackend(SandboxBackend):
         container_workdir = "/workspace"
         if cwd is not None:
             resolved_cwd = Path(cwd).resolve()
-            if resolved_cwd == ws_path or resolved_cwd.name == clean_id:
+            ws_resolved = ws_path.resolve()
+            if resolved_cwd == ws_resolved or resolved_cwd.name == clean_id:
                 container_workdir = "/workspace"
-            elif resolved_cwd.is_relative_to(ws_path):
-                rel = resolved_cwd.relative_to(ws_path)
+            elif resolved_cwd.is_relative_to(ws_resolved):
+                rel = resolved_cwd.relative_to(ws_resolved)
                 container_workdir = f"/workspace/{rel.as_posix()}" if str(rel) != "." else "/workspace"
+            else:
+                raise SandboxSecurityError(
+                    f"Execution working directory '{resolved_cwd}' escapes workspace root '{ws_resolved}'."
+                )
 
         # Construct Docker CLI command with full security profile
         docker_cmd: list[str] = [
@@ -245,22 +288,41 @@ class ContainerBackend(SandboxBackend):
 
         # Safe custom environment overrides (preventing host path leaks and sensitive credential overrides)
         if custom_env:
+            blocked_env_keys = {
+                "PATH",
+                "HOME",
+                "TEMP",
+                "TMP",
+                "RUNNER_AUTH_SECRET",
+                "DATABASE_URL",
+                "REDIS_URL",
+                "SECRET_KEY",
+                "JWT_SECRET",
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "GEMINI_API_KEY",
+                "GEMINI_API_KEYS",
+                "GROQ_API_KEY",
+                "GROQ_API_KEYS",
+                "GITHUB_TOKEN",
+                "GITHUB_PRIVATE_KEY",
+                "GITHUB_APP_PRIVATE_KEY",
+                "GITHUB_WEBHOOK_SECRET",
+                "GITHUB_CLIENT_SECRET",
+                "LD_PRELOAD",
+                "LD_LIBRARY_PATH",
+                "DYLD_INSERT_LIBRARIES",
+                "PYTHONINSPECT",
+                "PYTHONSTARTUP",
+            }
             for k, v in custom_env.items():
                 k_upper = k.upper()
-                if k_upper in {"PATH", "HOME", "TEMP", "TMP"}:
-                    continue
                 if (
-                    k_upper
-                    in (
-                        "RUNNER_AUTH_SECRET",
-                        "DATABASE_URL",
-                        "SECRET_KEY",
-                        "OPENAI_API_KEY",
-                        "ANTHROPIC_API_KEY",
-                        "GITHUB_TOKEN",
-                    )
+                    k_upper in blocked_env_keys
                     or k_upper.startswith("AWS_")
                     or k_upper.startswith("AZURE_")
+                    or k_upper.startswith("GCP_")
+                    or k_upper.startswith("GOOGLE_")
                 ):
                     continue
                 if k_upper == "PYTHONPATH":

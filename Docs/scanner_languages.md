@@ -23,14 +23,14 @@ The platform integrates tree-sitter grammars with Python standard library `ast` 
 
 | Language | Primary Parser Engine | Fallback Engine | Symbol Types Extracted | Line Range Fidelity | Status |
 |---|---|---|---|---|---|
-| **Python** | `tree-sitter-python` (v0.25+) | Python standard library `ast` | Class, Function, Method, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
-| **TypeScript** | `tree-sitter-typescript` (v0.23+) | RegEx / Heuristic Tokenizer | Class, Function, Method, Interface, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
-| **JavaScript** | `tree-sitter-javascript` (v0.25+) | RegEx / Heuristic Tokenizer | Class, Function, Method, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
-| **Java** | `tree_sitter_languages` (`java`) | Generic Import / Structural Extractor | Class, Interface, Method, Import | Exact (1-indexed inclusive) | 🟡 Supported |
-| **Go** | `tree_sitter_languages` (`go`) | Generic Import / Structural Extractor | Function, Method, Struct/Type, Import | Exact (1-indexed inclusive) | 🟡 Supported |
-| **Rust** | `tree_sitter_languages` (`rust`) | Generic Import / Structural Extractor | Struct, Impl, Function, Import | Exact (1-indexed inclusive) | 🟡 Supported |
-| **C** | `tree_sitter_languages` (`c`) | Generic Import / Structural Extractor | Function, Struct, Macro/Constant | Exact (1-indexed inclusive) | 🟡 Supported |
-| **C++** | `tree_sitter_languages` (`cpp`) | Generic Import / Structural Extractor | Class, Struct, Function, Method, Include | Exact (1-indexed inclusive) | 🟡 Supported |
+| **Python** | `tree-sitter-language-pack` / `tree-sitter-python` (v0.25+) | Python standard library `ast` | Class, Function, Method, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **TypeScript** | `tree-sitter-language-pack` / `tree-sitter-typescript` (v0.23+) | Structural CST / RegEx Tokenizer | Class, Function, Method, Interface, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **JavaScript** | `tree-sitter-language-pack` / `tree-sitter-javascript` (v0.25+) | Structural CST / RegEx Tokenizer | Class, Function, Method, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **Java** | `tree-sitter-language-pack` (`java`) | Structural CST (`StructuralSyntaxTree`) | Class, Interface, Method, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **Go** | `tree-sitter-language-pack` (`go`) | Structural CST (`StructuralSyntaxTree`) | Function, Method, Struct/Interface, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **Rust** | `tree-sitter-language-pack` (`rust`) | Structural CST (`StructuralSyntaxTree`) | Struct/Enum, Trait, Impl Method, Function, Import, Constant | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **C** | `tree-sitter-language-pack` (`c`) | Structural CST (`StructuralSyntaxTree`) | Function, Struct, Macro/Constant, Include | Exact (1-indexed inclusive) | 🟢 Production Ready |
+| **C++** | `tree-sitter-language-pack` (`cpp`) | Structural CST (`StructuralSyntaxTree`) | Class, Struct, Function, Method, Macro, Include | Exact (1-indexed inclusive) | 🟢 Production Ready |
 
 ---
 
@@ -365,11 +365,11 @@ The AST, source location, rules, framework detector, and review source mapping f
 | **Tier 1** | **Python** | `tree-sitter-python` (v0.25+) | `ast` standard library | Classes, Functions, Async Functions, Methods, Decorators, Imports, Constants | Exact 1-indexed inclusive | Dynamic `eval()`/`exec()`, runtime monkeypatching not resolved statically. |
 | **Tier 1** | **TypeScript** | `tree-sitter-typescript` (v0.23+) | RegEx Tokenizer | Classes, Methods, Functions, Interfaces, Type Aliases, ES6 Imports, Constants | Exact 1-indexed inclusive | Computed property keys (`[Symbol.iterator]()`), complex inline JSX components in .tsx. |
 | **Tier 1** | **JavaScript** | `tree-sitter-javascript` (v0.25+) | RegEx Tokenizer | Classes, Methods, Functions, CommonJS `require()`, ES6 Imports, Constants | Exact 1-indexed inclusive | Dynamic `require(computePath())` cannot be statically resolved to local files. |
-| **Tier 2** | **Java** | `tree_sitter_languages` (`java`) | Structural Regex | Classes, Interfaces, Methods, Imports | Exact 1-indexed inclusive | Complex annotation processing and deep anonymous inner classes. |
-| **Tier 2** | **Go** | `tree_sitter_languages` (`go`) | Structural Regex | Structs, Interfaces, Functions, Methods, Imports | Exact 1-indexed inclusive | Inline anonymous struct declarations and generic type constraints. |
-| **Tier 2** | **Rust** | `tree_sitter_languages` (`rust`) | Structural Regex | Structs, Impls, Functions, Macros, Imports | Exact 1-indexed inclusive | Declarative macro expansions (`macro_rules!`) and proc-macros not expanded. |
-| **Tier 2** | **C** | `tree_sitter_languages` (`c`) | Structural Regex | Functions, Structs, Typedefs, Macros, Includes | Exact 1-indexed inclusive | Heavy preprocessor macro metaprogramming and conditional compilation `#ifdef`. |
-| **Tier 2** | **C++** | `tree_sitter_languages` (`cpp`) | Structural Regex | Classes, Structs, Functions, Methods, Includes | Exact 1-indexed inclusive | Complex template metaprogramming declarations. |
+| **Tier 2** | **Java** | `tree-sitter-language-pack` (`java`) | Structural CST (`StructuralSyntaxTree`) | Classes, Interfaces, Constructors, Methods, Constants, Imports | Exact 1-indexed inclusive | Complex annotation processing and deep anonymous inner classes. |
+| **Tier 2** | **Go** | `tree-sitter-language-pack` (`go`) | Structural CST (`StructuralSyntaxTree`) | Structs, Interfaces, Functions, Receiver Methods, Constants, Imports | Exact 1-indexed inclusive | Inline anonymous struct declarations and generic type constraints. |
+| **Tier 2** | **Rust** | `tree-sitter-language-pack` (`rust`) | Structural CST (`StructuralSyntaxTree`) | Structs, Enums, Traits, Impl Methods, Functions, Constants, Imports | Exact 1-indexed inclusive | Declarative macro expansions (`macro_rules!`) and proc-macros not expanded. |
+| **Tier 2** | **C** | `tree-sitter-language-pack` (`c`) | Structural CST (`StructuralSyntaxTree`) | Functions, Structs, Typedefs, Macros, Includes | Exact 1-indexed inclusive | Heavy preprocessor macro metaprogramming and conditional compilation `#ifdef`. |
+| **Tier 2** | **C++** | `tree-sitter-language-pack` (`cpp`) | Structural CST (`StructuralSyntaxTree`) | Classes, Structs, Functions, Methods, Macros, Includes | Exact 1-indexed inclusive | Complex template metaprogramming declarations. |
 | **Tier 3** | **Unsupported** | N/A | Graceful Skip | None (returns explicit diagnostics) | Whole file bounds | Emits `UNSUPPORTED_LANGUAGE` error code / limitation. Zero unhandled exceptions. |
 
 ### 11.2 Parser Failure Handling & Zero-Crash Contract
@@ -422,6 +422,38 @@ The platform enforces a strict zero-crash invariant across all parsing, extracti
 | `backend/tests/test_framework_detector.py` | Pytest, unittest, jest, vitest, and ambiguous repository detection, conftest fixture AST extraction, and POSIX path proposals | 15 | 🟢 Passing |
 | `backend/tests/test_detector.py`, `test_walker.py`, `test_test_mapper.py` | Baseline scanner file walking, language detection, and test-to-source mapping | 8 | 🟢 Passing |
 | **Total** | **Complete Repository Scanner Engine Suite** | **143** | **100% Passing** |
+
+---
+
+## 12. Modernized Code Intelligence Pipeline (P1–P3 Architecture Specification)
+
+### 12.1 P1: Modernized Tree-sitter Grammar Loading (`backend/scanner/parser.py`)
+- **Removed Unmaintained Dependency**: Removed `tree_sitter_languages` from `pyproject.toml`, `backend/requirements.txt`, and `backend/scanner/parser.py`.
+- **Maintained Grammar Loading Hierarchy**:
+  1. Primary: `tree-sitter-language-pack` (`get_parser()` / `get_language()`) compatible with `tree-sitter >= 0.23, < 1.0` and Python 3.12+/3.14.
+  2. Secondary: Tested per-language bindings (`tree_sitter_python`, `tree_sitter_javascript`, `tree_sitter_typescript`, `tree_sitter_go`, `tree_sitter_rust`, `tree_sitter_java`, `tree_sitter_c`, `tree_sitter_cpp`).
+  3. Tertiary: Deterministic `StructuralSyntaxTree` / `StructuralCSTNode` and Python `ast` fallback preserving `.root_node`, 1-indexed inclusive line ranges, and syntax-error detection across all 8 languages (`Python`, `TypeScript`, `JavaScript`, `Go`, `Rust`, `Java`, `C`, `C++`).
+- **Diagnostics**: `Parser.get_grammar_status()` and `ParseResult.grammar_backend` report the active grammar backend per language.
+
+### 12.2 P2: Audited Symbol & Edge Schema, Provenance, and Weighted PageRank
+- **Minimal Reversible Schema Extensions** (Migration `j7a8b9c0d1e2_modernize_symbols_edges_and_ranking.py`):
+  - `code_symbols.importance_score` (`Float`, default `0.0`, indexed by `(repository_id, importance_score)`).
+  - `symbol_edges`: `target_symbol_id` made nullable to preserve unresolved/ambiguous references without arbitrary target assignment; added `target_name` (`String(512)`), `provenance` (`String(64)`, default `'tree_sitter'`), `resolution_status` (`String(32)`, `'resolved' | 'ambiguous' | 'unresolved'`), `confidence` (`Float`, default `1.0`), and `weight` (`Float`, default `1.0`).
+- **Consistent Edge Direction & Multi-Provider Reconciliation (`backend/scanner/graph.py`)**:
+  - `source_id` always represents the caller / importer / subclass; `target_id` represents the callee / imported symbol / superclass or interface.
+  - `DependencyGraphBuilder.reconcile_edges()` deduplicates identical edges while merging contributing providers deterministically (e.g., `import_tracker,scip,tree_sitter`) and upgrading unresolved references when resolved by another provider.
+- **Repository-Scoped Weighted PageRank (`backend/scanner/symbol_ranker.py`)**:
+  - Power-iteration PageRank (`damping_factor=0.85`, `tolerance=1e-6`, `max_iterations=100`) over resolved repository-scoped edges with relationship weights (`calls=1.0`, `inherits/extends=1.2`, `implements=1.1`, `imports=0.6`), dangling-node mass redistribution, vendor/generated path discounting (`vendor_discount_factor=0.25`), and `[0.0, 1.0]` normalization.
+  - Integrated into `RRFFusion.fuse()`, `SymbolGraphExpander`, and `build_intelligence_context()` as a bounded secondary signal (`max_imp_bonus = 0.01 / (k + 1)`) so semantic similarity always dominates while ties break in favor of architectural hubs.
+
+### 12.3 P3: Optional Sandboxed SCIP Integration (`backend/scanner/scip_runner.py`)
+- **Evaluated Indexers (`SCIP_INDEXER_REGISTRY`)**:
+  - `scip-python` (`@sourcegraph/scip-python`, Apache-2.0) and `scip-typescript` (`@sourcegraph/scip-typescript`, Apache-2.0).
+- **Safety & Sandbox Invariants**:
+  - Disabled by default (`SCIPIndexerConfig(enabled=False)`); Tree-sitter remains the primary parser and universal fallback.
+  - Host execution is strictly forbidden (`allow_host_execution=False`); indexers execute only via an injected `SandboxCommandExecutor` with `--network none`, CPU/memory caps, and fixed argument tuples.
+  - Validates SCIP output, blocks path traversal (`..`), maps 0-indexed SCIP ranges to 1-indexed inclusive `Symbol` spans, records `provenance="scip"`, retains unresolved external references, and reconciles duplicate edges with Tree-sitter.
+
 
 
 

@@ -154,20 +154,20 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
         user_content = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
             f"{fenced_context}\n\n"
-            "EXPLANATION TARGET:\n"
-            f"Analyze and explain `{payload.target.path}` "
-            f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
-            f"lines={payload.target.start_line or 1}..{payload.target.end_line or 'end'}).\n\n"
             f"{level_instructions}\n\n"
             "DETAILED REQUIREMENTS:\n"
             "1. Purpose: Provide a clear, concise overview of what the code is intended to accomplish.\n"
             "2. Detailed Explanation: Provide an in-depth technical walkthrough of how the code works under the hood, key mechanisms, algorithms, data transformations, and architectural considerations.\n"
             "3. Logic Flow: Provide the sequential execution steps in chronological order. Include exact 1-indexed line references like (L13–L16) or (L15) for each step.\n"
             "4. Execution Flow: Provide the cross-file / cross-component runtime sequence connecting components (e.g. API -> Service -> Model).\n"
-            "4. Code Output Explanation: Explain the outputs produced by the code in full detail, explaining how output fields are derived (including formulas, thresholds, or branch outcomes), and provide concrete example input/output payloads for different execution paths.\n"
-            "5. Code Issues & Solutions: Identify bugs, edge cases, missing validations, or vulnerabilities in the code, and explain how to solve each one.\n"
-            "6. Corrected Code: Provide the complete, production-ready, refactored code solving all identified issues with proper error handling and clean architecture.\n"
-            "7. Key Symbols, Inputs/Outputs, Dependencies, Assumptions & Limitations: Populate grounded entries for all schema fields."
+            "5. Code Output Explanation: Explain the outputs produced by the code in full detail, explaining how output fields are derived (including formulas, thresholds, or branch outcomes), and provide concrete example input/output payloads for different execution paths.\n"
+            "6. Code Issues & Solutions: Identify bugs, edge cases, missing validations, or vulnerabilities in the code, and explain how to solve each one.\n"
+            "7. Corrected Code: Provide the complete, production-ready, refactored code solving all identified issues with proper error handling and clean architecture.\n"
+            "8. Key Symbols, Inputs/Outputs, Dependencies, Assumptions & Limitations: Populate grounded entries for all schema fields.\n\n"
+            "EXPLANATION TARGET:\n"
+            f"Explain `{payload.target.path}` "
+            f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
+            f"lines={payload.target.start_line or 1}..{payload.target.end_line or 'end'})."
         )
 
         messages = [

@@ -14,7 +14,12 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
 
-import jsonschema
+try:
+    import jsonschema  # type: ignore[import-untyped]
+except ImportError:
+    jsonschema = None  # type: ignore[assignment]
+
+from agent.tools.schema_validator import default_schema_validator
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
@@ -37,23 +42,31 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 ALLOWED_FIELD_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
 BLOCKED_HOSTS = {
     "169.254.169.254",
+    "100.100.100.200",
     "metadata.google.internal",
     "metadata.local",
     "instance-data",
+    "0.0.0.0",
+    "::",
 }
 
 
 def validate_mcp_url(url: str) -> str:
     """Validate MCP URL for scheme safety and SSRF prevention.
 
-    Strictly enforces HTTPS (HTTP permitted only on localhost / 127.0.0.1 for development).
-    Blocks cloud metadata endpoints and link-local IP addresses.
-    Rejects unsafe schemes such as javascript:, data:, file:, ftp:.
+    Strictly enforces HTTPS (HTTP permitted only on localhost / 127.0.0.1 / ::1 for development).
+    Blocks cloud metadata endpoints, link-local, private RFC1918, unspecified, reserved,
+    multicast, non-localhost loopback, and IPv4-mapped IPv6 addresses.
+    Rejects unsafe schemes such as javascript:, data:, file:, ftp:, embedded credentials,
+    and control/newline characters.
     """
     if not url or not isinstance(url, str):
         raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, "URL must be a non-empty string")
 
     stripped = url.strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in stripped):
+        raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, "URL contains forbidden control characters")
+
     try:
         parsed = urlparse(stripped)
     except Exception as exc:
@@ -62,10 +75,17 @@ def validate_mcp_url(url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, "Invalid URL structure: missing scheme or host")
 
-    scheme = parsed.scheme.lower()
-    hostname = (parsed.hostname or "").lower()
+    if parsed.username is not None or parsed.password is not None:
+        raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, "Embedded credentials in MCP URLs are forbidden")
 
-    if hostname in ("localhost", "127.0.0.1", "::1"):
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if not hostname:
+        raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, "Invalid URL structure: missing hostname")
+
+    is_dev_loopback = hostname in ("localhost", "127.0.0.1", "::1")
+
+    if is_dev_loopback:
         if scheme not in ("http", "https"):
             raise APIError(
                 400,
@@ -80,21 +100,36 @@ def validate_mcp_url(url: str) -> str:
                 f"Forbidden scheme '{scheme}'. Only https is allowed for external URLs.",
             )
 
-    if hostname in BLOCKED_HOSTS:
+    if hostname in BLOCKED_HOSTS or hostname.endswith(".internal") or hostname.endswith(".local"):
         raise APIError(
             403,
             ErrorCode.MCP_SECURITY_VIOLATION,
-            f"Access to restricted cloud metadata endpoint '{hostname}' is strictly forbidden.",
+            f"Access to restricted cloud metadata or internal endpoint '{hostname}' is strictly forbidden.",
         )
 
     try:
         ip = ipaddress.ip_address(hostname)
-        if ip.is_link_local:
-            raise APIError(
-                403,
-                ErrorCode.MCP_SECURITY_VIOLATION,
-                f"Link-local IP address '{hostname}' is blocked.",
-            )
+        mapped = getattr(ip, "ipv4_mapped", None)
+        check_ips = [ip, mapped] if mapped is not None else [ip]
+        for candidate_ip in check_ips:
+            if str(candidate_ip) in BLOCKED_HOSTS or candidate_ip.is_link_local:
+                raise APIError(
+                    403,
+                    ErrorCode.MCP_SECURITY_VIOLATION,
+                    f"Link-local or cloud metadata IP address '{hostname}' is blocked.",
+                )
+            if not is_dev_loopback and (
+                candidate_ip.is_private
+                or candidate_ip.is_loopback
+                or candidate_ip.is_unspecified
+                or candidate_ip.is_reserved
+                or candidate_ip.is_multicast
+            ):
+                raise APIError(
+                    403,
+                    ErrorCode.MCP_SECURITY_VIOLATION,
+                    f"Private, loopback, or reserved IP address '{hostname}' is blocked.",
+                )
     except ValueError:
         pass
 
@@ -131,15 +166,21 @@ def validate_mcp_form_schema(schema: dict[str, Any]) -> None:
 
 
 def validate_mcp_form_response(schema: dict[str, Any], data: dict[str, Any]) -> None:
-    """Validate user response data against the form schema using jsonschema."""
+    """Validate user response data against the form schema using jsonschema or SchemaValidator fallback."""
     if not isinstance(data, dict):
         raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, "Response data must be a dictionary")
-    try:
-        jsonschema.validate(instance=data, schema=schema)
-    except jsonschema.ValidationError as exc:
-        raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Form validation failed: {exc.message}")
-    except Exception as exc:
-        raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Schema validation error: {exc}")
+    if jsonschema is not None:
+        try:
+            jsonschema.validate(instance=data, schema=schema)
+            return
+        except jsonschema.ValidationError as exc:
+            raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Form validation failed: {exc.message}")
+        except Exception as exc:
+            raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Schema validation error: {exc}")
+
+    err = default_schema_validator.validate_arguments(data, schema)
+    if err is not None:
+        raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Form validation failed: {err}")
 
 
 class MCPElicitationService:

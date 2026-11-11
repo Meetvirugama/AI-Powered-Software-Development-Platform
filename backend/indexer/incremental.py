@@ -191,7 +191,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists = repo_check.first() if hasattr(repo_check, "first") else None
+        repo_exists = (repo_check.first() is not None) if hasattr(repo_check, "first") else True
         if not repo_exists:
             logger.warning("indexing_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
@@ -512,17 +512,77 @@ class IncrementalIndexer:
         built_edges: list[Any] = []
         if all_extracted_symbols:
             try:
-                built_edges = DependencyGraphBuilder(
+                from scanner.import_tracker import ImportTracker
+                from scanner.symbol_ranker import SymbolImportanceRanker
+
+                for sym in all_extracted_symbols:
+                    if sym.file_id in file_id_to_path and not getattr(sym, "file_path", ""):
+                        sym.file_path = file_id_to_path[sym.file_id]
+
+                known_rel_paths = list(scanned_rel_paths)
+                tracker = ImportTracker()
+                import_maps = {}
+                for fid, fcontent in file_contents_by_id.items():
+                    fpath = file_id_to_path.get(fid, "")
+                    if fpath:
+                        f_lang = self.detector.detect(fpath)
+                        f_info = type(
+                            "FInfo",
+                            (),
+                            {"path": fpath, "size_bytes": len(fcontent), "language": f_lang, "is_binary": False},
+                        )()
+                        import_maps[fpath] = tracker.parse_imports(
+                            f_info, fcontent, known_files=known_rel_paths
+                        )
+
+                graph_builder = DependencyGraphBuilder(
                     all_extracted_symbols,
                     file_contents=file_contents_by_id,
-                ).build()
+                    file_paths=file_id_to_path,
+                    import_maps=import_maps,
+                )
+                resolved_edges = graph_builder.build()
+                all_graph_edges = graph_builder.all_edges
+                built_edges = all_graph_edges
+
+                # Compute repository-scoped weighted PageRank importance scores over resolved edges
+                ranker = SymbolImportanceRanker()
+                scores_by_id = ranker.rank_symbols(all_extracted_symbols, resolved_edges)
+                score_update_query = text(
+                    "UPDATE code_symbols SET importance_score = :score WHERE id = :id AND repository_id = :repo_id"
+                )
+                for sym_id, imp_score in scores_by_id.items():
+                    await self._execute(
+                        score_update_query,
+                        {"score": float(imp_score), "id": sym_id, "repo_id": repository_id},
+                        sess=session,
+                    )
+
+                # Clear stale outgoing edges for re-indexed symbols (or all edges on full sync) before inserting
+                if skipped_count == 0:
+                    await self._execute(
+                        text("DELETE FROM symbol_edges WHERE repository_id = :repo_id"),
+                        {"repo_id": repository_id},
+                        sess=session,
+                    )
+                else:
+                    for sym in all_extracted_symbols:
+                        await self._execute(
+                            text(
+                                "DELETE FROM symbol_edges WHERE repository_id = :repo_id AND source_symbol_id = :source_id"
+                            ),
+                            {"repo_id": repository_id, "source_id": sym.id},
+                            sess=session,
+                        )
+
                 edge_insert_query = text(
                     """
-                    INSERT INTO symbol_edges (id, repository_id, source_symbol_id, target_symbol_id, edge_type)
-                    VALUES (:id, :repo_id, :source_id, :target_id, :edge_type)
+                    INSERT INTO symbol_edges
+                    (id, repository_id, source_symbol_id, target_symbol_id, target_name, edge_type, provenance, resolution_status, confidence, weight)
+                    VALUES (:id, :repo_id, :source_id, :target_id, :target_name, :edge_type, :provenance, :resolution_status, :confidence, :weight)
                     """
                 )
-                for edge in built_edges:
+                for edge in all_graph_edges:
                     await self._execute(
                         edge_insert_query,
                         {
@@ -530,13 +590,18 @@ class IncrementalIndexer:
                             "repo_id": repository_id,
                             "source_id": edge.source_id,
                             "target_id": edge.target_id,
+                            "target_name": getattr(edge, "target_name", None),
                             "edge_type": edge.edge_type,
+                            "provenance": getattr(edge, "provenance", "tree_sitter") or "tree_sitter",
+                            "resolution_status": getattr(edge, "resolution_status", "resolved") or "resolved",
+                            "confidence": float(getattr(edge, "confidence", 1.0) or 1.0),
+                            "weight": float(getattr(edge, "weight", 1.0) or 1.0),
                         },
                         sess=session,
                     )
                     persisted_edges_count += 1
                 logger.info(
-                    "Explicitly persisted %d knowledge graph edges for repo %s",
+                    "Explicitly persisted %d knowledge graph edges and PageRank scores for repo %s",
                     persisted_edges_count,
                     repository_id,
                 )
@@ -549,7 +614,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists_snap = repo_check_snap.first() if hasattr(repo_check_snap, "first") else None
+        repo_exists_snap = (repo_check_snap.first() is not None) if hasattr(repo_check_snap, "first") else True
         if not repo_exists_snap:
             logger.warning("indexing_snapshot_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             if session is not None and hasattr(session, "rollback"):
@@ -612,7 +677,7 @@ class IncrementalIndexer:
             {"repo_id": repository_id},
             sess=session,
         )
-        repo_exists_commit = repo_check_commit.first() if hasattr(repo_check_commit, "first") else None
+        repo_exists_commit = (repo_check_commit.first() is not None) if hasattr(repo_check_commit, "first") else True
         if not repo_exists_commit:
             logger.warning("indexing_commit_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
             # Clean up any snapshot directory that was published before repository deletion was discovered

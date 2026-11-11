@@ -80,13 +80,17 @@ class TestCoverageService:
             )
 
         files = data.get("files", {})
-        norm_target = target_file.strip().replace("\\", "/")
+        norm_target_clean = target_file.strip().replace("\\", "/").lstrip("./")
 
-        # Match target_file by exact suffix or normalized path
+        # Match target_file by exact path or slash-bounded suffix
         matching_key = None
         for file_key in files:
-            norm_key = file_key.replace("\\", "/")
-            if norm_key.endswith(norm_target) or norm_target.endswith(norm_key):
+            norm_key_clean = file_key.replace("\\", "/").lstrip("./")
+            if (
+                norm_key_clean == norm_target_clean
+                or norm_key_clean.endswith("/" + norm_target_clean)
+                or norm_target_clean.endswith("/" + norm_key_clean)
+            ):
                 matching_key = file_key
                 break
 
@@ -268,13 +272,17 @@ class TestCoverageService:
                 error_message=f"Failed to parse node coverage JSON: {exc}",
             )
 
-        norm_target = target_file.strip().replace("\\", "/")
+        norm_target_clean = target_file.strip().replace("\\", "/").lstrip("./")
         matching_key = None
         for key in data:
             if key == "total":
                 continue
-            norm_key = key.replace("\\", "/")
-            if norm_key.endswith(norm_target) or norm_target.endswith(norm_key):
+            norm_key_clean = key.replace("\\", "/").lstrip("./")
+            if (
+                norm_key_clean == norm_target_clean
+                or norm_key_clean.endswith("/" + norm_target_clean)
+                or norm_target_clean.endswith("/" + norm_key_clean)
+            ):
                 matching_key = key
                 break
 

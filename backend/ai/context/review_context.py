@@ -232,6 +232,7 @@ class ReviewContextBuilder:
                 end_line=caller.end_line,
                 content=caller.content,
                 score=0.9,
+                importance_score=float(getattr(caller, "importance_score", 0.0) or 0.0),
             )
             blast_symbols.append(caller_copy)
 

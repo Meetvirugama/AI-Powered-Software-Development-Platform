@@ -279,8 +279,11 @@ class TaintAnalyzer:
         for sub in ast.walk(expr):
             if isinstance(sub, ast.Call):
                 func_name = self._ast_to_source(sub.func)
+                base_call = func_name.rsplit(".", 1)[-1]
+                if base_call in {"unquote", "unquote_plus", "unquote_to_bytes", "unescape"}:
+                    continue
                 for san_name, san_desc in self.SANITIZERS.items():
-                    if func_name.endswith(san_name):
+                    if func_name == san_name or func_name.endswith("." + san_name):
                         lineno = getattr(sub, "lineno", 1)
                         raw_line = lines[lineno - 1].strip() if lineno <= len(lines) else func_name
                         return TaintNode(

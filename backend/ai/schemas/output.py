@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_serializer
 
 __all__ = [
     "ErrorResponse",
@@ -88,6 +88,7 @@ class RepositoryAnswer(BaseModel):
         "retrieval_degraded",
         "provider_unavailable",
         "invalid_output",
+        "timeout",
     ] = Field(
         default="completed",
         description="Outcome status of the Q&A generation.",
@@ -96,6 +97,13 @@ class RepositoryAnswer(BaseModel):
         default=None,
         description="Execution telemetry and tool statistics for agentic chat mode.",
     )
+
+    @model_serializer(mode="wrap")
+    def _serialize_answer(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        if self.agent_metadata is None and isinstance(data, dict):
+            data.pop("agent_metadata", None)
+        return data
 
 
 # ---------------------------------------------------------------------------

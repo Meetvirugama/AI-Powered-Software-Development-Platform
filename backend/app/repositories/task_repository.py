@@ -2399,6 +2399,10 @@ class TaskRepository:
         )
         return list(self.session.scalars(stmt).all())
 
+    def list_repair_records(self, task_id: uuid.UUID | str) -> list[RepairAttempt]:
+        """Alias for list_repair_attempts for backward compatibility."""
+        return self.list_repair_attempts(task_id)
+
     def list_events(self, task_id: uuid.UUID | str) -> list[TaskEvent]:
         """List all events for a task, ordered by created_at asc."""
         t_uuid = _ensure_uuid(task_id)

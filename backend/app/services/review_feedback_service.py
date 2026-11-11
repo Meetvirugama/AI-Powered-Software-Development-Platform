@@ -94,11 +94,13 @@ class ReviewFeedbackService:
         if not finding:
             return None
 
+        from app.core.secret_redaction import redact
+
         meta = dict(finding.finding_metadata or {})
         feedback_entry = {
             "feedback_type": clean_type,
             "user_id": str(user_id) if user_id else None,
-            "comment": comment.strip() if comment else None,
+            "comment": redact(comment.strip()) if comment else None,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 

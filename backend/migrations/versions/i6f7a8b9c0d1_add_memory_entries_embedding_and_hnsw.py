@@ -29,6 +29,8 @@ def upgrade() -> None:
 
     dialect_name = bind.dialect.name
     if dialect_name == "postgresql":
+        op.execute("ALTER TYPE memorytype ADD VALUE IF NOT EXISTS 'task_summary';")
+        op.execute("ALTER TYPE memorytype ADD VALUE IF NOT EXISTS 'failure';")
         existing_indexes = {idx["name"] for idx in inspector.get_indexes("memory_entries")}
         if "ix_memory_entries_embedding_hnsw" not in existing_indexes:
             op.execute(

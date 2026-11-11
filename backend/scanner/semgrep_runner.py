@@ -185,10 +185,24 @@ class SemgrepRunner:
             str(self.rules_path),
             "--timeout",
             str(self.timeout_seconds),
-            str(resolved_target),
         ]
         if extra_args:
-            cmd.extend(extra_args)
+            forbidden_semgrep_flags = {"--config", "-f", "--output", "-o"}
+            skip_next = False
+            for arg in extra_args:
+                if skip_next:
+                    skip_next = False
+                    continue
+                arg_str = str(arg).strip()
+                flag_head = arg_str.split("=", 1)[0]
+                if flag_head in forbidden_semgrep_flags:
+                    if "=" not in arg_str:
+                        skip_next = True
+                    continue
+                if arg_str == "--":
+                    continue
+                cmd.append(arg_str)
+        cmd.extend(["--", str(resolved_target)])
 
         env = {
             "PATH": os.environ.get("PATH", ""),

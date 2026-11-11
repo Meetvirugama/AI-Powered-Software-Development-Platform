@@ -319,11 +319,23 @@ class GitleaksRunner:
         # Built-in deterministic secret scanner
         findings: list[GitleaksFinding] = []
         files_scanned = 0
+        resolved_ws = workspace.resolve()
 
-        for root, dirs, files in os.walk(workspace):
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_PATTERNS]
+        for root, dirs, files in os.walk(workspace, followlinks=False):
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in EXCLUDED_PATTERNS and not (Path(root) / d).is_symlink()
+            ]
             for f in files:
                 p = Path(root) / f
+                if p.is_symlink():
+                    continue
+                try:
+                    if not p.resolve().is_relative_to(resolved_ws):
+                        continue
+                except Exception:
+                    continue
                 rel_path = str(p.relative_to(workspace)).replace("\\", "/")
                 if self.is_excluded(rel_path):
                     continue

@@ -45,7 +45,8 @@ def normalize_sync_database_url(url: str) -> str:
 def _build_db_kwargs(url: str) -> dict[str, Any]:
     """Construct engine kwargs tailored for local, Supabase, Azure, or SQLite databases."""
     kwargs: dict[str, Any] = {"pool_pre_ping": True}
-    if not url.startswith("sqlite"):
+    is_memory_sqlite = url.startswith("sqlite") and (":memory:" in url or url in ("sqlite://", "sqlite:///"))
+    if not is_memory_sqlite:
         kwargs.update(
             {
                 "pool_size": settings.db_pool_size,
@@ -54,6 +55,7 @@ def _build_db_kwargs(url: str) -> dict[str, Any]:
                 "pool_recycle": settings.db_pool_recycle,
             }
         )
+    if not url.startswith("sqlite"):
         connect_args: dict[str, Any] = {}
         # Supabase Transaction Pooler (port 6543 / Supavisor / pgbouncer):
         # Disable prepared statement caching to prevent 'prepared statement already exists' collisions.
