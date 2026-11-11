@@ -1282,5 +1282,31 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/26_project_memory_entries.md`, `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch10] 2026-11-10 — Branch, Commit, Push, and Draft PR Publication (Issue #207 / F26)
+**Type:** Security / Feature / Git Architecture  
+**Developer:** Prit Zania  
+**Changes:**
+- `backend/sandbox/command_runner.py`:
+  - Enforced strict sandbox policy in `WorkspaceCommandRunner.validate_command`: all git network operations (`push`, `pull`, `fetch`, `remote`, `clone`) are rejected with `WorkspacePolicyViolationError`, guaranteeing untrusted containers cannot execute remote Git pushes.
+- `backend/app/schemas/workspace.py`:
+  - Added `installation_token: str | None = None` to `WorkspacePushRequest` for ephemeral host-side authentication without persisting credentials to disk.
+- `backend/sandbox/workspace_manager.py`:
+  - Hardened `push_task_branch`: dynamically passes `-c http.extraheader=AUTHORIZATION: basic <base64>` during host subprocess execution, ensuring zero token writes to `.git/config`, zero token leakage into container sandboxes, and full `redact()` scrubbing of errors.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Updated `push_verified_branch` to resolve GitHub App installation tokens host-side and supply them securely to `WorkspacePushRequest`.
+- `backend/app/integrations/github/routes.py`:
+  - Restored contract compatibility endpoint `POST /api/v1/repositories/{id}/source/agent-branch` with `AgentBranchRequest` and `AgentBranchResponse`.
+- `backend/tests/test_host_git_push_credential_isolation.py`:
+  - Authored 16 unit and security regression tests covering host-side execution, sandbox command rejection, token isolation, error redaction, protected branch guards, authorization gates, and draft PR rules.
+- `Docs/engineering/27_branch_commit_push_draft_pr_publication.md`:
+  - Authored complete architecture, threat boundary, and sequence specification.
+
+**Impact:** Guarantees strict boundary separation between untrusted sandbox environments and privileged Git operations, ensuring credentials never enter container runtimes and git push operations run host-side exclusively.
+
+**Related Docs:** `Docs/engineering/27_branch_commit_push_draft_pr_publication.md`, `Docs/README.md`
+
+
 
 
