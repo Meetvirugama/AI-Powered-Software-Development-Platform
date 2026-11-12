@@ -209,6 +209,8 @@ class Settings(BaseSettings):
     # their IP to dodge the per-IP rate limit.
     trust_proxy_headers: bool = False
     disable_embedded_sync_worker: bool = False
+    run_migrations_on_startup: bool = True
+    uvicorn_graceful_timeout: int = 15
     sync_worker_lease_ttl_seconds: int = 60
     sync_worker_heartbeat_interval_seconds: int = 15
     sync_worker_max_retries: int = 3
@@ -321,13 +323,20 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production configuration error: CORS_ALLOWED_ORIGINS must contain valid production origins."
                 )
+            if self.cors_origin_regex and self.cors_origin_regex.strip() in {"*", ".*", "^.*$", "https://.*", "http://.*"}:
+                raise ValueError(
+                    "Production configuration error: Overly permissive wildcard CORS_ORIGIN_REGEX is not permitted in production."
+                )
             if self.jwt_expire_minutes > 1440:
                 raise ValueError(
                     "Production configuration error: JWT_EXPIRE_MINUTES must not exceed 1440 minutes in production."
                 )
             if self.redis_url:
                 redis_url_lower = self.redis_url.lower().strip()
-                if any(cloud in redis_url_lower for cloud in ("upstash.io", "redislabs.com", "azure.com", "amazonaws.com")):
+                if any(
+                    cloud in redis_url_lower
+                    for cloud in ("upstash.io", "redislabs.com", "azure.com", "amazonaws.com", "windows.net")
+                ):
                     if not redis_url_lower.startswith("rediss://"):
                         raise ValueError(
                             "Production configuration error: Remote production Redis connection must use TLS (rediss://)."
