@@ -262,7 +262,7 @@ def test_context_budget_defaults_and_database_pool_configuration():
     assert settings.db_pool_recycle == 1800
 
     # If connected to PostgreSQL/QueuePool, verify pool attributes
-    if hasattr(engine.pool, "size"):
+    if callable(getattr(engine.pool, "size", None)):
         assert engine.pool.size() == 20
 
 
