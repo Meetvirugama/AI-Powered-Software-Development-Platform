@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
+from sqlalchemy import select
+
 from agent.tools.router import ToolRequest, ToolResult, ToolRouter
 from ai.services.agent_execution_loop import (
     AgentExecutionLoop,

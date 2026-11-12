@@ -21,10 +21,6 @@ tree-sitter-python>=0.23.0
 tree-sitter-javascript>=0.23.0
 tree-sitter-typescript>=0.23.0
 
-# Static analysis scanners (Bug 11)
-ruff>=0.5.0
-bandit>=1.7.0
-
 # Durable workflow evaluation (F04 - Issue #184)
 dbos>=3.4.0
 
