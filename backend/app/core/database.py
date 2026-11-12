@@ -30,7 +30,8 @@ def normalize_sync_database_url(url: str) -> str:
     """Normalize database URL for SQLAlchemy 2.0 with psycopg3 driver.
 
     Handles Supabase, Azure, Heroku, and cloud Postgres URLs starting with
-    'postgres://' or 'postgresql://' (without explicit driver specification).
+    'postgres://' or 'postgresql://' (without explicit driver specification),
+    and enforces sslmode=require on Supabase hosts when omitted.
     """
     if not url:
         return ""
@@ -39,6 +40,10 @@ def normalize_sync_database_url(url: str) -> str:
         clean = "postgresql+psycopg://" + clean[len("postgres://"):]
     elif clean.startswith("postgresql://") and not clean.startswith("postgresql+"):
         clean = "postgresql+psycopg://" + clean[len("postgresql://"):]
+    lower = clean.lower()
+    if ("supabase.co" in lower or "supabase.com" in lower) and "sslmode=" not in lower:
+        sep = "&" if "?" in clean else "?"
+        clean = f"{clean}{sep}sslmode=require"
     return clean
 
 
