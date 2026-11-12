@@ -124,3 +124,16 @@ After deploying all 4 services:
 - [ ] Click **Sign in with GitHub**: Completes OAuth flow, sets cookie, and redirects to `/app/dashboard`.
 - [ ] Run an AI Code Analysis: Verify response is returned without CORS or timeout errors.
 
+---
+
+## 7. CI/CD Quality Gates & Hardened Container Build
+
+The main GitHub Actions workflow ([`.github/workflows/main_ai-powered-dev-platform-api.yml`](../../.github/workflows/main_ai-powered-dev-platform-api.yml)) gates every Azure deployment behind:
+
+1. **Backend Lint & SAST (`backend-lint-and-static`)**: `compileall`, `ruff check`, and `bandit -r backend/app --severity-level high`.
+2. **Backend Tests & Coverage Gate (`backend-tests`)**: Full `pytest backend/tests tests/e2e/` suite with `--cov=app --cov-fail-under=71`.
+3. **Frontend Quality Gates (`frontend-lint-and-types`, `frontend-tests-and-build`)**: `oxlint`, `tsc -b`, Vitest, and production bundle compilation.
+4. **PostgreSQL 16 + `pgvector` Validation (`migration-validation`)**: Service container (`pgvector/pgvector:pg16`) verifying single Alembic head, `alembic upgrade head`, schema drift checks, and vector/lexical retrieval tests.
+5. **Security, Secret & Dependency Audit (`security-scan`)**: Gitleaks (`.gitleaks.toml`), `pip-audit -r backend/requirements.txt`, and `python backend/scripts/security_gate.py --skip-db`.
+6. **Hardened Multi-Stage Container Build (`build-and-package`)**: Builds [`Dockerfile`](../../Dockerfile) with SHA-256 digest-pinned `python:3.11-slim` base images, compiles dependencies in a `builder` stage, copies only `/opt/venv` (production deps from `backend/requirements.txt`, excluding `pytest`/`ruff`/`bandit`) into the compiler-free non-root (`appuser`) `runtime` stage, and packages Azure artifacts before OIDC deployment (`deploy` + `post-deployment-verification`).
+

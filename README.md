@@ -134,8 +134,8 @@ and template variables in **[`.env.production.example`](./.env.production.exampl
 ### Backend Tests
 ```bash
 cd backend
-# Run full test suite with coverage
-../.venv/bin/pytest --cov-fail-under=70
+# Run full test suite with CI coverage gate (>=71%)
+../.venv/bin/pytest --cov-fail-under=71
 
 # Run specific test modules
 ../.venv/bin/pytest tests/test_context_builder.py
