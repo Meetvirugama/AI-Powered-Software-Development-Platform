@@ -60,7 +60,7 @@ jobs:
 
       - name: Run Ruff static analysis checks
         run: |
-          ruff check backend/ --select E9,F63,F7,F82
+          ruff check backend/app backend/ai backend/agent backend/indexer backend/review backend/runner backend/sandbox backend/scanner --select E9,F63,F7,F82
           ruff check backend/app --statistics || true
 
       - name: Run Bandit security linter (fail on HIGH severity)
