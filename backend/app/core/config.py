@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     ai_embedding_provider: str = "gemini"
     gemini_embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
+    embedding_profile_version: str = "v2"
+    embedding_document_task_type: str = "RETRIEVAL_DOCUMENT"
+    embedding_query_task_type: str = "CODE_RETRIEVAL_QUERY"
+    allow_local_embeddings: bool = False
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 3
     ai_max_output_tokens: int = 2048

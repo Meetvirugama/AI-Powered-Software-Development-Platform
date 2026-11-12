@@ -350,8 +350,16 @@ async def process_sync_job(
         embedding_provider = (
             GeminiEmbeddingProvider(
                 api_keys=gemini_keys,
+                model=settings.gemini_embedding_model,
                 dimensions=settings.embedding_dimensions,
                 max_retries=max(len(gemini_keys) * 2, 6),
+                profile_version=getattr(settings, "embedding_profile_version", "v2"),
+                document_task_type=getattr(
+                    settings, "embedding_document_task_type", "RETRIEVAL_DOCUMENT"
+                ),
+                query_task_type=getattr(
+                    settings, "embedding_query_task_type", "CODE_RETRIEVAL_QUERY"
+                ),
             )
             if gemini_keys
             else None
