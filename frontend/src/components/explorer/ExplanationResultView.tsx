@@ -101,6 +101,12 @@ export function ExplanationResultView({
     code_output_explanation,
     code_issues_and_solutions,
     corrected_code,
+    has_redacted_content,
+    redacted_occurrences,
+    redaction_notice,
+    call_graph_depth_expanded,
+    expanded_callers,
+    expanded_callees,
   } = explanation;
 
   const hasMissingContext = missing_context && missing_context.length > 0;
@@ -236,6 +242,57 @@ export function ExplanationResultView({
           <span className="capitalize">{confidence} Confidence</span>
         </div>
       </div>
+
+      {/* -------------------------------------------------------------- */}
+      {/* Redacted Source Security Notice (Issue 2 — C.3)                */}
+      {/* -------------------------------------------------------------- */}
+      {has_redacted_content && (
+        <div
+          role="status"
+          data-testid="redacted-source-notice"
+          className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 space-y-1.5 animate-in fade-in duration-150"
+        >
+          <div className="flex items-center justify-between gap-2 text-rose-400 font-semibold text-xs">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>Redacted Source Security Notice</span>
+            </div>
+            {typeof redacted_occurrences === 'number' && redacted_occurrences > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-rose-500/20 border border-rose-500/30 font-mono text-[10px]">
+                {redacted_occurrences} [REDACTED] token{redacted_occurrences === 1 ? '' : 's'}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-rose-200/90 leading-relaxed">
+            {redaction_notice ||
+              'Configuration or secret-like values in the reconstructed source chunks were replaced with [REDACTED] before AI analysis to protect sensitive credentials.'}
+          </p>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------- */}
+      {/* Call-Graph Depth Expansion Summary (Issue 2 — C.1)             */}
+      {/* -------------------------------------------------------------- */}
+      {call_graph_depth_expanded &&
+        ((expanded_callers && expanded_callers.length > 0) ||
+          (expanded_callees && expanded_callees.length > 0)) && (
+          <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-2.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="font-mono font-semibold text-indigo-300 flex items-center gap-1">
+              <GitFork className="h-3.5 w-3.5" />
+              <span>1-Hop Call Graph Expanded:</span>
+            </span>
+            {expanded_callers && expanded_callers.length > 0 && (
+              <span className="font-mono text-purple-300 bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30">
+                Callers: {expanded_callers.join(', ')}
+              </span>
+            )}
+            {expanded_callees && expanded_callees.length > 0 && (
+              <span className="font-mono text-blue-300 bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30">
+                Callees: {expanded_callees.join(', ')}
+              </span>
+            )}
+          </div>
+        )}
 
       {/* -------------------------------------------------------------- */}
       {/* Missing-Context & Uncertainty Warning Callout                  */}
