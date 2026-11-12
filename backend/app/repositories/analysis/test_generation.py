@@ -422,3 +422,5 @@ class TestGenerationRunMixin:
 
 class TestGenerationRunRepository(TestGenerationRunMixin, AnalysisCoreMixin):
     """Standalone domain aggregate for test generation history."""
+
+    __test__ = False
