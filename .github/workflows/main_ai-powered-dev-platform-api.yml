@@ -336,6 +336,11 @@ jobs:
           name: python-app
           path: |
             .
+            !.git/
+            !.pytest_cache/
+            !.ruff_cache/
+            !.workspaces/
+            !htmlcov/
             !antenv/
             !frontend/node_modules/
 
@@ -347,6 +352,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-and-package
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    outputs:
+      webapp-url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
       id-token: write
       contents: read
@@ -379,15 +386,27 @@ jobs:
     runs-on: ubuntu-latest
     needs: deploy
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    env:
+      DEPLOYED_URL: ${{ needs.deploy.outputs.webapp-url || vars.AZURE_WEBAPP_URL || 'https://ai-powered-dev-platform-api-ehgdcmdfbseufsc6.indiasouthcentral-01.azurewebsites.net' }}
     steps:
-      - name: Verify API Health Endpoint
+      - name: Verify API Health, Readiness & Docs Endpoints
         run: |
-          echo "Verifying Azure API production health..."
-          HEALTH_URL="https://ai-powered-dev-platform-api.azurewebsites.net/api/v1/health"
+          BASE_URL="${DEPLOYED_URL%/}"
+          HEALTH_URL="${BASE_URL}/api/v1/health"
+          READY_URL="${BASE_URL}/api/v1/health/ready"
+          DOCS_URL="${BASE_URL}/docs"
+          echo "Verifying Azure API production health at ${HEALTH_URL}..."
           for i in {1..12}; do
             STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
             if [ "$STATUS" = "200" ]; then
               echo "Health check succeeded with HTTP 200 after attempt $i."
+              READY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$READY_URL" || true)
+              DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$DOCS_URL" || true)
+              echo "Readiness HTTP status: ${READY_STATUS} | Docs HTTP status: ${DOCS_STATUS}"
+              if [ "$READY_STATUS" != "200" ] || [ "$DOCS_STATUS" != "200" ]; then
+                echo "ERROR: Readiness (${READY_STATUS}) or Swagger docs (${DOCS_STATUS}) check failed."
+                exit 1
+              fi
               exit 0
             fi
             echo "Attempt $i: Received HTTP $STATUS, retrying in 10s..."
