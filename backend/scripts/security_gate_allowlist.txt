@@ -97,3 +97,4 @@ aa0941406f  # backend/tests/test_week3_day1_day2.py synthetic test/example fixtu
 72a07fb2b0  # backend/tests/test_week3_day1_day2.py synthetic test/example fixture
 d46cacfe47  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
 ee27e1105a  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
+bd474fcee8  # backend/tests/test_issues_intelligence_explanation_planning.py synthetic [REDACTED] test fixture
