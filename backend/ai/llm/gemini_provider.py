@@ -1,9 +1,11 @@
 """
-Gemini LLM Provider — Google Gemini REST API Client.
+Gemini LLM Provider — Google Gemini REST API Client with Strict responseSchema.
 
 Features:
 - Direct, resilient HTTP client over Google's Generative Language REST API.
 - Converts standardized ``LLMRequest`` to Gemini's ``system_instruction`` and ``contents`` format.
+- Enforces provider-level structured outputs via ``responseMimeType: "application/json"`` and
+  normalized ``responseSchema`` when ``request.response_schema`` is supplied (Issue 3).
 - Round-robin key rotation across free-tier keys on rate-limits (HTTP 429).
 - Normalizes output to ``LLMResponse`` with latency, token usage, and finish reasons.
 - Translates API errors into structured ``LLMError`` hierarchy with API key redaction.
@@ -13,13 +15,14 @@ Features:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
+import copy
+from itertools import cycle
 import json
 import logging
 import time
-import uuid
-from collections.abc import Sequence
-from itertools import cycle
 from typing import Any
+import uuid
 
 import httpx
 from pydantic import BaseModel
@@ -45,11 +48,84 @@ logger = logging.getLogger(__name__)
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+_ALLOWED_GEMINI_SCHEMA_KEYS: frozenset[str] = frozenset(
+    {
+        "type",
+        "format",
+        "description",
+        "nullable",
+        "enum",
+        "items",
+        "properties",
+        "required",
+    }
+)
+
 
 def _redact_key(text: str, key: str) -> str:
     if not text or not key:
         return text
     return text.replace(key, "[REDACTED]")
+
+
+def build_strict_gemini_response_schema(schema_cls: type[BaseModel]) -> dict[str, Any]:
+    """Convert a Pydantic BaseModel JSON schema into a Gemini-compatible `responseSchema`."""
+    raw = copy.deepcopy(schema_cls.model_json_schema())
+    defs = raw.pop("$defs", {}) or {}
+
+    def _clean(node: Any, depth: int = 0) -> dict[str, Any]:
+        if depth > 6 or not isinstance(node, dict):
+            return {"type": "STRING"}
+
+        if "$ref" in node:
+            ref_name = str(node["$ref"]).split("/")[-1]
+            if ref_name in defs:
+                return _clean(defs[ref_name], depth + 1)
+            return {"type": "OBJECT"}
+
+        if "anyOf" in node or "oneOf" in node:
+            variants = node.get("anyOf") or node.get("oneOf") or []
+            non_null = [v for v in variants if isinstance(v, dict) and v.get("type") != "null"]
+            has_null = any(isinstance(v, dict) and v.get("type") == "null" for v in variants)
+            chosen = _clean(non_null[0], depth + 1) if non_null else {"type": "STRING"}
+            if has_null:
+                chosen["nullable"] = True
+            return chosen
+
+        out: dict[str, Any] = {}
+        raw_type = node.get("type", "object" if "properties" in node else "string")
+        if isinstance(raw_type, list):
+            non_null_types = [t for t in raw_type if t != "null"]
+            raw_type = non_null_types[0] if non_null_types else "string"
+            out["nullable"] = True
+
+        type_str = str(raw_type).upper()
+        if type_str not in ("STRING", "NUMBER", "INTEGER", "BOOLEAN", "ARRAY", "OBJECT"):
+            type_str = "STRING"
+        out["type"] = type_str
+
+        if "description" in node and isinstance(node["description"], str):
+            out["description"] = node["description"]
+        if "enum" in node and isinstance(node["enum"], list) and out["type"] == "STRING":
+            out["enum"] = [str(v) for v in node["enum"] if v is not None]
+
+        if out["type"] == "ARRAY":
+            items_node = node.get("items")
+            out["items"] = _clean(items_node, depth + 1) if isinstance(items_node, dict) else {"type": "STRING"}
+        elif out["type"] == "OBJECT":
+            props = node.get("properties")
+            if isinstance(props, dict) and props:
+                cleaned_props = {k: _clean(v, depth + 1) for k, v in props.items()}
+                out["properties"] = cleaned_props
+                req_list = node.get("required")
+                if isinstance(req_list, list):
+                    out["required"] = [k for k in req_list if k in cleaned_props]
+                else:
+                    out["required"] = list(cleaned_props.keys())
+
+        return {k: v for k, v in out.items() if k in _ALLOWED_GEMINI_SCHEMA_KEYS}
+
+    return _clean(raw)
 
 
 class GeminiProvider(LLMProvider):
@@ -113,7 +189,6 @@ class GeminiProvider(LLMProvider):
             elif msg.role == "assistant":
                 contents.append({"role": "model", "parts": [{"text": msg.content}]})
 
-        # Default model resolution (including legacy gpt-* fallback safety)
         requested_model = (request.model or "").strip()
         if (
             not requested_model
@@ -123,7 +198,6 @@ class GeminiProvider(LLMProvider):
             model_name = self._default_model
         else:
             model_name = requested_model
-        # Strip models/ prefix if present
         model_name = model_name.removeprefix("models/")
 
         payload: dict[str, Any] = {"contents": contents}
@@ -140,6 +214,13 @@ class GeminiProvider(LLMProvider):
             generation_config["maxOutputTokens"] = request.max_tokens
         if getattr(request, "response_schema", None) is not None or getattr(request, "response_format", None):
             generation_config["responseMimeType"] = "application/json"
+            if getattr(request, "response_schema", None) is not None:
+                try:
+                    generation_config["responseSchema"] = build_strict_gemini_response_schema(
+                        request.response_schema  # type: ignore[arg-type]
+                    )
+                except Exception:
+                    pass
 
         if generation_config:
             payload["generationConfig"] = generation_config
@@ -163,6 +244,19 @@ class GeminiProvider(LLMProvider):
                 try:
                     response = await client.post(url, json=payload, headers=headers)
 
+                    # If Gemini rejects a complex responseSchema with HTTP 400, fallback to responseMimeType only
+                    if (
+                        response.status_code == 400
+                        and "generationConfig" in payload
+                        and "responseSchema" in payload["generationConfig"]
+                        and ("response_schema" in response.text.lower() or "schema" in response.text.lower())
+                    ):
+                        fallback_payload = copy.deepcopy(payload)
+                        fallback_payload["generationConfig"].pop("responseSchema", None)
+                        retry_resp = await client.post(url, json=fallback_payload, headers=headers)
+                        if retry_resp.status_code == 200:
+                            response = retry_resp
+
                     if response.status_code == 200:
                         data = response.json()
                         latency_ms = (time.monotonic() - start_time) * 1000.0
@@ -182,7 +276,6 @@ class GeminiProvider(LLMProvider):
                         input_tokens = usage.get("promptTokenCount", 0)
                         output_tokens = usage.get("candidatesTokenCount", 0)
 
-                        # Validate JSON schema if required
                         if request.response_schema is not None:
                             self._validate_structured_output(content_text, request.response_schema)
 
@@ -223,7 +316,6 @@ class GeminiProvider(LLMProvider):
                         await asyncio.sleep(1.0 * (attempt + 1))
                         continue
 
-                    # Non-retryable error
                     safe_body = _redact_key(response.text[:300], current_key)
                     raise LLMError(
                         f"Gemini API error (HTTP {response.status_code}): {safe_body}",
@@ -458,4 +550,4 @@ class GeminiProvider(LLMProvider):
         validate_structured_payload(content, schema, provider="gemini")
 
 
-__all__ = ["GeminiProvider", "_redact_key"]
+__all__ = ["GeminiProvider", "_redact_key", "build_strict_gemini_response_schema"]
