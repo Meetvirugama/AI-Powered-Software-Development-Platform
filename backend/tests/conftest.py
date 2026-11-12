@@ -46,7 +46,13 @@ except (ImportError, ModuleNotFoundError):
 # Determine test database URL before importing database module
 TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
 DEFAULT_TEST_DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL)
+_RAW_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL).strip()
+if _RAW_TEST_DATABASE_URL.startswith("postgres://"):
+    TEST_DATABASE_URL = "postgresql+psycopg://" + _RAW_TEST_DATABASE_URL[len("postgres://"):]
+elif _RAW_TEST_DATABASE_URL.startswith("postgresql://") and not _RAW_TEST_DATABASE_URL.startswith("postgresql+"):
+    TEST_DATABASE_URL = "postgresql+psycopg://" + _RAW_TEST_DATABASE_URL[len("postgresql://"):]
+else:
+    TEST_DATABASE_URL = _RAW_TEST_DATABASE_URL
 if "DATABASE_URL" not in os.environ:
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
@@ -177,6 +183,10 @@ def test_engine():
             ]
             for idx in indexes_to_remove:
                 table.indexes.remove(idx)
+
+    if not is_sqlite:
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
     Base.metadata.create_all(bind=engine)
     yield engine
