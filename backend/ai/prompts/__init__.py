@@ -102,6 +102,15 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
         description="System prompt for repairing malformed JSON responses",
         required_variables=("schema_name", "error_message", "invalid_content"),
     ),
+    "repair_code_system": PromptMetadata(
+        prompt_id="prompt-repair-code-sys-001",
+        version="1.0.0",
+        owner="AI Team",
+        capability="repair",
+        expected_output_schema="EditSynthesisResult",
+        last_evaluated="2026-11-11",
+        description="System prompt for autonomous code self-repair with Reflexion memory and anti-reward hacking",
+    ),
     "grounding_system": PromptMetadata(
         prompt_id="prompt-ground-sys-001",
         version="1.0.0",
