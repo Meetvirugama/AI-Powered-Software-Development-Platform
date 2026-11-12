@@ -1,0 +1,39 @@
+# Git & CI metadata
+.git
+.github
+.gitignore
+.pre-commit-config.yaml
+
+# Local secrets & database artifacts
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite*
+
+# Python caches & virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+antenv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Frontend & node artifacts (deployed separately on Vercel)
+frontend/
+node_modules/
+
+# Tests, fixtures & documentation (excluded from production container)
+backend/tests/
+tests/
+Docs/
+*.md
+Dockerfile
+docker-compose.yml
+Makefile
