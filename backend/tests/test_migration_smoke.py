@@ -28,7 +28,7 @@ from sqlalchemy import Engine, create_engine, inspect, text
 
 from app.core.config import get_settings
 from app.core.database import Base, normalize_sync_database_url
-import app.models  # Ensure all ORM models are registered in Base.metadata
+import app.models  # noqa: F401 — Ensure all ORM models are registered in Base.metadata
 
 
 EXPECTED_TABLES = frozenset({
