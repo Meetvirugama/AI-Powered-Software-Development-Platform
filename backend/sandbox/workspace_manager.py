@@ -1264,6 +1264,17 @@ class WorkspaceManager:
         # 1. Publication Authorization Gate (ADR-010, F37)
         _validate_ref_or_option(request.branch_name, "branch name")
         _validate_ref_or_option(request.remote_name, "remote name")
+        if request.remote_url:
+            remote_url_clean = str(request.remote_url).strip()
+            if (
+                remote_url_clean.startswith(("-", "+"))
+                or "\x00" in remote_url_clean
+                or any(c in remote_url_clean for c in " \t\n\r")
+                or remote_url_clean.lower().startswith("ext::")
+            ):
+                raise WorkspacePolicyViolationError(
+                    f"Invalid remote_url '{request.remote_url}': cannot start with '-'/'+', use 'ext::' protocol, or contain whitespace/null bytes."
+                )
         if not request.publication_authorized:
             self.record_timeline_event(
                 task_id=task_id,

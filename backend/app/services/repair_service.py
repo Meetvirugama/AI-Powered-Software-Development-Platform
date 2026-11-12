@@ -655,11 +655,20 @@ class RepairPatchValidator:
                     f"Patch targets forbidden file(s) under policy constraint: {', '.join(extra_conflicts)}"
                 )
 
-        # 5. Allowed Files Scope Check
+        # 5. Allowed Files Scope Check (both diff headers and explicit target_files)
         if allowed_files:
-            allowed_set = set(allowed_files)
+            def _norm_scope(path: str) -> str:
+                val = str(path).strip().replace("\\", "/")
+                while val.startswith("./"):
+                    val = val[2:]
+                return val
+
+            allowed_norm_set = {_norm_scope(af) for af in allowed_files}
             target_check = validated_files if validated_files else extracted_files
-            out_of_scope = sorted(set(target_check).difference(allowed_set))
+            all_candidates = [*target_check, *validated_targets]
+            out_of_scope = sorted(
+                {f for f in all_candidates if _norm_scope(f) not in allowed_norm_set}
+            )
             if out_of_scope:
                 violations.append(
                     f"Patch targets file(s) outside approved plan scope: {', '.join(out_of_scope)}"
