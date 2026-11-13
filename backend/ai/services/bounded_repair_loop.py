@@ -45,7 +45,6 @@ if TYPE_CHECKING:
         FailureTracebackAnalyzer,
         RepairPatchValidator,
     )
-from ai.services.llm_repair_synthesizer import LLMRepairSynthesizer
 from sandbox.exceptions import WorkspaceError
 from sandbox.test_runner import WorkspaceTestRunner
 
@@ -601,6 +600,8 @@ class BoundedRepairLoop:
             return self.traceback_analyzer.diagnose(raw_output, framework=framework)
         return self.traceback_analyzer.analyze_traceback(raw_output, framework=framework)
 
+
+from ai.services.llm_repair_synthesizer import LLMRepairSynthesizer
 
 __all__ = [
     "MAX_TASK_REPAIR_ATTEMPTS",

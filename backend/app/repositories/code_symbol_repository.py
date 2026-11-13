@@ -2,7 +2,7 @@ import uuid
 from typing import List, Optional
 
 # pyrefly: ignore [missing-import]
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.models.code_symbol import CodeSymbol
@@ -29,17 +29,18 @@ class CodeSymbolRepository:
         ).order_by(CodeSymbol.start_line)
         return list(self.session.scalars(stmt).all())
 
-    def create_batch(self, symbols_data: list[dict]) -> int:
+    def create_batch(self, symbols_data: list[dict], batch_size: int = 250) -> int:
         """
-        Insert multiple code symbols in a single database batch query.
-        
-        Simple explanation:
-        Instead of running multiple INSERT commands for each symbol, this method
-        takes a list of symbol dictionaries and saves all of them in one go.
+        Insert multiple code symbols in chunked database batch queries.
+
+        Slices inserts into `batch_size` (default 250) so large symbol sets
+        never exceed PostgreSQL's 65,535 bind-parameter limit.
         """
         if not symbols_data:
             return 0
-        from sqlalchemy import insert
+        if batch_size <= 0:
+            batch_size = 250
+
         cleaned = []
         for s in symbols_data:
             row = dict(s)
@@ -49,8 +50,10 @@ class CodeSymbolRepository:
                     try:
                         row[k] = uuid.UUID(row[k])
                     except (ValueError, TypeError):
-                        pass
+                        row[k] = None if k == "parent_id" else row[k]
             cleaned.append(row)
+
         stmt = insert(CodeSymbol)
-        self.session.execute(stmt, cleaned)
+        for i in range(0, len(cleaned), batch_size):
+            self.session.execute(stmt, cleaned[i : i + batch_size])
         return len(cleaned)

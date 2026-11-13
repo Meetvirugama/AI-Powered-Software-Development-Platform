@@ -98,3 +98,9 @@ aa0941406f  # backend/tests/test_week3_day1_day2.py synthetic test/example fixtu
 d46cacfe47  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
 ee27e1105a  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
 bd474fcee8  # backend/tests/test_issues_intelligence_explanation_planning.py synthetic [REDACTED] test fixture
+3179bc04f9  # Docs/observability/OBSERVABILITY_ARCHITECTURE.md documentation example
+3c38a43977  # backend/app/observability/genai.py attribute constant name
+4be76d81db  # backend/app/observability/genai.py attribute constant name
+5817e3133a  # backend/app/observability/genai.py attribute constant name
+ed4dcf88da  # backend/tests/test_llm_gateway_f28.py synthetic test key
+e612497353  # backend/tests/security/provenance/test_issue_intake_provenance.py synthetic test key

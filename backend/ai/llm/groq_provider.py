@@ -359,13 +359,11 @@ class GroqProvider(LLMProvider):
         if explicit_format is not None:
             payload["response_format"] = explicit_format
         elif not request.tools and schema_mode != "none" and request.response_schema is not None:
-            if schema_mode == "strict":
+            if schema_mode in ("strict", "json"):
                 try:
                     payload["response_format"] = build_strict_groq_json_schema(request.response_schema)
                 except Exception:
                     payload["response_format"] = {"type": "json_object"}
-            elif schema_mode == "json":
-                payload["response_format"] = {"type": "json_object"}
 
         return payload
 
