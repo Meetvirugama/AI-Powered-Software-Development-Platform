@@ -23,34 +23,58 @@ on:
       - 'main'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Stage 1: Backend Lint & Static Compilation
+  # Stage 1: Backend Lint & Static Analysis (compileall, Ruff, Bandit)
   # ---------------------------------------------------------------------------
   backend-lint-and-static:
     name: "Backend: Lint & Static Checks"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: 'backend/requirements*.txt'
 
-      - name: Install dependencies
+      - name: Install dev & static analysis dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r backend/requirements-dev.txt
 
       - name: Verify Python syntax across backend codebase
         run: |
           python -m compileall -q -f -x "backend/tests/fixtures" backend/
+
+      - name: Run Ruff static analysis checks
+        run: |
+          ruff check backend/app backend/ai backend/agent backend/indexer backend/review backend/runner backend/sandbox backend/scanner --select E9,F63,F7,F82
+          ruff check backend/app --statistics || true
+
+      - name: Run Bandit security linter (fail on HIGH severity)
+        run: |
+          bandit -r backend/app --severity-level high -q
+          bandit -r backend/app -ll -f json -o bandit-report.json || true
+
+      - name: Upload Bandit static analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Stage 2: Backend Unit, Security & Integration Tests
@@ -66,31 +90,37 @@ jobs:
       ENVIRONMENT: "testing"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: 'backend/requirements*.txt'
 
-      - name: Install dependencies
+      - name: Install backend test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r backend/requirements-dev.txt
 
-      - name: Run Core & Adversarial Test Suites
+      - name: Run Full Backend & E2E Test Suite with Coverage Gate (>=71%)
         run: |
-          pytest backend/tests/test_backend_audit_fixes.py \
-                 backend/tests/test_new_fixes_comprehensive_audit.py \
-                 backend/tests/test_command_runner.py \
-                 backend/tests/test_adversarial_sandbox.py \
-                 backend/tests/test_adversarial_m1_challenger.py \
-                 backend/tests/test_m1_security_multi_tenancy.py \
-                 backend/tests/test_prit_w3_d4_restricted_test_runner.py \
-                 backend/tests/test_prit_w3_d6_reliability_and_recovery.py \
-                 backend/tests/test_jwt_and_oauth_hardening.py \
-                 tests/e2e/ \
-                 --no-cov -v
+          pytest backend/tests tests/e2e/ \
+                 --cov=app \
+                 --cov-report=term-missing \
+                 --cov-report=xml:coverage.xml \
+                 --cov-fail-under=71 \
+                 -v
+
+      - name: Upload coverage report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Stage 3: Frontend Lint & TypeScript Type Checking
@@ -150,67 +180,122 @@ jobs:
         run: npm run build
 
   # ---------------------------------------------------------------------------
-  # Stage 5: Database Migration Validation
+  # Stage 5: PostgreSQL 16 + pgvector Migration & Vector Retrieval Validation
   # ---------------------------------------------------------------------------
   migration-validation:
-    name: "Database: Migration Schema Check"
+    name: "Database: PostgreSQL + pgvector Migrations & Retrieval"
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: platform_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d platform_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres_ci_password@localhost:5432/platform_ci
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres_ci_password@localhost:5432/platform_ci
+      ENVIRONMENT: development
+      JWT_SECRET: ci-migration-jwt-secret-key-32-chars-min
+      SECRET_KEY: ci-migration-secret-key-at-least-32-chars
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: 'backend/requirements*.txt'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r backend/requirements-dev.txt
 
-      - name: Validate Alembic migration history
+      - name: Validate Alembic migration history and apply to PostgreSQL 16
+        working-directory: backend
         run: |
-          alembic -c backend/alembic.ini heads
+          python -c "
+          import subprocess
+          heads = [h for h in subprocess.check_output(['alembic', 'heads'], text=True).splitlines() if h.strip()]
+          assert len(heads) == 1, f'Expected single Alembic head, got: {heads}'
+          "
+          alembic upgrade head
+          alembic downgrade b627460d74e0
+          alembic upgrade head
+          alembic current
+
+      - name: Run PostgreSQL migration lifecycle, schema drift & vector retrieval tests
+        run: |
+          pytest --no-cov -v -k "not test_clean_schema_migration_lifecycle" \
+                 backend/tests/test_migration_smoke.py \
+                 backend/tests/test_om_day7.py \
+                 backend/tests/test_project_memory_service.py \
+                 backend/tests/test_embedding_service.py \
+                 backend/tests/test_vector_retrieval.py \
+                 backend/tests/test_hybrid_retrieval.py \
+                 backend/tests/test_code_lexical_retrieval.py \
+                 backend/tests/test_adaptive_hnsw.py
 
   # ---------------------------------------------------------------------------
-  # Stage 6: Security & Secret Scan
+  # Stage 6: Security, Dependency & Secret Scan
   # ---------------------------------------------------------------------------
   security-scan:
-    name: "Security: Boundary & Secret Audit"
+    name: "Security: Secrets, Dependencies & Gate Audit"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'backend/requirements*.txt'
 
-      - name: Scan repository for accidentally committed private keys or credentials
+      - name: Install security & test tooling
         run: |
-          python -c '
-          import os, re, sys
-          pattern = re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----\s+[A-Za-z0-9+/=]{64,}")
-          skip_dirs = {".git", "node_modules", ".venv", "__pycache__", "htmlcov", "Docs", "tests", ".github"}
-          found = []
-          for root, dirs, files in os.walk("."):
-              dirs[:] = [d for d in dirs if d not in skip_dirs]
-              for f in files:
-                  if f.endswith((".md", ".pyc")) or f == "secret_redaction.py":
-                      continue
-                  p = os.path.join(root, f)
-                  try:
-                      with open(p, "r", encoding="utf-8", errors="ignore") as fh:
-                          if pattern.search(fh.read()):
-                              found.append(p)
-                  except Exception:
-                      pass
-          if found:
-              print(f"CRITICAL: Private keys detected in source: {found}")
-              sys.exit(1)
-          print("Security check passed: No unencrypted private keys committed.")
-          '
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Scan repository secrets with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Audit production dependencies with pip-audit
+        run: |
+          pip-audit -r backend/requirements.txt --desc on
+
+      - name: Run platform security gate suite
+        env:
+          JWT_SECRET: "ci-security-gate-jwt-secret-key-32-chars-min"
+          GITHUB_WEBHOOK_SECRET: "ci-security-gate-webhook-secret"
+          DATABASE_URL: "sqlite:///:memory:"
+          ENVIRONMENT: "testing"
+        run: |
+          python backend/scripts/security_gate.py --skip-db --out security-gate-report.md
+
+      - name: Upload security gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-gate-report
+          path: security-gate-report.md
+          if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
   # Stage 7: Build & Packaging (Only executes when all checks pass)
@@ -227,13 +312,19 @@ jobs:
       - security-scan
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Create deployment bundle
+      - name: Build production Docker image (multi-stage verification)
+        run: |
+          docker build --file Dockerfile --target runtime -t ai-dev-platform:ci .
+
+      - name: Create production deployment bundle (prod deps only)
         run: |
           python -m venv antenv
           source antenv/bin/activate

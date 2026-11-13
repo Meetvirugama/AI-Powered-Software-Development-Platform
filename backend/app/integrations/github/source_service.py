@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from sqlalchemy.orm import Session

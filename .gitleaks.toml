@@ -1,0 +1,22 @@
+title = "AI-Powered Software Development Platform Gitleaks Config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test fixtures, placeholder examples, and secret-redaction regex/test files"
+paths = [
+  '''^\.env\.example$''',
+  '''^\.env\.production\.example$''',
+  '''^Docs/''',
+  '''^backend/tests/''',
+  '''^tests/''',
+  '''^frontend/src/test/''',
+  '''^backend/scripts/security_gate\.py$''',
+  '''^backend/scripts/security_gate_allowlist\.txt$''',
+  '''^backend/scripts/benchmark_quality_suite\.py$''',
+]
+regexes = [
+  '''\[REDACTED\]''',
+  '''dummy[_-]|fake[_-]|mock[_-]|placeholder|changeme|example''',
+]
