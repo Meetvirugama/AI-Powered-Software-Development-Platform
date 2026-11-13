@@ -1,22 +1,24 @@
 """
-Groq LLM Provider — OpenAI-Compatible Low-Latency Inference with Key Rotation.
+Groq LLM Provider — OpenAI-Compatible Low-Latency Inference with Key Rotation & Strict JSON Schemas.
 
 Features:
     - Wraps Groq's high-speed inference endpoint using an OpenAI-compatible wire schema.
     - Automatic round-robin key rotation across free-tier keys to circumvent rate limits.
     - Model resolution mapping standard names (e.g. gpt-4o) to Groq equivalents.
-    - Structured output JSON-mode enforcement and Pydantic schema validation.
+    - Strict Structured Output (`json_schema` with `strict: True` and recursive `additionalProperties: False`)
+      at the provider level (Issue 3), with automatic graceful fallback to `json_object` when needed.
     - Real latency measurement and connection pooling support.
 """
 
 from __future__ import annotations
 
 import asyncio
+import copy
+from itertools import cycle
 import json
 import logging
 import os
 import time
-from itertools import cycle
 from typing import Any
 
 import httpx
@@ -69,15 +71,43 @@ _MODEL_MAP: dict[str, str] = {
 }
 
 
+def _enforce_strict_json_schema_node(node: Any) -> Any:
+    """Recursively enforce `additionalProperties: False` and complete `required` lists for OpenAI/Groq strict json_schema."""
+    if isinstance(node, dict):
+        if "$ref" in node:
+            return {"$ref": node["$ref"]}
+        out = {k: _enforce_strict_json_schema_node(v) for k, v in node.items()}
+        if out.get("type") == "object" or "properties" in out:
+            out["type"] = "object"
+            props = out.get("properties")
+            if isinstance(props, dict):
+                out["additionalProperties"] = False
+                out["required"] = list(props.keys())
+            else:
+                out.setdefault("additionalProperties", False)
+        return out
+    if isinstance(node, list):
+        return [_enforce_strict_json_schema_node(item) for item in node]
+    return node
+
+
+def build_strict_groq_json_schema(schema_cls: type[BaseModel]) -> dict[str, Any]:
+    """Build an OpenAI/Groq provider-level `response_format` payload with `type: 'json_schema'` and `strict: True`."""
+    raw_schema = copy.deepcopy(schema_cls.model_json_schema())
+    strict_schema = _enforce_strict_json_schema_node(raw_schema)
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_cls.__name__,
+            "strict": True,
+            "schema": strict_schema,
+        },
+    }
+
+
 class GroqProvider(LLMProvider):
     """
     Concrete LLMProvider for Groq Cloud.
-
-    Args:
-        api_keys: List of Groq API keys. Falls back to ``GROQ_API_KEYS`` or ``GROQ_API_KEY``.
-        timeout: Per-request timeout in seconds (default: 30.0).
-        model: Default model identifier (default: ``llama-3.3-70b-versatile``).
-        client: Optional shared ``httpx.AsyncClient`` for connection pooling.
     """
 
     def __init__(
@@ -103,10 +133,6 @@ class GroqProvider(LLMProvider):
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
         self._semaphore = asyncio.Semaphore(concurrency_limit)
-
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
 
     @property
     def provider_name(self) -> str:
@@ -135,7 +161,7 @@ class GroqProvider(LLMProvider):
     # ------------------------------------------------------------------
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
-        """Execute chat completion on Groq with key rotation and backoff."""
+        """Execute chat completion on Groq with key rotation, strict json_schema, and backoff."""
         resolved_model = self._resolve_model(request.model)
         payload = self._build_payload(request, resolved_model)
 
@@ -175,7 +201,6 @@ class GroqProvider(LLMProvider):
                             "groq_rate_limit_rotating_key",
                             extra={"attempt": attempt, "key_masked": f"{api_key[:4]}...{api_key[-4:]}"},
                         )
-                        # Rotate key immediately with minimal wait
                         await asyncio.sleep(0.1)
                         continue
 
@@ -188,9 +213,12 @@ class GroqProvider(LLMProvider):
                         except (json.JSONDecodeError, ValueError, TypeError):
                             logger.debug("groq_400_raw_body_fallback")
 
-                        # If Groq constrained JSON decoding/validation fails, retry without response_format constraint
-                        if ("JSON" in str(err_body) or "json" in str(err_body).lower()) and "response_format" in payload:
-                            logger.info("groq_retrying_without_response_format_json_object")
+                        # If Groq constrained JSON schema / JSON decoding fails, fallback to json_object or unconstrained
+                        if (
+                            ("json" in str(err_body).lower() or "schema" in str(err_body).lower() or "response_format" in str(err_body).lower())
+                            and "response_format" in payload
+                        ):
+                            logger.info("groq_retrying_without_response_format_constraint")
                             payload_copy = dict(payload)
                             payload_copy.pop("response_format", None)
                             retry_resp = await client.post(
@@ -466,8 +494,14 @@ class GroqProvider(LLMProvider):
             "max_tokens": request.max_tokens,
         }
 
-        if request.response_schema is not None or getattr(request, "response_format", None):
-            payload["response_format"] = getattr(request, "response_format", None) or {"type": "json_object"}
+        explicit_format = getattr(request, "response_format", None)
+        if explicit_format is not None:
+            payload["response_format"] = explicit_format
+        elif request.response_schema is not None:
+            try:
+                payload["response_format"] = build_strict_groq_json_schema(request.response_schema)
+            except Exception:
+                payload["response_format"] = {"type": "json_object"}
 
         return payload
 
@@ -482,7 +516,10 @@ class GroqProvider(LLMProvider):
         if not choices:
             raise LLMUnavailableError("Groq response contained no choices.", provider=self.provider_name)
 
-        content = choices[0].get("message", {}).get("content", "")
+        msg = choices[0].get("message", {})
+        content = msg.get("content", "")
+        if not content and msg.get("reasoning"):
+            content = msg.get("reasoning", "")
         if not content:
             raise LLMUnavailableError("Groq response message contained no content.", provider=self.provider_name)
         usage = data.get("usage", {})
@@ -503,4 +540,4 @@ class GroqProvider(LLMProvider):
         validate_structured_payload(content, schema, provider="groq")
 
 
-__all__ = ["GroqProvider"]
+__all__ = ["GroqProvider", "build_strict_groq_json_schema"]

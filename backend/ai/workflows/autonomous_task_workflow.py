@@ -14,6 +14,7 @@ Integrates DBOS durable workflows and multi-step recovery for autonomous task ex
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import threading
@@ -160,7 +161,7 @@ def step_initialize_workspace(task_id: str) -> dict[str, Any]:
         if not task:
             raise ValueError(f"Task '{task_id}' not found.")
 
-        orchestrator.ensure_workspace_loaded(task)
+        orchestrator.ensure_workspace_loaded(task, repo)
         meta = orchestrator.workspace_manager.get_workspace(task_id)
         return {
             "task_id": task_id,
@@ -198,10 +199,13 @@ def step_execute_plan_and_synthesize(
         orchestrator.save_task_checkpoint(task, repo, step_name="post_step_execution")
 
         db.commit()
+        steps_attr = getattr(task, "executions", None)
+        if steps_attr is None:
+            steps_attr = getattr(task, "execution_steps", None) or []
         return {
             "task_id": task_id,
             "task_status": task.status,
-            "step_count": len(task.execution_steps or []),
+            "step_count": len(steps_attr),
         }
 
 
@@ -263,10 +267,20 @@ def step_run_tests_and_repair(
         orchestrator.save_task_checkpoint(task, repo, step_name="post_test_and_repair")
         db.commit()
 
+        repair_status = None
+        if repair_res is not None:
+            repair_status = getattr(
+                repair_res,
+                "status",
+                "PASSED" if getattr(repair_res, "success", False) else getattr(repair_res, "final_test_status", "FAILED"),
+            )
+            if hasattr(repair_status, "value"):
+                repair_status = repair_status.value
+
         return {
             "test_status": test_res.status,
             "repair_attempted": repair_res is not None,
-            "repair_status": repair_res.status if repair_res else None,
+            "repair_status": repair_status,
         }
 
 

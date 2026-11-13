@@ -1,6 +1,6 @@
 """
 Related-File Discovery Service.
-Reference: task.md §6.1, §6.2
+Reference: task.md §6.1, §6.2 & Issue 1 (PageRank F05-C3 + Co-Change Coupling)
 
 Discovers and ranks related repository files for a selected file/symbol:
 1. Direct dependencies & calls (weight 0.95)
@@ -8,8 +8,10 @@ Discovers and ranks related repository files for a selected file/symbol:
 3. Direct callers (weight 0.85)
 4. Database models (weight 0.85)
 5. Associated test files (weight 0.80)
-6. Indirect dependencies (weight 0.65)
-7. Semantic retrieval matches (weight 0.60)
+6. Historical Git co-change coupled files (weight 0.78)
+7. Indirect dependencies (weight 0.65)
+8. Semantic retrieval matches (weight 0.60)
+Secondary signal: PageRank importance (`importance_score`) boosts high-centrality files.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ RelationKind = Literal[
     "type_definition",
     "database_model",
     "associated_test",
+    "co_change_coupled",
     "indirect_dependency",
     "semantic_match",
 ]
@@ -41,6 +44,7 @@ RELATION_BADGE_MAP: dict[RelationKind, str] = {
     "type_definition": "Type / Schema",
     "database_model": "Database Model",
     "associated_test": "Associated Test",
+    "co_change_coupled": "Co-Changed in Git",
     "indirect_dependency": "Indirect Dependency",
     "semantic_match": "Semantic Match",
 }
@@ -52,13 +56,16 @@ RELATION_WEIGHTS: dict[RelationKind, float] = {
     "database_model": 0.85,
     "caller": 0.85,
     "associated_test": 0.80,
+    "co_change_coupled": 0.78,
     "indirect_dependency": 0.65,
     "semantic_match": 0.60,
 }
 
+PAGERANK_SECONDARY_BOOST_WEIGHT: float = 0.08
+
 
 class DiscoveredRelatedFile(BaseModel):
-    """A discovered related file with relationship type, weight, and reasoning."""
+    """A discovered related file with relationship type, weight, PageRank importance, and co-change metrics."""
 
     path: str
     relation: RelationKind
@@ -67,6 +74,8 @@ class DiscoveredRelatedFile(BaseModel):
     reason: str
     symbols: list[str] = Field(default_factory=list)
     is_preselected: bool = True
+    importance_score: float = 0.0
+    co_change_score: float = 0.0
 
 
 class RelatedFilesDiscoveryResponse(BaseModel):
@@ -79,7 +88,7 @@ class RelatedFilesDiscoveryResponse(BaseModel):
 
 
 class RelatedFileDiscoveryService:
-    """Discovers related files from the persistent intelligence snapshot and database symbol edges."""
+    """Discovers related files from the persistent intelligence snapshot, symbol edges, PageRank, and Git co-change history."""
 
     def __init__(self, snapshot: RepositoryIntelligenceSnapshot | None = None) -> None:
         self.snapshot = snapshot
@@ -92,14 +101,22 @@ class RelatedFileDiscoveryService:
         all_repo_files: list[str] | None = None,
     ) -> list[DiscoveredRelatedFile]:
         """
-        Identify related files for target_path and target_symbol using knowledge graph traversal.
+        Identify related files for target_path and target_symbol using knowledge graph traversal,
+        Git co-change coupling, and PageRank importance weighting.
         """
         snap = snapshot or self.snapshot
         discovered: dict[str, DiscoveredRelatedFile] = {}
 
         if not snap:
-            # Fallback to heuristics based on filename naming conventions
             return self._fallback_discover(target_path, all_repo_files or [])
+
+        file_importance_map: dict[str, float] = {
+            f.path: float(getattr(f, "importance_score", 0.0) or 0.0)
+            for f in snap.files
+        }
+        for n in snap.nodes:
+            if n.file and float(n.importance_score or 0.0) > file_importance_map.get(n.file, 0.0):
+                file_importance_map[n.file] = float(n.importance_score or 0.0)
 
         # 1. Map symbols in target_path
         target_nodes = [n for n in snap.nodes if n.file == target_path]
@@ -135,6 +152,7 @@ class RelatedFileDiscoveryService:
                         f"{RELATION_BADGE_MAP[rel_kind]} ({edge.type} '{target_sym_name}')",
                         target_sym_name,
                         is_preselected=True,
+                        importance_score=file_importance_map.get(dep_file, 0.0),
                     )
 
             # Direct callers: edges where target is in target_node_ids
@@ -149,6 +167,7 @@ class RelatedFileDiscoveryService:
                         f"Direct Caller invoking target code from '{caller_sym_name}'",
                         caller_sym_name,
                         is_preselected=True,
+                        importance_score=file_importance_map.get(caller_file, 0.0),
                     )
 
         # 3. Associate Tests
@@ -168,7 +187,8 @@ class RelatedFileDiscoveryService:
                     "associated_test",
                     f"Associated test suite verifying '{base_name}'",
                     f.path,
-                    is_preselected=False,  # Unchecked by default as shown in task.md §6
+                    is_preselected=False,
+                    importance_score=file_importance_map.get(f.path, 0.0),
                 )
 
         # 4. Check for related models or schemas in the same subsystem
@@ -184,6 +204,7 @@ class RelatedFileDiscoveryService:
                             f"Database model in module '{module_id}'",
                             f.path,
                             is_preselected=True,
+                            importance_score=file_importance_map.get(f.path, 0.0),
                         )
                     elif "schema" in f.path.lower():
                         self._add_or_update(
@@ -193,10 +214,53 @@ class RelatedFileDiscoveryService:
                             f"Type schema in module '{module_id}'",
                             f.path,
                             is_preselected=True,
+                            importance_score=file_importance_map.get(f.path, 0.0),
                         )
 
-        # Sort discovered files by weight descending
-        results = sorted(discovered.values(), key=lambda d: d.weight, reverse=True)
+        # 5. Historical Git Co-Change Coupling (Issue 1 — B)
+        for cc in getattr(snap, "co_change_edges", []) or []:
+            partner: str | None = None
+            directional_conf = 0.0
+            if cc.file_a == target_path:
+                partner = cc.file_b
+                directional_conf = cc.confidence_a_to_b
+            elif cc.file_b == target_path:
+                partner = cc.file_a
+                directional_conf = cc.confidence_b_to_a
+            if not partner or partner == target_path:
+                continue
+
+            co_score = round(max(cc.jaccard_similarity, directional_conf), 4)
+            reason = (
+                f"Co-changed in {cc.co_change_count} commits "
+                f"(Jaccard={cc.jaccard_similarity:.2f}, confidence={directional_conf:.0%})"
+            )
+            self._add_or_update(
+                discovered,
+                partner,
+                "co_change_coupled",
+                reason,
+                "",
+                is_preselected=co_score >= 0.4,
+                importance_score=file_importance_map.get(partner, 0.0),
+                co_change_score=co_score,
+            )
+
+        # Sort discovered files by (effective weight + secondary PageRank boost + co-change score) descending
+        results = sorted(
+            discovered.values(),
+            key=lambda d: (
+                round(
+                    d.weight
+                    + PAGERANK_SECONDARY_BOOST_WEIGHT * d.importance_score
+                    + 0.05 * d.co_change_score,
+                    6,
+                ),
+                d.weight,
+                d.importance_score,
+            ),
+            reverse=True,
+        )
         return results
 
     def _add_or_update(
@@ -207,12 +271,16 @@ class RelatedFileDiscoveryService:
         reason: str,
         symbol_name: str,
         is_preselected: bool = True,
+        importance_score: float = 0.0,
+        co_change_score: float = 0.0,
     ) -> None:
         weight = RELATION_WEIGHTS.get(relation, 0.7)
         if file_path in store:
             existing = store[file_path]
-            if symbol_name not in existing.symbols:
+            if symbol_name and symbol_name not in existing.symbols:
                 existing.symbols.append(symbol_name)
+            existing.importance_score = max(existing.importance_score, importance_score)
+            existing.co_change_score = max(existing.co_change_score, co_change_score)
             if weight > existing.weight:
                 existing.weight = weight
                 existing.relation = relation
@@ -227,6 +295,8 @@ class RelatedFileDiscoveryService:
                 reason=reason,
                 symbols=[symbol_name] if symbol_name else [],
                 is_preselected=is_preselected,
+                importance_score=round(importance_score, 4),
+                co_change_score=round(co_change_score, 4),
             )
 
     def _fallback_discover(
@@ -279,4 +349,3 @@ class RelatedFileDiscoveryService:
                     )
 
         return sorted(discovered, key=lambda d: d.weight, reverse=True)
-

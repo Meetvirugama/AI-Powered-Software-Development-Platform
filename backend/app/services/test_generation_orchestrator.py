@@ -472,9 +472,9 @@ def check_generated_test_path(path: str, framework: str | None) -> str | None:
     if fw in ("pytest", "unittest"):
         if not _PY_TEST_NAME.match(name):
             return "Python test files must be named test_<name>.py or <name>_test.py"
-    elif fw == "jest":
+    elif fw in ("jest", "vitest"):
         if not (_JS_TEST_NAME.match(name) or ("__tests__" in parts[:-1] and _JS_EXT.search(name))):
-            return "Jest test files must be named <name>.test.<ext> / <name>.spec.<ext> or live in __tests__/"
+            return "Jest/Vitest test files must be named <name>.test.<ext> / <name>.spec.<ext> or live in __tests__/"
     elif not (_PY_TEST_NAME.match(name) or _JS_TEST_NAME.match(name)):
         return "file name does not look like a test file"
     return None
@@ -752,7 +752,7 @@ def validate_generated_test_code(
     proposed_test_path: str = "<generated_test>",
 ) -> tuple[bool, list[str]]:
     """Validate generated test code syntax and assertions without executing untrusted code."""
-    default_ext = ".ts" if framework == "jest" else ".py"
+    default_ext = ".ts" if framework in ("jest", "vitest") else ".py"
     effective_path = (
         proposed_test_path
         if proposed_test_path != "<generated_test>"

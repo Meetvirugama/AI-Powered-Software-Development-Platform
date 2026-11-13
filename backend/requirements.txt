@@ -11,16 +11,16 @@ pgvector>=0.3,<1.0
 # GitHub integration (Parth — W1-03)
 httpx>=0.27,<1.0         # Async HTTP client for GitHub API calls
 PyJWT[crypto]>=2.8,<3.0  # Consolidated JWT engine for platform HS256 tokens and GitHub App RS256 signing
-sentence-transformers>=3.0,<4.0
+sentence-transformers>=5.6.0,<7.0
+transformers>=5.22.0,<6.0
 tiktoken>=0.7,<1.0       # Token counting for ContextBuilder (Meet — W1-12)
 pathspec>=0.12.0
 greenlet>=3.0.0          # Needed by SQLAlchemy async engine
-tree-sitter>=0.21,<0.22
-tree-sitter-languages>=1.10,<2.0
-
-# Static analysis scanners (Bug 11)
-ruff>=0.5.0
-bandit>=1.7.0
+tree-sitter>=0.23,<1.0
+tree-sitter-language-pack>=0.6.0
+tree-sitter-python>=0.23.0
+tree-sitter-javascript>=0.23.0
+tree-sitter-typescript>=0.23.0
 
 # Durable workflow evaluation (F04 - Issue #184)
 dbos>=3.4.0

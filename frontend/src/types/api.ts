@@ -283,6 +283,25 @@ export interface ConnectRepositoryResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Remote Source Browsing Issues (F16 - Issue #196)
+// ---------------------------------------------------------------------------
+
+export interface RemoteIssueInfo {
+  number: number;
+  title: string;
+  state: string;
+  body?: string | null;
+  author?: string | null;
+  labels: string[];
+  html_url?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+  closed_at?: string | null;
+  comments_count: number;
+  is_pull_request: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Sync Progress — Day 4 (Prompt 2)
 //
 // week1.md requires the UI to show: Cloning → Scanning → Indexing → Ready

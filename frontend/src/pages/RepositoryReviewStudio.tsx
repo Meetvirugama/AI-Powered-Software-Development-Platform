@@ -53,8 +53,13 @@ export function RepositoryReviewStudio() {
   const handleRunReview = useCallback(() => {
     if (!selectedFile || reviewMutation.isPending) return;
 
+    const normalizedTarget =
+      activeTarget.type === 'range' || activeTarget.type === 'symbol'
+        ? { type: 'file' as const, path: activeTarget.path }
+        : activeTarget;
+
     reviewMutation.mutate({
-      target: activeTarget as any,
+      target: normalizedTarget as any,
     });
   }, [selectedFile, activeTarget, reviewMutation]);
 

@@ -67,8 +67,14 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/repositories/[^/]+/detect-bugs/?$"), 20, 60, "user"),
         RateLimitRule("repo_generate_tests", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/generate-tests/?$"), 20, 60, "user"),
-        RateLimitRule("repo_review", frozenset({"POST"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/review/?$"), 20, 60, "user"),
+        RateLimitRule("repo_review", frozenset({"POST", "PATCH"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/review(?:/publish|/settings)?/?$"), 20, 60, "user"),
+        RateLimitRule("repo_analysis_export", frozenset({"GET"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/analysis-runs/export/?$"), 15, 60, "user"),
+        RateLimitRule("analysis_feedback", frozenset({"POST"}),
+                      re.compile(rf"^{p}/analysis-runs/[^/]+/findings/[^/]+/feedback/?$"), 30, 60, "user"),
+        RateLimitRule("repo_memories", frozenset({"GET", "POST", "PATCH", "DELETE"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/memories(?:/.*)?$"), 30, 60, "user"),
         RateLimitRule("repo_source", frozenset({"GET", "POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/source(?:/.*)?$"), 30, 60, "user"),
         RateLimitRule("repo_issues", frozenset({"POST"}),
@@ -81,7 +87,7 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
             "task_execute",
             frozenset({"POST"}),
             re.compile(
-                rf"^{p}/tasks/[^/]+/(?:execute|tests|repair|verify|branch|commit|push|authorize-publication|create-pr|publish|checkpoints|recover|run-workflow|tools/[^/]+)/?$"
+                rf"^{p}/tasks/[^/]+/(?:execute|tests|repair|verify|branch|commit|push|authorize-publication|create-pr|publish|checkpoints|recover|run-workflow|tools/[^/]+|tool-approvals(?:/.*)?|mcp/elicitations(?:/.*)?)/?$"
             ),
             20,
             60,

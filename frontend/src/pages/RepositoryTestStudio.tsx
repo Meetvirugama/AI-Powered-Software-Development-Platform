@@ -131,10 +131,10 @@ export function RepositoryTestStudio() {
               <span>Score: {testResult.result.quality_report.quality_score}/100</span>
             </div>
           )}
-          {testResult?.result?.framework && (
+          {(testResult?.result?.detected_framework || testResult?.result?.framework) && (
             <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20 text-[11px] font-mono">
               <Terminal className="h-3 w-3" />
-              <span>{testResult.result.framework}</span>
+              <span>{testResult.result.detected_framework ?? testResult.result.framework}</span>
             </div>
           )}
         </div>

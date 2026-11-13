@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
+from sqlalchemy import select
+
 from agent.tools.router import ToolRequest, ToolResult, ToolRouter
 from ai.services.agent_execution_loop import (
     AgentExecutionLoop,
@@ -93,7 +95,7 @@ from sandbox.exceptions import (
     WorkspaceRepairBudgetExhaustedError,
     WorkspaceStateError,
 )
-from sandbox.tool_policy_bridge import WorkspaceToolPolicyBridge, register_workspace_tools
+from sandbox.tool_policy_bridge import CANONICAL_TOOL_METADATA, WorkspaceToolPolicyBridge, register_workspace_tools
 from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
@@ -189,6 +191,7 @@ class TaskExecutionOrchestrator:
         self.repair_loop = BoundedRepairLoop(
             workspace_manager=self.workspace_manager,
             test_runner=self.workspace_manager.test_runner,
+            edit_synthesizer=self.edit_synthesizer,
         )
         self.requirement_verifier = RequirementToCodeVerifier()
         self.static_scanner = BuiltinStaticBugScanner()
@@ -218,13 +221,15 @@ class TaskExecutionOrchestrator:
     def ensure_workspace_loaded(
         self,
         task: AgentTask,
-        task_repo: TaskRepository,
+        task_repo: TaskRepository | None = None,
     ) -> WorkspaceMetadata | None:
         """Ensure in-memory WorkspaceManager is synchronized with the database Workspace record if present."""
         task_id_str = str(task.id)
         meta = self.workspace_manager.get_workspace(task_id_str)
         if meta is not None:
             return meta
+        if task_repo is None:
+            return None
 
         db_ws = task_repo.get_workspace_record(task.id)
         if db_ws is None:
@@ -590,6 +595,37 @@ class TaskExecutionOrchestrator:
             )
             raise APIError(403, code, reason)
 
+        # F19: Human approval gate for tools with risk tier >= write-external (or high/critical)
+        tool_risk: str | None = None
+        if hasattr(self.tool_router, "registry") and self.tool_router.registry:
+            entry = self.tool_router.registry.get_entry(tool_name)
+            if entry and entry.definition:
+                tool_risk = entry.definition.risk_tier
+        if not tool_risk:
+            tool_risk = CANONICAL_TOOL_METADATA.get(tool_name, {}).get("risk_tier")
+
+        from app.services.tool_approval_gate import tool_approval_gate_service
+        try:
+            tool_approval_gate_service.verify_and_consume_tool(
+                session=task_repo.session,
+                task=task,
+                tool_name=tool_name,
+                arguments=arguments,
+                user_id=actor_id,
+                risk_tier=tool_risk,
+            )
+        except APIError as exc:
+            task_repo.record_tool_invocation(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                tool_name=tool_name,
+                arguments=redact_obj(dict(arguments or {})),
+                status=ToolInvocationStatus.BLOCKED,
+                duration_ms=0,
+                output_summary=f"Blocked by tool approval gate: {exc.message}",
+            )
+            raise
+
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace must be initialized before invoking tools.")
@@ -843,6 +879,18 @@ class TaskExecutionOrchestrator:
                     event_type="RETRY_BUDGET_EXHAUSTED",
                     summary=task.error_message,
                 )
+                try:
+                    from app.services.memory_service import ProjectMemoryService
+                    mem_svc = ProjectMemoryService(task_repo.session)
+                    mem_svc.record_task_failure_memory(
+                        repository_id=task.repository_id,
+                        task_id=task.id,
+                        title=task.title or f"Task {task.id}",
+                        failure_reason=task.error_message or "Repair budget exhausted",
+                        repair_attempts_used=task.repair_attempts_used,
+                    )
+                except Exception as mem_err:
+                    logger.debug("Project memory repair failure recording skipped: %s", mem_err)
 
         return outcome
 
@@ -1439,6 +1487,22 @@ class TaskExecutionOrchestrator:
                         "status": overall_status,
                     },
                 )
+            # Automatically record task completion memory (F36 / Issue #217)
+            try:
+                from app.services.memory_service import ProjectMemoryService
+                mem_svc = ProjectMemoryService(task_repo.session)
+                repair_count = len(task_repo.list_repair_attempts(task.id))
+                changed_files = [f for req_d in (task.requirements or []) for f in (req_d.get("target_files") or [])]
+                mem_svc.record_task_completion_memory(
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    title=task.title or f"Task {task.id}",
+                    verification_summary=f"Independent verification passed ({overall_status}) at revision {verified_rev_sha[:12]}.",
+                    repair_attempts_used=repair_count,
+                    files_changed=changed_files,
+                )
+            except Exception as mem_err:
+                logger.debug("Project memory task completion recording skipped: %s", mem_err)
         else:
             fail_summary = (
                 f"Independent verification failed with {len(blocking_findings)} blocking finding(s). "
@@ -1457,6 +1521,20 @@ class TaskExecutionOrchestrator:
                         "blocking_count": len(blocking_findings),
                     },
                 )
+            # Automatically record task failure memory (F36 / Issue #217)
+            try:
+                from app.services.memory_service import ProjectMemoryService
+                mem_svc = ProjectMemoryService(task_repo.session)
+                repair_count = len(task_repo.list_repair_attempts(task.id))
+                mem_svc.record_task_failure_memory(
+                    repository_id=task.repository_id,
+                    task_id=task.id,
+                    title=task.title or f"Task {task.id}",
+                    failure_reason=fail_summary,
+                    repair_attempts_used=repair_count,
+                )
+            except Exception as mem_err:
+                logger.debug("Project memory task failure recording skipped: %s", mem_err)
 
         return ver_schema
 
@@ -1726,11 +1804,29 @@ class TaskExecutionOrchestrator:
                     stale_res.message or "Workspace base revision is stale relative to remote HEAD.",
                 )
 
+        # Resolve installation token host-side for authenticated remote push (F26 credential isolation)
+        host_installation_token: str | None = None
+        try:
+            from app.models.repository import Repository
+            from app.models.github_installation import GitHubInstallation
+            repo_obj = task.repository or (task_repo.session.get(Repository, task.repository_id) if task.repository_id else None)
+            if repo_obj and getattr(repo_obj, "installation_id", None):
+                inst = task_repo.session.scalars(
+                    select(GitHubInstallation).where(
+                        GitHubInstallation.installation_id == str(repo_obj.installation_id)
+                    )
+                ).first()
+                if inst and getattr(inst, "access_token", None):
+                    host_installation_token = inst.access_token
+        except Exception:
+            host_installation_token = None
+
         push_req = WorkspacePushRequest(
             task_id=str(task.id),
             branch_name=target_branch,
             remote_name=remote_name,
             publication_authorized=True,
+            installation_token=host_installation_token,
         )
 
         ws_path = Path(meta.workspace_path)

@@ -257,6 +257,26 @@ class PullRequestDiffResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Remote Issues (F16 Source Browsing)
+# ---------------------------------------------------------------------------
+
+class RemoteIssueInfo(BaseModel):
+    """Metadata about a remote GitHub issue for source browsing."""
+    number: int
+    title: str
+    state: str = "open"
+    body: Optional[str] = None
+    author: Optional[str] = None
+    labels: list[str] = Field(default_factory=list)
+    html_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    closed_at: Optional[datetime] = None
+    comments_count: int = 0
+    is_pull_request: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Agent branch creation (Day 3)
 # ---------------------------------------------------------------------------
 

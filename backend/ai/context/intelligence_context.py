@@ -70,7 +70,16 @@ def build_intelligence_context(
     missing_records: list[MissingContextInfo] = []
     status = ContextStatus.COMPLETE
 
-    safe_symbols = list(related_symbols or [])[: active_limits.max_symbols]
+    # Order related symbols and chunks using primary relevance score + bounded secondary PageRank importance_score
+    # Stable sort guarantees original order is preserved whenever scores and importance_scores are equal.
+    ordered_symbols = sorted(
+        list(related_symbols or []),
+        key=lambda s: -(
+            float(getattr(s, "score", 1.0) or 0.0)
+            + 0.15 * min(1.0, max(0.0, float(getattr(s, "importance_score", 0.0) or 0.0)))
+        ),
+    )
+    safe_symbols = ordered_symbols[: active_limits.max_symbols]
     if related_symbols and len(related_symbols) > active_limits.max_symbols:
         dropped_cnt = len(related_symbols) - active_limits.max_symbols
         missing_records.append(
@@ -80,7 +89,14 @@ def build_intelligence_context(
             )
         )
 
-    safe_chunks = list(relevant_chunks or [])[: active_limits.max_chunks]
+    ordered_chunks = sorted(
+        list(relevant_chunks or []),
+        key=lambda c: -(
+            float(getattr(c, "score", 0.0) or 0.0)
+            + 0.01 * min(1.0, max(0.0, float(getattr(c, "importance_score", 0.0) or 0.0)))
+        ),
+    )
+    safe_chunks = ordered_chunks[: active_limits.max_chunks]
     if relevant_chunks and len(relevant_chunks) > active_limits.max_chunks:
         dropped_cnt = len(relevant_chunks) - active_limits.max_chunks
         missing_records.append(
@@ -101,7 +117,7 @@ def build_intelligence_context(
             MissingContextInfo(
                 file_path=target.file_path,
                 symbol_name=target.symbol_name,
-                reason=f"Target snippet ({target_tokens} tokens) exceeds effective context budget ({effective_budget} tokens)",
+                reason=f"Target snippet ({target_tokens} tokens) exceeds context budget (effective limit: {effective_budget} tokens)",
                 suggested_action="Narrow the selected line range or symbol scope",
             )
         )

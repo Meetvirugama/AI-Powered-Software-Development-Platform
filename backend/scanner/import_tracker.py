@@ -1,7 +1,7 @@
 """Import tracking and mapping engine.
 
 Owner: Prit — Repository Engine Lead (W2-07)
-Fulfills Week 2 Day 1: AST symbol range resolution & import mapping.
+Fulfills Week 2 Day 1: AST symbol range resolution & import mapping across all 8 languages.
 """
 
 from __future__ import annotations
@@ -104,7 +104,8 @@ class FileImportMap:
 class ImportTracker:
     """Extracts, categorizes, and tracks imports across Python, TypeScript,
 
-    and JavaScript source files. Resolves local dependencies against workspace files.
+    JavaScript, Go, Rust, Java, C, and C++ source files. Resolves local dependencies
+    against workspace files.
     """
 
     def parse_imports(
@@ -122,7 +123,7 @@ class ImportTracker:
         elif lang in ("TypeScript", "JavaScript"):
             imports = self._parse_js_ts_imports(content)
         else:
-            imports = self._parse_generic_imports(content)
+            imports = self._parse_generic_imports(content, lang)
 
         # Normalize known files for fast matching
         norm_known: set[str] = set()
@@ -157,6 +158,34 @@ class ImportTracker:
                     imp.is_third_party = False
                 else:
                     imp.is_third_party = True
+            elif lang == "Go":
+                if "/" not in imp.module and "." not in imp.module:
+                    imp.is_standard_library = True
+                    imp.is_third_party = False
+                else:
+                    imp.is_third_party = True
+            elif lang == "Rust":
+                if imp.module.startswith(("std", "core", "alloc")):
+                    imp.is_standard_library = True
+                    imp.is_third_party = False
+                elif imp.is_relative:
+                    imp.is_standard_library = False
+                    imp.is_third_party = False
+                else:
+                    imp.is_third_party = True
+            elif lang == "Java":
+                if imp.module.startswith(("java.", "javax.")):
+                    imp.is_standard_library = True
+                    imp.is_third_party = False
+                else:
+                    imp.is_third_party = True
+            elif lang in ("C", "C++"):
+                if not imp.is_relative:
+                    imp.is_standard_library = True
+                    imp.is_third_party = False
+                else:
+                    imp.is_third_party = False
+                    imp.is_standard_library = False
 
             # Attempt local resolution
             if imp.is_relative or norm_known:
@@ -400,22 +429,143 @@ class ImportTracker:
 
         return imports
 
-    def _parse_generic_imports(self, content: str) -> list[ImportedSymbol]:
-        """Generic fallback extractor for Java / Go / Rust imports."""
+    def _parse_generic_imports(
+        self, content: str, language: str = ""
+    ) -> list[ImportedSymbol]:
+        """Extractor for Go, Rust, Java, C, and C++ imports and includes."""
         imports: list[ImportedSymbol] = []
-        for idx, line in enumerate(content.splitlines(), start=1):
+        lines = content.splitlines()
+        in_go_import_block = False
+
+        for idx, line in enumerate(lines, start=1):
             s = line.strip()
-            # Java: import java.util.List;
-            if s.startswith("import "):
-                clean = s.rstrip(";").replace("import ", "").strip()
-                imports.append(
-                    ImportedSymbol(
-                        name=clean.split(".")[-1],
-                        module=clean,
-                        line=idx,
-                        raw_statement=s,
+            if not s or s.startswith("//") or s.startswith("/*"):
+                continue
+
+            # Go block imports: import ( "fmt" \n alias "pkg/path" )
+            if language == "Go":
+                if re.match(r"^import\s*\($", s):
+                    in_go_import_block = True
+                    continue
+                if in_go_import_block:
+                    if s.startswith(")"):
+                        in_go_import_block = False
+                        continue
+                    m_go = re.match(r'^(?:([A-Za-z0-9_.]+)\s+)?"([^"]+)"', s)
+                    if m_go:
+                        alias, mod = m_go.group(1), m_go.group(2)
+                        name = mod.split("/")[-1]
+                        imports.append(
+                            ImportedSymbol(
+                                name=name,
+                                module=mod,
+                                alias=alias if alias and alias != "_" else None,
+                                line=idx,
+                                raw_statement=s,
+                            )
+                        )
+                    continue
+                m_go_single = re.match(r'^import\s+(?:([A-Za-z0-9_.]+)\s+)?"([^"]+)"', s)
+                if m_go_single:
+                    alias, mod = m_go_single.group(1), m_go_single.group(2)
+                    name = mod.split("/")[-1]
+                    imports.append(
+                        ImportedSymbol(
+                            name=name,
+                            module=mod,
+                            alias=alias if alias and alias != "_" else None,
+                            line=idx,
+                            raw_statement=s,
+                        )
                     )
-                )
+                    continue
+
+            # Rust: use std::collections::HashMap; or use crate::foo::{bar, baz}; or mod foo;
+            if language == "Rust" or s.startswith(("use ", "pub use ", "mod ", "pub mod ")):
+                m_mod = re.match(r"^(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;", s)
+                if m_mod:
+                    mod_name = m_mod.group(1)
+                    imports.append(
+                        ImportedSymbol(
+                            name=mod_name,
+                            module=mod_name,
+                            is_relative=True,
+                            line=idx,
+                            raw_statement=s,
+                        )
+                    )
+                    continue
+                m_use = re.match(r"^(?:pub\s+)?use\s+([^;]+);", s)
+                if m_use:
+                    expr = m_use.group(1).strip()
+                    is_rel = expr.startswith(("crate::", "self::", "super::"))
+                    m_brace = re.match(r"^(.+)::\{([^}]+)\}$", expr)
+                    if m_brace:
+                        base_mod = m_brace.group(1).strip()
+                        for item in m_brace.group(2).split(","):
+                            item = item.strip()
+                            if not item:
+                                continue
+                            parts = re.split(r"\s+as\s+", item)
+                            name = parts[0].strip()
+                            alias = parts[1].strip() if len(parts) > 1 else None
+                            imports.append(
+                                ImportedSymbol(
+                                    name=name,
+                                    module=f"{base_mod}::{name}",
+                                    alias=alias,
+                                    is_relative=is_rel,
+                                    line=idx,
+                                    raw_statement=s,
+                                )
+                            )
+                    else:
+                        parts = re.split(r"\s+as\s+", expr)
+                        mod_path = parts[0].strip()
+                        alias = parts[1].strip() if len(parts) > 1 else None
+                        name = mod_path.split("::")[-1]
+                        imports.append(
+                            ImportedSymbol(
+                                name=name,
+                                module=mod_path,
+                                alias=alias,
+                                is_relative=is_rel,
+                                line=idx,
+                                raw_statement=s,
+                            )
+                        )
+                    continue
+
+            # C / C++: #include <stdio.h> or #include "my_header.h"
+            if language in ("C", "C++") or s.startswith("#include"):
+                m_inc = re.match(r'^#\s*include\s*([<"])([^>"]+)[>"]', s)
+                if m_inc:
+                    delim, header = m_inc.group(1), m_inc.group(2).strip()
+                    is_rel = delim == '"'
+                    stem = os.path.splitext(os.path.basename(header))[0] or header
+                    imports.append(
+                        ImportedSymbol(
+                            name=stem,
+                            module=header,
+                            is_relative=is_rel,
+                            line=idx,
+                            raw_statement=s,
+                        )
+                    )
+                    continue
+
+            # Java: import [static] java.util.List;
+            if s.startswith("import "):
+                clean = re.sub(r"^import\s+(?:static\s+)?", "", s.rstrip(";")).strip()
+                if clean:
+                    imports.append(
+                        ImportedSymbol(
+                            name=clean.split(".")[-1],
+                            module=clean,
+                            line=idx,
+                            raw_statement=s,
+                        )
+                    )
         return imports
 
     def _resolve_local_path(
@@ -432,9 +582,7 @@ class ImportTracker:
         candidates: list[str] = []
 
         if language == "Python":
-            # Relative import: .models -> same dir/models.py
             if imp.is_relative:
-                # Count level
                 level = imp.level
                 base_dir = file_dir
                 for _ in range(max(0, level - 1)):
@@ -447,7 +595,6 @@ class ImportTracker:
                     f"{rel_base}/__init__.py",
                 ])
             else:
-                # Absolute python import e.g. "app.models" or "backend.scanner.symbols"
                 mod_path = imp.module.replace(".", "/")
                 candidates.extend([
                     f"{mod_path}.py",
@@ -468,15 +615,51 @@ class ImportTracker:
                     f"{joined}/index.js",
                 ])
 
+        elif language == "Rust":
+            clean_mod = re.sub(r"^(?:crate|self|super)::", "", imp.module)
+            parts = [p for p in clean_mod.split("::") if p]
+            if parts:
+                for segs in (parts, parts[:-1]):
+                    if not segs:
+                        continue
+                    rel = "/".join(segs)
+                    if file_dir:
+                        candidates.extend([
+                            f"{file_dir}/{rel}.rs",
+                            f"{file_dir}/{rel}/mod.rs",
+                        ])
+                    candidates.extend([
+                        f"{rel}.rs",
+                        f"{rel}/mod.rs",
+                        f"src/{rel}.rs",
+                        f"src/{rel}/mod.rs",
+                    ])
+
+        elif language == "Java":
+            mod_path = imp.module.replace(".", "/")
+            candidates.append(f"{mod_path}.java")
+
+        elif language in ("C", "C++"):
+            header = imp.module.replace("\\", "/")
+            if file_dir:
+                candidates.append(os.path.normpath(os.path.join(file_dir, header)).replace("\\", "/"))
+            candidates.extend([header, f"include/{header}", f"src/{header}"])
+
+        elif language == "Go":
+            parts = imp.module.split("/")
+            for i in range(len(parts)):
+                pkg_dir = "/".join(parts[i:])
+                for k in sorted(known_files):
+                    if k.endswith(".go") and (os.path.dirname(k) == pkg_dir or os.path.dirname(k).endswith("/" + pkg_dir)):
+                        return k
+
         # Test candidates against known files
         for cand in candidates:
             cand_norm = os.path.normpath(cand).replace("\\", "/")
             if cand_norm in known_files:
                 return cand_norm
-            # Suffix match
             for k in known_files:
                 if k == cand_norm or k.endswith("/" + cand_norm):
                     return k
 
         return None
-

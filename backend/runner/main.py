@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.secret_redaction import redact
 from app.schemas.workspace import WorkspaceCommandResult
 from runner.schemas import (
     RunnerCreateWorkspaceRequest,
@@ -40,6 +41,38 @@ from sandbox.exceptions import (
 from sandbox.local_backend import LocalSubprocessBackend
 
 logger = logging.getLogger(__name__)
+
+_FORBIDDEN_BASE_REPO_PREFIXES = (
+    "/etc",
+    "/proc",
+    "/sys",
+    "/root",
+    "/dev",
+    "/boot",
+    "/var/run",
+    "/private/etc",
+    "/private/var/run",
+)
+
+
+def _validate_base_repo_path(raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+    raw_base = Path(raw_path)
+    if ".." in raw_base.parts or raw_base.is_symlink():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Forbidden base_repo_path: traversal or symlink not allowed.",
+        )
+    resolved = raw_base.resolve()
+    for prefix in _FORBIDDEN_BASE_REPO_PREFIXES:
+        pref_path = Path(prefix)
+        if resolved == pref_path or resolved.is_relative_to(pref_path):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Forbidden base_repo_path: system directory '{prefix}' is prohibited.",
+            )
+    return resolved
 
 
 def get_runner_secret() -> str:
@@ -137,7 +170,7 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
         payload: RunnerCreateWorkspaceRequest,
     ) -> RunnerCreateWorkspaceResponse:
         try:
-            base_path = Path(payload.base_repo_path) if payload.base_repo_path else None
+            base_path = _validate_base_repo_path(payload.base_repo_path)
             ws_path = exec_backend.create_workspace(payload.task_id, base_path)
             return RunnerCreateWorkspaceResponse(
                 success=True,
@@ -145,11 +178,13 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
                 workspace_path=str(ws_path),
                 backend=exec_backend.backend_type,
             )
+        except HTTPException:
+            raise
         except (WorkspacePathEscapeError, SandboxSecurityError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=redact(str(exc)))
         except Exception as exc:
             logger.error(f"Workspace creation failed: {exc}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.post(
         "/internal/v1/workspaces/{task_id}/exec",
@@ -172,10 +207,10 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
                 network_enabled=payload.network_enabled,
             )
         except (WorkspacePolicyViolationError, SandboxSecurityError) as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=redact(str(exc)))
         except Exception as exc:
             logger.error(f"Command execution failed: {exc}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.get(
         "/internal/v1/workspaces/{task_id}/files",
@@ -190,11 +225,11 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
             content = exec_backend.read_file(task_id, path)
             return RunnerFileReadResponse(success=True, path=path, content=content)
         except WorkspacePathEscapeError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=redact(str(exc)))
         except WorkspaceError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=redact(str(exc)))
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.put(
         "/internal/v1/workspaces/{task_id}/files",
@@ -213,9 +248,9 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
                 bytes_written=len(payload.content.encode("utf-8")),
             )
         except WorkspacePathEscapeError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=redact(str(exc)))
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.get(
         "/internal/v1/workspaces/{task_id}/diff",
@@ -227,7 +262,7 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
             diff_text = exec_backend.get_diff(task_id)
             return RunnerDiffResponse(success=True, task_id=task_id, diff=diff_text)
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.get(
         "/internal/v1/workspaces/{task_id}/status",
@@ -246,7 +281,7 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
                 details=status_data,
             )
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     @runner_app.delete(
         "/internal/v1/workspaces/{task_id}",
@@ -257,7 +292,7 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
             exec_backend.destroy_workspace(task_id)
             return {"success": True, "task_id": task_id, "status": "DESTROYED"}
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=redact(str(exc)))
 
     return runner_app
 

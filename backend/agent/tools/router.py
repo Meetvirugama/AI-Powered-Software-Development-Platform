@@ -255,7 +255,9 @@ class ToolRouter:
     @classmethod
     def _redact_string(cls, value: str) -> str:
         """Redact common secrets and credentials from output."""
-        result = value
+        from app.core.secret_redaction import redact
+
+        result = redact(value)
         for index, pattern in enumerate(cls.SECRET_PATTERNS):
             if index == 0:
                 result = pattern.sub(r"\1[REDACTED]", result)

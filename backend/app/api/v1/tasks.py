@@ -17,6 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import (
@@ -50,6 +51,9 @@ from app.schemas.plan import (
     TaskPlanResponse,
 )
 from app.schemas.task import (
+    MCPElicitationCancelRequest,
+    MCPElicitationRequest,
+    MCPElicitationResponseSubmit,
     PaginatedTaskListResponse,
     PublicationAuthorizationRequest,
     PublicationAuthorizationResponse,
@@ -64,6 +68,8 @@ from app.schemas.task import (
     TaskStatus,
     TaskSummaryResponse,
     TaskTraceabilityResponse,
+    ToolApprovalDecisionRequest,
+    ToolApprovalRequest,
 )
 from app.schemas.workspace import (
     RepairAttemptRecord,
@@ -303,6 +309,18 @@ def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanRes
 
     expected_files = list(plan.expected_files or [])
     tests_to_run = list(plan.tests_to_run or [])
+    parsed_steps = [PlanStep.model_validate(s) for s in (plan.steps or [])]
+    raw_loc_targets = getattr(plan, "localization_targets", None) or []
+    if not raw_loc_targets:
+        seen_loc_keys: set[tuple[str, str | None, int | None, int | None]] = set()
+        deduped_locs = []
+        for st in parsed_steps:
+            for lt in st.localization_targets:
+                key = (lt.file_path, lt.symbol_name, lt.start_line, lt.end_line)
+                if key not in seen_loc_keys:
+                    seen_loc_keys.add(key)
+                    deduped_locs.append(lt)
+        raw_loc_targets = deduped_locs
 
     payload = {
         "plan_id": str(plan.id),
@@ -318,7 +336,8 @@ def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanRes
         ],
         "relevant_files": list(plan.relevant_files or []),
         "relevant_symbols": list(plan.relevant_symbols or []),
-        "steps": [PlanStep.model_validate(s) for s in (plan.steps or [])],
+        "localization_targets": raw_loc_targets,
+        "steps": parsed_steps,
         "expected_files": expected_files,
         "expected_files_to_modify": expected_files,
         "tests_to_run": tests_to_run,
@@ -362,6 +381,10 @@ def _serialize_approval_record(record: TaskApprovalRecord, task: AgentTask) -> T
         "created_at": record.created_at.isoformat() if record.created_at else "",
     }
     return TaskApprovalResponse.model_validate(redact_obj(payload))
+
+
+def _serialize_task_approval(record: TaskApprovalRecord) -> dict[str, Any]:
+    return redact_obj(record.to_dict())
 
 
 def _serialize_event_record(event: TaskEventRecord) -> TaskEventResponse:
@@ -714,6 +737,318 @@ def reject_task_plan(
     task_detail = _serialize_task_detail(task, task_repo).model_dump(mode="json")
     merged = {**task_detail, **approval_resp.model_dump(mode="json", exclude_none=True)}
     return TaskApprovalResponse.model_validate(merged)
+
+
+# ---------------------------------------------------------------------------
+# 3b. Tool Approval Gate & MCP Elicitation (Issue #199)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{task_id}/approvals",
+    summary="List all approval records (plans, tools, MCP elicitations) for a task",
+)
+def list_all_task_approvals(
+    task_id: UUID,
+    request: Request,
+    approval_type: str | None = None,
+    status_filter: str | None = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    task, _ = _owned_task(task_id, request, db)
+    query = select(TaskApprovalRecord).where(TaskApprovalRecord.task_id == task.id)
+    if approval_type:
+        query = query.where(TaskApprovalRecord.approval_type == approval_type)
+    if status_filter:
+        query = query.where(TaskApprovalRecord.status == status_filter.lower())
+    query = query.order_by(TaskApprovalRecord.created_at.desc())
+    records = db.execute(query).scalars().all()
+    return [_serialize_task_approval(r) for r in records]
+
+
+@router.post(
+    "/{task_id}/tool-approvals/request",
+    summary="Request explicit human approval for a high-risk tool execution",
+)
+def request_tool_approval(
+    task_id: UUID,
+    body: ToolApprovalRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.tool_approval_gate import tool_approval_gate_service
+    approval = tool_approval_gate_service.request_tool_approval(
+        session=db,
+        task=task,
+        tool_name=body.tool_name,
+        arguments=body.arguments,
+        user_id=user_id,
+        risk_tier=body.risk_tier,
+        expires_in_seconds=body.expires_in_seconds,
+    )
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="TOOL_APPROVAL_REQUESTED",
+        event_data={
+            "approval_id": str(approval.id),
+            "tool_name": approval.tool_name,
+            "argument_hash": approval.argument_hash,
+            "risk_level": approval.risk_level,
+        },
+        user_id=user_id,
+        summary=f"Tool approval requested for '{approval.tool_name}'.",
+    )
+    db.commit()
+    return _serialize_task_approval(approval)
+
+
+@router.get(
+    "/{task_id}/tool-approvals",
+    summary="List tool approvals for a task",
+)
+def list_tool_approvals(
+    task_id: UUID,
+    request: Request,
+    status_filter: str | None = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    task, _ = _owned_task(task_id, request, db)
+    from app.services.tool_approval_gate import tool_approval_gate_service
+    approvals = tool_approval_gate_service.list_tool_approvals(
+        session=db,
+        task_id=task.id,
+        status=status_filter,
+    )
+    return [_serialize_task_approval(a) for a in approvals]
+
+
+@router.post(
+    "/{task_id}/tool-approvals/{approval_id}/approve",
+    summary="Approve a pending tool approval request",
+)
+def approve_tool_execution(
+    task_id: UUID,
+    approval_id: UUID,
+    request: Request,
+    body: ToolApprovalDecisionRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.tool_approval_gate import tool_approval_gate_service
+    approval = tool_approval_gate_service.approve_tool(
+        session=db,
+        task_id=task.id,
+        approval_id=approval_id,
+        user_id=user_id,
+        feedback=body.feedback if body else None,
+    )
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="TOOL_APPROVED",
+        event_data={
+            "approval_id": str(approval.id),
+            "tool_name": approval.tool_name,
+            "argument_hash": approval.argument_hash,
+        },
+        user_id=user_id,
+        summary=f"Tool approval granted for '{approval.tool_name}'.",
+    )
+    db.commit()
+    return _serialize_task_approval(approval)
+
+
+@router.post(
+    "/{task_id}/tool-approvals/{approval_id}/reject",
+    summary="Reject a pending tool approval request",
+)
+def reject_tool_execution(
+    task_id: UUID,
+    approval_id: UUID,
+    request: Request,
+    body: ToolApprovalDecisionRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.tool_approval_gate import tool_approval_gate_service
+    effective_reason = (body.reason or body.feedback) if body else None
+    approval = tool_approval_gate_service.reject_tool(
+        session=db,
+        task_id=task.id,
+        approval_id=approval_id,
+        user_id=user_id,
+        reason=effective_reason,
+    )
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="TOOL_REJECTED",
+        event_data={
+            "approval_id": str(approval.id),
+            "tool_name": approval.tool_name,
+            "argument_hash": approval.argument_hash,
+            "reason": effective_reason,
+        },
+        user_id=user_id,
+        summary=f"Tool approval rejected for '{approval.tool_name}'.",
+    )
+    db.commit()
+    return _serialize_task_approval(approval)
+
+
+@router.post(
+    "/{task_id}/mcp/elicitations/request",
+    summary="Request MCP Form or URL elicitation",
+)
+def request_mcp_elicitation(
+    task_id: UUID,
+    body: MCPElicitationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.mcp_elicitation_service import mcp_elicitation_service
+    if body.elicitation_type == "form":
+        schema_def = body.schema_definition or {}
+        elicitation = mcp_elicitation_service.request_form_elicitation(
+            session=db,
+            task=task,
+            session_id=body.session_id,
+            prompt=body.prompt or "",
+            schema=schema_def,
+            user_id=user_id,
+            expires_in_seconds=body.expires_in_seconds,
+        )
+    elif body.elicitation_type == "url":
+        elicitation = mcp_elicitation_service.request_url_elicitation(
+            session=db,
+            task=task,
+            session_id=body.session_id,
+            url=body.url or "",
+            purpose=body.purpose or "",
+            user_id=user_id,
+            expires_in_seconds=body.expires_in_seconds,
+        )
+    else:
+        raise APIError(400, ErrorCode.BAD_REQUEST, f"Invalid elicitation_type '{body.elicitation_type}'")
+
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="MCP_ELICITATION_REQUESTED",
+        event_data={
+            "elicitation_id": str(elicitation.id),
+            "session_id": elicitation.session_id,
+            "elicitation_type": elicitation.elicitation_type,
+        },
+        user_id=user_id,
+        summary=f"MCP {elicitation.elicitation_type.upper()} elicitation requested.",
+    )
+    db.commit()
+    return _serialize_task_approval(elicitation)
+
+
+@router.get(
+    "/{task_id}/mcp/elicitations",
+    summary="List MCP elicitations for a task",
+)
+def list_mcp_elicitations(
+    task_id: UUID,
+    request: Request,
+    session_id: str | None = Query(None),
+    status_filter: str | None = Query(None, alias="status"),
+    db: Session = Depends(get_db),
+) -> list[dict[str, Any]]:
+    task, _ = _owned_task(task_id, request, db)
+    from app.services.mcp_elicitation_service import mcp_elicitation_service
+    elicitations = mcp_elicitation_service.list_elicitations(
+        session=db,
+        task_id=task.id,
+        session_id=session_id,
+        status=status_filter,
+    )
+    return [_serialize_task_approval(e) for e in elicitations]
+
+
+@router.post(
+    "/{task_id}/mcp/elicitations/{elicitation_id}/respond",
+    summary="Submit user response or confirmation to an MCP elicitation",
+)
+def respond_mcp_elicitation(
+    task_id: UUID,
+    elicitation_id: UUID,
+    body: MCPElicitationResponseSubmit,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.mcp_elicitation_service import mcp_elicitation_service
+    elicitation = mcp_elicitation_service.submit_response(
+        session=db,
+        task_id=task.id,
+        elicitation_id=elicitation_id,
+        session_id=body.session_id,
+        action=body.action,
+        data=body.data,
+        user_id=user_id,
+    )
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="MCP_ELICITATION_RESPONDED",
+        event_data={
+            "elicitation_id": str(elicitation.id),
+            "session_id": elicitation.session_id,
+            "action": body.action,
+        },
+        user_id=user_id,
+        summary=f"MCP elicitation responded with '{body.action}'.",
+    )
+    db.commit()
+    return _serialize_task_approval(elicitation)
+
+
+@router.post(
+    "/{task_id}/mcp/elicitations/{elicitation_id}/cancel",
+    summary="Cancel a pending MCP elicitation",
+)
+def cancel_mcp_elicitation(
+    task_id: UUID,
+    elicitation_id: UUID,
+    body: MCPElicitationCancelRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    task, user_id = _owned_task(task_id, request, db)
+    from app.services.mcp_elicitation_service import mcp_elicitation_service
+    elicitation = mcp_elicitation_service.cancel_elicitation(
+        session=db,
+        task_id=task.id,
+        elicitation_id=elicitation_id,
+        session_id=body.session_id,
+        user_id=user_id,
+    )
+    task_repo = TaskRepository(db)
+    task_repo.record_event(
+        task_id=task.id,
+        repository_id=task.repository_id,
+        event_type="MCP_ELICITATION_CANCELLED",
+        event_data={
+            "elicitation_id": str(elicitation.id),
+            "session_id": elicitation.session_id,
+            "reason": body.reason,
+        },
+        user_id=user_id,
+        summary="MCP elicitation cancelled.",
+    )
+    db.commit()
+    return _serialize_task_approval(elicitation)
 
 
 # ---------------------------------------------------------------------------
@@ -1640,21 +1975,49 @@ def get_task_workflow_status(
                 wf = _active_workflows.get(wf_id)
 
     if not wf:
-        is_completed = task.status in ("COMPLETED", "DRAFT_PR_CREATED", "VERIFIED")
-        return {
+        is_completed = task.status in (
+            "COMPLETED",
+            "DRAFT_PR_CREATED",
+            "VERIFIED",
+            "READY_FOR_PUBLICATION",
+        )
+        latest_ver = None
+        if getattr(task, "verification_results", None):
+            ver_obj = task.verification_results[0]
+            latest_ver = (
+                ver_obj.to_dict()
+                if hasattr(ver_obj, "to_dict")
+                else {
+                    "status": getattr(ver_obj, "status", None),
+                    "verified_revision": getattr(ver_obj, "verified_revision", None),
+                    "summary": redact(getattr(ver_obj, "summary", "") or ""),
+                }
+            )
+        pr_dict = None
+        pr_obj = getattr(task, "pull_request", None)
+        if pr_obj is not None:
+            pr_dict = (
+                pr_obj.to_dict()
+                if hasattr(pr_obj, "to_dict")
+                else {
+                    "pr_id": str(getattr(pr_obj, "id", "")),
+                    "pr_number": getattr(pr_obj, "pr_number", None),
+                    "pr_url": getattr(pr_obj, "pr_url", None),
+                    "is_draft": getattr(pr_obj, "is_draft", True),
+                    "title": redact(getattr(pr_obj, "title", "") or ""),
+                }
+            )
+        err_summary = redact(task.error_message) if getattr(task, "error_message", None) else None
+        return redact_obj({
             "task_id": str(task.id),
             "workflow_id": f"wf-{task.id}",
             "status": "COMPLETED" if is_completed else ("FAILED" if task.status == "FAILED" else "QUEUED"),
             "current_step": None,
             "completed_steps": [cp.step_name for cp in (task.checkpoints or [])],
             "progress_percentage": 100 if is_completed else 0,
-            "verification": (
-                task.verification_results[-1]
-                if getattr(task, "verification_results", None)
-                else None
-            ),
-            "pull_request": None,
-            "error_summary": None,
+            "verification": latest_ver,
+            "pull_request": pr_dict,
+            "error_summary": err_summary,
             "started_at": task.created_at.isoformat() if getattr(task, "created_at", None) else "",
             "updated_at": task.updated_at.isoformat() if getattr(task, "updated_at", None) else "",
             "completed_at": (
@@ -1663,11 +2026,11 @@ def get_task_workflow_status(
                 else None
             ),
             "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
-        }
+        })
 
     total_steps = 7
     pct = int((len(wf.completed_steps) / total_steps) * 100) if total_steps else 0
-    return {
+    return redact_obj({
         "task_id": str(task.id),
         "workflow_id": wf.workflow_id,
         "status": wf.status.value,
@@ -1681,7 +2044,7 @@ def get_task_workflow_status(
         "updated_at": wf.updated_at,
         "completed_at": wf.completed_at,
         "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
-    }
+    })
 
 
 @router.get(
@@ -1743,20 +2106,3 @@ def create_repository_task(
 ) -> TaskDetailResponse:
     payload.repository_id = repository_id
     return create_task(payload=payload, request=request, db=db)
-
-
-# Route aliases for repo_id compatibility with Verification Gate 3.2
-repo_tasks_router.add_api_route(
-    "/{repo_id}/tasks",
-    list_repository_tasks,
-    methods=["GET"],
-    response_model=PaginatedTaskListResponse,
-    include_in_schema=False,
-)
-repo_tasks_router.add_api_route(
-    "/{repo_id}/tasks",
-    create_repository_task,
-    methods=["POST"],
-    response_model=TaskDetailResponse,
-    include_in_schema=False,
-)

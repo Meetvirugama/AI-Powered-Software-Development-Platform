@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 from app.schemas.repair import (
     DiagnosedFailure,
     FailureCategory,
+    FailureClassification,
     PatchValidationResult,
     RepairPatchPayload,
     TestFrameworkName,
@@ -39,10 +40,12 @@ from app.schemas.workspace import (
 )
 
 if TYPE_CHECKING:
+    from ai.services.edit_synthesizer import EditSynthesizer
     from app.services.repair_service import (
         FailureTracebackAnalyzer,
         RepairPatchValidator,
     )
+from ai.services.llm_repair_synthesizer import LLMRepairSynthesizer
 from sandbox.exceptions import WorkspaceError
 from sandbox.test_runner import WorkspaceTestRunner
 
@@ -80,8 +83,12 @@ class BoundedRepairLoop:
         test_runner: WorkspaceTestRunner | None = None,
         traceback_analyzer: FailureTracebackAnalyzer | None = None,
         patch_validator: RepairPatchValidator | None = None,
+        repair_synthesizer: LLMRepairSynthesizer | None = None,
+        edit_synthesizer: EditSynthesizer | None = None,
+        llm_gateway: Any = None,
         *,
         max_repair_attempts: int = MAX_TASK_REPAIR_ATTEMPTS,
+        allow_test_edits: bool = False,
     ) -> None:
         self.workspace_manager = workspace_manager
         self.test_runner = test_runner or WorkspaceTestRunner()
@@ -97,7 +104,14 @@ class BoundedRepairLoop:
         else:
             self.traceback_analyzer = traceback_analyzer
             self.patch_validator = patch_validator
+
+        self.repair_synthesizer = repair_synthesizer or LLMRepairSynthesizer(
+            edit_synthesizer=edit_synthesizer,
+            llm_gateway=llm_gateway,
+            workspace_manager=workspace_manager,
+        )
         self.max_repair_attempts = max_repair_attempts
+        self.allow_test_edits = allow_test_edits
 
     def run_repair_cycle(
         self,
@@ -107,6 +121,9 @@ class BoundedRepairLoop:
         test_path: str | None = None,
         patch_synthesizer: Any = None,
         forbidden_files: Sequence[str] | None = None,
+        allowed_files: Sequence[str] | None = None,
+        allow_test_edits: bool = False,
+        plan_scope_files: Sequence[str] | None = None,
     ) -> BoundedRepairOutcome:
         """Run bounded repair loop until tests pass or 3-attempt ceiling is reached."""
         start_time = datetime.now(UTC)
@@ -117,6 +134,9 @@ class BoundedRepairLoop:
         workspace_path = meta.workspace_path
         if not workspace_path:
             raise WorkspaceError(f"Workspace path not initialized for task '{task_id}'.")
+
+        effective_allow_test_edits = allow_test_edits or self.allow_test_edits
+        effective_allowed_files = list(allowed_files or plan_scope_files or []) or None
 
         # Initial test execution
         initial_run = self._run_tests(
@@ -170,7 +190,12 @@ class BoundedRepairLoop:
         )
 
         # Check if failure is an unrecoverable environment error
-        if diagnosis.has_infrastructure_failure or not diagnosis.can_attempt_repair:
+        is_infra = (
+            diagnosis.has_infrastructure_failure
+            or not diagnosis.can_attempt_repair
+            or getattr(diagnosis, "primary_classification", "") == "infra"
+        )
+        if is_infra:
             total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
             err_msg = f"Non-repairable infrastructure failure: {diagnosis.summary}"
             return BoundedRepairOutcome(
@@ -197,20 +222,26 @@ class BoundedRepairLoop:
                 payload={"attempt_number": current_attempts},
             )
 
-            # 1. Synthesize targeted patch
+            # 1. Synthesize targeted patch with LLMRepairSynthesizer & Reflexion memory
             patch_payload = self._synthesize_patch(
                 task_id=task_id,
                 attempt_number=current_attempts,
                 diagnosis=diagnosis,
                 patch_synthesizer=patch_synthesizer,
                 previous_hashes=previous_hashes,
+                repair_history=repair_records,
+                allowed_files=effective_allowed_files,
+                forbidden_files=forbidden_files,
+                allow_test_edits=effective_allow_test_edits,
             )
 
-            # 2. Validate patch with Dev's RepairPatchValidator
+            # 2. Validate patch with Dev's RepairPatchValidator (with Anti-Reward Hacking Gate)
             validation: PatchValidationResult = self.patch_validator.validate_patch(
                 patch_payload,
+                allowed_files=effective_allowed_files,
                 forbidden_files=list(forbidden_files) if forbidden_files else None,
                 max_attempts=self.max_repair_attempts,
+                allow_test_edits=effective_allow_test_edits,
             )
 
             if not validation.is_valid:
@@ -347,8 +378,12 @@ class BoundedRepairLoop:
         diagnosis: TracebackDiagnosisResult,
         patch_synthesizer: Any = None,
         previous_hashes: Sequence[str] | None = None,
+        repair_history: Sequence[RepairAttemptRecord] | None = None,
+        allowed_files: Sequence[str] | None = None,
+        forbidden_files: Sequence[str] | None = None,
+        allow_test_edits: bool = False,
     ) -> RepairPatchPayload:
-        """Synthesize a repair patch payload from diagnosis information."""
+        """Synthesize a repair patch payload using LLMRepairSynthesizer or custom callback."""
         if callable(patch_synthesizer):
             res = patch_synthesizer(task_id, attempt_number, diagnosis)
             if isinstance(res, RepairPatchPayload):
@@ -356,44 +391,91 @@ class BoundedRepairLoop:
                     res.previous_patch_hashes = list(previous_hashes)
                 return res
 
-        # Default targeted patch generation based on diagnosed failure files
-        primary_file = "src/main.py"
-        if diagnosis.failures and diagnosis.failures[0].file_path:
-            primary_file = diagnosis.failures[0].file_path
-
-        primary_cat: FailureCategory | str = (
-            diagnosis.failures[0].category if diagnosis.failures else "TEST_FAILURE"
-        )
-        cat_str = primary_cat.value if hasattr(primary_cat, "value") else str(primary_cat)
-
-        diff_text = (
-            f"--- a/{primary_file}\n"
-            f"+++ b/{primary_file}\n"
-            f"@@ -1,3 +1,4 @@\n"
-            f"+# Auto-repair attempt {attempt_number} for {cat_str}\n"
-            f" def handler():\n"
-            f"-    pass\n"
-            f"+    return True\n"
-        )
-
-        return RepairPatchPayload(
+        # Autonomous LLM / EditSynthesizer driven repair synthesis (Issue #205 / F24)
+        return self.repair_synthesizer.synthesize_repair(
             task_id=task_id,
-            explanation=f"Automated repair attempt {attempt_number}: patch {primary_file}",
-            target_files=[primary_file],
-            diff=diff_text,
             attempt_number=attempt_number,
-            previous_patch_hashes=list(previous_hashes or []),
+            diagnosis=diagnosis,
+            workspace_manager=self.workspace_manager,
+            repair_history=repair_history,
+            previous_hashes=previous_hashes,
+            allowed_files=allowed_files,
+            forbidden_files=forbidden_files,
+            allow_test_edits=allow_test_edits or self.allow_test_edits,
         )
 
     @staticmethod
+    def _slice_diff_for_file(diff_text: str, target_file: str) -> str:
+        """Extract only the unified diff section corresponding to target_file when multi-file diffs exist."""
+        if not diff_text.strip() or not target_file:
+            return diff_text
+
+        norm_target = target_file.replace("\\", "/").strip().lstrip("./")
+        sections = re.split(r"(?m)(?=^---\s+)", diff_text)
+        matched_sections: list[str] = []
+        for sec in sections:
+            if not sec.strip():
+                continue
+            header_match = re.search(
+                r"^\+\+\+\s+(?:b/)?([^\s\t\r\n]+)",
+                sec,
+                re.MULTILINE,
+            )
+            if header_match:
+                header_path = header_match.group(1).replace("\\", "/").strip().lstrip("./")
+                if header_path == norm_target or header_path.endswith(f"/{norm_target}"):
+                    matched_sections.append(sec)
+
+        if matched_sections:
+            return "\n".join(matched_sections)
+        return diff_text
+
+    @staticmethod
     def _extract_patched_content(existing_content: str, diff_text: str, target_file: str, explanation: str) -> str:
-        """Apply simple unified diff hunks to existing file content or reconstruct added lines."""
-        if not diff_text.strip():
+        """Apply unified diff hunks or reconstructed content to existing file content safely."""
+        scoped_diff = BoundedRepairLoop._slice_diff_for_file(diff_text, target_file)
+        if not scoped_diff.strip():
             return existing_content or f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
 
+        # 1. Hunk-based replacement for standard multi-line unified diffs
+        hunks = re.split(r"(?m)^@@\s+-[0-9,]+\s+\+[0-9,]+\s+@@.*$", scoped_diff)
+        if len(hunks) > 1 and existing_content:
+            content = existing_content
+            applied_any = False
+            for hunk in hunks[1:]:
+                lines = hunk.splitlines()
+                old_chunk_lines: list[str] = []
+                new_chunk_lines: list[str] = []
+                removed: list[str] = []
+                added: list[str] = []
+                for line in lines:
+                    if line.startswith(("---", "+++")):
+                        continue
+                    if line.startswith("-"):
+                        removed.append(line[1:])
+                        old_chunk_lines.append(line[1:])
+                    elif line.startswith("+"):
+                        added.append(line[1:])
+                        new_chunk_lines.append(line[1:])
+                    elif line.startswith(" "):
+                        old_chunk_lines.append(line[1:])
+                        new_chunk_lines.append(line[1:])
+                if old_chunk_lines and "\n".join(old_chunk_lines) in content:
+                    content = content.replace("\n".join(old_chunk_lines), "\n".join(new_chunk_lines), 1)
+                    applied_any = True
+                elif removed:
+                    rem_block = "\n".join(removed)
+                    add_block = "\n".join(added)
+                    if rem_block in content:
+                        content = content.replace(rem_block, add_block, 1)
+                        applied_any = True
+            if applied_any:
+                return content
+
+        # 2. Sequential removed vs added line application
         removed_lines: list[str] = []
         added_lines: list[str] = []
-        for raw_line in diff_text.splitlines():
+        for raw_line in scoped_diff.splitlines():
             if raw_line.startswith(("---", "+++", "@@")):
                 continue
             if raw_line.startswith("-"):
@@ -406,14 +488,24 @@ class BoundedRepairLoop:
             added_block = "\n".join(added_lines)
             if removed_block in existing_content:
                 return existing_content.replace(removed_block, added_block, 1)
+            stripped_rem = removed_block.strip()
+            if stripped_rem and stripped_rem in existing_content:
+                return existing_content.replace(stripped_rem, added_block.strip(), 1)
+            reconstructed_check = [
+                raw_line[1:]
+                for raw_line in scoped_diff.splitlines()
+                if not raw_line.startswith(("---", "+++", "@@", "-")) and raw_line.startswith(("+", " "))
+            ]
+            if len(reconstructed_check) >= max(1, len(existing_content.splitlines()) // 2):
+                return "\n".join(reconstructed_check) + "\n"
+            return existing_content
 
         if existing_content and added_lines and not removed_lines:
             return existing_content.rstrip("\n") + "\n" + "\n".join(added_lines) + "\n"
 
         if added_lines:
-            # Reconstruct from non-removed diff lines
             reconstructed: list[str] = []
-            for raw_line in diff_text.splitlines():
+            for raw_line in scoped_diff.splitlines():
                 if raw_line.startswith(("---", "+++", "@@", "-")):
                     continue
                 if raw_line.startswith(("+", " ")):
@@ -421,6 +513,8 @@ class BoundedRepairLoop:
             if reconstructed:
                 return "\n".join(reconstructed) + "\n"
 
+        if existing_content:
+            return existing_content
         return f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
 
     def _apply_patch_files(self, task_id: str, patch_payload: RepairPatchPayload) -> None:
@@ -506,3 +600,11 @@ class BoundedRepairLoop:
         if hasattr(self.traceback_analyzer, "diagnose"):
             return self.traceback_analyzer.diagnose(raw_output, framework=framework)
         return self.traceback_analyzer.analyze_traceback(raw_output, framework=framework)
+
+
+__all__ = [
+    "MAX_TASK_REPAIR_ATTEMPTS",
+    "BoundedRepairLoop",
+    "BoundedRepairOutcome",
+    "LLMRepairSynthesizer",
+]

@@ -361,6 +361,8 @@ def resolve_bug_target_and_build_context(
                 .all()
             )
             for edge in caller_edges:
+                if edge.source_symbol_id is None:
+                    continue
                 caller_sym = db.query(CodeSymbol).filter(CodeSymbol.id == edge.source_symbol_id).first()
                 if caller_sym:
                     caller_chunk = (
@@ -384,6 +386,7 @@ def resolve_bug_target_and_build_context(
                             start_line=caller_sym.start_line,
                             end_line=caller_sym.end_line,
                             content=content_snippet,
+                            importance_score=float(getattr(caller_sym, "importance_score", 0.0) or 0.0),
                         )
                     )
                     if caller_path not in related_file_paths and caller_path != safe_path:
@@ -1109,10 +1112,15 @@ def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFindin
             else secondary.severity
         )
 
-    rule_id = primary.rule_id or secondary.rule_id
+    if "SEC001" in (primary.rule_id, secondary.rule_id):
+        rule_id = "SEC001"
+    else:
+        rule_id = primary.rule_id or secondary.rule_id
 
     chosen_category = primary.category
-    if chosen_category in ("other", "logic_error") and secondary.category not in ("other", "logic_error"):
+    if chosen_category == "secrets" and secondary.category == "security":
+        chosen_category = "security"
+    elif chosen_category in ("other", "logic_error") and secondary.category not in ("other", "logic_error"):
         chosen_category = secondary.category
 
     if secondary.evidence and secondary.evidence not in primary.evidence:
@@ -1172,6 +1180,16 @@ def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFindin
     )
 
 
+def _are_equivalent_secret_rules(rule_a: str | None, rule_b: str | None) -> bool:
+    """Return True when both rules represent hardcoded secret detectors (e.g. SEC001 and GITLEAKS-*)."""
+    if not rule_a or not rule_b:
+        return False
+    secret_prefixes = ("SEC001", "GITLEAKS-")
+    return any(rule_a.startswith(p) for p in secret_prefixes) and any(
+        rule_b.startswith(p) for p in secret_prefixes
+    )
+
+
 def merge_and_deduplicate_findings(findings: list[BugFinding]) -> list[BugFinding]:
     """Deduplicate identical findings and merge overlapping STATIC + AI findings into COMBINED."""
     merged: list[BugFinding] = []
@@ -1186,11 +1204,12 @@ def merge_and_deduplicate_findings(findings: list[BugFinding]) -> list[BugFindin
             ):
                 matched_idx = idx
                 break
-            # Never merge two distinct static analyzer rules
+            # Never merge two distinct static analyzer rules unless both are secret detectors on the same line
             if (
                 existing.rule_id
                 and candidate.rule_id
                 and existing.rule_id != candidate.rule_id
+                and not _are_equivalent_secret_rules(existing.rule_id, candidate.rule_id)
             ):
                 continue
             tol = 1 if existing.source_type != candidate.source_type else 0

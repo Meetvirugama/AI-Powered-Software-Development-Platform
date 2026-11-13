@@ -116,7 +116,15 @@ def init_rag_pipeline(app: FastAPI) -> bool:
             try:
                 embedding_provider = GeminiEmbeddingProvider(
                     api_keys=gemini_keys,
+                    model=settings.gemini_embedding_model,
                     dimensions=settings.embedding_dimensions,
+                    profile_version=getattr(settings, "embedding_profile_version", "v2"),
+                    document_task_type=getattr(
+                        settings, "embedding_document_task_type", "RETRIEVAL_DOCUMENT"
+                    ),
+                    query_task_type=getattr(
+                        settings, "embedding_query_task_type", "CODE_RETRIEVAL_QUERY"
+                    ),
                 )
                 from ai.embeddings.service import CachedEmbeddingService
                 from app.core.redis import get_async_redis_client
@@ -148,7 +156,7 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     from ai.retrieval.cache import RetrievalResultCache
                     cache = RetrievalResultCache(
                         redis_client=r_client,
-                        ttl_seconds=getattr(settings, "retrieval_cache_ttl_seconds", 3600),
+                        default_ttl_seconds=getattr(settings, "retrieval_cache_ttl_seconds", 3600),
                     )
             except Exception as c_exc:  # noqa: BLE001
                 logger.warning("retrieval_cache_init_failed", extra={"error": str(c_exc)})

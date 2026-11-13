@@ -1264,6 +1264,17 @@ class WorkspaceManager:
         # 1. Publication Authorization Gate (ADR-010, F37)
         _validate_ref_or_option(request.branch_name, "branch name")
         _validate_ref_or_option(request.remote_name, "remote name")
+        if request.remote_url:
+            remote_url_clean = str(request.remote_url).strip()
+            if (
+                remote_url_clean.startswith(("-", "+"))
+                or "\x00" in remote_url_clean
+                or any(c in remote_url_clean for c in " \t\n\r")
+                or remote_url_clean.lower().startswith("ext::")
+            ):
+                raise WorkspacePolicyViolationError(
+                    f"Invalid remote_url '{request.remote_url}': cannot start with '-'/'+', use 'ext::' protocol, or contain whitespace/null bytes."
+                )
         if not request.publication_authorized:
             self.record_timeline_event(
                 task_id=task_id,
@@ -1293,9 +1304,15 @@ class WorkspaceManager:
             payload={"branch": branch, "remote": request.remote_name},
         )
 
-        # 3. Execute git push
+        # 3. Execute git push host-side (F26: credentials never enter sandbox containers or disk config)
         remote_target = request.remote_url or request.remote_name
-        cmd = ["git", "-C", str(workspace_path), "push", "--no-verify", remote_target, "--", branch]
+        cmd = ["git", "-C", str(workspace_path)]
+        if getattr(request, "installation_token", None):
+            import base64
+            token_val = str(request.installation_token).strip()
+            auth_token = base64.b64encode(f"x-access-token:{token_val}".encode("utf-8")).decode("utf-8")
+            cmd.extend(["-c", f"http.extraheader=AUTHORIZATION: basic {auth_token}"])
+        cmd.extend(["push", "--no-verify", remote_target, "--", branch])
         try:
             push_proc = subprocess.run(
                 cmd,

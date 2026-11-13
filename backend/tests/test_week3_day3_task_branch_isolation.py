@@ -40,7 +40,11 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.security import create_access_token
 from app.integrations.github.client import GitHubAPIError, GitHubClient
-from app.integrations.github.schemas import BranchIsolationCheck
+from app.integrations.github.schemas import (
+    BaseRevisionValidationResponse,
+    BranchIsolationCheck,
+    TaskBranchIsolationResponse,
+)
 from app.integrations.github.service import GitHubService, GitHubSourceService
 from app.main import app
 from app.models.repository import Repository

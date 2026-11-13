@@ -27,3 +27,74 @@ a674773a64  # backend/tests/test_om_w2_d7_acceptance_regression.py synthetic red
 ed92e70c71  # backend/tests/test_day6_integration_and_security.py synthetic test secret
 917939e9f2  # backend/tests/test_backend_audit_fixes.py synthetic groq test key
 10e9550af2  # backend/tests/test_backend_audit_fixes.py synthetic gemini test key
+
+0478ea6141  # backend/tests/test_repository_aggregates_and_postgres.py synthetic test/example fixture
+fa0711ddc3  # backend/tests/test_chunking_indexing_embedding_v2.py synthetic test/example fixture
+8f4e8a3535  # backend/tests/test_host_git_push_credential_isolation.py synthetic test/example fixture
+afaf100c77  # backend/tests/test_tool_approval_and_mcp_elicitation.py synthetic test/example fixture
+e5567393d4  # backend/tests/test_tool_execution_pipeline.py synthetic test/example fixture
+1eb278a0ab  # backend/tests/test_security_analysis_expansion.py synthetic test/example fixture
+6675cd0c36  # backend/tests/test_security_analysis_expansion.py synthetic test/example fixture
+3d38770ab0  # backend/scripts/benchmark_quality_suite.py synthetic test/example fixture
+1db61e13c1  # backend/scripts/benchmark_quality_suite.py synthetic test/example fixture
+a897a37ee4  # backend/scripts/benchmark_quality_suite.py synthetic test/example fixture
+1f579bf4f8  # backend/tests/test_security_analysis_expansion.py synthetic test/example fixture
+8aede3239c  # backend/tests/test_security_analysis_expansion.py synthetic test/example fixture
+adc5b068f6  # backend/tests/test_security_analysis_expansion.py synthetic test/example fixture
+1dde5174b6  # .env.example synthetic test/example fixture
+5bcf3e2bc8  # .env.production.example synthetic test/example fixture
+2a3dfe8828  # Docs/security/sandbox/13-operations-and-troubleshooting.md synthetic test/example fixture
+866aaed2fe  # backend/tests/test_runner_service.py synthetic test/example fixture
+dae85cbaea  # backend/tests/test_sandbox_backend.py synthetic test/example fixture
+258b8650d4  # backend/tests/test_code_review_quality_benchmark.py synthetic test/example fixture
+599a7f359d  # backend/tests/test_code_review_quality_benchmark.py synthetic test/example fixture
+652c7dc687  # backend/tests/test_review_validation_and_dedup.py synthetic test/example fixture
+c3904668ee  # backend/tests/test_review_validation_and_dedup.py synthetic test/example fixture
+d83e21c219  # backend/tests/test_test_generation_execution_verified.py synthetic test/example fixture
+2dfacb4231  # backend/tests/test_agent_policy.py synthetic test/example fixture
+6c8a7d4aa2  # backend/tests/test_jwt_and_oauth_hardening.py synthetic test/example fixture
+afc736e432  # backend/tests/test_jwt_and_oauth_hardening.py synthetic test/example fixture
+1f21f16122  # backend/tests/test_jwt_and_oauth_hardening.py synthetic test/example fixture
+26c58bfde0  # backend/tests/test_bug_ai_investigation_phase4.py synthetic test/example fixture
+a9e3c5a6ef  # .env.production.example synthetic test/example fixture
+af21e097a6  # backend/tests/test_new_fixes_comprehensive_audit.py synthetic test/example fixture
+257a4c3f3f  # backend/tests/test_adversarial_m1_challenger.py synthetic test/example fixture
+b2563cb5a4  # tests/e2e/test_tier1_features.py synthetic test/example fixture
+dd1cb130e3  # tests/e2e/test_tier1_features.py synthetic test/example fixture
+6d23e99a8e  # backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py synthetic test/example fixture
+42500fbd3a  # backend/tests/test_week3_day5_verification_and_pr.py synthetic test/example fixture
+38a02ea9bf  # backend/tests/test_security_w3_runner.py synthetic test/example fixture
+92f510df41  # backend/tests/test_security_w3_runner.py synthetic test/example fixture
+fb42925fb1  # backend/tests/test_security_w3_runner.py synthetic test/example fixture
+8300920384  # backend/tests/test_security_w3_runner.py synthetic test/example fixture
+cc51ca4417  # backend/tests/test_security_w3_runner.py synthetic test/example fixture
+7bf43998f6  # frontend/src/test/pr161_second_review_corrections.test.tsx synthetic test/example fixture
+c2f9a2618f  # backend/tests/test_yug_w3_day5_day6_day7_acceptance.py synthetic test/example fixture
+b45a6fb1f0  # backend/tests/test_yug_w3_day5_day6_day7_acceptance.py synthetic test/example fixture
+d2360faa4c  # frontend/src/test/pr161_second_review_corrections.test.tsx synthetic test/example fixture
+c7a4a4acf6  # backend/tests/test_dev_w3_day5_verification.py synthetic test/example fixture
+7cbb07dbd9  # frontend/src/test/pr161_critical_review_fixes.test.tsx synthetic test/example fixture
+24bf4c902d  # frontend/src/test/pr161_critical_review_fixes.test.tsx synthetic test/example fixture
+9e6e4f325a  # frontend/src/test/pr161_critical_review_fixes.test.tsx synthetic test/example fixture
+5d763d95fb  # backend/tests/test_om_w3_d5_verification_pr_traceability.py synthetic test/example fixture
+f93e6cc81f  # backend/tests/test_om_w3_d5_verification_pr_traceability.py synthetic test/example fixture
+3a7cfbb5ea  # backend/tests/test_om_w3_d5_verification_pr_traceability.py synthetic test/example fixture
+9666c089ec  # backend/tests/test_om_w3_d2_planning_persistence.py synthetic test/example fixture
+b5f6135cd7  # backend/tests/test_om_w3_d2_planning_persistence.py synthetic test/example fixture
+2ed473124e  # backend/tests/test_om_w3_d3_d4_execution_persistence.py synthetic test/example fixture
+e3aa7c871e  # backend/tests/test_om_w3_d3_d4_execution_persistence.py synthetic test/example fixture
+ebf18dccae  # backend/tests/test_prit_w3_d7_acceptance.py synthetic test/example fixture
+dc05b3edd7  # backend/tests/test_prit_w3_d7_acceptance.py synthetic test/example fixture
+4a000a3806  # backend/tests/test_prit_w3_d6_reliability_and_recovery.py synthetic test/example fixture
+37b3f835cd  # backend/tests/test_prit_w3_d6_reliability_and_recovery.py synthetic test/example fixture
+528ddd3203  # backend/tests/test_dev_w3_day4_repair.py synthetic test/example fixture
+d5b5e8368e  # backend/tests/test_database_redis_audit_fixes.py synthetic test/example fixture
+c5f2f42e6d  # backend/tests/test_prit_w3_d5_verification_and_draft_pr.py synthetic test/example fixture
+c5988f9504  # backend/tests/test_prit_w3_d5_verification_and_draft_pr.py synthetic test/example fixture
+7750e5644c  # backend/tests/test_production_config.py synthetic test/example fixture
+3229dc79ea  # backend/tests/test_production_config.py synthetic test/example fixture
+aa0941406f  # backend/tests/test_week3_day1_day2.py synthetic test/example fixture
+72a07fb2b0  # backend/tests/test_week3_day1_day2.py synthetic test/example fixture
+d46cacfe47  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
+ee27e1105a  # .github/workflows/main_ai-powered-dev-platform-api.yml dummy CI security-gate env fixture
+bd474fcee8  # backend/tests/test_issues_intelligence_explanation_planning.py synthetic [REDACTED] test fixture

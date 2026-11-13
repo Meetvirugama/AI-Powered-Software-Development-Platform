@@ -55,6 +55,10 @@ _LEXICAL_SEARCH_SQL = text(
             end_line,
             content_hash,
             COALESCE(metadata->>'file_path', '') AS file_path,
+            COALESCE(
+                (SELECT cs.importance_score FROM code_symbols cs WHERE cs.id = code_chunks.symbol_id),
+                0.0
+            ) AS importance_score,
             (
                 CASE
                     WHEN to_tsvector('simple', COALESCE(code_search_text, content)) @@ to_tsquery('simple', :code_tsquery)
@@ -161,6 +165,7 @@ def _sanitize_query(query: str) -> str:
 
 def _row_to_chunk(row: object, score: float) -> CodeChunk:
     """Map a SQLAlchemy Row to a typed CodeChunk dataclass."""
+    raw_imp = getattr(row, "importance_score", None)
     return CodeChunk(
         id=row.id,                          # type: ignore[attr-defined]
         repository_id=row.repository_id,    # type: ignore[attr-defined]
@@ -174,6 +179,7 @@ def _row_to_chunk(row: object, score: float) -> CodeChunk:
         score=score,
         file_path=row.file_path or "",      # type: ignore[attr-defined]
         lexical_rank=score,
+        importance_score=float(raw_imp) if raw_imp is not None else None,
     )
 
 

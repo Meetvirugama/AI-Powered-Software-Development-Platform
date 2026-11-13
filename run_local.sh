@@ -40,11 +40,30 @@ if [ ! -f "frontend/.env.local" ]; then
     echo "VITE_API_BASE_URL=http://localhost:8000/api/v1" > frontend/.env.local
 fi
 
-# 4. Run database migrations if database is configured
+# 4. Check for and free stale processes on ports 8000, 5173, and 5174 if needed
+LSOF_CMD=""
+if command -v lsof &>/dev/null; then
+    LSOF_CMD="lsof"
+elif [ -x "/usr/sbin/lsof" ]; then
+    LSOF_CMD="/usr/sbin/lsof"
+fi
+
+if [ -n "$LSOF_CMD" ]; then
+    for p in 8000 5173 5174; do
+        PIDS=$($LSOF_CMD -i :"$p" -t 2>/dev/null || true)
+        if [ -n "$PIDS" ]; then
+            echo "Notice: Freeing occupied port $p (PIDs: $PIDS)..."
+            echo "$PIDS" | xargs kill -9 2>/dev/null || true
+            sleep 0.5
+        fi
+    done
+fi
+
+# 5. Run database migrations if database is configured
 echo "Applying database migrations..."
 $PYTHON_BIN -m alembic -c backend/alembic.ini upgrade head || echo "Database migration notice: Continuing local startup."
 
-# 5. Trap Ctrl+C (SIGINT) and SIGTERM to kill all background processes cleanly
+# 6. Trap Ctrl+C (SIGINT) and SIGTERM to kill all background processes cleanly
 cleanup() {
     echo ""
     echo "Shutting down local servers..."
@@ -57,13 +76,22 @@ trap cleanup SIGINT SIGTERM
 
 # 6. Start Backend (Uvicorn with auto-reload)
 echo "Starting Backend API on http://localhost:8000..."
-$UVICORN_BIN main:app --reload --host 0.0.0.0 --port 8000 &
+$UVICORN_BIN main:app --reload --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 1 --timeout-keep-alive 5 &
 BACKEND_PID=$!
 
 # 7. Start Frontend (Vite)
 echo "Starting Frontend UI on http://localhost:5173..."
 (cd frontend && npm run dev -- --host 0.0.0.0 --port 5173) &
 FRONTEND_PID=$!
+
+echo "Waiting for backend services to initialize..."
+for i in {1..25}; do
+    if curl -s -f http://127.0.0.1:8000/api/v1/health/ready >/dev/null 2>&1; then
+        echo "Backend services are healthy and ready."
+        break
+    fi
+    sleep 1
+done
 
 echo ""
 echo "===================================================================="

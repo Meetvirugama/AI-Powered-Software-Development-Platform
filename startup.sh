@@ -33,12 +33,33 @@ if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then
 fi
 
 # Run alembic migrations if database is configured (Supabase / Azure Postgres / local Postgres)
-if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == *"postgres"* ]]; then
+if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == *"postgres"* ]] && [ "${RUN_MIGRATIONS_ON_STARTUP:-true}" != "false" ]; then
     echo "Applying database migrations using $ALEMBIC_CONFIG..."
-    $PY_BIN -m alembic -c "$ALEMBIC_CONFIG" upgrade head || echo "Database migration notice: Continuing startup."
+    ENV_LOWER=$(echo "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')
+    if [ "$ENV_LOWER" = "production" ] || [ "$ENV_LOWER" = "prod" ]; then
+        $PY_BIN -m alembic -c "$ALEMBIC_CONFIG" upgrade head
+    else
+        $PY_BIN -m alembic -c "$ALEMBIC_CONFIG" upgrade head || echo "Database migration notice: Continuing local startup."
+    fi
 fi
 
-PORT_TO_USE="${PORT:-${WEBSITES_PORT:-8000}}"
-echo "Starting Uvicorn server on port $PORT_TO_USE (Azure proxy headers enabled)..."
+# Prefer Azure's explicit WEBSITES_PORT when provided, then PORT (Dockerfile default 8000)
+PORT_TO_USE="${WEBSITES_PORT:-${PORT:-8000}}"
+GRACEFUL_TIMEOUT="${UVICORN_GRACEFUL_TIMEOUT:-15}"
+KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-5}"
 
-exec $PY_BIN -m uvicorn main:app --host 0.0.0.0 --port "$PORT_TO_USE" --proxy-headers --forwarded-allow-ips='*'
+PROXY_ARGS=()
+TRUST_PROXY_LOWER=$(echo "${TRUST_PROXY_HEADERS:-false}" | tr '[:upper:]' '[:lower:]')
+if [ "$TRUST_PROXY_LOWER" = "true" ] || [ "$TRUST_PROXY_LOWER" = "1" ] || [ "$TRUST_PROXY_LOWER" = "yes" ]; then
+    PROXY_ARGS=(--proxy-headers --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-*}")
+    echo "Starting Uvicorn server on port $PORT_TO_USE (trusted proxy headers enabled)..."
+else
+    echo "Starting Uvicorn server on port $PORT_TO_USE..."
+fi
+
+exec $PY_BIN -m uvicorn main:app \
+    --host 0.0.0.0 \
+    --port "$PORT_TO_USE" \
+    --timeout-graceful-shutdown "$GRACEFUL_TIMEOUT" \
+    --timeout-keep-alive "$KEEP_ALIVE" \
+    "${PROXY_ARGS[@]}"

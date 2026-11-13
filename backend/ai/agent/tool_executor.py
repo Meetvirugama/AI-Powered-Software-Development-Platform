@@ -88,29 +88,31 @@ class ToolExecutor:
 
         except AgentToolValidationError as exc:
             latency_ms = round((time.monotonic() - start_time) * 1000.0, 2)
+            safe_err = sanitize_and_redact(str(exc))
             logger.info(
                 "agent_tool_validation_failed",
-                extra={"tool_name": tool_name, "call_id": call_id, "error": str(exc)},
+                extra={"tool_name": tool_name, "call_id": call_id, "error": safe_err},
             )
             return AgentToolResult(
                 call_id=call_id,
                 tool_name=tool_name,
                 is_error=True,
-                error_message=str(exc),
+                error_message=safe_err,
                 execution_time_ms=latency_ms,
             )
 
         except Exception as exc:  # noqa: BLE001
             latency_ms = round((time.monotonic() - start_time) * 1000.0, 2)
+            safe_err = sanitize_and_redact(f"Tool error: {exc}")
             logger.error(
                 "agent_tool_unexpected_failure",
-                extra={"tool_name": tool_name, "call_id": call_id, "error": str(exc)},
+                extra={"tool_name": tool_name, "call_id": call_id, "error": safe_err},
             )
             return AgentToolResult(
                 call_id=call_id,
                 tool_name=tool_name,
                 is_error=True,
-                error_message=f"Tool error: {exc}",
+                error_message=safe_err,
                 execution_time_ms=latency_ms,
             )
 
@@ -119,6 +121,11 @@ class ToolExecutor:
 
     def _sanitize_result(self, result: AgentToolResult) -> AgentToolResult:
         """Redact secrets and clamp output size."""
+        if result.error_message:
+            result.error_message = sanitize_and_redact(result.error_message)
+            err_trunc, _ = truncate_tool_output(result.error_message, self._max_result_bytes)
+            result.error_message = err_trunc
+
         # 1. Redact secrets from result representation
         if isinstance(result.result, str):
             result.result = sanitize_and_redact(result.result)

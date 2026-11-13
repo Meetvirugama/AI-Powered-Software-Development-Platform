@@ -24,13 +24,28 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt
 
 
+_SENSITIVE_WEBHOOK_KEYS = frozenset({
+    "token",
+    "access_token",
+    "refresh_token",
+    "secret",
+    "client_secret",
+    "webhook_secret",
+    "private_key",
+    "password",
+    "authorization",
+    "api_key",
+    "apikey",
+})
+
+
 def _sanitize_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     """Recursively redact secrets and omit sensitive keys from webhook payload before DB storage."""
     if not payload:
         return {}
     sanitized: dict[str, Any] = {}
     for k, v in payload.items():
-        if k in ("token", "access_token", "secret", "client_secret", "private_key", "password"):
+        if str(k).lower() in _SENSITIVE_WEBHOOK_KEYS:
             sanitized[k] = "[REDACTED]"
         elif isinstance(v, dict):
             sanitized[k] = _sanitize_payload(v)
@@ -169,7 +184,7 @@ class WebhookEventRepository:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
             return None
-        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+        if expected_claimed_at is not None and _as_utc(event.claimed_at) != _as_utc(expected_claimed_at):
             logger.warning("webhook_fencing_token_mismatch_succeeded", extra={"event_id": str(event_id)})
             return None
         now = datetime.now(timezone.utc)
@@ -191,7 +206,7 @@ class WebhookEventRepository:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
             return None
-        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+        if expected_claimed_at is not None and _as_utc(event.claimed_at) != _as_utc(expected_claimed_at):
             logger.warning("webhook_fencing_token_mismatch_retry", extra={"event_id": str(event_id)})
             return None
         now = datetime.now(timezone.utc)
@@ -222,7 +237,7 @@ class WebhookEventRepository:
         event = self.session.get(GitHubWebhookEvent, event_id)
         if not event:
             return None
-        if expected_claimed_at is not None and event.claimed_at != expected_claimed_at:
+        if expected_claimed_at is not None and _as_utc(event.claimed_at) != _as_utc(expected_claimed_at):
             logger.warning("webhook_fencing_token_mismatch_dead_letter", extra={"event_id": str(event_id)})
             return None
         now = datetime.now(timezone.utc)

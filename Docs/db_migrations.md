@@ -2,7 +2,7 @@
 
 We use Alembic for managing database migrations with PostgreSQL.
 
-## Migration Files (Current — 12 Total)
+## Migration Files (Current — 17 Total)
 
 | Migration | File | Description |
 |---|---|---|
@@ -18,6 +18,11 @@ We use Alembic for managing database migrations with PostgreSQL.
 | `d5e6f7a8b9c0` | `d5e6f7a8b9c0_fix_constraints_and_add_indexes.py` | Constraint fixes, cascading foreign keys, and query index hardening |
 | `e1f2a3b4c5d6` | `e1f2a3b4c5d6_add_github_webhook_events_and_repo_automation.py` | Durable GitHub Webhook Ingestion — github_webhook_events table & repository automation flags |
 | `e8f9a0b1c2d3` | `e8f9a0b1c2d3_add_code_search_text_and_index_generation.py` | Multi-Stage Retrieval — code_search_text column on code_chunks & active_index_generation tracking |
+| `f3c4d5e6a7b8` | `f3c4d5e6a7b8_harden_repository_deletion_cascades.py` | Hardens repository deletion cascades across task, analysis, and webhook records |
+| `g4d5e6f7a8b9` | `g4d5e6f7a8b9_extend_tool_invocations_audit.py` | Extends tool_invocations with unified tool registry audit metadata |
+| `h5e6f7a8b9c0` | `h5e6f7a8b9c0_extend_task_approvals_for_tool_and_mcp.py` | Extends task_approvals for tool permissions and MCP elicitation |
+| `i6f7a8b9c0d1` | `i6f7a8b9c0d1_add_memory_entries_embedding_and_hnsw.py` | Adds vector(768) embedding column and HNSW index to memory_entries |
+| `j7a8b9c0d1e2` | `j7a8b9c0d1e2_modernize_symbols_edges_and_ranking.py` | Adds symbol importance ranking and edge provenance/resolution metadata |
 
 ## How to Create a Migration
 
@@ -86,12 +91,10 @@ alembic downgrade <revision_id>
 
 ## Production Migration Consistency & Acyclic Chain
 
-The entire 12-node migration chain is verified as continuous, unbroken, and acyclic (`backend/tests/test_migration_smoke.py::test_alembic_chain_is_unbroken_and_acyclic`):
-1. **Unbroken, Linear Chain:** `24498ac67b3e` (root) → `5f6dc031921b` → `aef3bb17eb34` → `cb4e2a7d0f31` → `e7b8c9d0f1a2` → `f1c2d3e4b5a6` → `b627460d74e0` → `b3c4d5e6f7a8` → `c94e1f8a2d73` → `d5e6f7a8b9c0` → `e1f2a3b4c5d6` → `e8f9a0b1c2d3` (head). Exactly one leaf head revision exists.
-2. **Schema & Model Parity:** All models in `backend/app/models/` have exact column and constraint parity with migrations, including:
-   - `repositories`: `active_index_generation`, `active_commit_sha`, `last_indexed_commit_sha`, `auto_sync_enabled`, `pr_review_enabled`, `pr_review_drafts`.
-   - `code_chunks`: `code_search_text` column with GIN simple text search index for code-aware lexical search.
-   - `github_webhook_events`: `id`, `event_type`, `action`, `delivery_id`, `repository_id`, `status` (Enum: `PENDING`, `PROCESSING`, `SUCCEEDED`, `RETRY`, `DEAD_LETTER`), `attempts`, `max_attempts`, `available_at`, `claimed_at`, `lease_expires_at`, `last_error`.
-3. **Cascading Referentials:** `ON DELETE CASCADE` verified on repository and run boundaries; `ON DELETE SET NULL` verified on user references.
+The entire 17-node migration chain is verified as continuous, unbroken, and acyclic (`backend/tests/test_migration_smoke.py::test_alembic_chain_is_unbroken_and_acyclic`) and runs against `pgvector/pgvector:pg16` in `.github/workflows/postgres-persistence-ci.yml`:
+1. **Unbroken, Linear Chain:** `24498ac67b3e` (root) → `5f6dc031921b` → `aef3bb17eb34` → `cb4e2a7d0f31` → `e7b8c9d0f1a2` → `f1c2d3e4b5a6` → `b627460d74e0` → `b3c4d5e6f7a8` → `c94e1f8a2d73` → `d5e6f7a8b9c0` → `e1f2a3b4c5d6` → `e8f9a0b1c2d3` → `f3c4d5e6a7b8` → `g4d5e6f7a8b9` → `h5e6f7a8b9c0` → `i6f7a8b9c0d1` → `j7a8b9c0d1e2` (head). Exactly one leaf head revision exists.
+2. **Schema & Model Parity:** `backend/migrations/env.py` registers all ORM models via `import app.models` so `alembic check` and `test_zero_schema_drift_against_database` enforce exact column, enum, and index parity (`memory_entries.embedding` `vector(768)` + HNSW, `code_chunks.code_search_text` + GIN, `code_symbols.importance_score`, `symbol_edges` provenance).
+3. **Domain-Specific Repository Aggregates:** `TaskRepository` (`backend/app/repositories/task/`) and `AnalysisRunRepository` (`backend/app/repositories/analysis/`) compose focused aggregates (`plans`, `approvals`, `executions`, `publication`, `explanations`, `bug_scans`, `test_generation`, `reviews`, `retention`) behind backwards-compatible facades.
+4. **Cascading Referentials:** `ON DELETE CASCADE` verified on repository and run boundaries; `ON DELETE SET NULL` verified on user and webhook references.
 
 Make sure your local PostgreSQL database (via `docker compose up -d`) is running before executing these commands.

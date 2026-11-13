@@ -25,13 +25,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from app.core.config import get_settings
 from app.core.database import Base, normalize_sync_database_url
-# ensure models are imported
+import app.models  # noqa: F401 — ensure all ORM models register on Base.metadata
 
 custom_url = config.get_main_option("sqlalchemy.url")
 if not custom_url or "driver://user:pass" in custom_url:
     settings = get_settings()
     norm_url = normalize_sync_database_url(settings.database_url)
     config.set_main_option("sqlalchemy.url", norm_url.replace("%", "%%"))
+else:
+    norm_custom = normalize_sync_database_url(custom_url)
+    config.set_main_option("sqlalchemy.url", norm_custom.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

@@ -355,13 +355,18 @@ def _normalize_code_target_payload(data: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 class ExplainContextOptions(BaseModel):
-    """Context selection options for Repository Intelligence Explain Studio (task.md §6.3)."""
+    """Context selection options for Repository Intelligence Explain Studio (task.md §6.3 & Issue 2)."""
 
     include_graph_context: bool = True
     include_callers: bool = True
+    include_callees: bool = True
     include_dependencies: bool = True
     include_tests: bool = True
     include_semantic_search: bool = True
+    explain_at_depth: bool = Field(
+        default=False,
+        description="Follow the call graph 1 hop (both callers and callees) and include their source body snippets (F07-C3).",
+    )
     selected_files: list[str] = Field(
         default_factory=list,
         description="User-selected related files explicitly added to context.",
@@ -377,6 +382,14 @@ class ExplainCodeRequest(BaseModel):
     )
     context: ExplainContextOptions = Field(default_factory=ExplainContextOptions)
     explanation_level: Literal["concise", "detailed", "deep_technical"] = "detailed"
+    depth_mode: Literal["standard", "deep"] = Field(
+        default="standard",
+        description="Call-graph traversal depth mode: 'standard' (signatures) or 'deep' (1-hop caller & callee body snippets).",
+    )
+    explain_at_depth: bool = Field(
+        default=False,
+        description="When True, follows the call graph one level (callers and callees) with full snippet expansion.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -487,6 +500,31 @@ class CodeExplanation(BaseModel):
     corrected_code: str | None = Field(
         default=None,
         description="Corrected, production-grade refactoring of the code solving identified issues.",
+    )
+    has_redacted_content: bool = Field(
+        default=False,
+        description="True when reconstructed source chunks contained [REDACTED] secret/config placeholders.",
+    )
+    redacted_occurrences: int = Field(
+        default=0,
+        ge=0,
+        description="Number of [REDACTED] placeholders detected in reconstructed target or context source.",
+    )
+    redaction_notice: str | None = Field(
+        default=None,
+        description="Human-readable security notice surfaced in the UI when source contains [REDACTED] tokens.",
+    )
+    call_graph_depth_expanded: bool = Field(
+        default=False,
+        description="True when 'Explain at depth' mode traversed 1-hop callers and callees in the call graph.",
+    )
+    expanded_callers: list[str] = Field(
+        default_factory=list,
+        description="1-hop caller symbols included during depth-mode call graph expansion.",
+    )
+    expanded_callees: list[str] = Field(
+        default_factory=list,
+        description="1-hop callee symbols included during depth-mode call graph expansion.",
     )
 
     @model_validator(mode="before")
@@ -880,7 +918,7 @@ class TestGenerationRequest(BaseModel):
         description="Specific commit SHA to pin analysis context.",
     )
     run_isolated_execution: bool = Field(
-        default=True,
+        default=False,
         description="Whether to execute generated tests in isolated sandbox runner.",
     )
 
@@ -1079,6 +1117,19 @@ class ReviewTarget(BaseModel):
     )
     base_revision: str | None = Field(default=None, max_length=128)
     head_revision: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_code_target_to_file(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_type = str(data.get("type") or "").strip().lower()
+            if raw_type in ("range", "symbol") and (data.get("path") or data.get("file_path")):
+                d = dict(data)
+                d["type"] = "file"
+                if "path" not in d and "file_path" in d:
+                    d["path"] = d["file_path"]
+                return d
+        return data
 
     @model_validator(mode="after")
     def _validate_review_target(self) -> "ReviewTarget":
@@ -1323,6 +1374,7 @@ _FEATURE_TYPE_ALIASES: dict[str, str] = {
     "generate_tests": "generate_tests",
     "explain": "explain",
     "review": "review",
+    "code_review": "review",
 }
 
 
@@ -1412,6 +1464,6 @@ class UpdateReviewSettingsRequest(BaseModel):
 
     pr_review_enabled: bool | None = None
     pr_review_drafts: bool | None = None
-    min_confidence: str | None = None
+    min_confidence: ConfidenceLevel | None = None
     max_comments: int | None = Field(default=None, ge=1, le=50)
     changed_lines_only: bool | None = None

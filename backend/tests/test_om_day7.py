@@ -11,21 +11,27 @@ from app.models import (
     CodeSymbol, SymbolEdge, CodeChunk, MemoryEntry, MemoryType, MemoryStatus
 )
 from app.core.config import get_settings
-from app.core.database import Base
+from app.core.database import Base, normalize_sync_database_url
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL",
-    get_settings().database_url,
+TEST_DATABASE_URL = normalize_sync_database_url(
+    os.environ.get(
+        "TEST_DATABASE_URL",
+        get_settings().database_url,
+    )
 )
 
 @pytest.fixture(scope="session")
 def engine():
+    if TEST_DATABASE_URL.startswith("sqlite"):
+        pytest.skip("PostgreSQL test database not available (SQLite active)")
     engine = create_engine(TEST_DATABASE_URL, connect_args={"connect_timeout": 2})
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception:
         pytest.skip("PostgreSQL test database not available")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
     yield engine
     engine.dispose()

@@ -35,9 +35,11 @@ export interface AnalysisOptions {
 export interface ExplainContextOptions {
   include_graph_context?: boolean;
   include_callers?: boolean;
+  include_callees?: boolean;
   include_dependencies?: boolean;
   include_tests?: boolean;
   include_semantic_search?: boolean;
+  explain_at_depth?: boolean;
   selected_files?: string[];
 }
 
@@ -48,6 +50,8 @@ export interface ExplainCodeRequest {
   options?: AnalysisOptions;
   context?: ExplainContextOptions;
   explanation_level?: ExplanationLevel;
+  depth_mode?: 'standard' | 'deep';
+  explain_at_depth?: boolean;
 }
 
 export interface DiscoveredRelatedFile {
@@ -59,6 +63,7 @@ export interface DiscoveredRelatedFile {
     | 'type_definition'
     | 'database_model'
     | 'associated_test'
+    | 'co_change_coupled'
     | 'indirect_dependency'
     | 'semantic_match';
   relation_label: string;
@@ -66,6 +71,8 @@ export interface DiscoveredRelatedFile {
   reason: string;
   symbols: string[];
   is_preselected: boolean;
+  importance_score?: number;
+  co_change_score?: number;
 }
 
 export interface RelatedFilesDiscoveryResponse {
@@ -203,6 +210,12 @@ export interface CodeExplanation {
   code_output_explanation?: string;
   code_issues_and_solutions?: string[];
   corrected_code?: string;
+  has_redacted_content?: boolean;
+  redacted_occurrences?: number;
+  redaction_notice?: string | null;
+  call_graph_depth_expanded?: boolean;
+  expanded_callers?: string[];
+  expanded_callees?: string[];
 }
 
 /** Backward-compatible alias for CodeExplanation */

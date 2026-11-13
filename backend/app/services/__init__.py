@@ -14,6 +14,7 @@ from app.services.git_branch import (
     format_agent_branch_name,
 )
 from app.services.independent_verifier import IndependentVerifier
+from app.services.memory_service import ProjectMemoryService
 from app.services.review_history_service import ReviewHistoryService
 from app.services.task_execution_orchestrator import (
     TaskExecutionOrchestrator,
@@ -38,6 +39,7 @@ __all__ = [
     "LLMCodeExplanationService",
     "LLMCodeReviewService",
     "LLMTestGenerationService",
+    "ProjectMemoryService",
     "MAX_TASK_REPAIR_ATTEMPTS",
     "ReviewHistoryService",
     "StatefulTaskExecutionOrchestrator",

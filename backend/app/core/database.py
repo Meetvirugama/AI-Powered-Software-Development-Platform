@@ -30,7 +30,8 @@ def normalize_sync_database_url(url: str) -> str:
     """Normalize database URL for SQLAlchemy 2.0 with psycopg3 driver.
 
     Handles Supabase, Azure, Heroku, and cloud Postgres URLs starting with
-    'postgres://' or 'postgresql://' (without explicit driver specification).
+    'postgres://' or 'postgresql://' (without explicit driver specification),
+    and enforces sslmode=require on Supabase hosts when omitted.
     """
     if not url:
         return ""
@@ -39,13 +40,18 @@ def normalize_sync_database_url(url: str) -> str:
         clean = "postgresql+psycopg://" + clean[len("postgres://"):]
     elif clean.startswith("postgresql://") and not clean.startswith("postgresql+"):
         clean = "postgresql+psycopg://" + clean[len("postgresql://"):]
+    lower = clean.lower()
+    if ("supabase.co" in lower or "supabase.com" in lower) and "sslmode=" not in lower:
+        sep = "&" if "?" in clean else "?"
+        clean = f"{clean}{sep}sslmode=require"
     return clean
 
 
 def _build_db_kwargs(url: str) -> dict[str, Any]:
     """Construct engine kwargs tailored for local, Supabase, Azure, or SQLite databases."""
     kwargs: dict[str, Any] = {"pool_pre_ping": True}
-    if not url.startswith("sqlite"):
+    is_memory_sqlite = url.startswith("sqlite") and (":memory:" in url or url in ("sqlite://", "sqlite:///"))
+    if not is_memory_sqlite:
         kwargs.update(
             {
                 "pool_size": settings.db_pool_size,
@@ -54,6 +60,7 @@ def _build_db_kwargs(url: str) -> dict[str, Any]:
                 "pool_recycle": settings.db_pool_recycle,
             }
         )
+    if not url.startswith("sqlite"):
         connect_args: dict[str, Any] = {}
         # Supabase Transaction Pooler (port 6543 / Supavisor / pgbouncer):
         # Disable prepared statement caching to prevent 'prepared statement already exists' collisions.

@@ -31,21 +31,31 @@ export function useAuth() {
     setIsLoading(true);
     setSessionError(null);
     try {
-      const currentUser = await getCurrentUser();
-      setUser(currentUser);
-      setSessionError(null);
-    } catch (err: unknown) {
-      const errorObj = err as { code?: string; message?: string; status?: number } | undefined;
-      const isUnauthorized = errorObj?.code === 'UNAUTHORIZED' || errorObj?.status === 401;
+      for (let attempt = 0; attempt <= 2; attempt += 1) {
+        try {
+          const currentUser = await getCurrentUser();
+          setUser(currentUser);
+          setSessionError(null);
+          return;
+        } catch (err: unknown) {
+          const errorObj = err as { code?: string; message?: string } | undefined;
+          const isUnauthorized = errorObj?.code === 'UNAUTHORIZED';
 
-      if (isUnauthorized) {
-        clearUser();
-        setSessionError(null);
-      } else {
-        // Network or 5xx server error: keep local user if already present, but surface retryable error
-        setSessionError(
-          errorObj?.message || 'Could not verify session due to a connection or server error.'
-        );
+          if (isUnauthorized) {
+            clearUser();
+            setSessionError(null);
+            return;
+          }
+          if (attempt < 2) {
+            // Auto-retry transient connection errors during initial server startup
+            await new Promise((resolve) => setTimeout(resolve, 800));
+            continue;
+          }
+          // Network or 5xx server error: keep local user if already present, but surface retryable error
+          setSessionError(
+            errorObj?.message || 'Could not verify session due to a connection or server error.'
+          );
+        }
       }
     } finally {
       setIsLoading(false);

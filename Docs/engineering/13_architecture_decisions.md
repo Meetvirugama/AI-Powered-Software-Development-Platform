@@ -476,4 +476,41 @@ Prior to this decision, autonomous execution after human plan approval exhibited
    - `GET /api/v1/tasks/{task_id}/workflow-status` returns real-time progress percentage, completed steps, and verification results.
    - Real-time step transitions stream over Redis pubsub (`platform_events`) to frontend SSE clients.
 
+---
+
+## ADR-016: Embedding Profile v2, cAST AST Chunking, Contextual Headers, L2 Normalization & Local Embedding Policy Review
+
+| Field | Value |
+|---|---|
+| **Title** | Task-Aware Gemini EmbeddingProfile v2, cAST Chunking, Contextual Headers, L2 Normalization, and ADR-008 Local Model Gating |
+| **Date** | 2026-11-11 |
+| **Status** | Accepted |
+| **Owner** | Yug / Meet |
+
+**Context:**
+Code retrieval quality and embedding efficiency exhibited five engineering gaps:
+1. Gemini `batchEmbedContents` requests omitted `taskType`, using symmetric embeddings instead of asymmetric document/code-query representations.
+2. Small sibling symbols (helper functions, methods, constants) produced numerous tiny chunks, inflating API calls and fragmenting retrieval context.
+3. Embedding input lacked structural hierarchy context (`file_path`, enclosing class, function signature), while displayed `code_chunks.content` must remain raw source code for accurate line citations.
+4. Stored vectors were not explicitly L2-normalized on write.
+5. Evaluating optional local code embeddings (`nomic-ai/CodeRankEmbed`) required explicit governance alignment with ADR-008 (`ai_quality_evaluator.py`).
+
+**Decision:**
+1. **Gemini Task Types & EmbeddingProfile v2:**
+   - Centralize `GeminiTaskType.RETRIEVAL_DOCUMENT` for corpus indexing (`embed_documents`) and `GeminiTaskType.CODE_RETRIEVAL_QUERY` for search queries (`embed_query`).
+   - Introduce `EmbeddingProfile` `profile_version="v2"` (`EmbeddingProfile.v2_gemini()`) and isolate L1/Redis L2 cache keys by `profile_version` and `task_type`.
+   - Enforce strict compatibility checks (`is_compatible_with`) so `v1` and `v2` profiles or incompatible providers/models are never mixed.
+   - Support staged blue/green re-embedding (`ReembeddingMigrationManager`) preserving the active `v1` index during background `v2` staging, with resumable file progress, vector validation, atomic activation, and instant rollback.
+2. **cAST-Style AST Chunking (`SymbolChunker`):**
+   - Walk the symbol/AST hierarchy: recursively split classes exceeding `MAX_CHUNK_TOKENS = 512` along child method boundaries before falling back to line-boundary splitting, and greedily merge adjacent small sibling symbols (`<= 128` tokens) up to `512` tokens.
+   - Retain a deterministic dominant `symbol_id` (`group[0].id`), store all constituent symbol IDs in `metadata["symbol_ids"]`, compute deterministic UUIDv5 chunk IDs (`compute_stable_chunk_id`), and reconcile obsolete chunks on boundary changes.
+3. **Contextual Embedding Headers:**
+   - Prepend deterministic, secret-redacted headers (`# path: app/x.py | class Foo | def bar(a, b)`) strictly to `chunk.embedding_text` while keeping `chunk.content` unmodified so source offsets and `reconstruct_file_from_chunks` remain exact.
+4. **L2 Normalization on Write:**
+   - Normalize all persisted and query vectors via `l2_normalize_vector` (`||v||_2 = 1.0`), rejecting zero-norm, `NaN`/`Inf`, or wrong-dimensionality vectors with `InvalidVectorError` / `DimensionMismatchError`. Retain `<=>` cosine search by default while providing `evaluate_vector_storage_modes` for inner-product (`<#>`) and `halfvec` float16 precision benchmarking.
+5. **ADR-008 Review for Optional Local Embeddings (`CodeRankEmbed`):**
+   - Keep ADR-008 (`_PERMITTED_PROVIDERS = {"gemini", "groq"}` in `ai_quality_evaluator.py` and `_ALLOWED_EMBEDDING_PROVIDERS = {"gemini"}` in `config.py`) strictly enforced by default.
+   - Gate `CodeRankEmbedProvider` (`nomic-ai/CodeRankEmbed`, 768-d, 8192 context, query prefix `"Represent this query for searching relevant code: "`) behind explicit `allow_local_embeddings=True` opt-in with an isolated `EmbeddingProfile(provider="local_coderank", model="nomic-ai/CodeRankEmbed", dimensions=768, profile_version="v2")`.
+
+
 

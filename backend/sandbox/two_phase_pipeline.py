@@ -119,7 +119,7 @@ class TwoPhaseExecutionService:
             res = backend.execute(
                 task_id=task_id,
                 command="npm",
-                arguments=["install", "--prefer-offline", "--no-audit", "--no-fund"],
+                arguments=["install", "--ignore-scripts", "--prefer-offline", "--no-audit", "--no-fund"],
                 timeout_seconds=timeout_seconds,
                 network_enabled=True,
             )

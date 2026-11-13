@@ -1,0 +1,134 @@
+name: PostgreSQL Persistence & Pgvector CI
+
+on:
+  push:
+    branches: ["main", "master", "feature/**"]
+    paths:
+      - "backend/app/models/**"
+      - "backend/app/repositories/**"
+      - "backend/app/core/database.py"
+      - "backend/migrations/**"
+      - "backend/ai/retrieval/**"
+      - "backend/tests/**"
+      - "backend/requirements*.txt"
+      - ".github/workflows/postgres-persistence-ci.yml"
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "backend/app/models/**"
+      - "backend/app/repositories/**"
+      - "backend/app/core/database.py"
+      - "backend/migrations/**"
+      - "backend/ai/retrieval/**"
+      - "backend/tests/**"
+      - "backend/requirements*.txt"
+      - ".github/workflows/postgres-persistence-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-persistence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-migrations-and-retrieval:
+    name: PostgreSQL 16 + pgvector Migrations & Persistence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_ci_password
+          POSTGRES_DB: platform_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d platform_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://postgres:postgres_ci_password@localhost:5432/platform_ci
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres_ci_password@localhost:5432/platform_ci
+      SECRET_KEY: ci-ephemeral-secret-key-not-for-production-use-32b
+      JWT_SECRET_KEY: ci-ephemeral-jwt-key-not-for-production-use-32b
+      REDIS_URL: redis://localhost:6379/0
+      GITHUB_TOKEN_ENCRYPTION_KEY: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "backend/requirements*.txt"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+
+      - name: Verify PostgreSQL and pgvector extension
+        run: |
+          python -c "
+          import os
+          from sqlalchemy import create_engine, text
+          engine = create_engine(os.environ['DATABASE_URL'])
+          with engine.begin() as conn:
+              conn.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+              ver = conn.execute(text(\"SELECT extversion FROM pg_extension WHERE extname = 'vector'\")).scalar_one()
+              print(f'Connected to PostgreSQL with pgvector {ver}')
+          engine.dispose()
+          "
+
+      - name: Run Alembic migrations and verify single head
+        working-directory: backend
+        run: |
+          python -c "
+          import subprocess, sys
+          out = subprocess.check_output(['alembic', 'heads'], text=True)
+          heads = [line for line in out.strip().splitlines() if line.strip()]
+          print('Alembic heads:', heads)
+          assert len(heads) == 1, f'Expected single Alembic head, got {heads}'
+          "
+          alembic upgrade head
+          alembic current
+
+      - name: Run PostgreSQL migration lifecycle, schema drift & persistence tests
+        run: |
+          pytest -v --no-cov \
+            backend/tests/test_migration_smoke.py \
+            backend/tests/test_om_day7.py \
+            backend/tests/test_repository_aggregates_and_postgres.py \
+            backend/tests/test_om_w2_d1_persistence.py \
+            backend/tests/test_om_w2_d2_explanation_history.py \
+            backend/tests/test_om_w2_d3_finding_persistence.py \
+            backend/tests/test_om_w2_d4_test_generation_history.py \
+            backend/tests/test_om_w2_d5_review_history.py \
+            backend/tests/test_om_w2_d6_integration_integrity.py \
+            backend/tests/test_om_w2_d7_acceptance_regression.py \
+            backend/tests/test_om_w3_d1_persistence.py \
+            backend/tests/test_om_w3_d2_planning_persistence.py \
+            backend/tests/test_om_w3_d3_d4_execution_persistence.py \
+            backend/tests/test_om_w3_d5_verification_pr_traceability.py \
+            backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py \
+            backend/tests/test_repository_deletion_cascades.py \
+            backend/tests/test_project_memory_service.py \
+            backend/tests/test_embedding_service.py \
+            backend/tests/test_embedding_dimension_invariant.py \
+            backend/tests/test_vector_retrieval.py \
+            backend/tests/test_hybrid_retrieval.py \
+            backend/tests/test_adaptive_hnsw.py \
+            backend/tests/test_code_lexical_retrieval.py

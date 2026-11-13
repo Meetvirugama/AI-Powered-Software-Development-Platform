@@ -43,14 +43,14 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
     """Deep readiness check validating database, Redis, and configured service availability."""
     settings = get_settings()
 
-    # 1. Database check (non-blocking thread with strict 2.0s timeout)
+    # 1. Database check (non-blocking thread with resilient timeout for cloud pools)
     db_health = ComponentHealth(status="unhealthy")
     def _sync_db_check() -> None:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
 
     try:
-        await asyncio.wait_for(asyncio.to_thread(_sync_db_check), timeout=2.0)
+        await asyncio.wait_for(asyncio.to_thread(_sync_db_check), timeout=5.0)
         db_health = ComponentHealth(status="healthy", message="Connected to PostgreSQL")
     except asyncio.TimeoutError:
         logger.warning("readiness_check_db_timeout")
@@ -59,14 +59,14 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         logger.warning("readiness_check_db_failed", extra={"error": str(exc)})
         db_health = ComponentHealth(status="unhealthy", message="Database connection failed")
 
-    # 2. Redis check (non-blocking thread with strict 2.0s timeout)
+    # 2. Redis check (non-blocking thread with resilient timeout)
     redis_health = ComponentHealth(status="unhealthy")
     def _sync_redis_check() -> bool:
         redis_client = get_redis()
         return bool(redis_client.ping())
 
     try:
-        ping_ok = await asyncio.wait_for(asyncio.to_thread(_sync_redis_check), timeout=2.0)
+        ping_ok = await asyncio.wait_for(asyncio.to_thread(_sync_redis_check), timeout=5.0)
         if ping_ok:
             redis_health = ComponentHealth(status="healthy", message="Connected to Redis")
         else:

@@ -82,6 +82,7 @@ class RepositoryIntelligenceSnapshotManager:
             file_count=len(snapshot.files),
             symbol_count=len(snapshot.nodes),
             edge_count=len(snapshot.edges),
+            co_change_edge_count=len(getattr(snapshot, "co_change_edges", []) or []),
             module_count=len(snapshot.modules),
             entry_point_count=len(snapshot.entry_points),
             is_valid=True,

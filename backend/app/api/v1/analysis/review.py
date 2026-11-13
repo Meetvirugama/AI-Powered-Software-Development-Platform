@@ -387,8 +387,9 @@ async def publish_review_to_github(
 
     github_service = getattr(request.app.state, "github_service", None)
     if not github_service:
-        from app.integrations.github.service import GitHubService
-        github_service = GitHubService(db)
+        from app.core.config import get_settings
+        from app.services.github_service import GitHubService
+        github_service = GitHubService(settings=get_settings(), db=db)
 
     gh_installation_id = None
     if getattr(repo, "installation_id", None):

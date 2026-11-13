@@ -10,7 +10,11 @@ from app.repositories.symbol_edge_repository import SymbolEdgeRepository
 from app.repositories.task_repository import (
     InvalidStateTransitionError,
     PlanNotFoundError,
+    TaskApprovalRepository,
+    TaskExecutionRepository,
     TaskNotFoundError,
+    TaskPlanRepository,
+    TaskPublicationRepository,
     TaskRepository,
 )
 from app.repositories.user_repository import UserRepository
@@ -25,7 +29,11 @@ __all__ = [
     "PullRequestRepository",
     "RepositoryRepository",
     "SymbolEdgeRepository",
+    "TaskApprovalRepository",
+    "TaskExecutionRepository",
     "TaskNotFoundError",
+    "TaskPlanRepository",
+    "TaskPublicationRepository",
     "TaskRepository",
     "UserRepository",
 ]

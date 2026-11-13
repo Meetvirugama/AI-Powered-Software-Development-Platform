@@ -29,6 +29,8 @@ FailureCategory = Literal[
     "ENVIRONMENT_ERROR",
 ]
 
+FailureClassification = Literal["infra", "test-bug", "code-bug"]
+
 TestFrameworkName = Literal["pytest", "unittest", "jest", "unknown"]
 RepairStateStatus = Literal["IDLE", "DIAGNOSING", "REPAIRING", "TESTING", "EXHAUSTED", "RESOLVED"]
 
@@ -70,6 +72,10 @@ class DiagnosedFailure(BaseModel):
     is_repairable: bool = Field(
         default=True,
         description="True if automated code repair can address this defect; False for environment/infrastructure faults.",
+    )
+    failure_classification: FailureClassification = Field(
+        default="code-bug",
+        description="High-level category: infra, test-bug, or code-bug (Docs/week3 §6 & Issue #205).",
     )
     stack_trace_snippet: str = Field(
         default="",
@@ -120,6 +126,10 @@ class TracebackDiagnosisResult(BaseModel):
     can_attempt_repair: bool = Field(
         default=True,
         description="True if at least one repairable code defect exists and no blocking infrastructure faults occurred.",
+    )
+    primary_classification: FailureClassification = Field(
+        default="code-bug",
+        description="Aggregate failure classification: infra, test-bug, or code-bug.",
     )
     summary: str = Field(
         default="",
@@ -270,6 +280,7 @@ class RepairLoopState(BaseModel):
 __all__ = [
     "DiagnosedFailure",
     "FailureCategory",
+    "FailureClassification",
     "MAX_DIFF_CHARS",
     "PatchValidationResult",
     "RepairLoopState",

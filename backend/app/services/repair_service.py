@@ -27,6 +27,7 @@ from app.core.secret_redaction import redact, redact_secrets
 from app.schemas.repair import (
     DiagnosedFailure,
     FailureCategory,
+    FailureClassification,
     MAX_DIFF_CHARS,
     PatchValidationResult,
     RepairPatchPayload,
@@ -123,6 +124,133 @@ def compute_normalized_patch_hash(diff_text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Classification & Test Path Helpers (Issue #205 & F24)
+# ---------------------------------------------------------------------------
+
+def is_test_file(path: str | None) -> bool:
+    """Determine whether a file path points to a test or specification file."""
+    if not path:
+        return False
+    norm = str(path).replace("\\", "/").strip().lower()
+    while norm.startswith("./"):
+        norm = norm[2:]
+    parts = norm.split("/")
+    filename = parts[-1]
+
+    # Test directories
+    if any(p in ("tests", "test", "__tests__", "spec", "specs") for p in parts[:-1]):
+        return True
+
+    # Test filename conventions
+    if filename.startswith("test_") or filename.endswith("_test.py"):
+        return True
+    if filename.endswith(
+        (
+            ".test.js",
+            ".test.ts",
+            ".test.jsx",
+            ".test.tsx",
+            ".spec.js",
+            ".spec.ts",
+            ".spec.jsx",
+            ".spec.tsx",
+            "_test.go",
+            "_spec.rb",
+        )
+    ):
+        return True
+    if filename in ("conftest.py", "setup_tests.py"):
+        return True
+
+    return False
+
+
+def extract_application_frames_from_traceback(tb_text: str) -> list[tuple[str, int]]:
+    """Extract (file_path, line_number) tuples for workspace application files from traceback."""
+    frames: list[tuple[str, int]] = []
+    if not tb_text:
+        return frames
+
+    # Python traceback lines: File "...", line 123
+    for match in re.finditer(r'File\s+["\']([^"\']+)["\'],\s+line\s+(\d+)', tb_text):
+        raw_path, line_str = match.group(1), match.group(2)
+        norm = raw_path.replace("\\", "/").strip()
+        while norm.startswith("./"):
+            norm = norm[2:]
+        if (
+            "site-packages" in norm
+            or "lib/python" in norm
+            or "Python3" in norm
+            or "python3" in norm
+            or norm.startswith(("<", "/usr", "/opt"))
+        ):
+            continue
+        if not is_test_file(norm):
+            frames.append((norm, int(line_str)))
+
+    # Jest/JS stack lines: at ... (path:line:col)
+    for match in re.finditer(r'at\s+.*?\((.*?):(\d+):(\d+)\)', tb_text):
+        raw_path, line_str = match.group(1), match.group(2)
+        norm = raw_path.replace("\\", "/").strip()
+        while norm.startswith("./"):
+            norm = norm[2:]
+        if "node_modules" in norm:
+            continue
+        if not is_test_file(norm):
+            frames.append((norm, int(line_str)))
+
+    return frames
+
+
+def classify_failure(
+    failure: DiagnosedFailure,
+    raw_traceback: str = "",
+) -> FailureClassification:
+    """Classify a diagnosed failure into 'infra', 'test-bug', or 'code-bug'."""
+    if (
+        failure.category in ("INFRASTRUCTURE_FAILURE", "TIMEOUT", "ENVIRONMENT_ERROR")
+        or not failure.is_repairable
+    ):
+        return "infra"
+
+    file_path = failure.file_path or ""
+    combined_tb = f"{failure.stack_trace_snippet}\n{raw_traceback}"
+    app_frames = extract_application_frames_from_traceback(combined_tb)
+
+    if file_path and is_test_file(file_path):
+        if app_frames:
+            # Test called into application code where the defect originated
+            return "code-bug"
+        # Test failed within itself (e.g. invalid test assertion, fixture failure)
+        return "test-bug"
+
+    return "code-bug"
+
+
+def classify_diagnosis(
+    diagnosis: TracebackDiagnosisResult,
+) -> FailureClassification:
+    """Classify aggregate diagnosis into 'infra', 'test-bug', or 'code-bug'."""
+    if diagnosis.has_infrastructure_failure or not diagnosis.can_attempt_repair:
+        return "infra"
+    if not diagnosis.failures:
+        return "code-bug"
+    if any(
+        f.category in ("INFRASTRUCTURE_FAILURE", "TIMEOUT", "ENVIRONMENT_ERROR")
+        for f in diagnosis.failures
+    ):
+        return "infra"
+
+    classifications = [
+        getattr(f, "failure_classification", None) or classify_failure(f, diagnosis.summary)
+        for f in diagnosis.failures
+    ]
+    if all(c == "test-bug" for c in classifications):
+        return "test-bug"
+    return "code-bug"
+
+
+# ---------------------------------------------------------------------------
 # 1. Failure Traceback Analyzer
 # ---------------------------------------------------------------------------
 
@@ -180,16 +308,22 @@ class FailureTracebackAnalyzer:
                 )
             )
 
+        # Populate granular failure classifications (infra / test-bug / code-bug)
+        for f in failures:
+            f.failure_classification = classify_failure(f, sanitized_output)
+
         # Repairability: Can repair only if at least one repairable failure exists and no blocking infra failure
+        has_infra = has_infra or any(f.failure_classification == "infra" for f in failures)
         can_repair = (
             any(f.is_repairable for f in failures)
             and not any(f.category in ("INFRASTRUCTURE_FAILURE", "ENVIRONMENT_ERROR", "TIMEOUT") for f in failures)
+            and not has_infra
         )
 
         total_failed = len(failures)
         summary = self._generate_summary(detected_framework, failures, has_infra, can_repair)
 
-        return TracebackDiagnosisResult(
+        temp_res = TracebackDiagnosisResult(
             framework=detected_framework,
             total_failed=total_failed,
             failures=failures,
@@ -198,6 +332,8 @@ class FailureTracebackAnalyzer:
             summary=summary,
             raw_exit_code=exit_code,
         )
+        temp_res.primary_classification = classify_diagnosis(temp_res)
+        return temp_res
 
     def _detect_framework(self, output: str) -> TestFrameworkName:
         """Infer test framework from output signatures."""
@@ -434,6 +570,7 @@ class RepairPatchValidator:
         allowed_files: list[str] | None = None,
         forbidden_files: list[str] | None = None,
         max_attempts: int = 3,
+        allow_test_edits: bool = False,
     ) -> PatchValidationResult:
         """Evaluate a candidate repair patch before workspace application.
 
@@ -445,6 +582,7 @@ class RepairPatchValidator:
         5. Scope Gate: if allowed_files is specified, modified files must be a subset.
         6. Secret Leaks Gate: patch diff cannot contain unredacted secrets or tokens.
         7. Repeat Loop Gate: patch cannot be an identical repeat of an earlier failed patch.
+        8. Anti-Reward Hacking Gate: strictly forbid modifying test files unless explicitly in scope.
 
         Returns:
             PatchValidationResult: Detailed validation verdict and telemetry.
@@ -517,11 +655,20 @@ class RepairPatchValidator:
                     f"Patch targets forbidden file(s) under policy constraint: {', '.join(extra_conflicts)}"
                 )
 
-        # 5. Allowed Files Scope Check
+        # 5. Allowed Files Scope Check (both diff headers and explicit target_files)
         if allowed_files:
-            allowed_set = set(allowed_files)
+            def _norm_scope(path: str) -> str:
+                val = str(path).strip().replace("\\", "/")
+                while val.startswith("./"):
+                    val = val[2:]
+                return val
+
+            allowed_norm_set = {_norm_scope(af) for af in allowed_files}
             target_check = validated_files if validated_files else extracted_files
-            out_of_scope = sorted(set(target_check).difference(allowed_set))
+            all_candidates = [*target_check, *validated_targets]
+            out_of_scope = sorted(
+                {f for f in all_candidates if _norm_scope(f) not in allowed_norm_set}
+            )
             if out_of_scope:
                 violations.append(
                     f"Patch targets file(s) outside approved plan scope: {', '.join(out_of_scope)}"
@@ -541,6 +688,29 @@ class RepairPatchValidator:
                 "Identical repair patch was already attempted and failed. Repeating identical failed patches is blocked."
             )
 
+        # 8. Anti-Reward Hacking Gate (Issue #205 & F24)
+        # Strictly forbid modifying or repairing test files to force a pass unless the
+        # approved plan explicitly specifies test files in its scope.
+        if not allow_test_edits:
+            allowed_test_files: set[str] = set()
+            if allowed_files:
+                for af in allowed_files:
+                    norm_af = str(af).replace("\\", "/").strip().lower()
+                    while norm_af.startswith("./"):
+                        norm_af = norm_af[2:]
+                    if is_test_file(norm_af):
+                        allowed_test_files.add(norm_af)
+
+            target_check_all = [*validated_files, *validated_targets]
+            for f in target_check_all:
+                norm_f = str(f).replace("\\", "/").strip().lower()
+                while norm_f.startswith("./"):
+                    norm_f = norm_f[2:]
+                if is_test_file(norm_f) and norm_f not in allowed_test_files:
+                    violations.append(
+                        f"Anti-reward hacking violation: Modifying test file '{f}' is forbidden during repair unless explicitly permitted in plan scope."
+                    )
+
         is_valid = len(violations) == 0
         rejection_reason = "; ".join(violations) if violations else None
 
@@ -558,6 +728,10 @@ class RepairPatchValidator:
 __all__ = [
     "FailureTracebackAnalyzer",
     "RepairPatchValidator",
+    "classify_diagnosis",
+    "classify_failure",
     "compute_normalized_patch_hash",
+    "extract_application_frames_from_traceback",
     "extract_modified_files_from_diff",
+    "is_test_file",
 ]

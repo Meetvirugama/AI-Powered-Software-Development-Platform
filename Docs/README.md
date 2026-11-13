@@ -60,6 +60,17 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
 - [17. GitHub Webhook Automation Design](./engineering/17_github_webhook_automation_design.md) — Durable webhook queue, lease worker, and event state machine.
 - [17. JWT & OAuth Hardening Architecture](./engineering/17_jwt_oauth_hardening.md) — Comprehensive reference for token rotation and security contracts.
+- [18. Repository Deletion Audit](./engineering/18_repository_deletion_audit.md) — Cascade deletion and audit trails.
+- [19. Background Worker Architecture](./engineering/19_background_worker_architecture.md) — Reliable background job processing.
+- [20. DBOS Transact Evaluation](./engineering/20_dbos_transact_evaluation.md) — Durable execution analysis.
+- [21. Provider Token Budget Calibration](./engineering/21_provider_token_budget_calibration.md) — Unified Token & Model Budget Calibration (Issue #189).
+- [22. Security Analysis Expansion](./engineering/22_security_analysis_expansion.md) — Broader Security Analysis & Multi-Scanner Architecture (Issue #191).
+- [23. Tool Permission Approval & MCP Elicitation](./engineering/23_tool_approval_and_mcp_elicitation.md) — Tool Permission Approval Gate and MCP Elicitation (Issue #199).
+- [24. Analysis History Evaluation Export](./engineering/24_analysis_history_evaluation_export.md) — Evaluation Dataset Export from Analysis History (Issue #195).
+- [25. GitHub Source Browsing & Consolidation](./engineering/25_github_source_browsing_and_consolidation.md) — Live remote issue browsing, PR demuxing, and duplicate execution surface consolidation (Issue #196).
+- [26. Project Memory Entries & MCP Resources](./engineering/26_project_memory_entries.md) — Episodic Project Memory, Semantic Search & MCP Resources (Issue #217 / F36).
+- [27. Branch, Commit, Push, and Draft PR Publication](./engineering/27_branch_commit_push_draft_pr_publication.md) — Host-Side Git Operations & Credential Isolation Architecture (Issue #207 / F26).
+- [28. Bounded Self-Repair Loop & Anti-Reward Hacking](./engineering/28_bounded_self_repair_loop.md) — LLM-Driven Targeted Repair Synthesis, Reflexion Memory & Anti-Reward Hacking Architecture (Issue #205 / F24).
 
 ---
 

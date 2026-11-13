@@ -16,3 +16,4 @@ class Chunk:
     token_count: int
     content_hash: str
     metadata: dict[str, Any]
+    embedding_text: str | None = None

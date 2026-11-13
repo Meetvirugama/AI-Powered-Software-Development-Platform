@@ -1,59 +1,70 @@
+"""AI Quality Evaluator, False-Positive Metrics, Explanation Rubric Judge, and Provider Validation Engine.
 
-"""AI Quality Evaluator, False-Positive Metrics, and Provider Validation Engine.
-
-Owner: Dev — Week 3 Day 6 Deliverable (Docs/daily_tasks.md line 664 & Docs/week3.md §4.1, §6)
+Owner: Dev — Week 3 Day 6 Deliverable (Docs/daily_tasks.md line 664 & Docs/week3.md §4.1, §6) & Issue 2 (P-28 LLM-as-Judge Rubric)
 Reference: Docs/week3.md §4.1 (AI Provider Policy), §4.3 (Quality & Reliability), §6
 
-What this service does in simple words:
-1. Provider Validator: Checks that the platform only uses approved AI companies (Google Gemini
-   and Groq). Blocks unapproved providers (like OpenAI) and tests fallback resilience.
-2. False-Positive Evaluator: Feeds clean, bug-free code to the AI and verifies that the AI
-   does NOT invent fake bugs (ensuring a 0.0% false-positive rate on clean code).
-3. Defect Fixture Evaluator: Feeds code with known defects (like null checks or off-by-one errors)
-   and measures how accurately the AI catches them (Precision, Recall, and F1 score).
-4. Schema Conformance Checker: Checks that the AI output strictly follows our Pydantic data
-   schemas without crashing.
-5. Report Generator: Combines all measurements into a clear, structured Quality Report.
+Responsibilities:
+1. Provider Validator: Checks that the platform only uses approved AI providers (Google Gemini and Groq).
+2. False-Positive Evaluator: Feeds clean, bug-free code to the AI and verifies 0.0% false-positive rate.
+3. Defect Fixture Evaluator: Measures Precision, Recall, and F1 score on known defect fixtures.
+4. Schema Conformance Checker: Verifies strict Pydantic schema conformance.
+5. Explanation Quality Evaluator (Issue 2 — P-28): Scores `CodeExplanation` outputs across a 5-dimension
+   rubric (`factual_accuracy`, `completeness`, `call_graph_context_clarity`, `citation_grounding`,
+   `redaction_transparency`) using LLM-as-judge (`P-28`) with a deterministic rubric fallback.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from typing import Any
 from uuid import uuid4
 
-from app.core.errors import APIError, ErrorCode
-from app.schemas.ai_quality import (
-    AIQualityReport,
-    ProviderValidationCheck,
-    QualityBenchmarkSample,
-)
 from pydantic import BaseModel, ValidationError
 
 from ai.schemas.validator import OutputValidator
+from app.core.errors import APIError, ErrorCode
+from app.core.secret_redaction import redact
+from app.schemas.ai_quality import (
+    AIQualityReport,
+    ExplanationQualityRubric,
+    ProviderValidationCheck,
+    QualityBenchmarkSample,
+)
 
 logger = logging.getLogger(__name__)
 
-# List of LLM providers explicitly permitted by company policy (Docs/week3.md §4.1)
-# Any provider not in this set is rejected with an HTTP 400 error.
+# List of LLM providers explicitly permitted by company policy (Docs/week3.md §4.1 / ADR-008)
 _PERMITTED_PROVIDERS: set[str] = {"gemini", "groq"}
+
+_EXPLANATION_JUDGE_SYSTEM_PROMPT = """You are an impartial Principal Software Engineer acting as an LLM-as-Judge (P-28) evaluating the quality of an AI-generated CodeExplanation against the ground-truth source code and call-graph context.
+
+Score each of the 5 dimensions on a float scale from 1.0 (poor) to 5.0 (excellent):
+1. factual_accuracy: Does the explanation accurately describe the code's behavior without hallucinating non-existent functions or logic?
+2. completeness: Does it cover purpose, chronological logic_flow, key_symbols, and inputs_and_outputs?
+3. call_graph_context_clarity: Does it clearly explain 1-hop caller/callee interactions and dependencies when present?
+4. citation_grounding: Are source references grounded in valid file paths and line numbers?
+5. redaction_transparency: When `[REDACTED]` placeholders appear in the source, does the explanation acknowledge the redaction honestly instead of guessing secret values?
+
+Return ONLY a valid JSON object matching the ExplanationQualityRubric schema:
+{
+  "factual_accuracy": 4.5,
+  "completeness": 4.5,
+  "call_graph_context_clarity": 4.0,
+  "citation_grounding": 5.0,
+  "redaction_transparency": 5.0,
+  "rationale": "Concise explanation of the scores",
+  "improvement_suggestions": ["Optional actionable improvement"]
+}
+"""
 
 
 class AIQualityEvaluator:
-    """Evaluates AI output quality, precision/recall, false alarms, and provider policy compliance.
-
-    In simple words: This class acts as a quality inspector for our AI engines.
-    It tests whether the AI is giving accurate answers, not raising fake alarms,
-    and using authorized AI models.
-    """
+    """Evaluates AI output quality, precision/recall, explanation quality rubrics, and provider policy compliance."""
 
     def __init__(self, permitted_providers: set[str] | None = None) -> None:
-        """Initialize the quality evaluator.
-
-        Simple explanation:
-        Sets up the list of allowed AI providers (defaulting to Gemini and Groq).
-        """
         self.permitted_providers = (
             {p.lower() for p in permitted_providers}
             if permitted_providers is not None
@@ -65,15 +76,7 @@ class AIQualityEvaluator:
     # =======================================================================
 
     def validate_provider(self, gateway_or_provider: Any) -> ProviderValidationCheck:
-        """Check if an LLM gateway or provider follows our approved provider policy.
-
-        Simple explanation:
-        - We inspect the name of the AI provider (e.g. 'gemini', 'groq', or 'openai').
-        - If the provider is 'gemini' or 'groq', it passes (VALID).
-        - If the provider is anything else (like 'openai' or 'anthropic'), it fails (INVALID_PROVIDER).
-        - If the gateway is missing, unconfigured, or has no provider, it returns SERVICE_UNAVAILABLE.
-        """
-        # If no gateway or provider was given at all
+        """Check if an LLM gateway or provider follows our approved provider policy."""
         if gateway_or_provider is None:
             return ProviderValidationCheck(
                 provider_name="none",
@@ -84,7 +87,6 @@ class AIQualityEvaluator:
                 message="LLM gateway or provider is unconfigured (None).",
             )
 
-        # Extract provider object and its name
         provider = getattr(gateway_or_provider, "provider", gateway_or_provider)
         raw_name = (
             getattr(provider, "provider_name", None)
@@ -103,15 +105,12 @@ class AIQualityEvaluator:
             )
 
         provider_name = raw_name.strip().lower()
-
-        # Resolve active model name if available
         active_model = (
             getattr(provider, "default_model", None)
             or getattr(gateway_or_provider, "default_model", None)
             or "unknown"
         )
 
-        # Check if provider is on the approved allowlist (Gemini or Groq)
         if provider_name not in self.permitted_providers:
             allowed_list = ", ".join(sorted(self.permitted_providers))
             return ProviderValidationCheck(
@@ -126,7 +125,6 @@ class AIQualityEvaluator:
                 ),
             )
 
-        # Check for fallback provider configuration (resilience check)
         fallback = getattr(gateway_or_provider, "fallback_provider", None)
         fallback_active = getattr(gateway_or_provider, "fallback_active", False)
 
@@ -151,12 +149,7 @@ class AIQualityEvaluator:
         )
 
     def enforce_provider_policy(self, gateway_or_provider: Any) -> None:
-        """Strict policy enforcement guard that raises APIError on unpermitted providers.
-
-        Simple explanation:
-        - If the AI gateway is missing or unconfigured, raise HTTP 503 (SERVICE_UNAVAILABLE).
-        - If an unauthorized provider (like OpenAI) is requested, raise HTTP 400 (INVALID_REQUEST).
-        """
+        """Strict policy enforcement guard that raises APIError on unpermitted providers."""
         check = self.validate_provider(gateway_or_provider)
         if check.status == "SERVICE_UNAVAILABLE":
             raise APIError(
@@ -180,13 +173,7 @@ class AIQualityEvaluator:
         self,
         clean_samples: list[dict[str, Any]],
     ) -> tuple[list[QualityBenchmarkSample], float]:
-        """Evaluate clean, bug-free code samples to measure false alarms.
-
-        Simple explanation:
-        - We give the AI snippets of clean code (where there are zero bugs).
-        - If the AI reports a bug, that's a 'False Positive' (false alarm).
-        - We calculate the false-positive rate: target is 0.0 (zero false alarms).
-        """
+        """Evaluate clean, bug-free code samples to measure false alarms."""
         results: list[QualityBenchmarkSample] = []
         false_positive_count = 0
 
@@ -194,7 +181,6 @@ class AIQualityEvaluator:
             sample_id = sample.get("sample_id", f"clean-{uuid4().hex[:6]}")
             detected = sample.get("detected_defects", [])
 
-            # In clean code, any detected defect is a false positive
             is_fp = len(detected) > 0
             if is_fp:
                 false_positive_count += 1
@@ -223,13 +209,7 @@ class AIQualityEvaluator:
         self,
         defect_fixtures: list[dict[str, Any]],
     ) -> tuple[list[QualityBenchmarkSample], float, float, float]:
-        """Evaluate code with known bugs to measure how well the AI detects them.
-
-        Simple explanation:
-        - Precision: When the AI flags a bug, how often is it actually right?
-        - Recall: Out of all the bugs that were actually in the code, how many did the AI catch?
-        - F1 score: A balanced average of Precision and Recall.
-        """
+        """Evaluate code with known bugs to measure Precision, Recall, and F1."""
         results: list[QualityBenchmarkSample] = []
         true_positives = 0
         false_negatives = 0
@@ -240,11 +220,8 @@ class AIQualityEvaluator:
             expected = set(fixture.get("expected_defects", []))
             detected = set(fixture.get("detected_defects", []))
 
-            # Matched bugs are true positives
             matched = expected.intersection(detected)
-            # Bugs that were present but missed by the AI are false negatives
             missed = expected.difference(detected)
-            # Bugs claimed by the AI that were not actually in the code are false positives
             hallucinated = detected.difference(expected)
 
             is_tp = len(matched) > 0
@@ -267,15 +244,12 @@ class AIQualityEvaluator:
                 )
             )
 
-        # Calculate Precision: TP / (TP + FP)
         denom_precision = true_positives + false_positives
         precision = (true_positives / denom_precision) if denom_precision > 0 else 1.0
 
-        # Calculate Recall: TP / (TP + FN)
         denom_recall = true_positives + false_negatives
         recall = (true_positives / denom_recall) if denom_recall > 0 else 1.0
 
-        # Calculate F1 Score: 2 * (P * R) / (P + R)
         denom_f1 = precision + recall
         f1 = (2 * (precision * recall) / denom_f1) if denom_f1 > 0 else 0.0
 
@@ -290,30 +264,19 @@ class AIQualityEvaluator:
         raw_outputs: list[str],
         schema_cls: type[BaseModel],
     ) -> float:
-        """Test how reliably AI text outputs convert into valid Pydantic models.
-
-        Simple explanation:
-        AI models sometimes put markdown ticks (```json ... ```) or extra text
-        around their response. We test whether our self-healing JSON parser
-        cleans and parses the text into the required Pydantic schema.
-        Returns the percentage (0.0 to 1.0) of outputs that succeeded.
-        """
+        """Test how reliably AI text outputs convert into valid Pydantic models."""
         if not raw_outputs:
             return 1.0
 
         valid_count = 0
         for text in raw_outputs:
             try:
-                # 1. First clean off markdown code fences or extra whitespace using canonical helper
                 cleaned = OutputValidator.clean_json_text(text)
-                # 2. Parse into Python dictionary
                 data = json.loads(cleaned)
-                # 3. Validate against Pydantic model
                 if isinstance(data, dict):
                     schema_cls.model_validate(data)
                     valid_count += 1
             except (json.JSONDecodeError, ValidationError):
-                # Failed schema validation
                 continue
             except Exception:  # noqa: BLE001, S112
                 continue
@@ -321,7 +284,298 @@ class AIQualityEvaluator:
         return valid_count / len(raw_outputs)
 
     # =======================================================================
-    # 5. Full Quality Report Compilation
+    # 5. Code Explanation Quality Evaluation Rubric (Issue 2 — P-28 LLM Judge)
+    # =======================================================================
+
+    @staticmethod
+    def _compute_composite_rubric_score(
+        factual_accuracy: float,
+        completeness: float,
+        call_graph_context_clarity: float,
+        citation_grounding: float,
+        redaction_transparency: float,
+    ) -> float:
+        """Compute weighted normalized score in [0.0, 1.0] from 1.0-5.0 rubric dimensions."""
+        weighted_5 = (
+            0.30 * factual_accuracy
+            + 0.25 * completeness
+            + 0.20 * call_graph_context_clarity
+            + 0.15 * citation_grounding
+            + 0.10 * redaction_transparency
+        )
+        normalized = (weighted_5 - 1.0) / 4.0
+        return round(min(1.0, max(0.0, normalized)), 4)
+
+    def _score_explanation_deterministically(
+        self,
+        explanation: Any,
+        source_code: str,
+        *,
+        expected_symbols: list[str] | None = None,
+        callers: list[str] | None = None,
+        callees: list[str] | None = None,
+    ) -> ExplanationQualityRubric:
+        """Deterministic rubric evaluator for offline benchmarking or fallback."""
+        purpose = str(getattr(explanation, "purpose", "") or "")
+        logic_flow = list(getattr(explanation, "logic_flow", []) or [])
+        key_symbols = list(getattr(explanation, "key_symbols", []) or [])
+        inputs_outputs = str(getattr(explanation, "inputs_and_outputs", "") or "")
+        deps = list(getattr(explanation, "dependencies", []) or [])
+        sources = list(getattr(explanation, "sources", []) or [])
+        exec_flow = list(getattr(explanation, "execution_flow", []) or [])
+        has_redacted = bool(getattr(explanation, "has_redacted_content", False))
+        redaction_notice = getattr(explanation, "redaction_notice", None)
+
+        combined_text = " ".join(
+            [
+                purpose,
+                " ".join(str(x) for x in logic_flow),
+                inputs_outputs,
+                " ".join(str(x) for x in deps),
+                " ".join(str(x) for x in exec_flow),
+                str(getattr(explanation, "detailed_explanation", "") or ""),
+            ]
+        ).lower()
+
+        suggestions: list[str] = []
+
+        # 1. Completeness (1.0 - 5.0)
+        comp_score = 1.5
+        if len(purpose.strip()) >= 20:
+            comp_score += 1.0
+        else:
+            suggestions.append("Expand `purpose` to clearly state the component's responsibility.")
+        if len(logic_flow) >= 2:
+            comp_score += 1.0
+        else:
+            suggestions.append("Provide at least 2 chronological execution steps in `logic_flow`.")
+        if key_symbols:
+            comp_score += 0.75
+        else:
+            suggestions.append("Populate `key_symbols` with the primary functions/classes in scope.")
+        if len(inputs_outputs.strip()) >= 15:
+            comp_score += 0.75
+        comp_score = min(5.0, comp_score)
+
+        # 2. Factual accuracy (1.0 - 5.0): check alignment with identifiers in source_code / expected_symbols
+        identifiers = set(expected_symbols or re.findall(r"\b(?:def|class|function|const)\s+([A-Za-z_][A-Za-z0-9_]*)", source_code))
+        explained_sym_names = {str(getattr(s, "name", s)).lower() for s in key_symbols}
+        if identifiers:
+            matched_ids = sum(
+                1
+                for ident in identifiers
+                if ident.lower() in combined_text or ident.lower() in explained_sym_names
+            )
+            coverage_ratio = matched_ids / max(1, len(identifiers))
+            factual_score = round(2.5 + 2.5 * min(1.0, coverage_ratio), 2)
+            if coverage_ratio < 0.5:
+                suggestions.append("Reference the specific function/class identifiers defined in the target snippet.")
+        else:
+            factual_score = 4.0 if len(purpose.strip()) >= 15 else 2.5
+
+        # 3. Call-graph context clarity (1.0 - 5.0)
+        neighbor_names = [*(callers or []), *(callees or [])]
+        if neighbor_names:
+            matched_neighbors = sum(1 for n in neighbor_names if n.lower() in combined_text)
+            cg_ratio = matched_neighbors / len(neighbor_names)
+            cg_score = round(2.0 + 3.0 * min(1.0, cg_ratio), 2)
+            if cg_ratio < 0.5:
+                suggestions.append("Include 1-hop caller and callee interactions in `execution_flow` or `dependencies`.")
+        elif deps or exec_flow:
+            cg_score = 4.5
+        else:
+            cg_score = 3.5
+
+        # 4. Citation grounding (1.0 - 5.0)
+        if sources:
+            valid_line_sources = sum(
+                1
+                for s in sources
+                if getattr(s, "file_path", None) and getattr(s, "start_line", None) is not None
+            )
+            cite_score = 5.0 if valid_line_sources == len(sources) else 3.8
+        else:
+            cite_score = 2.0
+            suggestions.append("Attach grounded `AnalysisSourceReference` items with 1-indexed line ranges.")
+
+        # 5. Redaction transparency (1.0 - 5.0)
+        source_has_redaction = "[REDACTED" in (source_code or "")
+        if source_has_redaction:
+            if has_redacted and redaction_notice:
+                redaction_score = 5.0
+            elif "redact" in combined_text or has_redacted:
+                redaction_score = 4.0
+            else:
+                redaction_score = 2.0
+                suggestions.append("Surface `has_redacted_content` and `redaction_notice` when `[REDACTED]` appears in source chunks.")
+        else:
+            redaction_score = 5.0
+
+        overall = self._compute_composite_rubric_score(
+            factual_score,
+            comp_score,
+            cg_score,
+            cite_score,
+            redaction_score,
+        )
+        passed = overall >= 0.70 and factual_score >= 3.0
+
+        return ExplanationQualityRubric(
+            factual_accuracy=factual_score,
+            completeness=comp_score,
+            call_graph_context_clarity=cg_score,
+            citation_grounding=cite_score,
+            redaction_transparency=redaction_score,
+            overall_score=overall,
+            passed=passed,
+            judge_mode="deterministic_rubric",
+            rationale=(
+                f"Deterministic rubric evaluation: overall={overall:.2f} "
+                f"(accuracy={factual_score:.1f}, completeness={comp_score:.1f}, "
+                f"call_graph={cg_score:.1f}, citations={cite_score:.1f}, redaction={redaction_score:.1f})."
+            ),
+            improvement_suggestions=suggestions,
+        )
+
+    async def evaluate_explanation_quality_async(
+        self,
+        explanation: Any,
+        source_code: str,
+        *,
+        llm_gateway: Any = None,
+        expected_symbols: list[str] | None = None,
+        callers: list[str] | None = None,
+        callees: list[str] | None = None,
+    ) -> ExplanationQualityRubric:
+        """Evaluate a `CodeExplanation` using LLM-as-judge (P-28) with deterministic fallback."""
+        baseline = self._score_explanation_deterministically(
+            explanation,
+            source_code,
+            expected_symbols=expected_symbols,
+            callers=callers,
+            callees=callees,
+        )
+        if llm_gateway is None:
+            return baseline
+
+        # Enforce ADR-008 provider policy (only Gemini and Groq allowed)
+        self.enforce_provider_policy(llm_gateway)
+
+        try:
+            from ai.llm.schemas import LLMRequest, Message
+
+            exp_json = (
+                explanation.model_dump_json(indent=2)
+                if hasattr(explanation, "model_dump_json")
+                else json.dumps(explanation, default=str)
+            )
+            user_prompt = (
+                f"SOURCE CODE:\n```\n{redact(source_code)[:6000]}\n```\n\n"
+                f"1-HOP CALLERS: {callers or []}\n"
+                f"1-HOP CALLEES: {callees or []}\n\n"
+                f"CANDIDATE EXPLANATION JSON:\n{redact(exp_json)[:6000]}\n\n"
+                "Score this explanation strictly using the 5-dimension rubric."
+            )
+            model_name = (
+                getattr(getattr(llm_gateway, "provider", None), "default_model", None)
+                or "gemini-2.5-flash"
+            )
+            req = LLMRequest(
+                model=str(model_name),
+                messages=[
+                    Message(role="system", content=_EXPLANATION_JUDGE_SYSTEM_PROMPT),
+                    Message(role="user", content=user_prompt),
+                ],
+                temperature=0.0,
+                max_tokens=1024,
+                response_format={"type": "json_object"},
+            )
+            resp = await llm_gateway.generate(req)
+            raw_content = getattr(resp, "content", "") or ""
+            cleaned = OutputValidator.clean_json_text(raw_content)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                fa = min(5.0, max(1.0, float(parsed.get("factual_accuracy", baseline.factual_accuracy))))
+                comp = min(5.0, max(1.0, float(parsed.get("completeness", baseline.completeness))))
+                cg = min(5.0, max(1.0, float(parsed.get("call_graph_context_clarity", baseline.call_graph_context_clarity))))
+                cite = min(5.0, max(1.0, float(parsed.get("citation_grounding", baseline.citation_grounding))))
+                red_t = min(5.0, max(1.0, float(parsed.get("redaction_transparency", baseline.redaction_transparency))))
+                overall = self._compute_composite_rubric_score(fa, comp, cg, cite, red_t)
+                return ExplanationQualityRubric(
+                    factual_accuracy=fa,
+                    completeness=comp,
+                    call_graph_context_clarity=cg,
+                    citation_grounding=cite,
+                    redaction_transparency=red_t,
+                    overall_score=overall,
+                    passed=overall >= 0.70 and fa >= 3.0,
+                    judge_mode="llm_judge",
+                    rationale=str(parsed.get("rationale") or baseline.rationale),
+                    improvement_suggestions=list(
+                        parsed.get("improvement_suggestions") or baseline.improvement_suggestions
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("explanation_llm_judge_fallback", extra={"error": redact(str(exc))})
+
+        return baseline
+
+    def evaluate_explanation_quality(
+        self,
+        explanation: Any,
+        source_code: str,
+        *,
+        llm_gateway: Any = None,
+        expected_symbols: list[str] | None = None,
+        callers: list[str] | None = None,
+        callees: list[str] | None = None,
+    ) -> ExplanationQualityRubric:
+        """Synchronous entrypoint for evaluating `CodeExplanation` quality (P-28 LLM judge + deterministic rubric)."""
+        if llm_gateway is None:
+            return self._score_explanation_deterministically(
+                explanation,
+                source_code,
+                expected_symbols=expected_symbols,
+                callers=callers,
+                callees=callees,
+            )
+
+        # Validate provider policy upfront even in sync mode
+        self.enforce_provider_policy(llm_gateway)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    self.evaluate_explanation_quality_async(
+                        explanation,
+                        source_code,
+                        llm_gateway=llm_gateway,
+                        expected_symbols=expected_symbols,
+                        callers=callers,
+                        callees=callees,
+                    ),
+                ).result()
+        return asyncio.run(
+            self.evaluate_explanation_quality_async(
+                explanation,
+                source_code,
+                llm_gateway=llm_gateway,
+                expected_symbols=expected_symbols,
+                callers=callers,
+                callees=callees,
+            )
+        )
+
+    # =======================================================================
+    # 6. Full Quality Report Compilation
     # =======================================================================
 
     def generate_quality_report(
@@ -331,27 +585,16 @@ class AIQualityEvaluator:
         provider_checks: list[ProviderValidationCheck],
         schema_conformance_rate: float = 1.0,
     ) -> AIQualityReport:
-        """Generate a complete AI Quality Report combining all evaluations.
-
-        Simple explanation:
-        Runs clean code benchmarks, defect fixture tests, provider policy checks,
-        and schema tests, and packages them into a clean report.
-        """
+        """Generate a complete AI Quality Report combining all evaluations."""
         report_id = f"ai-qual-{uuid4().hex[:8]}"
 
-        # Evaluate clean samples (measure false alarms)
         clean_results, fp_rate = self.evaluate_clean_samples(clean_samples)
         fp_count = sum(1 for s in clean_results if s.is_false_positive)
 
-        # Evaluate defect fixtures (measure precision and recall)
         _, precision, recall, f1 = self.evaluate_defect_fixtures(defect_fixtures)
 
         total_samples = len(clean_samples) + len(defect_fixtures)
 
-        # Quality thresholds:
-        # 1. False positive rate must be very low (<= 5%, ideally 0%)
-        # 2. Precision and Recall must be >= 80% (0.80)
-        # 3. All checked providers must be allowed
         all_providers_allowed = all(p.is_allowed for p in provider_checks) if provider_checks else True
         passed = (
             fp_rate <= 0.05
@@ -384,4 +627,4 @@ class AIQualityEvaluator:
         )
 
 
-__all__ = ["AIQualityEvaluator"]
+__all__ = ["AIQualityEvaluator", "ExplanationQualityRubric"]

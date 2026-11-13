@@ -1,13 +1,13 @@
 """End-to-end orchestration for Week 2 Day 2 Code Explanation (`POST /repositories/{id}/explain`).
 
-Owner: Yug — W2, Day 2 (Explanation Endpoint & Service Integration)
+Owner: Yug — W2, Day 2 (Explanation Endpoint & Service Integration) & Issue 2 (Explain at Depth + Redaction Surfacing)
 
 Implements the 9-step explanation pipeline required by `Docs/week2.md` §6:
 1. Authenticate user (enforced at route boundary)
 2. Verify repository access (enforced at route boundary)
 3. Validate target file, symbol, and 1-indexed inclusive line range (resolving AST symbols via CodeSymbol)
-4. Fetch the intended source content and revision from indexed repository chunks
-5. Build enriched `IntelligenceContext` (target snippet, related symbols/callers, repo files, rules)
+4. Fetch the intended source content and revision from indexed repository chunks (detecting `[REDACTED]` tokens)
+5. Build enriched `IntelligenceContext` (target snippet, related symbols/callers/callees with optional 1-hop "Explain at depth" expansion on F07-C3, repo files, rules)
 6. Invoke configured `explanation_service` (or LLMGateway-backed explanation engine)
 7. Validate structured `CodeExplanation` output and ground source citations against `repository_files`
 8. Persist completed or failed analysis run metadata for history retrieval (`/analysis-runs`)
@@ -16,11 +16,12 @@ Implements the 9-step explanation pipeline required by `Docs/week2.md` §6:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+import re
 from typing import Any
 from uuid import UUID
 
@@ -57,6 +58,37 @@ logger = logging.getLogger(__name__)
 
 MAX_ANALYZABLE_FILE_BYTES = 1_048_576  # 1 MB ceiling
 MAX_IN_MEMORY_HISTORY_RUNS = 500       # Bounded FIFO capacity for _analysis_run_history
+_REDACTED_MARKER_RE = re.compile(r"\[REDACTED(?:_[A-Z0-9_]+)?\]")
+
+
+def detect_redacted_source_metadata(text: str) -> tuple[bool, int, str | None]:
+    """Inspect reconstructed source code for `[REDACTED]` security placeholders (Issue 2 — C.3)."""
+    if not text:
+        return False, 0, None
+    matches = _REDACTED_MARKER_RE.findall(text)
+    count = len(matches)
+    if count <= 0:
+        return False, 0, None
+    plural = "s" if count != 1 else ""
+    notice = (
+        f"Source code contains {count} redacted secret/configuration value{plural} "
+        f"(`[REDACTED]`) withheld by security policy before AI analysis."
+    )
+    return True, count, notice
+
+
+def is_explain_at_depth_enabled(payload: ExplainCodeRequest) -> bool:
+    """Return True when 1-hop call-graph expansion ('Explain at depth', Issue 2 — C.1) is requested."""
+    if getattr(payload, "explain_at_depth", False):
+        return True
+    if getattr(payload, "depth_mode", "standard") == "deep":
+        return True
+    ctx_opts = getattr(payload, "context", None)
+    if ctx_opts and getattr(ctx_opts, "explain_at_depth", False):
+        return True
+    if getattr(payload, "explanation_level", "detailed") == "deep_technical":
+        return True
+    return False
 
 
 @dataclass
@@ -74,6 +106,12 @@ class ResolvedExplanationTarget:
     repo_files: list[RepositoryFile] = field(default_factory=list)
     related_files: list[str] = field(default_factory=list)
     execution_flow: list[str] = field(default_factory=list)
+    has_redacted_content: bool = False
+    redacted_occurrences: int = 0
+    redaction_notice: str | None = None
+    call_graph_depth_expanded: bool = False
+    expanded_callers: list[str] = field(default_factory=list)
+    expanded_callees: list[str] = field(default_factory=list)
 
 
 def resolve_target_and_build_context(
@@ -87,6 +125,7 @@ def resolve_target_and_build_context(
     target = payload.target.model_copy(update={"path": safe_path})
     revision = target.revision or getattr(repo, "default_branch", None) or "main"
     missing_context: list[str] = []
+    deep_mode = is_explain_at_depth_enabled(payload)
 
     if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
         # Unit-test mode with mock DB session (`object()`)
@@ -111,6 +150,7 @@ def resolve_target_and_build_context(
             intelligence_context=ctx,
             missing_context=missing_context,
             indexed_paths={},
+            call_graph_depth_expanded=deep_mode,
         )
 
     try:
@@ -273,13 +313,22 @@ def resolve_target_and_build_context(
     if not code_content:
         missing_context.append(f"No indexed code chunks found for '{safe_path}'.")
 
-    # Step 5: Assemble related symbols, callers/callees, and project rules for IntelligenceContext
+    has_redacted, redacted_count, redaction_notice = detect_redacted_source_metadata(
+        redact(code_content) if code_content else ""
+    )
+
+    # Step 5: Assemble related symbols, 1-hop callers/callees (building on F07-C3), and project rules
     related_symbol_contexts: list[SymbolContext] = []
+    expanded_callers: list[str] = []
+    expanded_callees: list[str] = []
+
     if payload.options.include_context:
+        in_range_symbols: list[CodeSymbol] = []
         for sym in file_symbols:
-            if resolved_symbol and sym.id == resolved_symbol.id:
-                continue
             if sym.end_line >= eff_start and sym.start_line <= eff_end:
+                in_range_symbols.append(sym)
+                if resolved_symbol and sym.id == resolved_symbol.id:
+                    continue
                 related_symbol_contexts.append(
                     SymbolContext(
                         name=sym.name,
@@ -288,32 +337,51 @@ def resolve_target_and_build_context(
                         start_line=sym.start_line,
                         end_line=sym.end_line,
                         content=sym.signature or "",
+                        importance_score=float(getattr(sym, "importance_score", 0.0) or 0.0),
                     )
                 )
 
-        # Fetch caller/callee symbols from SymbolEdge if resolved_symbol is known
-        if resolved_symbol is not None:
+        # Seed symbols for call-graph traversal: resolved_symbol or all symbols in selected range
+        seed_symbols: list[CodeSymbol] = (
+            [resolved_symbol]
+            if resolved_symbol is not None
+            else (in_range_symbols[:8] if deep_mode else [])
+        )
+        seed_ids = [s.id for s in seed_symbols if getattr(s, "id", None) is not None]
+
+        if seed_ids:
             try:
+                edge_limit = 30 if deep_mode else 15
                 edges: list[SymbolEdge] = (
                     db.query(SymbolEdge)
                     .filter(
                         SymbolEdge.repository_id == repository_id,
-                        (SymbolEdge.source_symbol_id == resolved_symbol.id)
-                        | (SymbolEdge.target_symbol_id == resolved_symbol.id),
+                        SymbolEdge.source_symbol_id.in_(seed_ids)
+                        | SymbolEdge.target_symbol_id.in_(seed_ids),
                     )
-                    .limit(15)
+                    .limit(edge_limit)
                     .all()
                 )
-                neighbor_ids = {
-                    (
-                        e.target_symbol_id
-                        if e.source_symbol_id == resolved_symbol.id
-                        else e.source_symbol_id
-                    )
-                    for e in edges
-                }
+                seed_id_set = set(seed_ids)
+                caller_ids: set[Any] = set()
+                callee_ids: set[Any] = set()
+                unresolved_callee_names: list[str] = []
+
+                for e in edges:
+                    if e.target_symbol_id in seed_id_set and e.source_symbol_id not in seed_id_set and e.source_symbol_id is not None:
+                        caller_ids.add(e.source_symbol_id)
+                    if e.source_symbol_id in seed_id_set:
+                        if e.target_symbol_id is not None and e.target_symbol_id not in seed_id_set:
+                            callee_ids.add(e.target_symbol_id)
+                        elif getattr(e, "target_name", None):
+                            t_name = str(e.target_name).strip()
+                            if t_name and t_name not in unresolved_callee_names:
+                                unresolved_callee_names.append(t_name)
+
+                neighbor_ids = caller_ids | callee_ids
+                neighbor_syms: list[CodeSymbol] = []
                 if neighbor_ids:
-                    neighbor_syms: list[CodeSymbol] = (
+                    neighbor_syms = (
                         db.query(CodeSymbol)
                         .filter(
                             CodeSymbol.repository_id == repository_id,
@@ -321,18 +389,89 @@ def resolve_target_and_build_context(
                         )
                         .all()
                     )
-                    file_id_to_path = {f.id: f.path for f in all_repo_files}
-                    for nsym in neighbor_syms:
-                        related_symbol_contexts.append(
-                            SymbolContext(
-                                name=nsym.name,
-                                kind="caller" if any(e.source_symbol_id == nsym.id for e in edges) else nsym.kind,
-                                file_path=file_id_to_path.get(nsym.file_id, safe_path),
-                                start_line=nsym.start_line,
-                                end_line=nsym.end_line,
-                                content=nsym.signature or "",
-                            )
+
+                # In deep mode, also resolve unresolved callee names by symbol name within the repository
+                if deep_mode and unresolved_callee_names:
+                    named_callees: list[CodeSymbol] = (
+                        db.query(CodeSymbol)
+                        .filter(
+                            CodeSymbol.repository_id == repository_id,
+                            CodeSymbol.name.in_(unresolved_callee_names[:10]),
                         )
+                        .limit(10)
+                        .all()
+                    )
+                    existing_nids = {ns.id for ns in neighbor_syms}
+                    for nc in named_callees:
+                        if nc.id not in seed_id_set and nc.id not in existing_nids:
+                            callee_ids.add(nc.id)
+                            neighbor_syms.append(nc)
+                            existing_nids.add(nc.id)
+
+                file_id_to_path = {f.id: f.path for f in all_repo_files}
+                # Sort neighbors by importance_score descending
+                neighbor_syms.sort(
+                    key=lambda s: float(getattr(s, "importance_score", 0.0) or 0.0),
+                    reverse=True,
+                )
+
+                for nsym in neighbor_syms:
+                    is_caller = nsym.id in caller_ids
+                    is_callee = nsym.id in callee_ids
+                    if is_caller and not getattr(payload.context, "include_callers", True):
+                        continue
+                    if is_callee and not getattr(payload.context, "include_callees", True):
+                        continue
+
+                    n_path = file_id_to_path.get(nsym.file_id, safe_path)
+                    role_kind = "caller" if is_caller else ("callee" if is_callee else nsym.kind)
+                    if is_caller and nsym.name not in expanded_callers:
+                        expanded_callers.append(nsym.name)
+                    if is_callee and nsym.name not in expanded_callees:
+                        expanded_callees.append(nsym.name)
+
+                    snippet_content = nsym.signature or ""
+                    if deep_mode:
+                        # Follow call graph 1 level (F07-C3): reconstruct 1-hop caller/callee source body
+                        try:
+                            n_chunks: list[CodeChunk] = (
+                                db.query(CodeChunk)
+                                .filter(
+                                    CodeChunk.repository_id == repository_id,
+                                    CodeChunk.file_id == nsym.file_id,
+                                    CodeChunk.end_line >= nsym.start_line,
+                                    CodeChunk.start_line <= nsym.end_line,
+                                )
+                                .order_by(CodeChunk.start_line)
+                                .limit(3)
+                                .all()
+                            )
+                            if n_chunks:
+                                body_text = reconstruct_file_from_chunks(
+                                    n_chunks,
+                                    start_line=nsym.start_line,
+                                    end_line=min(nsym.end_line, nsym.start_line + 60),
+                                )
+                                if body_text:
+                                    snippet_content = body_text[:1500]
+                                    c_red, c_cnt, _ = detect_redacted_source_metadata(snippet_content)
+                                    if c_red:
+                                        has_redacted = True
+                                        redacted_count += c_cnt
+                        except Exception:
+                            pass
+
+                    related_symbol_contexts.append(
+                        SymbolContext(
+                            name=nsym.name,
+                            kind=role_kind,
+                            file_path=n_path,
+                            start_line=nsym.start_line,
+                            end_line=nsym.end_line,
+                            content=snippet_content,
+                            importance_score=float(getattr(nsym, "importance_score", 0.0) or 0.0),
+                        )
+                    )
             except Exception:
                 missing_context.append("Caller/callee symbol graph edges could not be queried.")
     else:
@@ -360,6 +499,10 @@ def resolve_target_and_build_context(
                 )
                 sel_code = reconstruct_file_from_chunks(sel_chunks, start_line=1, end_line=min(200, sel_file.line_count or 100))
                 if sel_code:
+                    s_red, s_cnt, _ = detect_redacted_source_metadata(sel_code)
+                    if s_red:
+                        has_redacted = True
+                        redacted_count += s_cnt
                     related_symbol_contexts.append(
                         SymbolContext(
                             name=clean_sel.split("/")[-1],
@@ -373,13 +516,26 @@ def resolve_target_and_build_context(
         except Exception as sel_exc:
             logger.debug("Failed adding user-selected file %s: %s", sel_path, sel_exc)
 
+    if has_redacted and not redaction_notice:
+        plural = "s" if redacted_count != 1 else ""
+        redaction_notice = (
+            f"Source code contains {redacted_count} redacted secret/configuration value{plural} "
+            f"(`[REDACTED]`) withheld by security policy before AI analysis."
+        )
+    elif has_redacted and redacted_count > 0:
+        plural = "s" if redacted_count != 1 else ""
+        redaction_notice = (
+            f"Source code contains {redacted_count} redacted secret/configuration value{plural} "
+            f"(`[REDACTED]`) withheld by security policy before AI analysis."
+        )
+
     # Discover related files & execution flow from persistent Repository Intelligence Snapshot (task.md §3, §6.1, §8.B)
     execution_flow: list[str] = []
     resolved_related_files: list[str] = list(user_selected_files)
 
     try:
-        from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
         from ai.intelligence.related_files import RelatedFileDiscoveryService
+        from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 
         snap_mgr = RepositoryIntelligenceSnapshotManager()
         snapshot = snap_mgr.load_latest_snapshot(repository_id)
@@ -395,8 +551,8 @@ def resolve_target_and_build_context(
                     resolved_related_files.append(d.path)
 
             target_name = target.symbol or safe_path.split("/")[-1]
-            callers = [d.symbols[0] for d in discovered if d.relation == "caller" and d.symbols]
-            dependencies = [d.symbols[0] for d in discovered if d.relation in ("imported_dependency", "called_dependency") and d.symbols]
+            callers = expanded_callers or [d.symbols[0] for d in discovered if d.relation == "caller" and d.symbols]
+            dependencies = expanded_callees or [d.symbols[0] for d in discovered if d.relation in ("imported_dependency", "called_dependency") and d.symbols]
             db_models = [d.symbols[0] for d in discovered if d.relation == "database_model" and d.symbols]
 
             if callers:
@@ -406,6 +562,13 @@ def resolve_target_and_build_context(
                 execution_flow.append(f"Downstream logic: Invokes {', '.join(dependencies[:3])}")
             if db_models:
                 execution_flow.append(f"Persistence layer: Interacts with data model {', '.join(db_models[:2])}")
+        elif expanded_callers or expanded_callees:
+            target_name = target.symbol or safe_path.split("/")[-1]
+            if expanded_callers:
+                execution_flow.append(f"Inbound trigger: Called by {', '.join(expanded_callers[:3])}")
+            execution_flow.append(f"Execution: Core logic handled in {target_name} ({safe_path})")
+            if expanded_callees:
+                execution_flow.append(f"Downstream logic: Invokes {', '.join(expanded_callees[:3])}")
     except Exception as flow_exc:
         logger.debug("Execution flow derivation skipped: %s", flow_exc)
 
@@ -444,13 +607,17 @@ def resolve_target_and_build_context(
         language=file_record.language or "text",
     )
 
+    effective_budget = payload.options.max_context_tokens
+    if deep_mode and effective_budget == 4_000:
+        effective_budget = 6_500
+
     intelligence_ctx = ContextBuilder().build_intelligence_context(
         target=target_snippet,
         related_symbols=related_symbol_contexts,
         relevant_chunks=selected_chunks if payload.options.include_context else [],
         repository_files=context_repo_files if payload.options.include_context else [],
         project_rules=project_rules,
-        token_budget=payload.options.max_context_tokens,
+        token_budget=effective_budget,
     )
 
     return ResolvedExplanationTarget(
@@ -465,6 +632,12 @@ def resolve_target_and_build_context(
         repo_files=all_repo_files,
         related_files=resolved_related_files,
         execution_flow=execution_flow,
+        has_redacted_content=has_redacted,
+        redacted_occurrences=redacted_count,
+        redaction_notice=redaction_notice,
+        call_graph_depth_expanded=deep_mode,
+        expanded_callers=expanded_callers,
+        expanded_callees=expanded_callees,
     )
 
 
@@ -475,15 +648,18 @@ def calculate_grounding_confidence(
     related_symbols_verified: bool,
     critical_context_missing: bool,
     ungrounded_ratio: float = 0.0,
+    initial_confidence: str = "high",
 ) -> str:
     """Calculates multi-signal deterministic grounding confidence (task.md §5 Problem 3 & §6.B)."""
     if not target_found or not source_references_valid or ungrounded_ratio > 0.5:
         return "low"
-    if critical_context_missing or ungrounded_ratio > 0.2:
+    if critical_context_missing:
         return "low"
+    if ungrounded_ratio > 0.0:
+        return "medium" if initial_confidence == "high" else "low"
     if not related_symbols_verified:
         return "medium"
-    return "high"
+    return initial_confidence if initial_confidence in ("high", "medium", "low") else "high"
 
 
 def ground_explanation_sources(
@@ -492,7 +668,7 @@ def ground_explanation_sources(
     repository_id: UUID,
     resolved: ResolvedExplanationTarget,
 ) -> CodeExplanation:
-    """Step 7b: Remove hallucinated or unsafe citations and calibrate confidence using multi-signal grounding."""
+    """Step 7b: Remove hallucinated or unsafe citations, attach redaction & depth metadata, and calibrate confidence."""
     merged_missing = list(dict.fromkeys([*explanation.missing_context, *resolved.missing_context]))
 
     raw_sources = list(explanation.sources)
@@ -538,13 +714,24 @@ def ground_explanation_sources(
 
     # Multi-signal confidence calibration (task.md §6.B)
     ungrounded_ratio = ungrounded_count / len(raw_sources) if raw_sources else 0.0
-    target_found = resolved.file_record is not None or (resolved.target is not None and not resolved.indexed_paths)
+    target_found = (
+        resolved.file_record is not None
+        or (
+            resolved.target is not None
+            and (not resolved.indexed_paths or resolved.target.path in resolved.indexed_paths)
+        )
+    )
     source_references_valid = len(grounded_sources) > 0 or not raw_sources
     critical_context_missing = any(
         "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
         for m in merged_missing
     )
-    related_symbols_verified = bool(resolved.resolved_symbol or resolved.related_files or not resolved.indexed_paths)
+    related_symbols_verified = bool(
+        resolved.resolved_symbol
+        or resolved.related_files
+        or not resolved.indexed_paths
+        or len(grounded_sources) > 0
+    )
 
     confidence = calculate_grounding_confidence(
         target_found=target_found,
@@ -552,6 +739,7 @@ def ground_explanation_sources(
         related_symbols_verified=related_symbols_verified,
         critical_context_missing=critical_context_missing,
         ungrounded_ratio=ungrounded_ratio,
+        initial_confidence=explanation.confidence,
     )
 
     # Guarantee that when a real target file was resolved, its grounded citation is attached
@@ -567,6 +755,11 @@ def ground_explanation_sources(
             )
         )
 
+    # Surface redaction metadata (Issue 2 — C.3)
+    has_redacted = bool(explanation.has_redacted_content or resolved.has_redacted_content)
+    redacted_occurrences = max(explanation.redacted_occurrences, resolved.redacted_occurrences)
+    redaction_notice = explanation.redaction_notice or resolved.redaction_notice
+
     return explanation.model_copy(
         update={
             "sources": grounded_sources,
@@ -574,6 +767,14 @@ def ground_explanation_sources(
             "missing_context": merged_missing,
             "related_files": explanation.related_files or list(resolved.related_files),
             "execution_flow": explanation.execution_flow or list(resolved.execution_flow),
+            "has_redacted_content": has_redacted,
+            "redacted_occurrences": redacted_occurrences,
+            "redaction_notice": redaction_notice,
+            "call_graph_depth_expanded": bool(
+                explanation.call_graph_depth_expanded or resolved.call_graph_depth_expanded
+            ),
+            "expanded_callers": explanation.expanded_callers or list(resolved.expanded_callers),
+            "expanded_callees": explanation.expanded_callees or list(resolved.expanded_callees),
         }
     )
 
@@ -597,14 +798,11 @@ def record_analysis_run(
     **extra_kwargs: Any,
 ) -> None:
     """Step 8: Persist analysis run (COMPLETED or FAILED) to Om's repository or in-memory history store."""
-    # Security (W2 Day 2): saved history must never contain secrets copied from
-    # repository code or model output — applies to every analysis feature.
     result_payload = redact_obj(result_payload) if result_payload is not None else None
     findings = redact_obj(findings) if findings else findings
     error_message = redact(error_message) if error_message else error_message
     now = datetime.now(timezone.utc)
 
-    # Extract test_output from result_payload if available
     resolved_test_output = test_output
     if resolved_test_output is None and result_payload:
         resolved_test_output = (
@@ -660,7 +858,6 @@ def record_analysis_run(
         "completed_at": now if status in ("COMPLETED", "FAILED", "CANCELLED") else None,
     }
 
-    # 1. Direct persistence to AnalysisRunRepository when database session is available
     persisted_direct = False
     if db is not None:
         try:
@@ -676,7 +873,6 @@ def record_analysis_run(
                     pass
             logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
-    # Forward to analysis_run_service if configured on app_state and not already persisted directly
     if not persisted_direct:
         run_service = getattr(app_state, "analysis_run_service", None)
         if run_service is not None and hasattr(run_service, "record_run"):
@@ -685,7 +881,6 @@ def record_analysis_run(
             except Exception:
                 pass
 
-    # 2. Maintain bounded in-memory history store on app.state for immediate retrieval and test isolation
     history_store: dict[str, dict[str, Any]] | None = getattr(
         app_state, "_analysis_run_history", None
     )

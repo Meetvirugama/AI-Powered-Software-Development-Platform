@@ -1182,3 +1182,171 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/autonomous-execution/`, `Docs/engineering/13_architecture_decisions.md` (ADR-015), `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch7] 2026-11-10 — Evaluation Dataset Export from Analysis History (Issue #195 / F15)
+**Type:** Feature / Evaluation / MLOps  
+**Developer:** Meet Virugama & Parth  
+**Changes:**
+- `backend/app/services/analysis_run_history_service.py`:
+  - Implemented `export_evaluation_records` to structure developer intelligence runs (explanations, bugs, tests, reviews) into standardized evaluation samples with input coordinates, output results, findings, and attached user feedback.
+  - Implemented `export_evaluation_dataset` supporting `jsonl` (plain JSONL), `langfuse` (Langfuse-compatible dataset items with `input`, `expected_output`, and `metadata`), `json` (formatted array), and `records`.
+  - Added multi-tenant isolation, alias normalization (`code_review` -> `review`), and `include_feedback_only` filtering.
+- `backend/app/api/v1/analysis/history.py`:
+  - Added `GET /api/v1/repositories/{repository_id}/analysis-runs/export` endpoint with format selection, feature filtering, status filtering, and streaming attachment headers.
+- `backend/app/schemas/analysis.py`:
+  - Added `"code_review": "review"` mapping to `_FEATURE_TYPE_ALIASES`.
+- `frontend/src/services/analysis.ts`:
+  - Added `exportAnalysisRunsDataset` client method for non-blocking file downloads.
+- `frontend/src/components/explorer/AnalysisHistoryDrawer.tsx`:
+  - Added one-click **Export** dataset dropdown menu in the drawer header with JSONL, Langfuse, and JSON options and feedback filtering.
+- `backend/tests/test_analysis_run_export.py`:
+  - 9 comprehensive unit and HTTP integration tests validating JSONL, JSON, Langfuse format, aliases, multi-tenant isolation, error handling, and client downloads.
+- `frontend/src/test/analysisHistoryExport.test.tsx`:
+  - 3 unit tests verifying UI drawer export button, dropdown menu, and download triggers.
+- `Docs/engineering/24_analysis_history_evaluation_export.md`:
+  - Authored full technical architecture specification.
+
+**Impact:** Historical developer intelligence interactions and user feedback are now directly exportable into benchmark regression datasets and Langfuse evaluation suites for continuous LLM calibration.
+
+**Related Docs:** `Docs/engineering/24_analysis_history_evaluation_export.md`, `Docs/README.md`
+
+---
+
+### [Post-Week3-Batch8] 2026-11-10 — GitHub Source Browsing & Execution Surface Consolidation (Issue #196)
+**Type:** Feature / Refactor / Consolidation  
+**Developer:** Parth & Meet Virugama  
+**Changes:**
+- `backend/app/integrations/github/source_service.py`:
+  - Added `list_issues`, `get_issue_detail`, and compatibility `get_issue` for `IssueToTaskAdapter`.
+  - Implemented pull request demuxing to filter out PRs from the issue stream while preserving PR metadata.
+  - Added consistent 404 handling when upstream repositories are not found on GitHub.
+- `backend/app/integrations/github/schemas.py`:
+  - Added `RemoteIssueInfo` schema.
+- `backend/app/integrations/github/routes.py`:
+  - Added `GET /api/v1/repositories/{id}/source/issues` and `GET /api/v1/repositories/{id}/source/issues/{issue_number}`.
+  - Deprecated legacy duplicate execution endpoints under `/source/task/*` and `/source/task-workspace/*` with `HTTP 410 Gone` and `X-Canonical-Endpoint: /api/v1/tasks`.
+- `backend/app/api/v1/tasks.py`:
+  - Deleted unreachable `/{repo_id}/tasks` route aliases.
+- `frontend/src/types/api.ts`:
+  - Added `RemoteIssueInfo` TypeScript interface.
+- `frontend/src/services/repositories.ts`:
+  - Added `listRemoteSourceIssues` and `getRemoteSourceIssue` client functions.
+- `frontend/src/mocks/handlers/task.ts`:
+  - Added MSW mock handlers for remote issues and 410 deprecated execution endpoints.
+- `backend/tests/test_github_source_browsing_consolidation.py`:
+  - Added 7 unit and integration tests covering issue listing, PR filtering, issue detail lookup, API endpoints, deprecation headers, and 404/invalid number handling.
+- `frontend/src/test/sourceIssuesBrowsing.test.ts`:
+  - Added 6 frontend tests verifying client methods and MSW mock doubles.
+- `Docs/engineering/25_github_source_browsing_and_consolidation.md`:
+  - Authored comprehensive architectural and interface specification.
+
+**Impact:** Eliminates duplicate task execution surfaces across the codebase, provides first-class remote issue browsing through GitHubSourceService, and cleans up dead route aliases.
+
+**Related Docs:** `Docs/engineering/25_github_source_browsing_and_consolidation.md`, `Docs/README.md`
+
+---
+
+### [Post-Week3-Batch9] 2026-11-10 — Project Memory Entries, Semantic Retrieval & MCP Resources (Issue #217 / F36)
+**Type:** Feature / Episodic Memory / MCP  
+**Developer:** Parth & Meet Virugama  
+**Changes:**
+- `backend/app/models/memory_entry.py` & Alembic Migration `i6f7a8b9c0d1_add_memory_entries_embedding_and_hnsw.py`:
+  - Added `embedding vector(768)` nullable column and HNSW cosine distance index `ix_memory_entries_embedding_hnsw` to `memory_entries`.
+- `backend/app/repositories/memory_repository.py`:
+  - Implemented `semantic_search_entries` utilizing pgvector cosine operator `<=>` (with in-memory fallback for non-Postgres environments) and strict repository isolation.
+  - Implemented CRUD and multi-criteria filtering operations.
+- `backend/app/services/memory_service.py`:
+  - Implemented Reflexion-style automated writers: `record_task_completion_memory`, `record_task_failure_memory`, and `record_architectural_rule` with idempotency deduplication.
+  - Implemented Model Context Protocol (MCP 2025-11-25) resource exposure: `list_mcp_resources` and `resolve_mcp_resource` (`memory://repo/{id}/rules`, `decisions`, `task-summaries`, `failures`, `all`).
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Wired automated memory writers to record task completion memories upon passing independent verification and task failure memories upon verification rejection or exhausted repair attempts.
+- `backend/app/api/v1/memories.py`:
+  - Mounted CRUD, automated writers, pgvector `/semantic-search`, and `/mcp-resources` endpoints with tenant ownership checks.
+- `frontend/src/types/memory.ts` & `frontend/src/services/memory.ts`:
+  - Defined memory TypeScript types and client functions for CRUD, rule pinning, and MCP inspection.
+- `frontend/src/mocks/handlers/memory.ts`:
+  - Added MSW mock handlers for all project memory and MCP routes.
+- `frontend/src/components/explorer/ProjectMemoryPanel.tsx`:
+  - Built interactive Project Memory management panel with category tabs, real-time search, rule pinning, inline edit/delete, and MCP resource URI inspector.
+- `frontend/src/pages/RepositoryDetail.tsx` & `WorkbenchHeader.tsx`:
+  - Added memory toggle button to the workbench toolbar to open the Project Memory panel.
+- `backend/tests/test_project_memory_service.py`:
+  - 7 comprehensive tests covering repository CRUD, automated writers, multi-tenant boundary checks, semantic vector search, and MCP resource resolution.
+- `frontend/src/test/projectMemory.test.tsx`:
+  - 10 unit and integration tests verifying service calls, badge rendering, category filtering, rule pinning, and MCP URI copying.
+- `Docs/engineering/26_project_memory_entries.md`:
+  - Authored complete architecture specification.
+
+**Impact:** The platform now maintains persistent episodic memory across tasks, preventing repetitive failures, enforcing pinned architectural standards, and exposing memory to external tools and agents via MCP.
+
+**Related Docs:** `Docs/engineering/26_project_memory_entries.md`, `Docs/README.md`
+
+---
+
+### [Post-Week3-Batch10] 2026-11-10 — Branch, Commit, Push, and Draft PR Publication (Issue #207 / F26)
+**Type:** Security / Feature / Git Architecture  
+**Developer:** Prit Zania  
+**Changes:**
+- `backend/sandbox/command_runner.py`:
+  - Enforced strict sandbox policy in `WorkspaceCommandRunner.validate_command`: all git network operations (`push`, `pull`, `fetch`, `remote`, `clone`) are rejected with `WorkspacePolicyViolationError`, guaranteeing untrusted containers cannot execute remote Git pushes.
+- `backend/app/schemas/workspace.py`:
+  - Added `installation_token: str | None = None` to `WorkspacePushRequest` for ephemeral host-side authentication without persisting credentials to disk.
+- `backend/sandbox/workspace_manager.py`:
+  - Hardened `push_task_branch`: dynamically passes `-c http.extraheader=AUTHORIZATION: basic <base64>` during host subprocess execution, ensuring zero token writes to `.git/config`, zero token leakage into container sandboxes, and full `redact()` scrubbing of errors.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Updated `push_verified_branch` to resolve GitHub App installation tokens host-side and supply them securely to `WorkspacePushRequest`.
+- `backend/app/integrations/github/routes.py`:
+  - Restored contract compatibility endpoint `POST /api/v1/repositories/{id}/source/agent-branch` with `AgentBranchRequest` and `AgentBranchResponse`.
+- `backend/tests/test_host_git_push_credential_isolation.py`:
+  - Authored 16 unit and security regression tests covering host-side execution, sandbox command rejection, token isolation, error redaction, protected branch guards, authorization gates, and draft PR rules.
+- `Docs/engineering/27_branch_commit_push_draft_pr_publication.md`:
+  - Authored complete architecture, threat boundary, and sequence specification.
+
+**Impact:** Guarantees strict boundary separation between untrusted sandbox environments and privileged Git operations, ensuring credentials never enter container runtimes and git push operations run host-side exclusively.
+
+**Related Docs:** `Docs/engineering/27_branch_commit_push_draft_pr_publication.md`, `Docs/README.md`
+
+---
+
+### [Post-Week3-Batch11] 2026-11-11 — Bounded Self-Repair Loop & Anti-Reward Hacking (Issue #205 / F24)
+**Type:** Feature / AI Architecture / Safety  
+**Developer:** Prit Zania  
+**Changes:**
+- `backend/ai/services/llm_repair_synthesizer.py`:
+  - Implemented `LLMRepairSynthesizer` replacing the legacy hardcoded placeholder diff (`def handler(): pass -> return True`).
+  - Integrated `EditSynthesizer` (F22) for structured SEARCH/REPLACE block generation, exact match validation, dry-run in-memory patch application, AST syntax validation, and unified diff output.
+  - Implemented `format_reflexion_memory` for multi-turn verbal reinforcement history (Reflexion P-19 & Self-Refine P-20).
+  - Implemented spectrum-based fault localization (`identify_target_file_and_line`, AgentFL) extracting workspace application frames from tracebacks rather than mistakenly targeting test files.
+  - Built robust deterministic fallback generating attempt-differentiated, targeted code repairs with anti-cycling hash variation when LLM gateway is offline.
+- `backend/app/schemas/repair.py`:
+  - Added `FailureClassification = Literal["infra", "test-bug", "code-bug"]`.
+  - Added `failure_classification` to `DiagnosedFailure`.
+  - Added `primary_classification` to `TracebackDiagnosisResult`.
+- `backend/app/services/repair_service.py`:
+  - Implemented `is_test_file`, `extract_application_frames_from_traceback`, `classify_failure`, and `classify_diagnosis`.
+  - Added Gate 8: Anti-Reward Hacking Gate to `RepairPatchValidator.validate_patch`: strictly forbids modifying test files to force a test pass during repair unless the approved plan scope explicitly whitelists the test file (`allow_test_edits=True`).
+- `backend/ai/prompts/repair_code_system.txt` & `__init__.py`:
+  - Created and registered `repair_code_system` prompt template enforcing minimal code repairs, Reflexion memory adherence, and anti-reward hacking constraints.
+- `backend/ai/services/bounded_repair_loop.py`:
+  - Replaced placeholder stub in `_synthesize_patch` with `LLMRepairSynthesizer` delegation.
+  - Enforced immediate halt on infrastructure failures (`TIMEOUT`, `ENVIRONMENT_ERROR`, missing binaries) without consuming repair attempts.
+  - Wired Reflexion memory and anti-reward hacking parameters through `run_repair_cycle`.
+  - Enhanced `_extract_patched_content` to apply multi-hunk unified diffs with high fidelity.
+- `backend/ai/services/__init__.py`:
+  - Exported `LLMRepairSynthesizer`.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Wired shared `edit_synthesizer` into `BoundedRepairLoop`.
+- `backend/tests/test_bounded_repair_loop_f24.py`:
+  - Authored 14 comprehensive unit and regression tests verifying LLM repair synthesis, Reflexion memory, anti-reward hacking rejection, fault localization, 3-attempt ceiling, and E2E recovery.
+- `Docs/engineering/28_bounded_self_repair_loop.md`:
+  - Authored complete architecture, control flow, sequence diagrams, and security specification.
+
+**Impact:** Resolves autonomous recovery loops by replacing placeholder stubs with real LLM-driven repair synthesis, enforcing multi-turn Reflexion memory, preventing reward hacking against test suites, and guaranteeing strict 3-attempt budget containment.
+
+**Related Docs:** `Docs/engineering/28_bounded_self_repair_loop.md`, `Docs/README.md`
+
+
+
+
+

@@ -539,8 +539,8 @@ class AgentExecutionLoop:
                         ) from exc
                 output = read_outputs
 
-            elif action_type in ("command", "test", "execute_command", "run_command"):
-                if action_type == "test" and "command" not in step_input and not getattr(step, "command", None) and expected_files and not step_input.get("run_command", False):
+            elif action_type in ("command", "test", "execute_command", "run_command", "verify", "validate"):
+                if (action_type in ("test", "verify", "validate")) and "command" not in step_input and not getattr(step, "command", None) and expected_files and not step_input.get("run_command", False):
                     written_tests: list[str] = []
                     for target_file in expected_files:
                         content = step_input.get("content")
@@ -553,6 +553,16 @@ class AgentExecutionLoop:
                             )
                             written_tests.append(target_file)
                     output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
+                elif (action_type in ("verify", "validate")) and not step_input.get("command") and not getattr(step, "command", None):
+                    # Verification step without an explicit shell command:
+                    # Validate that expected files exist and are readable in workspace
+                    verified_files: list[str] = []
+                    for target_file in expected_files:
+                        read_res = self.workspace_manager.read_file(task_id=task_id, file_path=target_file)
+                        if not getattr(read_res, "success", True):
+                            raise WorkspaceError(f"Verification step failed: could not read {target_file}")
+                        verified_files.append(target_file)
+                    output = {"status": "verification_passed", "verified_files": verified_files}
                 else:
                     cmd = step_input.get("command") or getattr(step, "command", None) or "pytest"
                     args = list(step_input.get("args") or [])
