@@ -4,7 +4,7 @@ import math
 import uuid
 from typing import Any, List, Optional, Sequence, Tuple
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.memory_entry import MemoryEntry, MemoryStatus, MemoryType
@@ -183,17 +183,18 @@ class MemoryRepository:
 
         if dialect_name == "postgresql":
             # PostgreSQL + pgvector query using <=> cosine distance operator
-            where_clauses = ["repository_id = :repo_id", "embedding IS NOT NULL"]
+            vec_literal = "[" + ",".join(str(float(v)) for v in query_vector) + "]"
+            where_clauses = ["repository_id = CAST(:repo_id AS uuid)", "embedding IS NOT NULL"]
             params: dict[str, Any] = {
                 "repo_id": str(repository_id),
-                "query_vec": str(query_vector),
+                "query_vec": vec_literal,
                 "limit": limit,
             }
             if resolved_type:
-                where_clauses.append("type = :m_type")
+                where_clauses.append("CAST(type AS TEXT) = :m_type")
                 params["m_type"] = resolved_type.value
             if resolved_status:
-                where_clauses.append("status = :m_status")
+                where_clauses.append("CAST(status AS TEXT) = :m_status")
                 params["m_status"] = resolved_status.value
 
             sql = f"""

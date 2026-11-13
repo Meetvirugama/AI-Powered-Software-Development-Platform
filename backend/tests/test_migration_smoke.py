@@ -27,8 +27,8 @@ from alembic.migration import MigrationContext
 from sqlalchemy import Engine, create_engine, inspect, text
 
 from app.core.config import get_settings
-from app.core.database import Base
-import app.models  # Ensure all ORM models are registered in Base.metadata
+from app.core.database import Base, normalize_sync_database_url
+import app.models  # noqa: F401 — Ensure all ORM models are registered in Base.metadata
 
 
 EXPECTED_TABLES = frozenset({
@@ -84,10 +84,13 @@ EXPECTED_MILESTONE_REVISIONS = (
 @pytest.fixture
 def clean_schema_name() -> Generator[str, None, None]:
     """Create a temporary PostgreSQL schema and drop it after the test."""
-    settings = get_settings()
+    db_url = normalize_sync_database_url(get_settings().database_url)
+    if db_url.startswith("sqlite"):
+        pytest.skip("PostgreSQL database not available for migration smoke test (SQLite active)")
+        return
     schema = f"smoke_{uuid.uuid4().hex[:10]}"
     try:
-        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
+        engine = create_engine(db_url, connect_args={"connect_timeout": 2})
         with engine.begin() as conn:
             conn.execute(text(f"CREATE SCHEMA {schema};"))
     except Exception as exc:
@@ -107,20 +110,21 @@ def clean_schema_name() -> Generator[str, None, None]:
 
 def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
     """Run full Alembic migration from <base> to head on a clean schema, test rollback and re-upgrade."""
-    settings = get_settings()
+    db_url = normalize_sync_database_url(get_settings().database_url)
     ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
     assert ini_path.is_file(), f"alembic.ini not found at {ini_path}"
 
     cfg = Config(str(ini_path))
     # Escape % in search_path option and credentials for configparser compatibility
-    escaped_url = settings.database_url.replace("%", "%%")
-    url_with_schema = f"{escaped_url}?options=-csearch_path%%3D{clean_schema_name},public"
+    escaped_url = db_url.replace("%", "%%")
+    separator = "&" if "?" in escaped_url else "?"
+    url_with_schema = f"{escaped_url}{separator}options=-csearch_path%%3D{clean_schema_name},public"
     cfg.set_main_option("sqlalchemy.url", url_with_schema)
     cfg.set_main_option("version_table_schema", clean_schema_name)
 
     def _make_engine() -> Engine:
         return create_engine(
-            settings.database_url,
+            db_url,
             connect_args={"options": f"-c search_path={clean_schema_name},public"},
         )
 
@@ -134,10 +138,16 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         for expected in EXPECTED_TABLES:
             assert expected in tables, f"Expected table '{expected}' missing from clean migration schema"
 
-        # Verify pgvector HNSW index was created on code_chunks
+        # Verify pgvector HNSW index was created on code_chunks and memory_entries
         indexes = {idx["name"]: idx for idx in insp.get_indexes("code_chunks", schema=clean_schema_name)}
         assert "ix_code_chunks_embedding_hnsw" in indexes, "HNSW vector index missing on code_chunks"
         assert "ix_code_chunks_content_gin" in indexes, "GIN full-text index missing on code_chunks"
+
+        mem_indexes = {idx["name"] for idx in insp.get_indexes("memory_entries", schema=clean_schema_name)}
+        assert "ix_memory_entries_embedding_hnsw" in mem_indexes, "HNSW vector index missing on memory_entries"
+
+        symbol_cols = {col["name"] for col in insp.get_columns("code_symbols", schema=clean_schema_name)}
+        assert "importance_score" in symbol_cols, "importance_score missing from code_symbols at head"
 
         # Verify composite indexes on analysis_runs
         run_indexes = {idx["name"] for idx in insp.get_indexes("analysis_runs", schema=clean_schema_name)}
@@ -147,16 +157,23 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         pr_fks = insp.get_foreign_keys("pull_requests", schema=clean_schema_name)
         assert any(fk.get("options", {}).get("ondelete") == "CASCADE" or fk.get("name") == "pull_requests_repository_id_fkey" for fk in pr_fks)
 
-        # 2. Downgrade -1 (rolls back durable github webhook events e1f2a3b4c5d6)
+        # 2. Downgrade -1 (rolls back head j7a8b9c0d1e2)
         command.downgrade(cfg, "-1")
         insp_downgraded = inspect(_make_engine())
-        tables_after_downgrade = set(insp_downgraded.get_table_names(schema=clean_schema_name))
-        assert "github_webhook_events" not in tables_after_downgrade, "github_webhook_events table should be dropped after downgrade -1"
-        assert "github_issues" in tables_after_downgrade, "github_issues table should remain after downgrade -1"
-        assert "tasks" in tables_after_downgrade, "tasks table should remain after downgrade -1"
-        assert "pull_requests" in tables_after_downgrade, "pull_requests should remain after downgrade -1"
+        symbol_cols_after = {col["name"] for col in insp_downgraded.get_columns("code_symbols", schema=clean_schema_name)}
+        edge_cols_after = {col["name"] for col in insp_downgraded.get_columns("symbol_edges", schema=clean_schema_name)}
+        assert "importance_score" not in symbol_cols_after, "importance_score should be dropped after downgrade -1"
+        assert "provenance" not in edge_cols_after, "symbol_edges.provenance should be dropped after downgrade -1"
+        assert "github_webhook_events" in set(insp_downgraded.get_table_names(schema=clean_schema_name))
 
-        # 3. Downgrade to Week 2 head b627460d74e0
+        # 3. Downgrade past durable webhook events (to d5e6f7a8b9c0)
+        command.downgrade(cfg, "d5e6f7a8b9c0")
+        tables_after_webhook_rollback = set(inspect(_make_engine()).get_table_names(schema=clean_schema_name))
+        assert "github_webhook_events" not in tables_after_webhook_rollback, "github_webhook_events table should be dropped"
+        assert "github_issues" in tables_after_webhook_rollback, "github_issues table should remain"
+        assert "tasks" in tables_after_webhook_rollback, "tasks table should remain"
+
+        # 4. Downgrade to Week 2 head b627460d74e0
         command.downgrade(cfg, "b627460d74e0")
         insp_w2 = inspect(_make_engine())
         tables_w2 = set(insp_w2.get_table_names(schema=clean_schema_name))
@@ -164,13 +181,15 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         assert "github_issues" not in tables_w2, "github_issues table should be dropped after rolling back to b627460d74e0"
         assert "pull_requests" in tables_w2, "pull_requests should remain at b627460d74e0"
 
-        # 4. Re-upgrade to head (idempotent re-creation)
+        # 5. Re-upgrade to head (idempotent re-creation)
         command.upgrade(cfg, "head")
         insp_reupgraded = inspect(_make_engine())
         tables_reupgraded = set(insp_reupgraded.get_table_names(schema=clean_schema_name))
         assert "tasks" in tables_reupgraded, "tasks must be restored after re-upgrade head"
         assert "github_issues" in tables_reupgraded, "github_issues must be restored after re-upgrade head"
         assert "github_webhook_events" in tables_reupgraded, "github_webhook_events must be restored after re-upgrade head"
+        re_symbol_cols = {col["name"] for col in insp_reupgraded.get_columns("code_symbols", schema=clean_schema_name)}
+        assert "importance_score" in re_symbol_cols, "code_symbols.importance_score must be restored after re-upgrade head"
 
     finally:
         engine.dispose()
@@ -178,28 +197,36 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
 
 def test_zero_schema_drift_against_database() -> None:
     """Verify that ORM models (Base.metadata) and Alembic migrations have zero schema drift (B-21)."""
-    settings = get_settings()
+    db_url = normalize_sync_database_url(get_settings().database_url)
+    if db_url.startswith("sqlite"):
+        pytest.skip("PostgreSQL database not available for schema drift test (SQLite active)")
+        return
     try:
-        probe_engine = create_engine(settings.database_url, connect_args={"connect_timeout": 2})
-        with probe_engine.connect() as conn:
+        probe_engine = create_engine(db_url, connect_args={"connect_timeout": 2})
+        with probe_engine.connect():
             pass
     except Exception as exc:
         pytest.skip(f"PostgreSQL database not available for schema drift test: {exc}")
         return
+    finally:
+        try:
+            probe_engine.dispose()
+        except Exception:
+            pass
 
+    ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
+    cfg = Config(str(ini_path))
+    cfg.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+    command.upgrade(cfg, "head")
+
+    engine = create_engine(db_url, connect_args={"connect_timeout": 3})
     try:
-        ini_path = Path(__file__).resolve().parent.parent / "alembic.ini"
-        cfg = Config(str(ini_path))
-        cfg.set_main_option("sqlalchemy.url", settings.database_url)
-        command.upgrade(cfg, "head")
-
-        engine = create_engine(settings.database_url, connect_args={"connect_timeout": 3})
         with engine.connect() as conn:
             ctx = MigrationContext.configure(conn, opts={"compare_type": True})
             diffs = compare_metadata(ctx, Base.metadata)
 
             # Filter out expected environment-specific benign diffs if any
-            # (e.g. pgvector vector type internal details)
+            # (e.g. pgvector vector type internal details or PostgreSQL GIN/HNSW index expression diffs)
             actionable_diffs = []
             for diff in diffs:
                 diff_str = str(diff)
@@ -212,13 +239,8 @@ def test_zero_schema_drift_against_database() -> None:
                 f"Diffs: {actionable_diffs}\n"
                 f"Run 'alembic check' to inspect."
             )
-    except Exception as exc:
-        pytest.skip(f"PostgreSQL database not available for schema drift test: {exc}")
     finally:
-        try:
-            engine.dispose()
-        except Exception:
-            pass
+        engine.dispose()
 
 
 def test_alembic_chain_is_unbroken_and_acyclic() -> None:
