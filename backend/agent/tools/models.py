@@ -222,6 +222,8 @@ class ToolRequest:
     arguments: dict[str, Any] = field(default_factory=dict)
     version: str | None = None
     request_id: str | None = None
+    provenance: Any | None = None
+    provenance_ids: list[str] = field(default_factory=list)
 
 
 @dataclass

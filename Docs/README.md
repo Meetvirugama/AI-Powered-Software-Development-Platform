@@ -13,6 +13,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | 🟢 **COMPLETE** (17-step autonomous workflow verified) |
 | **Post-Week 3** | [Retrieval](./retrieval/README.md), [Agentic Chat](./agentic-chat/README.md), [Test Generation](./test-generation/README.md), & [Code Review Intelligence](./code-review/README.md) | Enterprise hardening & advanced intelligence: Timing-safe JWT/OAuth auth (#181), durable webhook event worker (#182), multi-stage hybrid retrieval (#187), bounded agentic chat (#188), execution-verified test generation (#193), and production AI code review with inline GitHub PR reviews, precision gating, ESLint/Biome analysis, and feedback lifecycle (#194). | 🟢 **COMPLETE** (All suites passing, 100% verified) |
 | **P0 Security** | [Secure Sandbox Execution Architecture](./security/sandbox/README.md) | Production-grade secure sandbox execution architecture for untrusted GitHub repositories: SandboxBackend abstraction, LocalSubprocessBackend (dev-only), ContainerBackend (Docker + gVisor `runsc`), dedicated internal Runner Service, Two-Phase Execution (controlled install vs offline tests with `--network=none`), resource bounding (2 vCPU, 4GB RAM, 512 PIDs, read-only rootfs), and 12-scenario attack verification (#200 / F20). | 🟢 **COMPLETE** (142 tests passing, 100% verified) |
+| **P0 Security** | [Provenance-Aware Taint-Tracking Architecture](./security/provenance/README.md) | End-to-end information flow control & indirect prompt injection defense: 6-level TrustLevel lattice, immutable DataProvenance, thread-safe DAG TaintTracker, capability-based TaintPolicyEngine, cryptographic SHA-256 human approval binding, tool authorization, and full adversarial test verification. | 🟢 **COMPLETE** (37 security tests passing, 100% verified) |
 
 ---
 
@@ -34,6 +35,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | [Team Rules & Boundaries](./team_rules.md) | Directory ownership map, branch protection rules, anti-clash guidelines, and PR workflow. | All Leads |
 | [Week 1 Security Report](./security/week1_security_report.md) | Comprehensive security audit covering multi-tenant isolation, prompt injection, and credential scrubbers. | Sukun |
 | [Week 3 Threat Model & Security Report](./security/week3_security_report.md) | Attack matrix, sandbox boundary isolation, secret redaction, and release checklist. | Sukun |
+| [Provenance-Aware Taint Tracking Architecture](./security/provenance/README.md) | End-to-end provenance tracking, trust level lattice, DAG propagation, and taint-aware tool authorization policy. | Meet |
 
 ---
 

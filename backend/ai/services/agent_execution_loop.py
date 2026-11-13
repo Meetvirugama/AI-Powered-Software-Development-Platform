@@ -42,6 +42,7 @@ from sandbox.exceptions import (
 
 from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
 from ai.services.edit_synthesizer import EditSynthesizer
+from ai.security.taint_policy import TaintPolicyEngine, get_taint_policy_engine, PolicyDecision
 
 if TYPE_CHECKING:
     from sandbox.workspace_manager import WorkspaceManager
@@ -186,6 +187,7 @@ class AgentExecutionLoop:
         execution_verifier: ExecutionVerifier | None = None,
         forbidden_files: Sequence[str] | None = None,
         edit_synthesizer: Any = None,
+        policy_engine: TaintPolicyEngine | None = None,
     ) -> None:
         self.workspace_manager = workspace_manager
         self.max_iterations = max_iterations
@@ -194,6 +196,7 @@ class AgentExecutionLoop:
         self.execution_verifier = execution_verifier or ExecutionVerifier()
         self.forbidden_files = list(forbidden_files or [])
         self.edit_synthesizer = edit_synthesizer
+        self.policy_engine = policy_engine or get_taint_policy_engine()
 
     def _resolve_step_dependencies(self, steps: Sequence[PlanStep]) -> list[PlanStep]:
         """Validate step dependency DAG strictly; rejects cycles, missing IDs, or self-dependencies."""
@@ -255,6 +258,8 @@ class AgentExecutionLoop:
         plan: StructuredPlan | Sequence[PlanStep] | Sequence[dict[str, Any]] | Any,
         *,
         step_payloads: Mapping[str, Any] | None = None,
+        repository_id: str | None = None,
+        approvals: Sequence[Any] | None = None,
     ) -> AgentExecutionResult:
         """Execute an approved plan inside the task's isolated workspace sandbox."""
         start_time = datetime.now(UTC)
@@ -374,7 +379,13 @@ class AgentExecutionLoop:
                 )
 
             # 2. Execute Step
-            step_record = self._execute_single_step(task_id, step, step_input)
+            step_record = self._execute_single_step(
+                task_id=task_id,
+                step=step,
+                step_input=step_input,
+                repository_id=repository_id,
+                approvals=approvals,
+            )
             step_records.append(step_record)
 
             if step_record.status == StepExecutionStatus.FAILED:
@@ -409,6 +420,8 @@ class AgentExecutionLoop:
         task_id: str,
         step: PlanStep,
         step_input: Mapping[str, Any],
+        repository_id: str | None = None,
+        approvals: Sequence[Any] | None = None,
     ) -> StepExecutionRecord:
         """Execute a single plan step dispatching to WorkspaceManager operations."""
         step_id = step.step_id
@@ -432,6 +445,33 @@ class AgentExecutionLoop:
         )
 
         try:
+            # Policy enforcement: evaluate taint and execution capability
+            eval_res = self.policy_engine.evaluate_step(
+                step=step,
+                task_id=task_id,
+                repository_id=repository_id,
+                step_input=dict(step_input),
+                approvals=list(approvals or []),
+            )
+            if not eval_res.is_allowed:
+                record.status = StepExecutionStatus.FAILED
+                record.failure_category = (
+                    "POLICY_DENIED" if eval_res.decision == PolicyDecision.DENY else "APPROVAL_REQUIRED"
+                )
+                err_msg = f"Policy violation on step '{step_id}': {eval_res.reason}"
+                record.error_message = err_msg
+                self.workspace_manager.record_timeline_event(
+                    task_id=task_id,
+                    event_type=WorkspaceExecutionEventType.EXECUTION_FAILED,
+                    message=err_msg,
+                    payload={
+                        "step_id": step_id,
+                        "decision": eval_res.decision.value,
+                        "reason": eval_res.reason,
+                    },
+                )
+                raise WorkspaceError(err_msg)
+
             # Validate repo-relative paths
             for target_file in expected_files:
                 validate_repo_relative_path(target_file)

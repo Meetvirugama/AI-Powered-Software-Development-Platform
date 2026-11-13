@@ -32,6 +32,7 @@ from agent.tools.models import (
 from agent.tools.rate_limiter import RateLimitDecision, ToolRateLimiter
 from agent.tools.registry import UnifiedToolRegistry
 from agent.tools.schema_validator import SchemaValidator
+from ai.security.taint_policy import TaintPolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,41 @@ class ToolRouter:
         """Check authorization with policy engine. Any failure or absence denies access."""
         if self._policy_engine is None:
             return "Policy engine unavailable; execution denied"
+
+        if isinstance(self._policy_engine, TaintPolicyEngine):
+            task_id = (
+                agent_state.get("task_id")
+                if isinstance(agent_state, dict)
+                else getattr(agent_state, "task_id", None)
+            )
+            repository_id = (
+                agent_state.get("repository_id")
+                if isinstance(agent_state, dict)
+                else getattr(agent_state, "repository_id", None)
+            )
+            prov_ids = list(getattr(request, "provenance_ids", []) or [])
+            if getattr(request, "provenance", None):
+                prov_ids.append(request.provenance.provenance_id)
+
+            target_files: list[str] = []
+            if "file_path" in request.arguments:
+                target_files.append(str(request.arguments["file_path"]))
+            elif "path" in request.arguments:
+                target_files.append(str(request.arguments["path"]))
+            elif "files" in request.arguments and isinstance(request.arguments["files"], list):
+                target_files.extend(str(f) for f in request.arguments["files"])
+
+            res = self._policy_engine.evaluate(
+                action_type=request.tool_name,
+                arguments=request.arguments,
+                target_files=target_files,
+                provenance_ids=prov_ids,
+                task_id=task_id,
+                repository_id=repository_id,
+            )
+            if not res.is_allowed:
+                return f"Policy denied tool execution: {res.reason}"
+            return None
 
         if self._policy_context_factory is None:
             return "Policy context unavailable; execution denied"

@@ -13,11 +13,12 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ai.security.provenance import DataProvenance
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.schemas.task import TaskAssumption, TaskSourceReference, TaskStatus
@@ -397,6 +398,30 @@ class PlanStep(BaseModel):
         ge=1,
         le=3600,
         description="Estimated execution time in seconds.",
+    )
+    provenance: Optional[DataProvenance] = Field(
+        default=None,
+        description="Metadata tracking the origin and trust level of this step.",
+    )
+    provenance_ids: list[str] = Field(
+        default_factory=list,
+        description="Parent provenance IDs from which this step was derived.",
+    )
+    taint_status: bool = Field(
+        default=False,
+        description="True if this step is derived from untrusted input.",
+    )
+    field_provenance: dict[str, str] = Field(
+        default_factory=dict,
+        description="Field-level provenance mapping (e.g. {'description': 'prov-1', 'command': 'prov-2'}).",
+    )
+    approval_required: bool = Field(
+        default=False,
+        description="True if execution policy mandates explicit human approval before running this step.",
+    )
+    approval_id: str | None = Field(
+        default=None,
+        description="ID of associated ExecutionApproval record if approved.",
     )
 
     @field_validator("step_id")

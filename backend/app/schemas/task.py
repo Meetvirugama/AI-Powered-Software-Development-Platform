@@ -23,6 +23,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ai.security.provenance import DataProvenance
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 
@@ -250,6 +251,14 @@ class TaskRequirement(BaseModel):
         default_factory=list,
         description="Conditions that must pass for this requirement to be satisfied.",
     )
+    provenance: Optional[DataProvenance] = Field(
+        default=None,
+        description="Provenance metadata tracking the origin and taint status of this requirement.",
+    )
+    provenance_ids: list[str] = Field(
+        default_factory=list,
+        description="Parent provenance IDs from which this requirement was derived.",
+    )
 
     @field_validator("description")
     @classmethod
@@ -283,6 +292,14 @@ class TaskAssumption(BaseModel):
     risk_level: Literal["low", "medium", "high"] = Field(
         default="low",
         description="Risk of failure if assumption proves false.",
+    )
+    provenance: Optional[DataProvenance] = Field(
+        default=None,
+        description="Provenance metadata for this assumption.",
+    )
+    provenance_ids: list[str] = Field(
+        default_factory=list,
+        description="Parent provenance IDs from which this assumption was derived.",
     )
 
     @field_validator("description")
@@ -319,6 +336,14 @@ class TaskConstraint(BaseModel):
         ge=500,
         le=100000,
         description="Token budget cap for agent planning and execution.",
+    )
+    provenance: Optional[DataProvenance] = Field(
+        default=None,
+        description="Provenance metadata for this constraint.",
+    )
+    provenance_ids: list[str] = Field(
+        default_factory=list,
+        description="Parent provenance IDs from which this constraint was derived.",
     )
 
     @field_validator("forbidden_files")
@@ -360,6 +385,14 @@ class TaskIntakePayload(BaseModel):
     base_revision: str | None = Field(
         default=None,
         description="Git commit SHA or branch ref to branch from. If omitted, uses default branch HEAD.",
+    )
+    provenance: Optional[DataProvenance] = Field(
+        default=None,
+        description="Aggregate provenance metadata for the task intake payload.",
+    )
+    provenance_ids: list[str] = Field(
+        default_factory=list,
+        description="Collection of parent provenance IDs across requirements, assumptions, and source.",
     )
 
     @model_validator(mode="before")
