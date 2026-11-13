@@ -315,6 +315,18 @@ class VerificationContext(BaseModel):
     execution_time_s: float = Field(default=0.0, ge=0.0, description="Task execution time in seconds.")
     timeout_s: float = Field(default=300.0, ge=1.0, description="Task timeout limit in seconds.")
 
+    # Optional task requirements for P-28 LLM-as-judge acceptance check
+    requirements: list[Any] | None = Field(
+        default=None,
+        description="Optional requirements list for P-28 LLM-as-judge criteria verification.",
+    )
+
+    # Structured P-28 LLM-as-judge evidence with diff hunk citations
+    requirement_evidence: list[CriterionJudgeEvidence] = Field(
+        default_factory=list,
+        description="Structured LLM-as-judge criteria evidence with diff citations.",
+    )
+
 
 class VerificationResult(BaseModel):
     """Independent verification result envelope matching Docs/week3.md §6 F36.
