@@ -20,6 +20,7 @@ from app.api.v1.dependencies import (
     get_owned_repository,
     get_request_user_id as _request_user_id,
 )
+from app.models.user import UserRole
 from app.services.repository_metadata_service import extract_repository_dependencies
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
@@ -29,8 +30,15 @@ from app.repositories.repository_repository import RepositoryRepository
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 
 
-def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
-    return get_owned_repository(repository_id, request, db, repo_cls=RepositoryRepository)
+def _owned_repository(
+    repository_id: UUID,
+    request: Request,
+    db: Session,
+    min_role: str | UserRole | None = None,
+) -> Repository:
+    return get_owned_repository(
+        repository_id, request, db, repo_cls=RepositoryRepository, min_role=min_role
+    )
 from app.schemas.repository import (
     CodeSymbolResponse,
     PaginatedResponse,
@@ -152,6 +160,7 @@ def sync_repository(
     force: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> SyncJobResponse:
+    _owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     user_id = _request_user_id(request)
     service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
     job = service.request_sync(repository_id, user_id, force=force)
@@ -183,8 +192,8 @@ def sync_repository(
 
 @router.delete("/{repository_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Disconnect and remove a repository")
 def delete_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> None:
+    repo = _owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     user_id = _request_user_id(request)
-    repo = _owned_repository(repository_id, request, db)
     redis_client = None
     try:
         redis_client = get_redis()
