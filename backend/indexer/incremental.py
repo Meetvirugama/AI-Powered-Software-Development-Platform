@@ -171,6 +171,78 @@ class IncrementalIndexer:
                 await session.commit()
                 return res
 
+    async def _execute_batch(
+        self,
+        stmt: Any,
+        params_list: list[dict[str, Any]],
+        sess: Any = None,
+        batch_size: int = 250,
+    ) -> int:
+        """
+        Execute multi-row batch insertion or update in chunked batches.
+        Reduces database network roundtrip overhead from O(N) to O(ceil(N / batch_size)).
+
+        Simple explanation:
+        Instead of calling the database one-by-one for each symbol or chunk, this function
+        groups them into small batches (e.g., 250 items at a time) and sends them together
+        in one trip. This makes saving to the database much faster and avoids network delays.
+        """
+        # If there is nothing to insert, return immediately
+        if not params_list:
+            return 0
+
+        target_session = sess or self._db
+        is_sqlite = self._is_sqlite()
+        base_stmt = stmt
+
+        # For SQLite in tests, remove PostgreSQL-specific CAST syntax so SQLite doesn't error
+        if is_sqlite:
+            sql_txt = str(stmt)
+            if "CAST(:embedding AS vector)" in sql_txt or "CAST(:metadata AS jsonb)" in sql_txt:
+                sql_txt = sql_txt.replace("CAST(:embedding AS vector)", ":embedding").replace(
+                    "CAST(:metadata AS jsonb)", ":metadata"
+                )
+                base_stmt = text(sql_txt)
+
+        total_inserted = 0
+        # Process the items in manageable slices (e.g. 250 items per slice)
+        for i in range(0, len(params_list), batch_size):
+            batch_slice = params_list[i : i + batch_size]
+            cleaned_batch: list[dict[str, Any]] = []
+
+            for raw_params in batch_slice:
+                bound = dict(raw_params)
+                if is_sqlite:
+                    # SQLite needs UUID objects converted to string hex format
+                    for k, v in list(bound.items()):
+                        if isinstance(v, UUID):
+                            bound[k] = v.hex
+                    if bound.get("embedding") is None and "embedding" in bound:
+                        bound["embedding"] = json.dumps([0.0] * 768)
+                cleaned_batch.append(bound)
+
+            # Execute the batch slice on the database session
+            if hasattr(target_session, "execute"):
+                if inspect.iscoroutinefunction(target_session.execute):
+                    await target_session.execute(base_stmt, cleaned_batch)
+                else:
+                    target_session.execute(base_stmt, cleaned_batch)
+            else:
+                async with target_session() as session:
+                    if inspect.iscoroutinefunction(session.execute):
+                        await session.execute(base_stmt, cleaned_batch)
+                    else:
+                        session.execute(base_stmt, cleaned_batch)
+                    if hasattr(session, "commit"):
+                        if inspect.iscoroutinefunction(session.commit):
+                            await session.commit()
+                        else:
+                            session.commit()
+
+            total_inserted += len(cleaned_batch)
+
+        return total_inserted
+
     async def _commit(self, sess: Any = None) -> None:
         """Helper to commit transactions."""
         target = sess or self._db
@@ -431,32 +503,42 @@ class IncrementalIndexer:
                     VALUES (:id, :file_id, :repo_id, :name, :kind, :start_line, :end_line, :signature, :parent_id)
                     """
                 )
+                # Collect all symbols for this file into a single batch list
+                # This prepares all rows in memory first so we can save them in one trip
+                symbols_data: list[dict[str, Any]] = []
                 for sym in symbols:
                     sym_uuid = sym.id if isinstance(sym.id, UUID) else uuid.uuid4()
                     sym.id = sym_uuid
                     parent_uuid = sym.parent_id if sym.parent_id in persisted_symbol_ids else None
+                    symbols_data.append(
+                        {
+                            "id": sym_uuid,
+                            "file_id": file_id,
+                            "repo_id": repository_id,
+                            "name": (sym.name or "anonymous")[:255],
+                            "kind": (sym.kind or "symbol")[:50],
+                            "start_line": max(1, int(sym.start_line or 1)),
+                            "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
+                            "signature": redact(sym.signature) if sym.signature else None,
+                            "parent_id": parent_uuid,
+                        }
+                    )
+                    persisted_symbol_ids.add(sym_uuid)
+                    all_extracted_symbols.append(sym)
+                    file_contents_by_id[file_id] = content
+                    file_id_to_path[file_id] = file_rel_path
+
+                # Execute batch insert for all symbols instead of doing one query per symbol
+                if symbols_data:
                     try:
-                        await self._execute(
+                        await self._execute_batch(
                             symbol_insert_query,
-                            {
-                                "id": sym_uuid,
-                                "file_id": file_id,
-                                "repo_id": repository_id,
-                                "name": (sym.name or "anonymous")[:255],
-                                "kind": (sym.kind or "symbol")[:50],
-                                "start_line": max(1, int(sym.start_line or 1)),
-                                "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
-                                "signature": redact(sym.signature) if sym.signature else None,
-                                "parent_id": parent_uuid,
-                            },
+                            symbols_data,
                             sess=session,
+                            batch_size=250,
                         )
-                        persisted_symbol_ids.add(sym_uuid)
-                        all_extracted_symbols.append(sym)
-                        file_contents_by_id[file_id] = content
-                        file_id_to_path[file_id] = file_rel_path
                     except Exception as sym_exc:
-                        logger.debug("Symbol persistence skipped for %s in %s: %s", sym.name, file_rel_path, sym_exc)
+                        logger.debug("Symbol batch persistence failed in %s: %s", file_rel_path, sym_exc)
 
             # Chunk the file using SymbolChunker (cAST symbol-aware or fallback line blocks)
             try:
@@ -561,6 +643,9 @@ class IncrementalIndexer:
             )
 
             seen_chunk_ids: set[UUID] = set()
+            # Collect all chunk payloads for this file into a single batch list
+            # Preparing all chunks in memory lets us insert hundreds of rows in one batch query
+            chunks_data: list[dict[str, Any]] = []
             for i, chunk in enumerate(chunks):
                 chunk_meta = dict(chunk.metadata or {})
                 sym_ids_list = [str(x) for x in chunk_meta.get("symbol_ids", [])]
@@ -620,8 +705,7 @@ class IncrementalIndexer:
                     ),
                 }
 
-                await self._execute(
-                    chunk_query,
+                chunks_data.append(
                     {
                         "id": chunk_id,
                         "repo_id": repository_id,
@@ -635,8 +719,16 @@ class IncrementalIndexer:
                         "end": chunk.end_line,
                         "hash": chunk.content_hash,
                         "metadata": json.dumps(metadata),
-                    },
+                    }
+                )
+
+            # Insert all code chunks and vector embeddings in batched network roundtrips
+            if chunks_data:
+                await self._execute_batch(
+                    chunk_query,
+                    chunks_data,
                     sess=session,
+                    batch_size=250,
                 )
 
             indexed_count += 1
@@ -723,11 +815,17 @@ class IncrementalIndexer:
                 score_update_query = text(
                     "UPDATE code_symbols SET importance_score = :score WHERE id = :id AND repository_id = :repo_id"
                 )
-                for sym_id, imp_score in scores_by_id.items():
-                    await self._execute(
+                # Batch all symbol score updates together into one database trip
+                score_updates = [
+                    {"score": float(imp_score), "id": sym_id, "repo_id": repository_id}
+                    for sym_id, imp_score in scores_by_id.items()
+                ]
+                if score_updates:
+                    await self._execute_batch(
                         score_update_query,
-                        {"score": float(imp_score), "id": sym_id, "repo_id": repository_id},
+                        score_updates,
                         sess=session,
+                        batch_size=250,
                     )
 
                 if skipped_count == 0:
@@ -753,24 +851,29 @@ class IncrementalIndexer:
                     VALUES (:id, :repo_id, :source_id, :target_id, :target_name, :edge_type, :provenance, :resolution_status, :confidence, :weight)
                     """
                 )
-                for edge in all_graph_edges:
-                    await self._execute(
+                # Batch all knowledge graph edge inserts into one database trip
+                edges_data = [
+                    {
+                        "id": uuid.uuid4(),
+                        "repo_id": repository_id,
+                        "source_id": edge.source_id,
+                        "target_id": edge.target_id,
+                        "target_name": getattr(edge, "target_name", None),
+                        "edge_type": edge.edge_type,
+                        "provenance": getattr(edge, "provenance", "tree_sitter") or "tree_sitter",
+                        "resolution_status": getattr(edge, "resolution_status", "resolved") or "resolved",
+                        "confidence": float(getattr(edge, "confidence", 1.0) or 1.0),
+                        "weight": float(getattr(edge, "weight", 1.0) or 1.0),
+                    }
+                    for edge in all_graph_edges
+                ]
+                if edges_data:
+                    persisted_edges_count = await self._execute_batch(
                         edge_insert_query,
-                        {
-                            "id": uuid.uuid4(),
-                            "repo_id": repository_id,
-                            "source_id": edge.source_id,
-                            "target_id": edge.target_id,
-                            "target_name": getattr(edge, "target_name", None),
-                            "edge_type": edge.edge_type,
-                            "provenance": getattr(edge, "provenance", "tree_sitter") or "tree_sitter",
-                            "resolution_status": getattr(edge, "resolution_status", "resolved") or "resolved",
-                            "confidence": float(getattr(edge, "confidence", 1.0) or 1.0),
-                            "weight": float(getattr(edge, "weight", 1.0) or 1.0),
-                        },
+                        edges_data,
                         sess=session,
+                        batch_size=250,
                     )
-                    persisted_edges_count += 1
                 logger.info(
                     "Explicitly persisted %d knowledge graph edges and PageRank scores for repo %s",
                     persisted_edges_count,
@@ -1219,8 +1322,9 @@ class ReembeddingMigrationManager:
                 VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :code_search_text, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
                 """
             )
-            for rec in staged_rows:
-                await self._indexer._execute(insert_stmt, rec)
+            # Batch insert staged v2 chunks in multi-row batches for high throughput
+            if staged_rows:
+                await self._indexer._execute_batch(insert_stmt, staged_rows, batch_size=250)
 
             await self._indexer._execute(
                 text(
@@ -1260,8 +1364,9 @@ class ReembeddingMigrationManager:
                     VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :code_search_text, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
                     """
                 )
-                for rec in backup:
-                    await self._indexer._execute(insert_stmt, rec)
+                # Batch restore previous v1 chunks in multi-row batches for high throughput
+                if backup:
+                    await self._indexer._execute_batch(insert_stmt, backup, batch_size=250)
 
                 prev_gen = self._v1_generation_by_repo.get(repository_id)
                 await self._indexer._execute(
