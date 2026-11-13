@@ -315,6 +315,9 @@ class WorkspaceDiffVerifier:
             file_hunks_text = "\n".join(
                 line for hunk in file_summary.hunks for line in hunk.lines
             )
+            if not file_hunks_text.strip():
+                file_hunks_text = file_summary.patch or diff_result.raw_diff
+
             gitleaks_results = self._gitleaks_scanner.scan_diff(
                 file_hunks_text, file_path_hint=file_path
             )

@@ -134,7 +134,7 @@ class CriterionJudgeEvidence(BaseModel):
 
     criterion_id: str = Field(..., description="Acceptance criterion identifier or statement.")
     requirement_id: str = Field(..., description="Associated parent requirement ID.")
-    verdict: Literal["PASS", "FAIL", "PARTIAL", "INCONCLUSIVE"] = Field(
+    verdict: Literal["PASS", "FAIL", "PARTIAL", "INCONCLUSIVE", "UNMET"] = Field(
         default="PASS",
         description="LLM-as-judge verification verdict.",
     )

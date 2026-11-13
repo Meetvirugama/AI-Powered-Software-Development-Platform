@@ -61,9 +61,14 @@ GITLEAKS_RULES: dict[str, re.Pattern[str]] = {
 
 # Values that are explicitly benign placeholders or allowed documentation examples
 PLACEHOLDER_REGEX = re.compile(
-    r"(?i)(\[REDACTED\]|<[^>]*>|\.\.\.|x{4,}|example|placeholder|changeme|dummy|fake|mock|"
-    r"os\.environ|getenv|process\.env|\$\{|none|null|true|false)"
+    r"(?i)(\[REDACTED\]|<[A-Z0-9_\-\.]+>|your_api_key_here|my_secret_key|placeholder_secret|"
+    r"changeme|dummy_token|fake_key|os\.environ\.get|getenv\()"
 )
+
+
+def is_gitleaks_cli_available() -> bool:
+    """Return True if native gitleaks CLI is installed and discoverable on PATH."""
+    return bool(shutil.which("gitleaks"))
 
 
 class GitleaksDiffScanner:
@@ -73,12 +78,14 @@ class GitleaksDiffScanner:
         self,
         config_path: Path | None = None,
         use_cli: bool = True,
+        force_builtin: bool = False,
         rules: dict[str, re.Pattern[str]] | None = None,
     ) -> None:
         self.config_path = config_path or Path(".gitleaks.toml")
-        self.use_cli = use_cli
+        self.use_cli = use_cli and not force_builtin
+        self.force_builtin = force_builtin
         self.rules = rules or GITLEAKS_RULES
-        self._gitleaks_binary = shutil.which("gitleaks") if use_cli else None
+        self._gitleaks_binary = shutil.which("gitleaks") if self.use_cli else None
 
     @property
     def is_cli_available(self) -> bool:
@@ -180,16 +187,26 @@ class GitleaksDiffScanner:
             if line.startswith("+++ b/"):
                 current_file = line[6:].strip()
                 continue
+            elif line.startswith("+++ "):
+                current_file = line[4:].strip().lstrip("b/")
+                continue
+
             if line.startswith("@@"):
                 # Parse hunk header: @@ -old,len +new,len @@
                 m = re.search(r"\+(\d+)", line)
                 if m:
-                    current_line_no = int(m.group(1))
+                    current_line_no = int(m.group(1)) - 1
                 continue
 
             if line.startswith("+") and not line.startswith("+++"):
-                content = line[1:].strip()
                 current_line_no += 1
+                content = line[1:].strip()
+
+                # Skip comment lines that contain placeholder keywords
+                if content.startswith(("#", "//", "/*", "*")) and any(
+                    w in content.lower() for w in ("dummy", "example", "placeholder", "[redacted]")
+                ):
+                    continue
 
                 # Skip obvious placeholder comments or redacted content
                 if PLACEHOLDER_REGEX.search(content):
