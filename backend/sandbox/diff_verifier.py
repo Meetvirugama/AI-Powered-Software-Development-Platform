@@ -43,6 +43,7 @@ from sandbox.exceptions import (
     WorkspaceDiffError,
     WorkspacePathEscapeError,
 )
+from sandbox.gitleaks_scanner import GitleaksDiffScanner
 from sandbox.path_guard import WorkspacePathGuard
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,12 @@ class WorkspaceDiffVerifier:
         forbidden_patterns: Sequence[str] = FORBIDDEN_FILE_PATTERNS,
         critical_files: frozenset[str] = CRITICAL_PROJECT_FILES,
         secret_patterns: Sequence[tuple[str, re.Pattern[str]]] = SECRET_SCAN_PATTERNS,
+        gitleaks_scanner: GitleaksDiffScanner | None = None,
     ) -> None:
         self._forbidden_patterns = tuple(forbidden_patterns)
         self._critical_files = critical_files
         self._secret_patterns = tuple(secret_patterns)
+        self._gitleaks_scanner = gitleaks_scanner or GitleaksDiffScanner()
 
     def extract_diff(
         self,
@@ -283,7 +286,7 @@ class WorkspaceDiffVerifier:
                             f"Deletion of critical project manifest '{file_path}' was explicitly allowed."
                         )
 
-            # 5. Secret Scanner across added diff lines
+            # 5. Secret Scanner across added diff lines (Primary Pattern Engine)
             for hunk in file_summary.hunks:
                 current_line_no = hunk.new_start
                 for line in hunk.lines:
@@ -307,6 +310,24 @@ class WorkspaceDiffVerifier:
                         current_line_no += 1
                     elif not line.startswith("-"):
                         current_line_no += 1
+
+            # 6. Secondary Secret Scanner (Gitleaks Engine)
+            file_hunks_text = "\n".join(
+                line for hunk in file_summary.hunks for line in hunk.lines
+            )
+            gitleaks_results = self._gitleaks_scanner.scan_diff(
+                file_hunks_text, file_path_hint=file_path
+            )
+            for gf in gitleaks_results:
+                # Deduplicate if primary pattern scanner already identified finding on this line
+                if not any(
+                    sf.file_path == gf.file_path and sf.line_number == gf.line_number
+                    for sf in secret_findings
+                ):
+                    secret_findings.append(gf)
+                    blocking_findings.append(
+                        f"Credential leakage detected by secondary engine (Gitleaks) in '{file_path}:{gf.line_number}' ({gf.secret_type})."
+                    )
 
         # Warn if diff is empty
         if diff_result.is_empty:
