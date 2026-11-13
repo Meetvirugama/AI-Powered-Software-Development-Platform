@@ -465,6 +465,30 @@ async def lifespan(app: FastAPI):
     init_history_services(app)
     await init_github_service(app)
 
+    # Initialize OpenTelemetry & Observability (F31 - Issue #212)
+    try:
+        from app.observability import (
+            setup_telemetry,
+            instrument_fastapi,
+            instrument_httpx,
+            instrument_sqlalchemy,
+            instrument_redis,
+            get_langfuse_adapter,
+        )
+        telemetry_mgr = setup_telemetry(settings)
+        if telemetry_mgr.is_initialized:
+            instrument_fastapi(app)
+            instrument_httpx()
+            from app.core.database import engine
+            instrument_sqlalchemy(engine)
+            try:
+                instrument_redis()
+            except Exception:
+                pass
+        get_langfuse_adapter(settings)
+    except Exception as obs_exc:
+        logger.warning("observability_startup_warning", extra={"error": str(obs_exc)})
+
     # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks on Startup ──────
     if "PYTEST_CURRENT_TEST" not in os.environ:
         try:
@@ -562,5 +586,13 @@ async def lifespan(app: FastAPI):
         await async_engine.dispose()
     except Exception as exc:
         logger.debug("db_dispose_error", extra={"error": str(exc)})
+
+    # Shutdown OpenTelemetry and Langfuse
+    try:
+        from app.observability import shutdown_telemetry, get_langfuse_adapter
+        shutdown_telemetry()
+        get_langfuse_adapter().shutdown()
+    except Exception as obs_shut_exc:
+        logger.debug("observability_shutdown_error", extra={"error": str(obs_shut_exc)})
 
     logger.info("app_shutdown")

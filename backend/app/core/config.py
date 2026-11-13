@@ -128,6 +128,27 @@ class Settings(BaseSettings):
     reranker_onnx_enabled: bool = False
     reranker_quantization: str = "none"
 
+    # --- Distributed Tracing & Observability (F31 - Issue #212) -----------
+    otel_enabled: bool = False
+    otel_service_name: str = "ai-dev-platform"
+    otel_service_version: str = "1.0.0"
+    otel_environment: str = "development"
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_exporter_otlp_headers: str | None = None
+    otel_traces_exporter: str = "none"  # "otlp", "console", "none"
+    otel_metrics_enabled: bool = False
+    otel_trace_sample_rate: float = 1.0
+
+    # --- Langfuse LLM Observability ---------------------------------------
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+
+    # --- Privacy & Grounding Controls -------------------------------------
+    observability_capture_prompts: bool = False
+    observability_capture_responses: bool = False
+
     @property
     def active_chat_model(self) -> str:
         """Resolve active default chat model based on ai_primary_provider."""

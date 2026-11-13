@@ -43,6 +43,7 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | [Nightly CI Quality Evaluation](./evaluation/NIGHTLY_QUALITY_EVALUATION.md) | Scheduled zero-egress offline benchmark pipeline, JSON artifact retention, and failure alerts. | Keval |
 | [Evaluation Framework Research](./evaluation/EVALUATION_FRAMEWORK_RESEARCH.md) | Architectural trade-offs, license checks, and adopt/defer recommendations for RAGAS, promptfoo, DeepEval, Langfuse, and SWE-bench. | Meet |
 | [AI Evaluation Implementation Report](./evaluation/AI_EVALUATION_IMPLEMENTATION_REPORT.md) | Comprehensive implementation audit, before/after comparison, file inventory, and test results. | Meet & Keval |
+| [Distributed Tracing & LLM Observability](./observability/README.md) | OpenTelemetry distributed tracing, GenAI semantic spans, autonomous agent execution monitoring, and fail-safe Langfuse adapter (#212 / F31). | Meet |
 
 ---
 
@@ -80,7 +81,8 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [26. Project Memory Entries & MCP Resources](./engineering/26_project_memory_entries.md) — Episodic Project Memory, Semantic Search & MCP Resources (Issue #217 / F36).
 - [27. Branch, Commit, Push, and Draft PR Publication](./engineering/27_branch_commit_push_draft_pr_publication.md) — Host-Side Git Operations & Credential Isolation Architecture (Issue #207 / F26).
 - [28. Bounded Self-Repair Loop & Anti-Reward Hacking](./engineering/28_bounded_self_repair_loop.md) — LLM-Driven Targeted Repair Synthesis, Reflexion Memory & Anti-Reward Hacking Architecture (Issue #205 / F24).
-- [29. AI Quality Evaluator & Benchmark Infrastructure](./evaluation/AI_EVALUATION_IMPLEMENTATION_REPORT.md) — Comprehensive reference for QualityGate, Fixture Suites, Mini SWE-bench, and Nightly CI (Issue #210 / F29).
+- [29. LLM Gateway, Providers & Tool Calling](./engineering/29_llm_gateway_providers_tool_calling_and_telemetry.md) — Unified LLM Gateway, Gemini & Groq Providers, Strict Schemas & Pricing (Issue #209 / F28).
+- [30. Distributed Tracing & LLM Observability](./engineering/30_distributed_tracing_llm_observability_and_agent_monitoring.md) — OpenTelemetry Tracing, GenAI Semantic Spans, Tool Invocations & Langfuse (Issue #212 / F31).
 
 ---
 

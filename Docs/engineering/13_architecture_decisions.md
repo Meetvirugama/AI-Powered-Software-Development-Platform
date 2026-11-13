@@ -512,5 +512,46 @@ Code retrieval quality and embedding efficiency exhibited five engineering gaps:
    - Keep ADR-008 (`_PERMITTED_PROVIDERS = {"gemini", "groq"}` in `ai_quality_evaluator.py` and `_ALLOWED_EMBEDDING_PROVIDERS = {"gemini"}` in `config.py`) strictly enforced by default.
    - Gate `CodeRankEmbedProvider` (`nomic-ai/CodeRankEmbed`, 768-d, 8192 context, query prefix `"Represent this query for searching relevant code: "`) behind explicit `allow_local_embeddings=True` opt-in with an isolated `EmbeddingProfile(provider="local_coderank", model="nomic-ai/CodeRankEmbed", dimensions=768, profile_version="v2")`.
 
+---
+
+## ADR-017: OpenTelemetry Distributed Tracing, GenAI Semantic Spans & Fail-Safe Langfuse Observability
+
+| Field | Value |
+|---|---|
+| **Title** | OpenTelemetry Distributed Tracing, GenAI Semantic Conventions, Autonomous Tool Tracing & Fail-Safe Langfuse Observability |
+| **Date** | 2026-11-13 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+As the platform expanded from single LLM requests into autonomous multi-turn agents, workflow loops, and tool-assisted code modifications, visibility across boundaries became fractured:
+1. Tracing across FastAPI ingress, database queries, Redis caching, outbound HTTP calls, and internal LLM gateway invocations lacked unified context propagation.
+2. Debugging LLM degradation, token consumption spikes, and transient rate-limiting required dedicated GenAI semantic tracing without fragmenting logs.
+3. Autonomous agent execution loops and tool routing (`ToolRouter.route()`) lacked hierarchical parent-child span correlation.
+4. LLM-specific observability (evaluations, prompt versioning, token cost tracking) required a dedicated dashboard interface (Langfuse) without creating a single point of failure or violating enterprise privacy.
+5. In-app stage-level telemetry (`AnalysisRun.result_payload["stage_metrics"]`) and existing health check contracts (`/health/ready`) needed strict preservation.
+
+**Decision:**
+1. **OpenTelemetry as the Unified Tracing Standard:**
+   - Establish `TelemetryManager` as the process-wide OpenTelemetry singleton managing `TracerProvider`, `MeterProvider`, and resource attributes (`service.name`, `service.version`, `deployment.environment`).
+   - Propagate trace context via W3C TraceContext standards (`traceparent`).
+   - Implement framework auto-instrumentation for FastAPI (excluding health endpoints), HTTPX, SQLAlchemy, and Redis with secret redaction.
+   - Enrich existing structured logging (`JsonFormatter`) with dynamic `trace_id`, `span_id`, `request_id`, `analysis_run_id`, and `agent_execution_id`.
+2. **GenAI Semantic Spans & Fallback Tracking:**
+   - Instrument `LLMGateway.generate` and `LLMGateway.generate_stream` with standardized OpenTelemetry GenAI semantic conventions (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens`).
+   - Explicitly track provider fallback events (`gen_ai.fallback.attempted`, `gen_ai.fallback.provider`, `gen_ai.fallback.status`, `gen_ai.primary.error`).
+   - Monitor streaming latency (TTFT) and token cost estimation based on model-aware pricing.
+3. **Autonomous Agent & Tool Invocation Tracing:**
+   - Create root `agent.execution` spans around autonomous agent reasoning loops via `trace_agent_execution`.
+   - Wrap tool executions in child spans `tool:{tool_name}` within `ToolRouter.route()` via `trace_tool_invocation`, capturing duration, execution ID, and sanitized tool metadata.
+4. **Fail-Safe Langfuse Adapter & Privacy Opt-in:**
+   - Wrap the `langfuse` SDK inside `LangfuseAdapter` with defensive error boundaries and no-op fallback when unconfigured.
+   - Enforce zero raw content retention by default (`OBSERVABILITY_CAPTURE_PROMPTS=False`, `OBSERVABILITY_CAPTURE_RESPONSES=False`), transmitting only model identifiers, token counts, latency, and cost unless explicit user opt-in is granted.
+   - Redact all sensitive tokens and credentials via `app.core.secret_redaction` even when debugging capture is active.
+5. **Decoupled Health Endpoints & Metric Cardinality Governance:**
+   - Preserve `/health`, `/health/live`, and `/health/ready` checking only database and cache connectivity; external OTLP or Langfuse outages never affect platform readiness.
+   - Enforce strict low-cardinality governance on OpenTelemetry metrics (`llm_requests_total`, `llm_request_duration_seconds`, `agent_executions_total`, `tool_invocations_total`), forbidding high-cardinality IDs from metric label sets.
+   - Retain full backwards compatibility with `AnalysisRun.result_payload["stage_metrics"]` and `StageExecutionTimer`.
+
 
 

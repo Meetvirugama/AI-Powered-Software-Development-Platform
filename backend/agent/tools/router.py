@@ -494,33 +494,39 @@ class ToolRouter:
             return handler(**request.arguments)
 
         try:
-            timeout_s = getattr(definition, "timeout_s", 60.0)
-            # Enforce execution timeout via ThreadPoolExecutor when configured
-            if timeout_s and timeout_s > 0:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_invoke_handler)
-                    try:
-                        raw_result = future.result(timeout=timeout_s)
-                    except concurrent.futures.TimeoutError:
-                        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-                        return ToolResult(
-                            success=False,
-                            error=f"Tool execution timed out after {timeout_s}s",
-                            error_category="TIMEOUT_ERROR",
-                            duration_ms=elapsed_ms,
-                            timed_out=True,
-                        )
-            else:
-                raw_result = _invoke_handler()
+            from app.observability.agent import trace_tool_invocation
+            with trace_tool_invocation(
+                tool_name=request.tool_name,
+                task_id=task_id,
+                metadata={"source": getattr(definition, "source", "unknown") if definition else "unknown"},
+            ):
+                timeout_s = getattr(definition, "timeout_s", 60.0)
+                # Enforce execution timeout via ThreadPoolExecutor when configured
+                if timeout_s and timeout_s > 0:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(_invoke_handler)
+                        try:
+                            raw_result = future.result(timeout=timeout_s)
+                        except concurrent.futures.TimeoutError:
+                            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                            return ToolResult(
+                                success=False,
+                                error=f"Tool execution timed out after {timeout_s}s",
+                                error_category="TIMEOUT_ERROR",
+                                duration_ms=elapsed_ms,
+                                timed_out=True,
+                            )
+                else:
+                    raw_result = _invoke_handler()
 
-            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
-            # 7. Common Output Boundary
-            return self._post_process_output(
-                raw_result=raw_result,
-                output_schema=definition.output_schema,
-                duration_ms=elapsed_ms,
-            )
+                # 7. Common Output Boundary
+                return self._post_process_output(
+                    raw_result=raw_result,
+                    output_schema=definition.output_schema,
+                    duration_ms=elapsed_ms,
+                )
 
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
