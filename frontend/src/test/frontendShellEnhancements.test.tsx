@@ -61,9 +61,7 @@ describe('Issue 2 Frontend Shell: Virtualization, Syntax Highlighting, TaskPhase
           onResolveApproval={onResolveApproval}
         />
         <TaskVerificationPhasePanel
-          unifiedDiff="@@ -1,1 +1,1 @@
--old
-+new"
+          unifiedDiff={"@@ -1,1 +1,1 @@\n-old\n+new"}
           repairAttempt={1}
           maxRepairAttempts={3}
           testsPassed={12}

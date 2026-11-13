@@ -18,17 +18,14 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  FileCode,
   FileDiff,
   FlaskConical,
   FolderGit2,
   GitBranch,
-  GitCommit,
   GitPullRequest,
   History,
   ListChecks,
   Loader2,
-  Pause,
   Play,
   Plus,
   RefreshCw,
@@ -75,15 +72,11 @@ import {
   triggerTaskVerification,
 } from '../services/tasks';
 import type {
-  PlanStep,
   TaskDetail,
   TaskEvent,
   TaskPullRequestResponse,
   TaskSummary,
 } from '../types/task';
-import { CodeChangesPanel } from '../components/tasks/CodeChangesPanel';
-import { TestExecutionPanel } from '../components/tasks/TestExecutionPanel';
-import { VerificationPanel } from '../components/tasks/VerificationPanel';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
 import {
   RepositoryTaskChangesTab,

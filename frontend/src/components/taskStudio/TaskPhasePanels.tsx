@@ -1,9 +1,28 @@
 import React, { memo } from 'react';
 import {
+  CheckCircle2,
+  ExternalLink,
+  FileCode,
+  FlaskConical,
+  GitBranch,
+  GitCommit,
+  GitPullRequest,
+  Pause,
+  Play,
+  ShieldCheck,
+  Terminal,
+  Wrench,
+} from 'lucide-react';
+import { cn } from '../../lib/utils';
+import type { PlanStep } from '../../types/task';
+import {
   parseUnifiedDiffWithTokens,
-  SyntaxToken,
+  type SyntaxToken,
   useVirtualRange,
 } from '../../utils/virtualizationAndSyntax';
+import { CodeChangesPanel } from '../tasks/CodeChangesPanel';
+import { TestExecutionPanel } from '../tasks/TestExecutionPanel';
+import { VerificationPanel } from '../tasks/VerificationPanel';
 
 const TOKEN_COLOR_CLASS: Record<SyntaxToken['kind'], string> = {
   keyword: 'text-purple-400 font-medium',
@@ -299,26 +318,6 @@ export const TaskPublicationPhasePanel: React.FC<TaskPublicationPhaseProps> = me
   ),
 );
 TaskPublicationPhasePanel.displayName = 'TaskPublicationPhasePanel';
-
-import {
-  CheckCircle2,
-  ExternalLink,
-  FileCode,
-  FlaskConical,
-  GitBranch,
-  GitCommit,
-  GitPullRequest,
-  Pause,
-  Play,
-  ShieldCheck,
-  Terminal,
-  Wrench,
-} from 'lucide-react';
-import { cn } from '../../lib/utils';
-import { CodeChangesPanel } from '../tasks/CodeChangesPanel';
-import { TestExecutionPanel } from '../tasks/TestExecutionPanel';
-import { VerificationPanel } from '../tasks/VerificationPanel';
-import type { PlanStep } from '../../types/task';
 
 export interface RepositoryTaskPlanTabProps {
   taskDetail: any;
@@ -793,7 +792,7 @@ RepositoryTaskChangesTab.displayName = 'RepositoryTaskChangesTab';
 
 export interface RepositoryTaskVerificationTabProps {
   taskId: string;
-  currentRevision: string;
+  currentRevision?: string | null;
   actionBusy: string | null;
   handleRunVerification: () => void;
 }

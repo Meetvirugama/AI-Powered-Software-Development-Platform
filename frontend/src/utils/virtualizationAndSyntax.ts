@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, UIEvent } from 'react';
+import { useMemo, useState, useCallback, useEffect, type UIEvent } from 'react';
 
 export const TOKEN_COLOR_CLASS: Record<SyntaxTokenKind, string> = {
   keyword: "text-purple-400 font-medium",

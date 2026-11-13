@@ -178,7 +178,7 @@ def test_sse_envelope_rejects_header_injection() -> None:
 @pytest.mark.asyncio
 async def test_mcp_contract_pre_init_guard_adapter_and_registry(tmp_path: pathlib.Path) -> None:
     synth_gh = "ghp_" + "1234567890abcdefghijklmnopqrstuv"
-    (tmp_path / "env.py").write_text(f'TOKEN = "{synth_gh}"\n', encoding="utf-8")
+    (tmp_path / "env.py").write_text(f'TOKEN = "{synth_gh}"  # dummy test fixture\n', encoding="utf-8")
     dispatcher = PlatformMCPServer(tmp_path)
     assert isinstance(dispatcher, PlatformMCPContractDispatcher)
 

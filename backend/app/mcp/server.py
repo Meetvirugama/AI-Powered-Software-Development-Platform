@@ -8,6 +8,7 @@ sandboxed patch verification with mandatory secret redaction and SSE notificatio
 from __future__ import annotations
 
 import pathlib
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -209,9 +210,12 @@ class PlatformMCPServer:
                         },
                     }
                 raw_text = candidate.read_text(encoding="utf-8", errors="replace")
-                # Apply both platform secret redaction and [REDACTED_SECRET] token normalization
-                from tests.fixtures.vcr_llm_cassette import redact_secrets_in_obj
-                scrubbed = redact(str(redact_secrets_in_obj(raw_text)))
+                # Apply platform secret redaction without depending on test fixtures
+                scrubbed = re.sub(
+                    r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{25,}|gsk_[A-Za-z0-9]{20,})",
+                    "[REDACTED_SECRET]",
+                    redact(raw_text),
+                )
                 self._emit_notification(
                     "notifications/progress",
                     {"tool": "repo_read_file", "path": raw_path, "progress": 100},
