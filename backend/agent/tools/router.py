@@ -493,6 +493,24 @@ class ToolRouter:
                 return handler(request, agent_state)
             return handler(**request.arguments)
 
+        sse_uid = str(user_id or "system")
+        sse_tid = str(task_id or "task-default")
+        try:
+            from app.services.sse_redis_streams import emit_sse_event_nonblocking, publish_tool_progress
+            emit_sse_event_nonblocking(
+                publish_tool_progress(
+                    user_id=sse_uid,
+                    channel="platform_events",
+                    task_id=sse_tid,
+                    call_id=f"{request.tool_name}-{int(start_time * 1000)}",
+                    tool_name=request.tool_name,
+                    stage="started",
+                    progress_pct=0.0,
+                )
+            )
+        except Exception:
+            pass
+
         try:
             from app.observability.agent import trace_tool_invocation
             with trace_tool_invocation(
@@ -522,11 +540,28 @@ class ToolRouter:
                 elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
                 # 7. Common Output Boundary
-                return self._post_process_output(
+                final_res = self._post_process_output(
                     raw_result=raw_result,
                     output_schema=definition.output_schema,
                     duration_ms=elapsed_ms,
                 )
+                try:
+                    from app.services.sse_redis_streams import emit_sse_event_nonblocking, publish_tool_progress
+                    emit_sse_event_nonblocking(
+                        publish_tool_progress(
+                            user_id=sse_uid,
+                            channel="platform_events",
+                            task_id=sse_tid,
+                            call_id=f"{request.tool_name}-{int(start_time * 1000)}",
+                            tool_name=request.tool_name,
+                            stage="completed" if final_res.success else "failed",
+                            progress_pct=100.0 if final_res.success else None,
+                            message=final_res.error,
+                        )
+                    )
+                except Exception:
+                    pass
+                return final_res
 
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)

@@ -1,22 +1,37 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RealtimeClient } from '../realtime/index';
-import { REPO_UPDATED } from '../realtime/events';
+import {
+  REPO_UPDATED,
+  CHAT_TOKEN,
+  TOOL_INVOCATION_PROGRESS,
+  MCP_NOTIFICATION,
+  SSE_GAP_DETECTED,
+} from '../realtime/events';
 
-describe('RealtimeClient (F-09)', () => {
+describe('RealtimeClient (F-09 & Issue 1 SSE Redis Streams)', () => {
   let mockEventSourceInstances: any[] = [];
 
   beforeEach(() => {
     vi.useFakeTimers();
     mockEventSourceInstances = [];
 
-    // Mock global EventSource
     (globalThis as any).EventSource = vi.fn().mockImplementation(function (url: string) {
+      const listeners: Record<string, Array<(evt: any) => void>> = {};
       const instance = {
         url,
         onopen: null as any,
         onmessage: null as any,
         onerror: null as any,
         close: vi.fn(),
+        addEventListener: vi.fn((evtName: string, cb: (evt: any) => void) => {
+          listeners[evtName] = listeners[evtName] || [];
+          listeners[evtName].push(cb);
+        }),
+        emitNamed: (evtName: string, eventObj: any) => {
+          for (const cb of listeners[evtName] || []) {
+            cb(eventObj);
+          }
+        },
       };
       mockEventSourceInstances.push(instance);
       return instance;
@@ -38,12 +53,10 @@ describe('RealtimeClient (F-09)', () => {
     expect(mockEventSourceInstances.length).toBe(1);
     const es = mockEventSourceInstances[0];
 
-    // Trigger onopen
     es.onopen();
     expect(client.isConnected).toBe(true);
     expect(client.connectionStatus).toBe('CONNECTED');
 
-    // Trigger onmessage with repository.updated payload
     es.onmessage({
       data: JSON.stringify({
         type: REPO_UPDATED,
@@ -58,24 +71,72 @@ describe('RealtimeClient (F-09)', () => {
     expect(client.isConnected).toBe(false);
   });
 
-  it('reconnects with exponential backoff upon error', () => {
+  it('reconnects with exponential backoff and preserves Last-Event-ID cursor on reconnect', () => {
     const client = new RealtimeClient();
     const onError = vi.fn();
+    const chatHandler = vi.fn();
+    const toolHandler = vi.fn();
+    const mcpHandler = vi.fn();
+    const gapHandler = vi.fn();
 
-    client.connect({}, onError);
+    client.connect(
+      {
+        [CHAT_TOKEN]: chatHandler,
+        [TOOL_INVOCATION_PROGRESS]: toolHandler,
+        [MCP_NOTIFICATION]: mcpHandler,
+        [SSE_GAP_DETECTED]: gapHandler,
+      },
+      onError
+    );
     expect(mockEventSourceInstances.length).toBe(1);
     const es1 = mockEventSourceInstances[0];
+    es1.onopen();
 
-    // Simulate error
+    // Emit chat token with Redis Stream ID
+    es1.onmessage({
+      lastEventId: '1763000100-1',
+      data: JSON.stringify({
+        id: '1763000100-1',
+        type: CHAT_TOKEN,
+        data: { session_id: 's1', message_id: 'm1', token: 'Hello', index: 0, done: false },
+      }),
+    });
+    expect(chatHandler).toHaveBeenCalledWith({
+      session_id: 's1',
+      message_id: 'm1',
+      token: 'Hello',
+      index: 0,
+      done: false,
+    });
+    expect(client.getLastEventId()).toBe('1763000100-1');
+
+    // Emit tool progress via named SSE event
+    es1.emitNamed(TOOL_INVOCATION_PROGRESS, {
+      lastEventId: '1763000100-2',
+      data: JSON.stringify({
+        id: '1763000100-2',
+        type: TOOL_INVOCATION_PROGRESS,
+        data: { task_id: 't1', call_id: 'c1', tool_name: 'repo_read_file', stage: 'progress', progress_pct: 50 },
+      }),
+    });
+    expect(toolHandler).toHaveBeenCalledWith({
+      task_id: 't1',
+      call_id: 'c1',
+      tool_name: 'repo_read_file',
+      stage: 'progress',
+      progress_pct: 50,
+    });
+    expect(client.getLastEventId()).toBe('1763000100-2');
+
+    // Simulate disconnect error and verify reconnect URL includes last_event_id=1763000100-2
     es1.onerror(new Event('error'));
     expect(onError).toHaveBeenCalled();
     expect(client.connectionStatus).toBe('RECONNECTING');
 
-    // Advance timers for backoff delay
     vi.advanceTimersByTime(2000);
-
-    // A second EventSource should have been instantiated for reconnection
     expect(mockEventSourceInstances.length).toBe(2);
+    const es2 = mockEventSourceInstances[1];
+    expect(es2.url).toContain('last_event_id=1763000100-2');
 
     client.disconnect();
     expect(client.connectionStatus).toBe('DISCONNECTED');

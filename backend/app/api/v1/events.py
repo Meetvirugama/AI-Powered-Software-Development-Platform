@@ -1,4 +1,4 @@
-"""Server-Sent Events (SSE) router for real-time frontend updates."""
+"""Server-Sent Events (SSE) router for real-time frontend updates (Issue 1 — Redis Streams & Last-Event-ID)."""
 
 from __future__ import annotations
 
@@ -10,13 +10,25 @@ import time
 from uuid import UUID
 
 from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.auth import _get_token
 from app.core.database import get_db
 from app.core.redis import get_redis, get_redis_async
 from app.core.security import decode_access_token
 from app.repositories.repository_repository import RepositoryRepository
+from app.services.sse_redis_streams import (
+    RedisStreamEventBroker,
+    SSEEnvelope,
+    SUPPORTED_SSE_EVENT_TYPES,
+    compare_stream_ids,
+    get_sse_broker,
+    normalize_stream_cursor,
+    parse_stream_id_tuple,
+    publish_chat_token,
+    publish_mcp_notification,
+    publish_tool_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +80,9 @@ def _should_deliver_event(
     try:
         parsed = json.loads(raw_data)
     except Exception:
-        # Fail closed on malformed JSON
         return False
 
     if not isinstance(parsed, dict):
-        # Fail closed on non-dict payload
         return False
 
     data_obj = parsed.get("data")
@@ -81,7 +91,6 @@ def _should_deliver_event(
         or (data_obj.get("user_id") if isinstance(data_obj, dict) else None)
     )
 
-    # If the event is explicitly scoped to a user, strictly match caller_user_id
     if event_user_id is not None:
         if not caller_user_id:
             return False
@@ -91,15 +100,11 @@ def _should_deliver_event(
             return str(data_obj["repository_id"]) in owned_repo_ids
         return True
 
-    # If the event is scoped to a repository, verify caller ownership
     if isinstance(data_obj, dict) and "repository_id" in data_obj:
         if owned_repo_ids is None:
-            # Cannot verify repository ownership; fail closed (Audit A1.4)
             return False
         return str(data_obj["repository_id"]) in owned_repo_ids
 
-    # For general events with no repository or user scope, require authenticated user
-    # unless it is explicitly a public system notice
     if caller_user_id is None:
         is_public = parsed.get("is_public") is True or parsed.get("type") in {"system.notice", "connected"}
         if not is_public:
@@ -111,13 +116,25 @@ def _should_deliver_event(
 @router.get("/events", summary="Subscribe to real-time platform events (SSE)")
 async def stream_events(
     request: Request,
-) -> StreamingResponse:
-    """Stream real-time repository and platform events scoped to the authenticated user.
+):
+    """Stream real-time repository, chat token, tool progress, and MCP events with Last-Event-ID replay.
 
     Acquires and closes the database session immediately before returning the
     long-lived StreamingResponse so SSE connections never exhaust QueuePool.
     """
     from app.core.database import SessionLocal
+
+    raw_cursor = (
+        request.headers.get("Last-Event-ID")
+        or request.query_params.get("last_event_id")
+        or None
+    )
+    try:
+        stream_cursor = normalize_stream_cursor(raw_cursor)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    channel = (request.query_params.get("channel") or "platform_events").strip() or "platform_events"
 
     user_uuid = await _resolve_optional_user_id(request)
     caller_user_id = str(user_uuid) if user_uuid is not None else getattr(request.state, "user_id", None)
@@ -145,10 +162,35 @@ async def stream_events(
                 owned_repo_ids = None
 
     async def event_generator():
+        nonlocal stream_cursor
         connected_payload = json.dumps(
-            {"type": "connected", "data": {"authenticated": caller_user_id is not None}}
+            {
+                "type": "connected",
+                "data": {
+                    "authenticated": caller_user_id is not None,
+                    "cursor": stream_cursor,
+                    "channel": channel,
+                },
+            }
         )
         yield f"data: {connected_payload}\n\n"
+
+        broker = get_sse_broker()
+        stream_user_key = str(caller_user_id) if caller_user_id else None
+
+        # Replay any missed Redis Stream events when a Last-Event-ID cursor is provided
+        if stream_user_key and stream_cursor != "$":
+            try:
+                missed_batch, stream_cursor = await broker.read_batch(
+                    user_id=stream_user_key,
+                    channel=channel,
+                    cursor=stream_cursor,
+                    block_ms=10,
+                )
+                for env in missed_batch:
+                    yield env.to_sse_frame()
+            except Exception as replay_exc:
+                logger.debug("sse_stream_replay_warning: %s", replay_exc)
 
         redis = None
         pubsub = None
@@ -166,6 +208,21 @@ async def stream_events(
                 if await request.is_disconnected():
                     break
 
+                # 1. Poll tenant-scoped Redis Stream / ring buffer for chat tokens, tool progress & MCP notifications
+                if stream_user_key:
+                    try:
+                        live_batch, stream_cursor = await broker.read_batch(
+                            user_id=stream_user_key,
+                            channel=channel,
+                            cursor=stream_cursor,
+                            block_ms=15,
+                        )
+                        for env in live_batch:
+                            yield env.to_sse_frame()
+                    except Exception as stream_exc:
+                        logger.debug("sse_stream_poll_error: %s", stream_exc)
+
+                # 2. Poll Redis pub/sub for platform_events compatibility
                 if pubsub is not None:
                     try:
                         message = await pubsub.get_message(
@@ -208,3 +265,21 @@ async def stream_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+__all__ = [
+    "RedisStreamEventBroker",
+    "SSEEnvelope",
+    "SUPPORTED_SSE_EVENT_TYPES",
+    "_resolve_optional_user_id",
+    "_should_deliver_event",
+    "compare_stream_ids",
+    "get_sse_broker",
+    "normalize_stream_cursor",
+    "parse_stream_id_tuple",
+    "publish_chat_token",
+    "publish_mcp_notification",
+    "publish_tool_progress",
+    "router",
+    "stream_events",
+]

@@ -233,6 +233,20 @@ class MCPElicitationService:
             task.id,
             session_id,
         )
+        try:
+            from app.services.sse_redis_streams import emit_sse_event_nonblocking, publish_mcp_notification
+            emit_sse_event_nonblocking(
+                publish_mcp_notification(
+                    user_id=str(user_id or getattr(task, "user_id", None) or "system"),
+                    channel="platform_events",
+                    server_name="mcp-platform-core",
+                    method="elicitation/create",
+                    params={"elicitation_id": str(elicitation.id), "type": "form", "session_id": session_id.strip()},
+                    kind="elicitation",
+                )
+            )
+        except Exception:
+            pass
         return elicitation
 
     def request_url_elicitation(

@@ -115,4 +115,24 @@ async def chat_with_repository(
 
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.
     validated = RepositoryAnswer.model_validate(answer)
-    return RepositoryAnswer.model_validate(redact_obj(validated.model_dump(mode="json")))
+    sanitized = RepositoryAnswer.model_validate(redact_obj(validated.model_dump(mode="json")))
+
+    # Stream chat token & completion event over SSE Redis Streams (Issue 1)
+    caller_uid = str(getattr(getattr(request, "state", None), "user_id", "") or "")
+    if caller_uid:
+        try:
+            from app.services.sse_redis_streams import publish_chat_token
+            msg_id = f"msg-{repository_id}"
+            await publish_chat_token(
+                user_id=caller_uid,
+                channel="platform_events",
+                session_id=str(repository_id),
+                message_id=msg_id,
+                token=sanitized.answer,
+                index=0,
+                done=True,
+            )
+        except Exception:
+            pass
+
+    return sanitized
