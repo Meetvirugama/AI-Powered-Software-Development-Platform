@@ -47,3 +47,42 @@ class ChunkRepository:
         )
         self.session.execute(stmt)
         self.session.commit()
+
+    def create_batch(self, chunks_data: list[dict]) -> int:
+        """
+        Insert multiple code chunks in a single database batch query.
+        
+        Simple explanation:
+        Instead of calling insert separately for each code chunk, this method
+        batches all chunk records together and writes them in one database operation.
+        """
+        if not chunks_data:
+            return 0
+        import json
+        from sqlalchemy import insert
+        cleaned = []
+        for c in chunks_data:
+            row = dict(c)
+            # Ensure UUID fields are valid UUID objects so SQLAlchemy does not fail
+            for k in ("id", "repository_id", "file_id", "symbol_id"):
+                if row.get(k) and isinstance(row[k], str):
+                    try:
+                        row[k] = uuid.UUID(row[k])
+                    except (ValueError, TypeError):
+                        pass
+            # If metadata was passed as string JSON, convert to dict for JSONB column
+            if "metadata" in row and isinstance(row["metadata"], str):
+                try:
+                    row["metadata"] = json.loads(row["metadata"])
+                except Exception:
+                    pass
+            # If embedding was passed as JSON string, parse into list for Vector type
+            if "embedding" in row and isinstance(row["embedding"], str):
+                try:
+                    row["embedding"] = json.loads(row["embedding"])
+                except Exception:
+                    pass
+            cleaned.append(row)
+        stmt = insert(CodeChunk)
+        self.session.execute(stmt, cleaned)
+        return len(cleaned)

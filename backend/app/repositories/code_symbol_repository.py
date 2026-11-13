@@ -28,3 +28,29 @@ class CodeSymbolRepository:
             CodeSymbol.file_id == file_id
         ).order_by(CodeSymbol.start_line)
         return list(self.session.scalars(stmt).all())
+
+    def create_batch(self, symbols_data: list[dict]) -> int:
+        """
+        Insert multiple code symbols in a single database batch query.
+        
+        Simple explanation:
+        Instead of running multiple INSERT commands for each symbol, this method
+        takes a list of symbol dictionaries and saves all of them in one go.
+        """
+        if not symbols_data:
+            return 0
+        from sqlalchemy import insert
+        cleaned = []
+        for s in symbols_data:
+            row = dict(s)
+            # Ensure UUID fields are valid UUID objects so SQLAlchemy does not fail
+            for k in ("id", "file_id", "repository_id", "parent_id"):
+                if row.get(k) and isinstance(row[k], str):
+                    try:
+                        row[k] = uuid.UUID(row[k])
+                    except (ValueError, TypeError):
+                        pass
+            cleaned.append(row)
+        stmt = insert(CodeSymbol)
+        self.session.execute(stmt, cleaned)
+        return len(cleaned)
