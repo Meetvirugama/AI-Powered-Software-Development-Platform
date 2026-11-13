@@ -553,5 +553,41 @@ As the platform expanded from single LLM requests into autonomous multi-turn age
    - Enforce strict low-cardinality governance on OpenTelemetry metrics (`llm_requests_total`, `llm_request_duration_seconds`, `agent_executions_total`, `tool_invocations_total`), forbidding high-cardinality IDs from metric label sets.
    - Retain full backwards compatibility with `AnalysisRun.result_payload["stage_metrics"]` and `StageExecutionTimer`.
 
+---
+
+## ADR-018: Two-Level Distributed Retrieval Query Caching & Version-Aware Repository Invalidation
+
+| Field | Value |
+|---|---|
+| **Title** | Two-Level Distributed Retrieval Query Caching & Version-Aware Repository Invalidation |
+| **Date** | 2026-11-13 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+The platform's multi-stage hybrid code retrieval engine (combining dense vector search, lexical BM25, and reciprocal rank fusion) requires substantial computation and database IO. Previously:
+1. In-process LRU caching (`LRUQueryCache` in `retrieval_optimizer.py`) was isolated within individual worker processes, causing redundant embedding and database queries across multi-worker deployments.
+2. An optional Redis result cache existed in `HybridRetriever` but was uncoordinated with local memory, incurring unnecessary network roundtrips for hot query loops.
+3. Repository synchronization updates code files, AST symbols, dense vector embeddings, and lexical search indexes. Without coordinated invalidation, workers could serve stale cached code results across instances.
+4. The platform enforces a strict Service Level Objective (`P95 Retrieval Latency < 400ms`) and task/step token budget ceilings that must not be degraded by distributed caching overhead.
+
+**Decision:**
+1. **Two-Level (L1 / L2) Hierarchical Cache Coordination:**
+   - Establish `TwoLevelRetrievalCache` orchestrating an L1 local in-memory LRU cache (`InMemoryRetrievalCache` / `LRUQueryCache`) and an L2 shared distributed cache (`RedisRetrievalCache` / `RetrievalResultCache`).
+   - Execute lookups local-first: L1 hits return in `< 0.2ms` with zero network overhead. L1 misses query L2 Redis; on an L2 hit (`1.8 - 3.2ms`), L1 is populated automatically. On dual misses, retrieval is executed and backfilled into both tiers.
+2. **Version-Aware Key Formulation & Deterministic Hashing:**
+   - Format all cache keys using `retrieval:v2:{scope}:{repo_id}:{index_version}:{query_hash}`.
+   - Compute `{query_hash}` via SHA-256 over normalized canonical JSON query and configuration parameters (`top_k`, `retrieval_mode`, `filters`).
+   - Incorporate dynamic `{index_version}` resolved from Redis pointer `retrieval:repo_index_version:{repo_id}`.
+3. **Instant Cache Invalidation on Repository Synchronization:**
+   - Hook cache invalidation into `sync_worker.py` strictly after `db.commit()` marks repository state as `SYNCED`.
+   - Update repository index version in Redis to the latest commit SHA, rendering all pre-sync cached results instantly unreachable across all cluster workers.
+   - Perform safe, non-blocking asynchronous garbage collection of old keys via bounded cursor scanning (`SCAN ... MATCH ... COUNT 100`).
+4. **Resilient Failure Boundaries & Backward Compatibility:**
+   - Ensure Redis connectivity, timeout, or serialization failures never raise exceptions or fail retrieval requests. Redis errors gracefully fall back to local LRU caching and direct database execution.
+   - Retain full backward compatibility for deployments running without Redis (`RETRIEVAL_REDIS_CACHE_ENABLED=false`).
+   - Preserve existing `RetrievalLatencyOptimizer` percentile tracking (P50, P90, P95, P99) and `AgentTokenBudgetManager` token ceilings with zero regressions.
+
+
 
 

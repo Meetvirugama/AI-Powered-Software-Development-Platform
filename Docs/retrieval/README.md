@@ -16,6 +16,10 @@ This directory documents the production retrieval architecture for the AI-Powere
 | [retrieval-benchmarking.md](retrieval-benchmarking.md) | 150-query ground-truth benchmark suite, evaluation metrics, and harness |
 | [onnx-reranker-evaluation.md](onnx-reranker-evaluation.md) | ONNX Runtime cross-encoder evaluation, factory pattern, and fallbacks |
 | [future-enhancements.md](future-enhancements.md) | Architectural roadmap for deferred features (Zoekt integration & Prometheus/Grafana) |
+| [RETRIEVAL_CACHE_ARCHITECTURE.md](RETRIEVAL_CACHE_ARCHITECTURE.md) | Baseline audit of existing in-memory LRU, latency tracking, token budgets & multi-worker gaps (#218) |
+| [DISTRIBUTED_RETRIEVAL_CACHE.md](DISTRIBUTED_RETRIEVAL_CACHE.md) | Two-level hierarchical caching design (L1 LRU + L2 Redis), key hashing, serialization & fault tolerance (#218) |
+| [RETRIEVAL_CACHE_INVALIDATION.md](RETRIEVAL_CACHE_INVALIDATION.md) | Version-aware key partitioning, sync lifecycle integration & non-blocking cleanup (#218) |
+| [RETRIEVAL_CACHE_TEST_REPORT.md](RETRIEVAL_CACHE_TEST_REPORT.md) | Test verification report covering unit, concurrency, SLO, and token budget suites (#218) |
 
 ## Quick Reference
 

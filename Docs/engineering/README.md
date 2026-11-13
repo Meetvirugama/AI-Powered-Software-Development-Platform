@@ -21,7 +21,7 @@
 | [10](./10_development_tasks.md) | **Development Tasks** | Master task board, dependencies, assignments | Active |
 | [11](./11_testing_qa.md) | **Testing & QA** | Test plan, test cases, bug tracker | Active |
 | [12](./12_deployment_devops.md) | **Deployment & DevOps** | Local setup, env config, Docker | Active |
-| [13](./13_architecture_decisions.md) | **Architecture Decisions** | ADR-001 through ADR-017 | Active |
+| [13](./13_architecture_decisions.md) | **Architecture Decisions** | ADR-001 through ADR-018 | Active |
 | [14](./14_changelog.md) | **Changelog** | All significant changes by date | Active |
 | [15](./15_authentication_authorization_audit.md) | **Auth & Authorization Audit** | Complete security audit of auth implementation | Active |
 | [16](./16_issue181_implementation_plan.md) | **Issue #181 Implementation Plan** | Multi-batch implementation roadmap for auth hardening | Active |
@@ -31,6 +31,7 @@
 | [Agentic Chat](../agentic-chat/README.md) | **Bounded Agentic Repository Chat** | Normalized tool calling, read-only repo tools, sandbox policy, budget manager | Active |
 | [29](./29_llm_gateway_providers_tool_calling_and_telemetry.md) | **LLM Gateway, Tool Calling & Telemetry (F28)** | Unified primitives, streaming, strict schemas & cost calibration | Active |
 | [30](./30_distributed_tracing_llm_observability_and_agent_monitoring.md) | **Distributed Tracing & LLM Observability (F31)** | OpenTelemetry tracing, GenAI spans, tool tracking & Langfuse | Active |
+| [31](./31_distributed_retrieval_cache_and_invalidation.md) | **Distributed Retrieval Cache & Invalidation (F37)** | Two-level caching, Redis coordination, version-aware sync invalidation | Active |
 
 ---
 

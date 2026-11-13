@@ -64,7 +64,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, Week 3, and Post-Week 3.
 - [11. Testing & QA](./engineering/11_testing_qa.md) — Test strategies, fixture suites, and coverage policies.
 - [12. Deployment & DevOps](./engineering/12_deployment_devops.md) — Local setup, Docker Compose, and environment variables.
-- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-010).
+- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-018).
 - [14. Changelog](./engineering/14_changelog.md) — Chronological log of major codebase milestones.
 - [15. Authentication & Authorization Security Audit](./engineering/15_authentication_authorization_audit.md) — Timing-safe HMAC, secret validation, and token rotation audit.
 - [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
@@ -83,6 +83,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [28. Bounded Self-Repair Loop & Anti-Reward Hacking](./engineering/28_bounded_self_repair_loop.md) — LLM-Driven Targeted Repair Synthesis, Reflexion Memory & Anti-Reward Hacking Architecture (Issue #205 / F24).
 - [29. LLM Gateway, Providers & Tool Calling](./engineering/29_llm_gateway_providers_tool_calling_and_telemetry.md) — Unified LLM Gateway, Gemini & Groq Providers, Strict Schemas & Pricing (Issue #209 / F28).
 - [30. Distributed Tracing & LLM Observability](./engineering/30_distributed_tracing_llm_observability_and_agent_monitoring.md) — OpenTelemetry Tracing, GenAI Semantic Spans, Tool Invocations & Langfuse (Issue #212 / F31).
+- [31. Distributed Retrieval Cache & Invalidation](./engineering/31_distributed_retrieval_cache_and_invalidation.md) — Two-Level Hierarchical Query Caching, Redis Distributed Sharing & Sync Invalidation (Issue #218 / F37).
 
 ---
 

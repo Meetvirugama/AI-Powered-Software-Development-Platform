@@ -427,6 +427,26 @@ async def process_sync_job(
                 repo.last_indexed_commit_sha = target_commit_sha
             db.commit()
 
+        # Step 9b: Invalidate distributed retrieval cache for repository
+        try:
+            from ai.retrieval.cache import get_retrieval_cache
+            cache = get_retrieval_cache(redis_client=redis)
+            new_version = target_commit_sha or f"v{int(time.time())}"
+            deleted = await cache.invalidate_repository(repository_id, new_index_version=new_version)
+            logger.info(
+                "sync_retrieval_cache_invalidated",
+                extra={
+                    "repo_id": str(repository_id),
+                    "new_index_version": new_version,
+                    "deleted_keys": deleted,
+                },
+            )
+        except Exception as cache_exc:
+            logger.warning(
+                "sync_retrieval_cache_invalidation_warning",
+                extra={"repo_id": str(repository_id), "error": str(cache_exc)},
+            )
+
         # Step 10: Publish event
         try:
             if redis is not None and hasattr(redis, "publish"):

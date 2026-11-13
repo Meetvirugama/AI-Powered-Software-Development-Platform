@@ -155,6 +155,7 @@ class LRUQueryCache:
         self.maxsize = maxsize
         self.ttl_seconds = ttl_seconds
         self._cache: collections.OrderedDict[str, tuple[float, Any]] = collections.OrderedDict()
+        self._key_map: dict[str, str] = {}
         self._hits = 0
         self._misses = 0
 
@@ -171,6 +172,7 @@ class LRUQueryCache:
         insert_time, val = self._cache[h]
         if time.time() - insert_time > self.ttl_seconds:
             del self._cache[h]
+            self._key_map.pop(h, None)
             self._misses += 1
             return None
 
@@ -183,8 +185,29 @@ class LRUQueryCache:
         if h in self._cache:
             self._cache.move_to_end(h)
         self._cache[h] = (time.time(), value)
+        self._key_map[h] = str(key)
         if len(self._cache) > self.maxsize:
-            self._cache.popitem(last=False)
+            oldest_key, _ = self._cache.popitem(last=False)
+            self._key_map.pop(oldest_key, None)
+
+    def delete(self, key: Any) -> bool:
+        h = self._hash_key(key)
+        if h in self._cache:
+            del self._cache[h]
+            self._key_map.pop(h, None)
+            return True
+        return False
+
+    def invalidate_repository(self, repository_id: str | Any) -> int:
+        repo_str = str(repository_id)
+        to_del = [
+            h for h, orig_key in self._key_map.items()
+            if repo_str in orig_key
+        ]
+        for h in to_del:
+            self._cache.pop(h, None)
+            self._key_map.pop(h, None)
+        return len(to_del)
 
     @property
     def stats(self) -> dict[str, int]:
@@ -192,6 +215,7 @@ class LRUQueryCache:
 
     def clear(self) -> None:
         self._cache.clear()
+        self._key_map.clear()
         self._hits = 0
         self._misses = 0
 
@@ -204,11 +228,31 @@ class RetrievalLatencyOptimizer:
         target_p95_ms: float = TARGET_P95_LATENCY_MS,
         cache_size: int = 256,
         max_workers: int = 4,
+        *,
+        distributed_cache: Any | None = None,
+        redis_client: Any | None = None,
+        repo_id: str | None = None,
     ) -> None:
         self.target_p95_ms = target_p95_ms
         self.cache = LRUQueryCache(maxsize=cache_size)
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self._latencies: list[float] = []
+        self.repo_id = repo_id
+
+        # Two-level cache coordinator integration
+        self.two_level_cache = distributed_cache
+        if self.two_level_cache is None and redis_client is not None:
+            try:
+                from ai.retrieval.cache import (
+                    InMemoryRetrievalCache,
+                    RedisRetrievalCache,
+                    TwoLevelRetrievalCache,
+                )
+                l1 = InMemoryRetrievalCache(lru=self.cache)
+                l2 = RedisRetrievalCache(redis_client=redis_client)
+                self.two_level_cache = TwoLevelRetrievalCache(l1_cache=l1, l2_cache=l2)
+            except Exception:
+                self.two_level_cache = None
 
     def execute_optimized_retrieval(
         self,
@@ -216,12 +260,23 @@ class RetrievalLatencyOptimizer:
         retrieval_fn: Callable[[str], Any],
         *,
         use_cache: bool = True,
+        repo_id: str | None = None,
+        index_version: str | None = None,
     ) -> tuple[Any, float]:
         """Execute a retrieval function with caching, concurrent dispatch, and latency tracking."""
+        effective_repo = repo_id or self.repo_id
         if use_cache:
-            cached = self.cache.get(query)
+            cache_lookup_key = (
+                f"{effective_repo}:{index_version}:{query}"
+                if (effective_repo and index_version)
+                else query
+            )
+            cached = self.cache.get(cache_lookup_key)
+            if cached is None and cache_lookup_key != query:
+                cached = self.cache.get(query)
+
             if cached is not None:
-                # Cache hits are sub-millisecond
+                # Local Cache hits are sub-millisecond
                 self._record_latency(0.5)
                 return cached, 0.5
 
@@ -230,10 +285,103 @@ class RetrievalLatencyOptimizer:
         duration_ms = (time.perf_counter() - start) * 1000.0
 
         if use_cache:
-            self.cache.set(query, result)
+            store_key = (
+                f"{effective_repo}:{index_version}:{query}"
+                if (effective_repo and index_version)
+                else query
+            )
+            self.cache.set(store_key, result)
 
         self._record_latency(duration_ms)
         return result, duration_ms
+
+    async def execute_optimized_retrieval_async(
+        self,
+        query: str,
+        retrieval_fn: Callable[[str], Any],
+        *,
+        use_cache: bool = True,
+        repo_id: str | None = None,
+        index_version: str | None = None,
+        intent: str = "conceptual",
+        top_k: int = 8,
+    ) -> tuple[Any, float]:
+        """
+        Asynchronous retrieval execution with full two-level caching (L1 local-first, L2 Redis).
+        """
+        import inspect
+        from ai.retrieval.cache_keys import build_retrieval_cache_key, get_repository_index_version_async
+
+        effective_repo = repo_id or self.repo_id or "default"
+        resolved_version = index_version
+        if resolved_version is None and self.two_level_cache and self.two_level_cache.l2:
+            resolved_version = await get_repository_index_version_async(
+                effective_repo, self.two_level_cache.l2._get_client()
+            )
+        effective_version = resolved_version or "0"
+
+        cache_key = build_retrieval_cache_key(
+            query=query,
+            repository_id=effective_repo,
+            index_version=effective_version,
+            intent=intent,
+            top_k=top_k,
+        )
+
+        if use_cache:
+            # 1. Check L1 / two_level_cache
+            if self.two_level_cache is not None:
+                # Check L1 first
+                l1_hit = await self.two_level_cache.l1.get(cache_key)
+                if l1_hit is not None:
+                    self.two_level_cache._local_hits += 1
+                    self._record_latency(0.5)
+                    return l1_hit, 0.5
+
+                # Check L2 Redis
+                if self.two_level_cache.l2 is not None and self.two_level_cache.l2.enabled:
+                    l2_start = time.perf_counter()
+                    l2_hit = await self.two_level_cache.l2.get(cache_key)
+                    l2_duration_ms = (time.perf_counter() - l2_start) * 1000.0
+                    if l2_hit is not None:
+                        self.two_level_cache._redis_hits += 1
+                        await self.two_level_cache.l1.set(cache_key, l2_hit)
+                        self._record_latency(max(0.5, l2_duration_ms))
+                        return l2_hit, l2_duration_ms
+
+                self.two_level_cache._misses += 1
+            else:
+                cached = self.cache.get(cache_key)
+                if cached is not None:
+                    self._record_latency(0.5)
+                    return cached, 0.5
+
+        # Execute retrieval function
+        start = time.perf_counter()
+        if inspect.iscoroutinefunction(retrieval_fn):
+            result = await retrieval_fn(query)
+        else:
+            result = retrieval_fn(query)
+        duration_ms = (time.perf_counter() - start) * 1000.0
+
+        if use_cache:
+            if self.two_level_cache is not None:
+                await self.two_level_cache.set(cache_key, result)
+            else:
+                self.cache.set(cache_key, result)
+
+        self._record_latency(duration_ms)
+        return result, duration_ms
+
+    async def invalidate_repository_cache(
+        self,
+        repo_id: str,
+        new_index_version: str | None = None,
+    ) -> int:
+        """Invalidate repository cached queries across local and distributed layers."""
+        if self.two_level_cache is not None:
+            return await self.two_level_cache.invalidate_repository(repo_id, new_index_version)
+        return self.cache.invalidate_repository(repo_id)
 
     def execute_concurrent_search(
         self,

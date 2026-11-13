@@ -111,7 +111,9 @@ class Settings(BaseSettings):
     retrieval_hnsw_iterative_scan: str = "relaxed_order"
 
     retrieval_cache_enabled: bool = True
+    retrieval_redis_cache_enabled: bool = True
     retrieval_cache_ttl_seconds: int = 300
+    retrieval_cache_max_local_entries: int = 1000
     retrieval_cache_max_payload_bytes: int = 500_000
 
     retrieval_code_lexical_enabled: bool = True
