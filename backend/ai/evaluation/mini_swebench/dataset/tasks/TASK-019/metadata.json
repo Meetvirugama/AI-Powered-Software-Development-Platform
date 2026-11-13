@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-019",
+  "repository": "retry_executor",
+  "base_commit": "main@pinned",
+  "issue_title": "Implement maximum retry count on transient failure",
+  "issue_description": "execute_with_retry loops infinitely if operation keeps failing.",
+  "category": "error_handling",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "retry.py"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-017",
+  "repository": "file_reader",
+  "base_commit": "main@pinned",
+  "issue_title": "Catch specific FileNotFoundError instead of broad exception",
+  "issue_description": "read_text_safely should handle missing file cleanly without catching KeyboardInterrupt.",
+  "category": "error_handling",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "reader.py"
+  ],
+  "license": "MIT"
+}

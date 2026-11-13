@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-021",
+  "repository": "dict_flattener",
+  "base_commit": "main@pinned",
+  "issue_title": "Flatten nested dictionary with dot notation keys",
+  "issue_description": "Nested dicts {'a': {'b': 1}} should become {'a.b': 1}.",
+  "category": "data_processing",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "flattener.py"
+  ],
+  "license": "MIT"
+}

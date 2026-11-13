@@ -65,7 +65,16 @@ async def run_comprehensive_benchmark() -> int:
     print(f"Latency P95:          {res_quick['latency_p95_ms']} ms")
     print("--------------------------------------------------\n")
 
-    if res_quick["target_hit_rate_met"] and res_quick["target_mrr_met"]:
+    rag_passed = (
+        res_quick["target_hit_rate_met"]
+        and res_quick["target_mrr_met"]
+        and (res_quick.get("precision_at_1", 0.0) >= 0.70)
+        and (res_quick.get("recall_at_5", 0.0) >= 0.80)
+        and (res_quick.get("latency_p50_ms", 999.0) < 100.0)
+        and (res_quick.get("latency_p95_ms", 999.0) < 250.0)
+    )
+
+    if rag_passed:
         print("✅ PASS: All RAG retrieval quality targets achieved.")
         return 0
     else:

@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-007",
+  "repository": "html_stripper",
+  "base_commit": "main@pinned",
+  "issue_title": "Fix greedy regex match in tag stripper",
+  "issue_description": "re.sub('<.*>', '', text) strips all content between first open and last close tag.",
+  "category": "bug_fix",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "stripper.py"
+  ],
+  "license": "MIT"
+}

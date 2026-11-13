@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-025",
+  "repository": "refactor_helper",
+  "base_commit": "main@pinned",
+  "issue_title": "Extract common string normalization into reusable helper",
+  "issue_description": "Duplicate lowercase and strip logic scattered across search and filter.",
+  "category": "refactoring",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "normalize.py"
+  ],
+  "license": "MIT"
+}

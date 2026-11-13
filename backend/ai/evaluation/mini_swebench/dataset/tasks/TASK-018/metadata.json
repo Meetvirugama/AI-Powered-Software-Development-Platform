@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-018",
+  "repository": "db_connection",
+  "base_commit": "main@pinned",
+  "issue_title": "Ensure database connection close in finally block",
+  "issue_description": "Connection remains open if cursor query raises an error.",
+  "category": "error_handling",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "db_pool.py"
+  ],
+  "license": "MIT"
+}

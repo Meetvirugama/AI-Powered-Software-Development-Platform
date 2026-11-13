@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-013",
+  "repository": "email_validator",
+  "base_commit": "main@pinned",
+  "issue_title": "Validate email address format with domain dot check",
+  "issue_description": "user@localhost passes basic validation but lacks a dot in domain part.",
+  "category": "validation",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "validator.py"
+  ],
+  "license": "MIT"
+}

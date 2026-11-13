@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-014",
+  "repository": "order_validator",
+  "base_commit": "main@pinned",
+  "issue_title": "Reject negative numbers in order quantity",
+  "issue_description": "Orders with quantity <= 0 should raise ValueError.",
+  "category": "validation",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "orders.py"
+  ],
+  "license": "MIT"
+}

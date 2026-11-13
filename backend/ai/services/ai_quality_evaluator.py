@@ -244,14 +244,20 @@ class AIQualityEvaluator:
                 )
             )
 
-        denom_precision = true_positives + false_positives
-        precision = (true_positives / denom_precision) if denom_precision > 0 else 1.0
+        total_defect_fixtures = len(defect_fixtures)
+        if total_defect_fixtures == 0:
+            precision = 0.0
+            recall = 0.0
+            f1 = 0.0
+        else:
+            denom_precision = true_positives + false_positives
+            precision = (true_positives / denom_precision) if denom_precision > 0 else 0.0
 
-        denom_recall = true_positives + false_negatives
-        recall = (true_positives / denom_recall) if denom_recall > 0 else 1.0
+            denom_recall = true_positives + false_negatives
+            recall = (true_positives / denom_recall) if denom_recall > 0 else 0.0
 
-        denom_f1 = precision + recall
-        f1 = (2 * (precision * recall) / denom_f1) if denom_f1 > 0 else 0.0
+            denom_f1 = precision + recall
+            f1 = (2 * (precision * recall) / denom_f1) if denom_f1 > 0 else 0.0
 
         return results, precision, recall, f1
 
@@ -595,14 +601,17 @@ class AIQualityEvaluator:
 
         total_samples = len(clean_samples) + len(defect_fixtures)
 
-        all_providers_allowed = all(p.is_allowed for p in provider_checks) if provider_checks else True
-        passed = (
-            fp_rate <= 0.05
-            and precision >= 0.80
-            and recall >= 0.80
-            and schema_conformance_rate >= 0.95
-            and all_providers_allowed
-        )
+        if total_samples <= 0 or len(clean_samples) == 0 or len(defect_fixtures) == 0:
+            passed = False
+        else:
+            all_providers_allowed = all(p.is_allowed for p in provider_checks) if provider_checks else True
+            passed = (
+                fp_rate <= 0.05
+                and precision >= 0.80
+                and recall >= 0.80
+                and schema_conformance_rate >= 0.95
+                and all_providers_allowed
+            )
 
         summary = (
             f"Evaluated {total_samples} samples across clean and defect code: "

@@ -1,0 +1,57 @@
+[
+  {
+    "fixture_id": "CLN-001",
+    "category": "clean_code",
+    "subcategory": "math_logic",
+    "description": "Safe mathematical calculation with explicit zero check and type validation",
+    "source_code": "def calculate_average(numbers: list[float]) -> float:\n    \"\"\"Compute arithmetic mean safely.\"\"\"\n    if not numbers:\n        return 0.0\n    return sum(numbers) / len(numbers)\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "CLN-002",
+    "category": "clean_code",
+    "subcategory": "database_queries",
+    "description": "Parameterized database query using SQLAlchemy session filter",
+    "source_code": "def get_user_by_email(session, email: str):\n    \"\"\"Fetch user record via parameterized ORM filter.\"\"\"\n    return session.query(User).filter(User.email == email).first()\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "CLN-003",
+    "category": "clean_code",
+    "subcategory": "resource_management",
+    "description": "Safe file processing using context manager (with-statement)",
+    "source_code": "def read_configuration(path: str) -> str:\n    \"\"\"Read file contents using standard context manager.\"\"\"\n    with open(path, 'r', encoding='utf-8') as f:\n        return f.read()\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "CLN-004",
+    "category": "clean_code",
+    "subcategory": "auth_control",
+    "description": "Role-based access check with timing-safe comparison",
+    "source_code": "import hmac\n\ndef verify_admin_token(token: str, expected_token: str) -> bool:\n    \"\"\"Verify token using constant-time comparison.\"\"\"\n    return hmac.compare_digest(token.encode('utf-8'), expected_token.encode('utf-8'))\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "CLN-005",
+    "category": "clean_code",
+    "subcategory": "error_handling",
+    "description": "Specific exception handling with cleanup and re-raise",
+    "source_code": "import logging\n\nlogger = logging.getLogger(__name__)\n\ndef parse_int_list(raw_items: list[str]) -> list[int]:\n    \"\"\"Parse integers with explicit ValueError handling.\"\"\"\n    result: list[int] = []\n    for item in raw_items:\n        try:\n            result.append(int(item.strip()))\n        except ValueError as exc:\n            logger.warning('Skipping non-integer item: %s', item)\n    return result\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  }
+]

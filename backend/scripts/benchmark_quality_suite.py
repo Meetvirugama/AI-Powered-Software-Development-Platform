@@ -38,6 +38,7 @@ from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.hybrid import HybridRetriever
 from ai.retrieval.reranker import CrossEncoderReranker
 from ai.context.review_context import ModifiedFile
+from ai.evaluation.quality_gate import QualityGate, QualityGateConfig
 from app.schemas.analysis import AnalysisSourceReference, ReviewFinding, ReviewTarget
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
 from app.services.code_review_orchestrator import (
@@ -981,44 +982,29 @@ def run_code_review_grounding_benchmark() -> dict[str, Any]:
     }
 
 
-def evaluate_metric(value: float | int | None, threshold: float | int, operator: str = ">=") -> dict[str, Any]:
+def evaluate_metric(
+    value: float | int | None,
+    threshold: float | int,
+    operator: str = ">=",
+    metric_name: str = "metric",
+    mandatory: bool = True,
+) -> dict[str, Any]:
     """Dynamically evaluate a quality metric against a threshold.
-    
+
     Guarantees that:
     - Below threshold strictly produces 'FAIL' (when operator is '>=')
     - At or above threshold produces 'PASS'
     - None / missing values strictly produce 'FAIL'
+    - NaN and Infinite values strictly produce 'FAIL'
     """
-    if value is None:
-        return {
-            "value": None,
-            "threshold": threshold,
-            "operator": operator,
-            "status": "FAIL",
-            "passed": False,
-            "error": "Missing measurement value",
-        }
-
-    if operator == ">=":
-        passed = value >= threshold
-    elif operator == "<=":
-        passed = value <= threshold
-    elif operator == "==":
-        passed = value == threshold
-    elif operator == ">":
-        passed = value > threshold
-    elif operator == "<":
-        passed = value < threshold
-    else:
-        raise ValueError(f"Unsupported operator: {operator}")
-
-    return {
-        "value": value,
-        "threshold": threshold,
-        "operator": operator,
-        "status": "PASS" if passed else "FAIL",
-        "passed": passed,
-    }
+    res = QualityGate.evaluate(
+        metric_name=metric_name,
+        actual=value,
+        threshold=threshold,
+        comparison=operator,
+        mandatory=mandatory,
+    )
+    return res.to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -1176,9 +1162,14 @@ async def run_all_benchmarks() -> dict[str, Any]:
     all_passed = (
         rag_res["target_hit_rate_met"]
         and rag_res["target_mrr_met"]
+        and (rag_res.get("precision_at_1", 0.0) >= 0.70)
+        and (rag_res.get("recall_at_5", 0.0) >= 0.80)
+        and (rag_res.get("latency_p50_ms", 999.0) < 100.0)
+        and (rag_res.get("latency_p95_ms", 999.0) < 250.0)
         and bug_res["target_precision_met"]
         and bug_res["target_recall_met"]
         and bug_res["target_fpr_met"]
+        and (bug_res.get("f1_score", 0.0) >= 0.85)
         and review_res["target_accuracy_met"]
         and review_res["target_zero_hallucination_met"]
         and test_res["target_safety_met"]
@@ -1219,7 +1210,7 @@ Evaluates the `HybridRetriever` (Vector + Lexical + RRF Fusion $k=60$ + MiniLM R
 | **Hit Rate (@5)** | **{rag['hit_rate_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | {'✅ PASS' if rag['target_hit_rate_met'] else '❌ FAIL'} |
 | **MRR (Mean Reciprocal Rank)** | **{rag['mrr']:.3f}** | $\\ge 0.800$ | {'✅ PASS' if rag['target_mrr_met'] else '❌ FAIL'} |
 | **Precision@1** | **{rag['precision_at_1']*100:.1f}%** | $\\ge 70.0\\%$ | {'✅ PASS' if rag['precision_at_1'] >= 0.70 else '❌ FAIL'} |
-| **Precision@5** | **{rag['precision_at_5']*100:.1f}%** | Informational | ✅ PASS |
+| **Precision@5** | **{rag['precision_at_5']*100:.1f}%** | Informational | ℹ️ INFO |
 | **Recall@5** | **{rag['recall_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | {'✅ PASS' if rag['recall_at_5'] >= 0.80 else '❌ FAIL'} |
 | **P50 Retrieval Latency** | **{rag['latency_p50_ms']} ms** | < 100 ms | {'✅ PASS' if rag['latency_p50_ms'] < 100 else '❌ FAIL'} |
 | **P95 Retrieval Latency** | **{rag['latency_p95_ms']} ms** | < 250 ms | {'✅ PASS' if rag['latency_p95_ms'] < 250 else '❌ FAIL'} |
@@ -1272,10 +1263,57 @@ Evaluates generated test code syntax validity and AST-based sandboxing safety ch
 
 
 if __name__ == "__main__":
+    import argparse
     import asyncio
 
+    parser = argparse.ArgumentParser(description="Platform Quality & Retrieval Benchmark Runner")
+    parser.add_argument(
+        "--fixtures-only",
+        action="store_true",
+        default=False,
+        help="Run benchmarks using only deterministic local fixtures (zero live LLM calls).",
+    )
+    parser.add_argument(
+        "--fail-on-threshold",
+        action="store_true",
+        default=False,
+        help="Exit with non-zero exit code (1) if any mandatory quality gate threshold fails.",
+    )
+    parser.add_argument(
+        "--output-json",
+        type=str,
+        default=None,
+        help="Optional path to write raw evaluation metrics as JSON.",
+    )
+    parser.add_argument(
+        "--output-md",
+        type=str,
+        default=None,
+        help="Path to write the formatted markdown report (defaults to Docs/quality_benchmark_report.md).",
+    )
+    args = parser.parse_args()
+
     res = asyncio.run(run_all_benchmarks())
-    docs_path = Path(__file__).resolve().parent.parent.parent / "Docs" / "quality_benchmark_report.md"
+
+    # Write Markdown Report
+    docs_path = (
+        Path(args.output_md)
+        if args.output_md
+        else Path(__file__).resolve().parent.parent.parent / "Docs" / "quality_benchmark_report.md"
+    )
+    docs_path.parent.mkdir(parents=True, exist_ok=True)
     generate_markdown_report(res, docs_path)
+
+    # Write JSON Report if requested
+    if args.output_json:
+        json_path = Path(args.output_json)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(json.dumps(res, indent=2), encoding="utf-8")
+        print(f"Machine-readable JSON report written to: {json_path}")
+
     print("\nBenchmark Summary:")
-    print(json.dumps(res, indent=2))
+    print(f"Overall Quality Gate: {'PASS' if res['all_quality_gates_passed'] else 'FAIL'}")
+
+    if args.fail_on_threshold and not res["all_quality_gates_passed"]:
+        print("❌ CI Gate Failure: One or more mandatory quality metrics did not achieve threshold.")
+        sys.exit(1)

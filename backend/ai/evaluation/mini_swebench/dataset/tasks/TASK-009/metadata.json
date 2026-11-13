@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-009",
+  "repository": "api_router",
+  "base_commit": "main@pinned",
+  "issue_title": "Return 404 response structure when record is not found",
+  "issue_description": "find_item returns None which causes caller to raise internal 500.",
+  "category": "api_behavior",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "router.py"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,35 @@
+[
+  {
+    "fixture_id": "FP-001",
+    "category": "false_positives",
+    "subcategory": "variable_name_trap",
+    "description": "Benign variable named eval_metric or evaluate that is not Python eval()",
+    "source_code": "def evaluate_model_accuracy(eval_metric: str, scores: list[float]) -> float:\n    \"\"\"Function using eval_metric name without calling built-in eval.\"\"\"\n    if eval_metric == 'mean':\n        return sum(scores) / len(scores)\n    return max(scores)\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "FP-002",
+    "category": "false_positives",
+    "subcategory": "docstring_sql_trap",
+    "description": "SQL query in docstring or comments that does not execute in Python code",
+    "source_code": "def get_user_schema_docs() -> str:\n    \"\"\"\n    Example SQL query for reference:\n    SELECT * FROM users WHERE id = %s;\n    \"\"\"\n    return \"Schema documentation v1.0\"\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  },
+  {
+    "fixture_id": "FP-003",
+    "category": "false_positives",
+    "subcategory": "dummy_secret_trap",
+    "description": "Placeholder string like EXAMPLE_TOKEN in unit test mock",
+    "source_code": "def get_test_token_placeholder() -> str:\n    \"\"\"Mock token placeholder in unit testing utility.\"\"\"\n    return 'EXAMPLE_TEST_TOKEN_NOT_REAL'\n",
+    "language": "python",
+    "has_defect": false,
+    "expected_defects": [],
+    "expected_findings": []
+  }
+]

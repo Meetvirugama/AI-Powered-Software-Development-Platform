@@ -1,0 +1,40 @@
+[
+  {
+    "fixture_id": "ERR-001",
+    "category": "error_handling",
+    "subcategory": "swallowed_exception",
+    "description": "Silent catch-all exception block swallowing errors",
+    "source_code": "def execute_critical_sync(data_payload: dict) -> None:\n    \"\"\"Bare except swallowing all failures silently.\"\"\"\n    try:\n        database_sync(data_payload)\n    except Exception:\n        pass\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["swallowed_exception"],
+    "expected_findings": [
+      {
+        "type": "swallowed_exception",
+        "category": "error_handling",
+        "severity": "medium",
+        "line_number": 6,
+        "description": "Silent except pass hides unexpected exceptions"
+      }
+    ]
+  },
+  {
+    "fixture_id": "ERR-002",
+    "category": "error_handling",
+    "subcategory": "missing_cleanup",
+    "description": "Acquiring connection without finally cleanup on error",
+    "source_code": "def process_database_job(pool):\n    \"\"\"Connection leak if query fails.\"\"\"\n    conn = pool.get_connection()\n    cursor = conn.cursor()\n    cursor.execute('RUN BATCH')\n    # If cursor raises, conn is never released\n    pool.release(conn)\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["missing_cleanup"],
+    "expected_findings": [
+      {
+        "type": "missing_cleanup",
+        "category": "error_handling",
+        "severity": "high",
+        "line_number": 5,
+        "description": "Resource not released inside finally or context manager"
+      }
+    ]
+  }
+]

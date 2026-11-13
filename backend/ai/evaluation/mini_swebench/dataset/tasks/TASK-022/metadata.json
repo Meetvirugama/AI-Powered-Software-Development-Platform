@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-022",
+  "repository": "order_dedup",
+  "base_commit": "main@pinned",
+  "issue_title": "Deduplicate list of strings while preserving original order",
+  "issue_description": "list(set(items)) scrambles order. Use dict.fromkeys or ordered set.",
+  "category": "data_processing",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "dedup.py"
+  ],
+  "license": "MIT"
+}
