@@ -545,11 +545,32 @@ class EditSynthesizer:
                     preview = content[:4000] if len(content) > 4000 else content
                     context_lines.append(f"--- File: {f} ---\n{preview}\n")
 
+                loc_targets = getattr(step, "localization_targets", None) or (
+                    task_context.get("localization_targets") if isinstance(task_context, Mapping) else None
+                )
+                loc_section = ""
+                if loc_targets:
+                    loc_lines = []
+                    for lt in loc_targets:
+                        fp = getattr(lt, "file_path", lt.get("file_path") if isinstance(lt, Mapping) else "")
+                        sym = getattr(lt, "symbol_name", lt.get("symbol_name") if isinstance(lt, Mapping) else None)
+                        sl = getattr(lt, "start_line", lt.get("start_line") if isinstance(lt, Mapping) else None)
+                        el = getattr(lt, "end_line", lt.get("end_line") if isinstance(lt, Mapping) else None)
+                        rat = getattr(lt, "rationale", lt.get("rationale") if isinstance(lt, Mapping) else "")
+                        loc_lines.append(
+                            f"- {fp}"
+                            + (f" :: {sym}" if sym else "")
+                            + (f" (lines {sl}..{el})" if sl and el else "")
+                            + (f" — {rat}" if rat else "")
+                        )
+                    loc_section = "HIERARCHICAL LOCALIZATION TARGETS (Focus edits on these regions):\n" + "\n".join(loc_lines) + "\n\n"
+
                 user_prompt = (
                     f"Task Step ID: {step.step_id}\n"
                     f"Step Title: {getattr(step, 'title', '')}\n"
                     f"Step Description: {step.description}\n"
                     f"Approved Target Files: {list(allowed_files)}\n\n"
+                    f"{loc_section}"
                     f"CURRENT FILE CONTENTS:\n"
                     + "\n".join(context_lines)
                 )

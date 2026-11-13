@@ -355,13 +355,18 @@ def _normalize_code_target_payload(data: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 class ExplainContextOptions(BaseModel):
-    """Context selection options for Repository Intelligence Explain Studio (task.md §6.3)."""
+    """Context selection options for Repository Intelligence Explain Studio (task.md §6.3 & Issue 2)."""
 
     include_graph_context: bool = True
     include_callers: bool = True
+    include_callees: bool = True
     include_dependencies: bool = True
     include_tests: bool = True
     include_semantic_search: bool = True
+    explain_at_depth: bool = Field(
+        default=False,
+        description="Follow the call graph 1 hop (both callers and callees) and include their source body snippets (F07-C3).",
+    )
     selected_files: list[str] = Field(
         default_factory=list,
         description="User-selected related files explicitly added to context.",
@@ -377,6 +382,14 @@ class ExplainCodeRequest(BaseModel):
     )
     context: ExplainContextOptions = Field(default_factory=ExplainContextOptions)
     explanation_level: Literal["concise", "detailed", "deep_technical"] = "detailed"
+    depth_mode: Literal["standard", "deep"] = Field(
+        default="standard",
+        description="Call-graph traversal depth mode: 'standard' (signatures) or 'deep' (1-hop caller & callee body snippets).",
+    )
+    explain_at_depth: bool = Field(
+        default=False,
+        description="When True, follows the call graph one level (callers and callees) with full snippet expansion.",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -487,6 +500,31 @@ class CodeExplanation(BaseModel):
     corrected_code: str | None = Field(
         default=None,
         description="Corrected, production-grade refactoring of the code solving identified issues.",
+    )
+    has_redacted_content: bool = Field(
+        default=False,
+        description="True when reconstructed source chunks contained [REDACTED] secret/config placeholders.",
+    )
+    redacted_occurrences: int = Field(
+        default=0,
+        ge=0,
+        description="Number of [REDACTED] placeholders detected in reconstructed target or context source.",
+    )
+    redaction_notice: str | None = Field(
+        default=None,
+        description="Human-readable security notice surfaced in the UI when source contains [REDACTED] tokens.",
+    )
+    call_graph_depth_expanded: bool = Field(
+        default=False,
+        description="True when 'Explain at depth' mode traversed 1-hop callers and callees in the call graph.",
+    )
+    expanded_callers: list[str] = Field(
+        default_factory=list,
+        description="1-hop caller symbols included during depth-mode call graph expansion.",
+    )
+    expanded_callees: list[str] = Field(
+        default_factory=list,
+        description="1-hop callee symbols included during depth-mode call graph expansion.",
     )
 
     @model_validator(mode="before")

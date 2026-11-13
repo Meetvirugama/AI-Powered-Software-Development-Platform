@@ -1,17 +1,18 @@
-"""Week 3 Day 1 & Day 2 Schemas: GitHub Issue Integration, Task Planner & Human Approval Gate.
+"""Week 3 Day 1 & Day 2 Schemas: GitHub Issue Integration, Task Planner, Hierarchical Localisation & Human Approval Gate.
 
 Owners:
 - Parth & Yug (F31 GitHub Issue Integration contracts)
 - Meet & Dev (F32 TaskPlanner & PlannerSchema with DAG step dependency validation)
 - Sukun (Approval gate & plan hash verification contracts)
+- Issue 3 (Agentless-style 3-stage Hierarchical Localisation targets persisted for human review & EditSynthesizer)
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
 
@@ -158,7 +159,7 @@ class IssueImportResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 2. F32 — Task Planner & Structured Implementation Plan Schemas
+# 2. F32 — Task Planner, Hierarchical Localisation & Structured Plan Schemas
 # ---------------------------------------------------------------------------
 
 PlanStepActionType = Literal[
@@ -174,6 +175,74 @@ PlanStepActionType = Literal[
 ]
 
 PlanRiskSeverity = Literal["low", "medium", "high", "critical"]
+
+
+class LocalizationTarget(BaseModel):
+    """Agentless-style 3-stage hierarchical localization target (File -> Symbol -> Line Range) [Issue 3 / P-17]."""
+
+    model_config = ConfigDict(from_attributes=True, extra="allow")
+
+    file_path: str = Field(..., min_length=1, max_length=1024, description="Repository-relative file path.")
+    symbol_name: str | None = Field(
+        default=None,
+        max_length=256,
+        description="Localized class, method, or function name (Stage 2).",
+    )
+    symbol_kind: str = Field(
+        default="symbol",
+        max_length=64,
+        description="Symbol category: function, method, class, module, etc.",
+    )
+    start_line: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-indexed inclusive start line of the localized edit region (Stage 3).",
+    )
+    end_line: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-indexed inclusive end line of the localized edit region (Stage 3).",
+    )
+    confidence: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Localization confidence score in [0.0, 1.0].",
+    )
+    localization_stage: Literal["file", "symbol", "line_range"] = Field(
+        default="line_range",
+        description="Deepest completed localization stage ('file', 'symbol', or 'line_range').",
+    )
+    rationale: str = Field(
+        default="",
+        description="Evidence explaining why this file/symbol/line-range was selected.",
+    )
+    importance_score: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="PageRank importance score of the localized symbol or file (F05-C3).",
+    )
+    snippet_preview: str | None = Field(
+        default=None,
+        description="Optional short code snippet preview for human plan review and edit synthesis.",
+    )
+
+    @field_validator("file_path")
+    @classmethod
+    def _validate_safe_file_path(cls, value: str) -> str:
+        try:
+            return validate_repo_relative_path(value)
+        except UnsafePathError as exc:
+            raise ValueError(f"Unsafe localization file_path '{value}': {exc}") from exc
+
+    @model_validator(mode="after")
+    def _normalize_line_bounds(self) -> "LocalizationTarget":
+        if self.end_line is not None and self.start_line is None:
+            self.start_line = self.end_line
+        if self.start_line is not None and self.end_line is not None and self.end_line < self.start_line:
+            self.start_line, self.end_line = self.end_line, self.start_line
+        return self
 
 
 class ValidationStrategy(BaseModel):
@@ -270,6 +339,10 @@ class PlanStep(BaseModel):
     target_symbols: list[str] = Field(
         default_factory=list,
         description="Functions, classes, or symbols affected in this step.",
+    )
+    localization_targets: list[LocalizationTarget] = Field(
+        default_factory=list,
+        description="Agentless 3-stage localized file/symbol/line-range targets for this step (Issue 3).",
     )
     depends_on: list[str] = Field(
         default_factory=list,
@@ -371,24 +444,20 @@ class PlanStep(BaseModel):
 
     @model_validator(mode="after")
     def _sync_and_populate(self) -> "PlanStep":
-        # Synchronize dependencies and depends_on
         merged_deps = list(dict.fromkeys(self.dependencies + self.depends_on))
         self.dependencies = merged_deps
         self.depends_on = merged_deps
 
-        # Synchronize action_type and step_type
         if self.step_type and not self.action_type:
             self.action_type = self.step_type
         elif self.action_type and not self.step_type:
             self.step_type = self.action_type
 
-        # Synchronize risk_level and estimated_risk
         if self.risk_level and not self.estimated_risk:
             self.estimated_risk = self.risk_level
         elif self.estimated_risk and not self.risk_level:
             self.risk_level = self.estimated_risk
 
-        # Synchronize rollback_hint and rollback_instructions
         if self.rollback_hint and not self.rollback_instructions:
             self.rollback_instructions = self.rollback_hint
         elif self.rollback_instructions and not self.rollback_hint:
@@ -451,11 +520,7 @@ class PlanDependencyGraph:
         self.adj_list: dict[str, list[str]] = {s.step_id: list(s.dependencies or s.depends_on) for s in steps}
 
     def validate(self) -> None:
-        """Validate step uniqueness, self-dependencies, dangling references, and acyclicity.
-
-        Raises:
-            ValueError: If duplicate steps, self-dependencies, dangling references, or cycles are found.
-        """
+        """Validate step uniqueness, self-dependencies, dangling references, and acyclicity."""
         if len(self.step_map) != len(self.steps):
             seen: set[str] = set()
             duplicates: set[str] = set()
@@ -477,7 +542,6 @@ class PlanDependencyGraph:
                         f"(Step '{step_id}' depends on unknown step_id '{dep}')."
                     )
 
-        # Validate transition targets if defined (task.md §3, §5 B)
         for step in self.steps:
             for tr in getattr(step, "transitions", []) or []:
                 target_next = getattr(tr, "next_step_id", None)
@@ -610,6 +674,10 @@ class StructuredPlan(BaseModel):
     relevant_symbols: list[str] = Field(
         default_factory=list,
         description="Key classes, methods, or functions relevant to the plan.",
+    )
+    localization_targets: list[LocalizationTarget] = Field(
+        default_factory=list,
+        description="Agentless 3-stage localized candidate files, symbols, and 1-indexed line ranges (Issue 3 / P-17).",
     )
     steps: list[PlanStep] = Field(
         ...,
@@ -758,11 +826,9 @@ class StructuredPlan(BaseModel):
 
     @model_validator(mode="after")
     def _validate_dag_and_sync(self) -> "StructuredPlan":
-        # 1. Validate DAG
         graph = PlanDependencyGraph(self.steps)
         graph.validate()
 
-        # 2. Consolidate expected_files
         combined: list[str] = list(self.expected_files)
         for step in self.steps:
             for f in step.expected_files:
@@ -771,13 +837,11 @@ class StructuredPlan(BaseModel):
         self.expected_files = combined
         self.expected_files_to_modify = combined
 
-        # 3. Sync tests
         if self.tests_to_run and not self.tests_to_add_or_run:
             self.tests_to_add_or_run = list(self.tests_to_run)
         elif self.tests_to_add_or_run and not self.tests_to_run:
             self.tests_to_run = list(self.tests_to_add_or_run)
 
-        # 4. Sync risks
         if self.risks and not self.risks_and_side_effects:
             self.risks_and_side_effects = list(self.risks)
         elif self.risks_and_side_effects and not self.risks:
@@ -1017,6 +1081,10 @@ class TaskPlanResponse(BaseModel):
     assumptions: list[TaskAssumption] = Field(default_factory=list)
     relevant_files: list[str] = Field(default_factory=list)
     relevant_symbols: list[str] = Field(default_factory=list)
+    localization_targets: list[LocalizationTarget] = Field(
+        default_factory=list,
+        description="Agentless 3-stage localized candidate files, symbols, and line ranges (Issue 3).",
+    )
     steps: list[PlanStep]
     expected_files: list[str] = Field(default_factory=list)
     expected_files_to_modify: list[str] = Field(default_factory=list)
@@ -1121,6 +1189,7 @@ __all__ = [
     "GitHubIssueImportRequest",
     "GitHubIssueResponse",
     "IssueImportResponse",
+    "LocalizationTarget",
     "PlanApprovalPayload",
     "PlanApprovalRequest",
     "PlanDependencyGraph",

@@ -405,21 +405,65 @@ class BoundedRepairLoop:
         )
 
     @staticmethod
+    def _slice_diff_for_file(diff_text: str, target_file: str) -> str:
+        """Extract only the unified diff section corresponding to target_file when multi-file diffs exist."""
+        if not diff_text.strip() or not target_file:
+            return diff_text
+
+        norm_target = target_file.replace("\\", "/").strip().lstrip("./")
+        sections = re.split(r"(?m)(?=^---\s+)", diff_text)
+        matched_sections: list[str] = []
+        for sec in sections:
+            if not sec.strip():
+                continue
+            header_match = re.search(
+                r"^\+\+\+\s+(?:b/)?([^\s\t\r\n]+)",
+                sec,
+                re.MULTILINE,
+            )
+            if header_match:
+                header_path = header_match.group(1).replace("\\", "/").strip().lstrip("./")
+                if header_path == norm_target or header_path.endswith(f"/{norm_target}"):
+                    matched_sections.append(sec)
+
+        if matched_sections:
+            return "\n".join(matched_sections)
+        return diff_text
+
+    @staticmethod
     def _extract_patched_content(existing_content: str, diff_text: str, target_file: str, explanation: str) -> str:
-        """Apply unified diff hunks or reconstructed content to existing file content."""
-        if not diff_text.strip():
+        """Apply unified diff hunks or reconstructed content to existing file content safely."""
+        scoped_diff = BoundedRepairLoop._slice_diff_for_file(diff_text, target_file)
+        if not scoped_diff.strip():
             return existing_content or f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
 
         # 1. Hunk-based replacement for standard multi-line unified diffs
-        hunks = re.split(r"(?m)^@@\s+-[0-9,]+\s+\+[0-9,]+\s+@@", diff_text)
+        hunks = re.split(r"(?m)^@@\s+-[0-9,]+\s+\+[0-9,]+\s+@@.*$", scoped_diff)
         if len(hunks) > 1 and existing_content:
             content = existing_content
             applied_any = False
             for hunk in hunks[1:]:
                 lines = hunk.splitlines()
-                removed = [line[1:] for line in lines if line.startswith("-") and not line.startswith("---")]
-                added = [line[1:] for line in lines if line.startswith("+") and not line.startswith("+++")]
-                if removed:
+                old_chunk_lines: list[str] = []
+                new_chunk_lines: list[str] = []
+                removed: list[str] = []
+                added: list[str] = []
+                for line in lines:
+                    if line.startswith(("---", "+++")):
+                        continue
+                    if line.startswith("-"):
+                        removed.append(line[1:])
+                        old_chunk_lines.append(line[1:])
+                    elif line.startswith("+"):
+                        added.append(line[1:])
+                        new_chunk_lines.append(line[1:])
+                    elif line.startswith(" "):
+                        old_chunk_lines.append(line[1:])
+                        new_chunk_lines.append(line[1:])
+                if old_chunk_lines and "\n".join(old_chunk_lines) in content:
+                    content = content.replace("\n".join(old_chunk_lines), "\n".join(new_chunk_lines), 1)
+                    applied_any = True
+                elif removed:
                     rem_block = "\n".join(removed)
                     add_block = "\n".join(added)
                     if rem_block in content:
@@ -431,7 +475,7 @@ class BoundedRepairLoop:
         # 2. Sequential removed vs added line application
         removed_lines: list[str] = []
         added_lines: list[str] = []
-        for raw_line in diff_text.splitlines():
+        for raw_line in scoped_diff.splitlines():
             if raw_line.startswith(("---", "+++", "@@")):
                 continue
             if raw_line.startswith("-"):
@@ -444,14 +488,24 @@ class BoundedRepairLoop:
             added_block = "\n".join(added_lines)
             if removed_block in existing_content:
                 return existing_content.replace(removed_block, added_block, 1)
+            stripped_rem = removed_block.strip()
+            if stripped_rem and stripped_rem in existing_content:
+                return existing_content.replace(stripped_rem, added_block.strip(), 1)
+            reconstructed_check = [
+                raw_line[1:]
+                for raw_line in scoped_diff.splitlines()
+                if not raw_line.startswith(("---", "+++", "@@", "-")) and raw_line.startswith(("+", " "))
+            ]
+            if len(reconstructed_check) >= max(1, len(existing_content.splitlines()) // 2):
+                return "\n".join(reconstructed_check) + "\n"
+            return existing_content
 
         if existing_content and added_lines and not removed_lines:
             return existing_content.rstrip("\n") + "\n" + "\n".join(added_lines) + "\n"
 
         if added_lines:
-            # Reconstruct from non-removed diff lines
             reconstructed: list[str] = []
-            for raw_line in diff_text.splitlines():
+            for raw_line in scoped_diff.splitlines():
                 if raw_line.startswith(("---", "+++", "@@", "-")):
                     continue
                 if raw_line.startswith(("+", " ")):
@@ -459,6 +513,8 @@ class BoundedRepairLoop:
             if reconstructed:
                 return "\n".join(reconstructed) + "\n"
 
+        if existing_content:
+            return existing_content
         return f"# Repaired content for {target_file}\n# Patch: {explanation}\n"
 
     def _apply_patch_files(self, task_id: str, patch_payload: RepairPatchPayload) -> None:

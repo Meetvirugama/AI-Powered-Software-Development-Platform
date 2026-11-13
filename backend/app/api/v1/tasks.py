@@ -309,6 +309,18 @@ def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanRes
 
     expected_files = list(plan.expected_files or [])
     tests_to_run = list(plan.tests_to_run or [])
+    parsed_steps = [PlanStep.model_validate(s) for s in (plan.steps or [])]
+    raw_loc_targets = getattr(plan, "localization_targets", None) or []
+    if not raw_loc_targets:
+        seen_loc_keys: set[tuple[str, str | None, int | None, int | None]] = set()
+        deduped_locs = []
+        for st in parsed_steps:
+            for lt in st.localization_targets:
+                key = (lt.file_path, lt.symbol_name, lt.start_line, lt.end_line)
+                if key not in seen_loc_keys:
+                    seen_loc_keys.add(key)
+                    deduped_locs.append(lt)
+        raw_loc_targets = deduped_locs
 
     payload = {
         "plan_id": str(plan.id),
@@ -324,7 +336,8 @@ def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanRes
         ],
         "relevant_files": list(plan.relevant_files or []),
         "relevant_symbols": list(plan.relevant_symbols or []),
-        "steps": [PlanStep.model_validate(s) for s in (plan.steps or [])],
+        "localization_targets": raw_loc_targets,
+        "steps": parsed_steps,
         "expected_files": expected_files,
         "expected_files_to_modify": expected_files,
         "tests_to_run": tests_to_run,

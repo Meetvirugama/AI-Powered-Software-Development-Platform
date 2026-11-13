@@ -37,6 +37,7 @@ const BADGE_COLOR_MAP: Record<string, string> = {
   type_definition: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
   database_model: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
   associated_test: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
+  co_change_coupled: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
   indirect_dependency: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
   semantic_match: 'bg-teal-500/10 text-teal-300 border-teal-500/30',
 };
@@ -55,6 +56,7 @@ export function RepositoryExplainStudio() {
   const [runId, setRunId] = useState<string | null>(null);
   const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
   const [explanationLevel, setExplanationLevel] = useState<ExplanationLevel>('detailed');
+  const [explainAtDepth, setExplainAtDepth] = useState<boolean>(false);
 
   // Related files state (Repository Intelligence Engine — task.md §6)
   const [userSelectedRelatedPaths, setUserSelectedRelatedPaths] = useState<Set<string> | null>(null);
@@ -109,19 +111,24 @@ export function RepositoryExplainStudio() {
       new Set([...Array.from(selectedRelatedPaths), ...customSelectedFiles])
     );
 
+    const isDeep = explainAtDepth || explanationLevel === 'deep_technical';
     explainMutation.mutate({
       target: activeTarget,
       explanation_level: explanationLevel,
+      depth_mode: isDeep ? 'deep' : 'standard',
+      explain_at_depth: isDeep,
       context: {
         include_graph_context: true,
         include_callers: true,
+        include_callees: true,
         include_dependencies: true,
         include_tests: true,
         include_semantic_search: true,
+        explain_at_depth: isDeep,
         selected_files: allSelected,
       },
     });
-  }, [selectedFile, activeTarget, explainMutation, selectedRelatedPaths, customSelectedFiles, explanationLevel]);
+  }, [selectedFile, activeTarget, explainMutation, selectedRelatedPaths, customSelectedFiles, explanationLevel, explainAtDepth]);
 
   // Keyboard shortcut: Cmd/Ctrl + Enter triggers explain
   useEffect(() => {
@@ -236,6 +243,18 @@ export function RepositoryExplainStudio() {
               </button>
             ))}
           </div>
+          <label
+            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border/70 bg-muted/40 text-[11px] font-medium text-foreground cursor-pointer select-none"
+            title="Follow the call graph 1 level (both callers and callees) with source snippets (F07-C3)"
+          >
+            <input
+              type="checkbox"
+              checked={explainAtDepth || explanationLevel === 'deep_technical'}
+              onChange={(e) => setExplainAtDepth(e.target.checked)}
+              className="rounded border-border text-primary focus:ring-primary h-3 w-3"
+            />
+            <span>Explain at Depth (1-Hop)</span>
+          </label>
           <button
             onClick={handleRunExplain}
             disabled={!selectedFile || explainMutation.isPending}
