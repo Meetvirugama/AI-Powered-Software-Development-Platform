@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-004",
+  "repository": "auth_policy",
+  "base_commit": "main@pinned",
+  "issue_title": "Fix inverted boolean condition in check_admin_access",
+  "issue_description": "check_admin_access returns True when is_admin is False.",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "auth.py"
+  ],
+  "license": "MIT"
+}

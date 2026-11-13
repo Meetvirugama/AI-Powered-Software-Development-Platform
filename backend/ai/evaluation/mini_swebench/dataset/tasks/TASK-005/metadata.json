@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-005",
+  "repository": "math_metrics",
+  "base_commit": "main@pinned",
+  "issue_title": "Prevent ZeroDivisionError in compute_percentage",
+  "issue_description": "compute_percentage(count, total) raises ZeroDivisionError when total is 0.",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "metrics.py"
+  ],
+  "license": "MIT"
+}

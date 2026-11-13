@@ -319,3 +319,4 @@ def test_agent_loop_cross_step_content_fallback_is_eliminated():
     written_files = [call.kwargs.get("file_path") for call in mock_ws.write_file.call_args_list]
     assert "f1.py" in written_files
     assert "f2.py" not in written_files
+

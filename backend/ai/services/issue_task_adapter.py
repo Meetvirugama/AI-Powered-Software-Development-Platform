@@ -21,6 +21,8 @@ from uuid import UUID
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
+from ai.security.provenance import TrustLevel, create_provenance
+from ai.security.taint_tracker import get_taint_tracker
 from app.schemas.task import (
     TaskAssumption,
     TaskConstraint,
@@ -191,6 +193,14 @@ class IssueToTaskAdapter:
         self._max_budget_tokens = max_budget_tokens
 
     def _default_constraints(self) -> list[TaskConstraint]:
+        tracker = get_taint_tracker()
+        plat_prov = tracker.register_source(
+            source_type="platform_constraint",
+            source_id="cst-platform-defaults",
+            trust_level=TrustLevel.PLATFORM,
+            tainted=False,
+            metadata={"policy": "protected_files_and_security_policy"},
+        )
         return [
             TaskConstraint(
                 id="cst-protected-files",
@@ -198,6 +208,8 @@ class IssueToTaskAdapter:
                 constraint_type="protected_file",
                 forbidden_files=self._protected_files,
                 max_budget_tokens=self._max_budget_tokens,
+                provenance=plat_prov,
+                provenance_ids=[plat_prov.provenance_id],
             ),
             TaskConstraint(
                 id="cst-security-policy",
@@ -205,6 +217,8 @@ class IssueToTaskAdapter:
                 constraint_type="security_policy",
                 forbidden_files=[],
                 max_budget_tokens=self._max_budget_tokens,
+                provenance=plat_prov,
+                provenance_ids=[plat_prov.provenance_id],
             ),
         ]
 
@@ -233,8 +247,9 @@ class IssueToTaskAdapter:
         base_revision: str | None = None,
         finding_id: str | None = None,
         known_repo_paths: Sequence[str] | None = None,
+        comments: Sequence[dict[str, Any]] | None = None,
     ) -> TaskIntakePayload:
-        """Convert an imported or created GitHub issue into a validated TaskIntakePayload."""
+        """Convert an imported or created GitHub issue into a validated TaskIntakePayload with provenance."""
         repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
         safe_title = redact((title or f"Resolve GitHub Issue #{issue_number}").strip())
         if len(safe_title) < 3:
@@ -247,6 +262,48 @@ class IssueToTaskAdapter:
             known_repo_paths=known_repo_paths,
             forbidden_files=self._protected_files,
         )
+
+        # Register external untrusted provenance for the GitHub issue
+        tracker = get_taint_tracker()
+        issue_prov = tracker.register_source(
+            source_type="github_issue",
+            source_id=str(issue_number),
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            tainted=True,
+            source_repository_id=str(repo_uuid),
+            source_reference=html_url,
+            metadata={"issue_number": issue_number, "title": safe_title},
+        )
+        parent_prov_ids = [issue_prov.provenance_id]
+
+        # Register comment provenance if comments were imported
+        if comments:
+            for idx, c in enumerate(comments):
+                cid = str(c.get("id") or f"comment-{idx}")
+                c_prov = tracker.register_source(
+                    source_type="github_comment",
+                    source_id=cid,
+                    trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+                    tainted=True,
+                    source_repository_id=str(repo_uuid),
+                    source_reference=f"{html_url}#issuecomment-{cid}",
+                    parent_ids=[issue_prov.provenance_id],
+                    metadata={"user": str(c.get("user") or ""), "body_length": len(str(c.get("body", "")))},
+                )
+                parent_prov_ids.append(c_prov.provenance_id)
+
+        # Register finding evidence provenance if linked
+        if finding_id:
+            find_prov = tracker.register_source(
+                source_type="finding_evidence",
+                source_id=str(finding_id),
+                trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+                tainted=True,
+                source_repository_id=str(repo_uuid),
+                parent_ids=[issue_prov.provenance_id],
+                metadata={"finding_id": str(finding_id)},
+            )
+            parent_prov_ids.append(find_prov.provenance_id)
 
         # Extract bullet points or numbered acceptance items if present
         acceptance_criteria: list[str] = []
@@ -262,6 +319,16 @@ class IssueToTaskAdapter:
                 "Add or update unit tests covering the fix and verify all existing tests pass.",
             ]
 
+        # Derive requirement with inherited provenance and taint
+        req_prov = tracker.propagate(
+            parent_ids=parent_prov_ids,
+            transformation="intake_requirement_extraction",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_requirement",
+            metadata={"requirement_id": "req-1", "category": category},
+            source_repository_id=str(repo_uuid),
+        )
+
         requirements = [
             TaskRequirement(
                 id="req-1",
@@ -269,8 +336,20 @@ class IssueToTaskAdapter:
                 category=category,
                 target_files=target_files,
                 acceptance_criteria=acceptance_criteria[:6],
+                provenance=req_prov,
+                provenance_ids=[req_prov.provenance_id],
             )
         ]
+
+        # Derive assumption with inherited provenance and taint
+        asm_prov = tracker.propagate(
+            parent_ids=parent_prov_ids,
+            transformation="intake_assumption_derivation",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_assumption",
+            metadata={"assumption_id": "asm-1"},
+            source_repository_id=str(repo_uuid),
+        )
 
         assumptions = [
             TaskAssumption(
@@ -282,6 +361,8 @@ class IssueToTaskAdapter:
                 ),
                 unresolved=len(target_files) == 0,
                 risk_level="low" if target_files else "medium",
+                provenance=asm_prov,
+                provenance_ids=[asm_prov.provenance_id],
             )
         ]
 
@@ -302,6 +383,17 @@ class IssueToTaskAdapter:
             base_revision=commit_sha_rev,
         )
 
+        default_constraints = self._default_constraints()
+        constraint_prov_ids = [c.provenance.provenance_id for c in default_constraints if c.provenance]
+
+        payload_prov = tracker.propagate(
+            parent_ids=parent_prov_ids + constraint_prov_ids,
+            transformation="intake_payload_aggregation",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_intake_payload",
+            source_repository_id=str(repo_uuid),
+        )
+
         return TaskIntakePayload(
             repository_id=repo_uuid,
             title=safe_title[:256],
@@ -309,8 +401,212 @@ class IssueToTaskAdapter:
             source=source_ref,
             requirements=requirements,
             assumptions=assumptions,
-            constraints=self._default_constraints(),
+            constraints=default_constraints,
             base_revision=base_revision,
+            provenance=payload_prov,
+            provenance_ids=payload_prov.parent_ids + [payload_prov.provenance_id],
+        )
+
+    def from_finding(
+        self,
+        *,
+        repository_id: UUID | str,
+        finding: Any,
+        known_repo_paths: Sequence[str] | None = None,
+        base_revision: str | None = None,
+    ) -> TaskIntakePayload:
+        """Convert a Week 2 AnalysisFinding directly into a TaskIntakePayload with complete provenance."""
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+        title, body, labels = format_issue_from_finding(finding)
+
+        finding_id = str(
+            getattr(finding, "id", None)
+            or (finding.get("id") if isinstance(finding, dict) else "unknown_finding")
+        )
+        finding_desc = str(
+            getattr(finding, "description", None)
+            or (finding.get("description") if isinstance(finding, dict) else title)
+        )
+        finding_evidence = str(
+            getattr(finding, "evidence", None)
+            or (finding.get("evidence") if isinstance(finding, dict) else "")
+        )
+
+        tracker = get_taint_tracker()
+        desc_prov = tracker.register_source(
+            source_type="finding_description",
+            source_id=finding_id,
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            tainted=True,
+            source_repository_id=str(repo_uuid),
+            metadata={"finding_id": finding_id, "title": title},
+        )
+
+        evidence_prov = tracker.register_source(
+            source_type="finding_evidence",
+            source_id=finding_id,
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            tainted=True,
+            source_repository_id=str(repo_uuid),
+            parent_ids=[desc_prov.provenance_id],
+            metadata={"evidence_length": len(finding_evidence)},
+        )
+
+        parent_prov_ids = [desc_prov.provenance_id, evidence_prov.provenance_id]
+
+        target_files = extract_safe_repo_paths(
+            f"{title}\n{body}",
+            known_repo_paths=known_repo_paths,
+            forbidden_files=self._protected_files,
+        )
+
+        req_prov = tracker.propagate(
+            parent_ids=parent_prov_ids,
+            transformation="intake_finding_requirement_extraction",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_requirement",
+            metadata={"finding_id": finding_id},
+            source_repository_id=str(repo_uuid),
+        )
+
+        requirements = [
+            TaskRequirement(
+                id="req-1",
+                description=f"Resolve finding [{finding_id}]: {title}",
+                category="bug_fix",
+                target_files=target_files,
+                acceptance_criteria=[
+                    f"Fix defect identified in finding {finding_id}.",
+                    "Verify all existing tests pass.",
+                ],
+                provenance=req_prov,
+                provenance_ids=[req_prov.provenance_id],
+            )
+        ]
+
+        asm_prov = tracker.propagate(
+            parent_ids=parent_prov_ids,
+            transformation="intake_finding_assumption_derivation",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_assumption",
+            metadata={"finding_id": finding_id},
+            source_repository_id=str(repo_uuid),
+        )
+
+        assumptions = [
+            TaskAssumption(
+                id="asm-1",
+                description="Target defect localized to candidate files from finding evidence.",
+                unresolved=len(target_files) == 0,
+                risk_level="low" if target_files else "medium",
+                provenance=asm_prov,
+                provenance_ids=[asm_prov.provenance_id],
+            )
+        ]
+
+        source_ref = TaskSourceReference(
+            type="BUG_FINDING",
+            finding_id=finding_id,
+            repository_id=str(repo_uuid),
+        )
+
+        default_constraints = self._default_constraints()
+        constraint_prov_ids = [c.provenance.provenance_id for c in default_constraints if c.provenance]
+
+        payload_prov = tracker.propagate(
+            parent_ids=parent_prov_ids + constraint_prov_ids,
+            transformation="intake_finding_payload_aggregation",
+            trust_level=TrustLevel.EXTERNAL_UNTRUSTED,
+            source_type="task_intake_payload",
+            source_repository_id=str(repo_uuid),
+        )
+
+        return TaskIntakePayload(
+            repository_id=repo_uuid,
+            title=title[:256],
+            description=body,
+            source=source_ref,
+            requirements=requirements,
+            assumptions=assumptions,
+            constraints=default_constraints,
+            base_revision=base_revision,
+            provenance=payload_prov,
+            provenance_ids=payload_prov.parent_ids + [payload_prov.provenance_id],
+        )
+
+    def from_user_prompt(
+        self,
+        *,
+        repository_id: UUID | str,
+        user_id: str,
+        prompt: str,
+        title: str | None = None,
+        target_files: Sequence[str] | None = None,
+        base_revision: str | None = None,
+    ) -> TaskIntakePayload:
+        """Convert an authenticated user prompt into a TaskIntakePayload with USER_PROVIDED trust."""
+        repo_uuid = UUID(str(repository_id)) if not isinstance(repository_id, UUID) else repository_id
+        safe_prompt = redact((prompt or "").strip())
+        safe_title = redact((title or safe_prompt[:60]).strip()) or "User Development Task"
+
+        tracker = get_taint_tracker()
+        user_prov = tracker.register_source(
+            source_type="user_prompt",
+            source_id=str(user_id),
+            trust_level=TrustLevel.USER_PROVIDED,
+            tainted=False,
+            source_repository_id=str(repo_uuid),
+            metadata={"user_id": str(user_id)},
+        )
+
+        clean_files = list(target_files or [])
+        req_prov = tracker.propagate(
+            parent_ids=[user_prov.provenance_id],
+            transformation="user_prompt_requirement_extraction",
+            trust_level=TrustLevel.USER_PROVIDED,
+            source_type="task_requirement",
+            source_repository_id=str(repo_uuid),
+        )
+
+        requirements = [
+            TaskRequirement(
+                id="req-1",
+                description=safe_prompt,
+                category="functional",
+                target_files=clean_files,
+                acceptance_criteria=["Implement requested changes per user prompt."],
+                provenance=req_prov,
+                provenance_ids=[req_prov.provenance_id],
+            )
+        ]
+
+        default_constraints = self._default_constraints()
+        constraint_prov_ids = [c.provenance.provenance_id for c in default_constraints if c.provenance]
+
+        payload_prov = tracker.propagate(
+            parent_ids=[user_prov.provenance_id] + constraint_prov_ids,
+            transformation="user_task_payload_aggregation",
+            trust_level=TrustLevel.USER_PROVIDED,
+            source_type="task_intake_payload",
+            source_repository_id=str(repo_uuid),
+        )
+
+        source_ref = TaskSourceReference(
+            type="USER_PROMPT",
+            repository_id=str(repo_uuid),
+        )
+
+        return TaskIntakePayload(
+            repository_id=repo_uuid,
+            title=safe_title[:256],
+            description=safe_prompt,
+            source=source_ref,
+            requirements=requirements,
+            assumptions=[],
+            constraints=default_constraints,
+            base_revision=base_revision,
+            provenance=payload_prov,
+            provenance_ids=[user_prov.provenance_id, payload_prov.provenance_id],
         )
 
 

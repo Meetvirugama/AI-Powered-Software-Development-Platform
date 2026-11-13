@@ -88,3 +88,4 @@ The `AgentExecutionLoop` utilizes `LoopDetector` to prevent repeating cycles acr
 1. **Action-State Fingerprinting**: Tracks `(action_type, target_file, patch_hash)` tuples.
 2. **Repeating Cycle Detection**: If the same action on the same file with identical patch contents is encountered twice in the execution window, `LoopDetector` triggers `CYCLE_DETECTED`.
 3. **Immediate Abort**: Execution halts, recording the cycle event to the timeline and failing safely.
+

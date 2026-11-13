@@ -10,9 +10,10 @@ output validation are governed by LLMGateway.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Self
 
-from .schemas import LLMRequest, LLMResponse, LLMToolRequest, LLMToolResponse
+from .schemas import LLMRequest, LLMResponse, LLMResponseChunk, LLMToolRequest, LLMToolResponse
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -48,25 +49,58 @@ class LLMProvider(ABC):
         """
         ...
 
+    async def generate_stream(
+        self, request: LLMRequest
+    ) -> AsyncIterator[LLMResponseChunk]:
+        """
+        Execute streaming chat completion, yielding LLMResponseChunk tokens as they arrive.
+
+        Default base implementation collects completion and yields it as a single chunk.
+        Concrete providers implement true SSE streaming.
+        """
+        resp = await self.generate(request)
+        yield LLMResponseChunk(
+            delta=resp.content,
+            index=0,
+            finish_reason=resp.finish_reason or "stop",
+            tool_calls=resp.tool_calls,
+            model=resp.model,
+            provider=self.provider_name,
+            input_tokens=resp.input_tokens,
+            output_tokens=resp.output_tokens,
+        )
+
     async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
         """
         Execute chat completion with tool calling support.
 
-        Args:
-            request: Fully constructed LLMToolRequest containing tool definitions and conversation turns.
-
-        Returns:
-            LLMToolResponse containing generated content or tool calls with usage metadata.
-
-        Raises:
-            LLMTimeoutError: If the provider call exceeds the configured deadline.
-            LLMRateLimitError: If provider rate limits are exhausted.
-            LLMUnavailableError: If provider returns 5xx errors or connection drops.
-            LLMAuthenticationError: If API credentials are rejected.
-            LLMValidationError: If the model returns malformed tool arguments or structure.
-            NotImplementedError: If the provider does not support function/tool calling.
+        Delegates to unified generate() using the normalized LLMRequest interface.
         """
-        raise NotImplementedError(f"Provider {self.provider_name} does not implement generate_with_tools.")
+        from .schemas import LLMRequest
+
+        llm_req = LLMRequest.create(
+            model=request.model,
+            messages=request.messages,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            allow_fallback=request.allow_fallback,
+            request_id=request.request_id,
+            estimated_tokens=request.estimated_tokens,
+            feature=request.feature,
+        )
+        resp = await self.generate(llm_req)
+        return LLMToolResponse(
+            content=resp.content,
+            tool_calls=resp.tool_calls or [],
+            model=resp.model,
+            input_tokens=resp.input_tokens,
+            output_tokens=resp.output_tokens,
+            latency_ms=resp.latency_ms,
+            finish_reason=resp.finish_reason,
+            provider=self.provider_name,
+        )
 
     @property
     @abstractmethod

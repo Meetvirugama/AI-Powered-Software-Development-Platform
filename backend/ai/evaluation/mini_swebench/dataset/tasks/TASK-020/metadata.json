@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-020",
+  "repository": "iso_parser",
+  "base_commit": "main@pinned",
+  "issue_title": "Parse ISO datetime strings with Z suffix",
+  "issue_description": "fromisoformat in older versions fails on trailing Z. Replace Z with +00:00.",
+  "category": "data_processing",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "iso.py"
+  ],
+  "license": "MIT"
+}

@@ -57,3 +57,4 @@ This changelog records all engineering changes made for Feature F22: Autonomous 
   - Updated `handleRunAutoPilot` to invoke `startAutonomousWorkflow` with async execution and auto-fallback.
 - Created comprehensive workflow test suite `backend/tests/test_autonomous_task_workflow.py` (6 tests).
 - Verified full test suite (83 passed, 0 failed) and clean frontend build.
+

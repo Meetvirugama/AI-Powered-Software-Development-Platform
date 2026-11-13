@@ -13,6 +13,8 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | **Week 3** | [Week 3 — Workflow Automation, GitHub Integration & Production Hardening](./week3.md) | End-to-end plan-to-PR workflow: Task planning, mandatory Human Approval Gate, isolated task workspace, policy-guarded tool routing, test execution, bounded repair loop (max 3), independent verification, and GitHub Draft PR creation. | 🟢 **COMPLETE** (17-step autonomous workflow verified) |
 | **Post-Week 3** | [Retrieval](./retrieval/README.md), [Agentic Chat](./agentic-chat/README.md), [Test Generation](./test-generation/README.md), & [Code Review Intelligence](./code-review/README.md) | Enterprise hardening & advanced intelligence: Timing-safe JWT/OAuth auth (#181), durable webhook event worker (#182), multi-stage hybrid retrieval (#187), bounded agentic chat (#188), execution-verified test generation (#193), and production AI code review with inline GitHub PR reviews, precision gating, ESLint/Biome analysis, and feedback lifecycle (#194). | 🟢 **COMPLETE** (All suites passing, 100% verified) |
 | **P0 Security** | [Secure Sandbox Execution Architecture](./security/sandbox/README.md) | Production-grade secure sandbox execution architecture for untrusted GitHub repositories: SandboxBackend abstraction, LocalSubprocessBackend (dev-only), ContainerBackend (Docker + gVisor `runsc`), dedicated internal Runner Service, Two-Phase Execution (controlled install vs offline tests with `--network=none`), resource bounding (2 vCPU, 4GB RAM, 512 PIDs, read-only rootfs), and 12-scenario attack verification (#200 / F20). | 🟢 **COMPLETE** (142 tests passing, 100% verified) |
+| **P0 Security** | [Provenance-Aware Taint-Tracking Architecture](./security/provenance/README.md) | End-to-end information flow control & indirect prompt injection defense: 6-level TrustLevel lattice, immutable DataProvenance, thread-safe DAG TaintTracker, capability-based TaintPolicyEngine, cryptographic SHA-256 human approval binding, tool authorization, and full adversarial test verification. | 🟢 **COMPLETE** (37 security tests passing, 100% verified) |
+| **AI Quality & Benchmarks** | [AI Quality Evaluation & Benchmarks](./evaluation/AI_EVALUATION_IMPLEMENTATION_REPORT.md) | Centralized mathematical QualityGate, strict non-zero benchmark gating, categorized 8-domain fixture dataset, automated nightly CI suite, and 25-task Mini SWE-bench Pass@1 harness (#210 / F29). | 🟢 **COMPLETE** (44 evaluation tests passing, 100% verified) |
 
 ---
 
@@ -34,6 +36,14 @@ Welcome to the **AI-Powered Software Development Platform** documentation. This 
 | [Team Rules & Boundaries](./team_rules.md) | Directory ownership map, branch protection rules, anti-clash guidelines, and PR workflow. | All Leads |
 | [Week 1 Security Report](./security/week1_security_report.md) | Comprehensive security audit covering multi-tenant isolation, prompt injection, and credential scrubbers. | Sukun |
 | [Week 3 Threat Model & Security Report](./security/week3_security_report.md) | Attack matrix, sandbox boundary isolation, secret redaction, and release checklist. | Sukun |
+| [Provenance-Aware Taint Tracking Architecture](./security/provenance/README.md) | End-to-end provenance tracking, trust level lattice, DAG propagation, and taint-aware tool authorization policy. | Meet |
+| [AI Quality Evaluation Architecture](./evaluation/AI_QUALITY_EVALUATION_ARCHITECTURE.md) | Baseline architectural audit, metric calculations, and gate failure root cause analysis. | Keval & Meet |
+| [Benchmark Gating Design](./evaluation/BENCHMARK_GATING_DESIGN.md) | Mathematical formulation, operator specifications, and fail-closed aggregate gate rules. | Keval & Meet |
+| [Mini SWE-bench Evaluation Harness](./evaluation/MINI_SWE_BENCH_DESIGN.md) | 25-task deterministic real-world issue benchmark, isolated test execution, and Pass@1 computation. | Meet & Keval |
+| [Nightly CI Quality Evaluation](./evaluation/NIGHTLY_QUALITY_EVALUATION.md) | Scheduled zero-egress offline benchmark pipeline, JSON artifact retention, and failure alerts. | Keval |
+| [Evaluation Framework Research](./evaluation/EVALUATION_FRAMEWORK_RESEARCH.md) | Architectural trade-offs, license checks, and adopt/defer recommendations for RAGAS, promptfoo, DeepEval, Langfuse, and SWE-bench. | Meet |
+| [AI Evaluation Implementation Report](./evaluation/AI_EVALUATION_IMPLEMENTATION_REPORT.md) | Comprehensive implementation audit, before/after comparison, file inventory, and test results. | Meet & Keval |
+| [Distributed Tracing & LLM Observability](./observability/README.md) | OpenTelemetry distributed tracing, GenAI semantic spans, autonomous agent execution monitoring, and fail-safe Langfuse adapter (#212 / F31). | Meet |
 
 ---
 
@@ -54,7 +64,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, Week 3, and Post-Week 3.
 - [11. Testing & QA](./engineering/11_testing_qa.md) — Test strategies, fixture suites, and coverage policies.
 - [12. Deployment & DevOps](./engineering/12_deployment_devops.md) — Local setup, Docker Compose, and environment variables.
-- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-010).
+- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-018).
 - [14. Changelog](./engineering/14_changelog.md) — Chronological log of major codebase milestones.
 - [15. Authentication & Authorization Security Audit](./engineering/15_authentication_authorization_audit.md) — Timing-safe HMAC, secret validation, and token rotation audit.
 - [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
@@ -71,6 +81,9 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [26. Project Memory Entries & MCP Resources](./engineering/26_project_memory_entries.md) — Episodic Project Memory, Semantic Search & MCP Resources (Issue #217 / F36).
 - [27. Branch, Commit, Push, and Draft PR Publication](./engineering/27_branch_commit_push_draft_pr_publication.md) — Host-Side Git Operations & Credential Isolation Architecture (Issue #207 / F26).
 - [28. Bounded Self-Repair Loop & Anti-Reward Hacking](./engineering/28_bounded_self_repair_loop.md) — LLM-Driven Targeted Repair Synthesis, Reflexion Memory & Anti-Reward Hacking Architecture (Issue #205 / F24).
+- [29. LLM Gateway, Providers & Tool Calling](./engineering/29_llm_gateway_providers_tool_calling_and_telemetry.md) — Unified LLM Gateway, Gemini & Groq Providers, Strict Schemas & Pricing (Issue #209 / F28).
+- [30. Distributed Tracing & LLM Observability](./engineering/30_distributed_tracing_llm_observability_and_agent_monitoring.md) — OpenTelemetry Tracing, GenAI Semantic Spans, Tool Invocations & Langfuse (Issue #212 / F31).
+- [31. Distributed Retrieval Cache & Invalidation](./engineering/31_distributed_retrieval_cache_and_invalidation.md) — Two-Level Hierarchical Query Caching, Redis Distributed Sharing & Sync Invalidation (Issue #218 / F37).
 
 ---
 

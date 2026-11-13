@@ -31,18 +31,50 @@ from app.core.logging import request_id_context
 
 logger = logging.getLogger(__name__)
 
-# Standard pricing estimates (USD per 1M tokens)
-_PRICE_PER_MILLION_INPUT: dict[str, float] = {
-    "gemini": 0.075,
-    "groq": 0.05,
-    "default": 0.075,
+# Model-aware pricing estimates (USD per 1M tokens: input_price, output_price)
+MODEL_TOKEN_PRICING: dict[str, tuple[float, float]] = {
+    # Gemini models
+    "gemini-flash-lite-latest": (0.075, 0.30),
+    "gemini-flash-lite": (0.075, 0.30),
+    "gemini-2.0-flash-lite": (0.075, 0.30),
+    "gemini-flash-latest": (0.075, 0.30),
+    "gemini-1.5-flash": (0.075, 0.30),
+    "gemini-2.0-flash": (0.075, 0.30),
+    "gemini-1.5-pro": (1.25, 5.00),
+    "gemini-pro": (1.25, 5.00),
+    # Groq / OSS models
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.05, 0.20),
+    "llama-3.3-70b-versatile": (0.59, 0.79),
+    "llama-3.1-8b-instant": (0.05, 0.08),
+    "qwen/qwen3.8-27b": (0.05, 0.20),
+    "allam-2-7b": (0.05, 0.15),
 }
 
-_PRICE_PER_MILLION_OUTPUT: dict[str, float] = {
-    "gemini": 0.30,
-    "groq": 0.10,
-    "default": 0.30,
+PROVIDER_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
+    "gemini": (0.075, 0.30),
+    "groq": (0.15, 0.60),
+    "default": (0.075, 0.30),
 }
+
+
+def get_token_pricing(
+    provider: str | None = None, model: str | None = None
+) -> tuple[float, float]:
+    """
+    Resolve (input_price_per_1m, output_price_per_1m) for a given provider and model.
+    Resolves model-specific rates first, falling back to provider defaults.
+    """
+    if model:
+        norm_model = model.strip().lower().removeprefix("models/")
+        if norm_model in MODEL_TOKEN_PRICING:
+            return MODEL_TOKEN_PRICING[norm_model]
+        for k, pricing in MODEL_TOKEN_PRICING.items():
+            if norm_model.startswith(k) or k.startswith(norm_model):
+                return pricing
+
+    prov_key = (provider or "default").strip().lower()
+    return PROVIDER_DEFAULT_PRICING.get(prov_key, PROVIDER_DEFAULT_PRICING["default"])
 
 
 @dataclass
@@ -119,6 +151,19 @@ class StageExecutionTimer:
         if context_utilized is not None:
             self.context_utilized_tokens = context_utilized
 
+    def add_tokens(
+        self,
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        *,
+        provider: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Convenience method to record tokens and optional provider/model in one call."""
+        self.record_tokens(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
+        if provider is not None or model is not None:
+            self.set_model_info(provider=provider, model=model)
+
     def set_model_info(self, *, provider: str | None, model: str | None) -> None:
         """Record provider and model metadata."""
         self.provider = provider
@@ -129,9 +174,9 @@ class StageExecutionTimer:
         total_latency_ms = (time.perf_counter() - self.start_time) * 1000.0
         self.stages_ms["total_latency"] = total_latency_ms
 
-        prov_key = (self.provider or "default").lower()
-        cost_in = (self.prompt_tokens / 1_000_000.0) * _PRICE_PER_MILLION_INPUT.get(prov_key, 0.075)
-        cost_out = (self.completion_tokens / 1_000_000.0) * _PRICE_PER_MILLION_OUTPUT.get(prov_key, 0.30)
+        price_in, price_out = get_token_pricing(self.provider, self.model)
+        cost_in = (self.prompt_tokens / 1_000_000.0) * price_in
+        cost_out = (self.completion_tokens / 1_000_000.0) * price_out
         est_cost = cost_in + cost_out
 
         metrics = StageMetrics(

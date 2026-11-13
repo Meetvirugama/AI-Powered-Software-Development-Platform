@@ -32,6 +32,7 @@ from agent.tools.models import (
 from agent.tools.rate_limiter import RateLimitDecision, ToolRateLimiter
 from agent.tools.registry import UnifiedToolRegistry
 from agent.tools.schema_validator import SchemaValidator
+from ai.security.taint_policy import TaintPolicyEngine
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,41 @@ class ToolRouter:
         """Check authorization with policy engine. Any failure or absence denies access."""
         if self._policy_engine is None:
             return "Policy engine unavailable; execution denied"
+
+        if isinstance(self._policy_engine, TaintPolicyEngine):
+            task_id = (
+                agent_state.get("task_id")
+                if isinstance(agent_state, dict)
+                else getattr(agent_state, "task_id", None)
+            )
+            repository_id = (
+                agent_state.get("repository_id")
+                if isinstance(agent_state, dict)
+                else getattr(agent_state, "repository_id", None)
+            )
+            prov_ids = list(getattr(request, "provenance_ids", []) or [])
+            if getattr(request, "provenance", None):
+                prov_ids.append(request.provenance.provenance_id)
+
+            target_files: list[str] = []
+            if "file_path" in request.arguments:
+                target_files.append(str(request.arguments["file_path"]))
+            elif "path" in request.arguments:
+                target_files.append(str(request.arguments["path"]))
+            elif "files" in request.arguments and isinstance(request.arguments["files"], list):
+                target_files.extend(str(f) for f in request.arguments["files"])
+
+            res = self._policy_engine.evaluate(
+                action_type=request.tool_name,
+                arguments=request.arguments,
+                target_files=target_files,
+                provenance_ids=prov_ids,
+                task_id=task_id,
+                repository_id=repository_id,
+            )
+            if not res.is_allowed:
+                return f"Policy denied tool execution: {res.reason}"
+            return None
 
         if self._policy_context_factory is None:
             return "Policy context unavailable; execution denied"
@@ -458,33 +494,39 @@ class ToolRouter:
             return handler(**request.arguments)
 
         try:
-            timeout_s = getattr(definition, "timeout_s", 60.0)
-            # Enforce execution timeout via ThreadPoolExecutor when configured
-            if timeout_s and timeout_s > 0:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(_invoke_handler)
-                    try:
-                        raw_result = future.result(timeout=timeout_s)
-                    except concurrent.futures.TimeoutError:
-                        elapsed_ms = int((time.perf_counter() - start_time) * 1000)
-                        return ToolResult(
-                            success=False,
-                            error=f"Tool execution timed out after {timeout_s}s",
-                            error_category="TIMEOUT_ERROR",
-                            duration_ms=elapsed_ms,
-                            timed_out=True,
-                        )
-            else:
-                raw_result = _invoke_handler()
+            from app.observability.agent import trace_tool_invocation
+            with trace_tool_invocation(
+                tool_name=request.tool_name,
+                task_id=task_id,
+                metadata={"source": getattr(definition, "source", "unknown") if definition else "unknown"},
+            ):
+                timeout_s = getattr(definition, "timeout_s", 60.0)
+                # Enforce execution timeout via ThreadPoolExecutor when configured
+                if timeout_s and timeout_s > 0:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(_invoke_handler)
+                        try:
+                            raw_result = future.result(timeout=timeout_s)
+                        except concurrent.futures.TimeoutError:
+                            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                            return ToolResult(
+                                success=False,
+                                error=f"Tool execution timed out after {timeout_s}s",
+                                error_category="TIMEOUT_ERROR",
+                                duration_ms=elapsed_ms,
+                                timed_out=True,
+                            )
+                else:
+                    raw_result = _invoke_handler()
 
-            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+                elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
-            # 7. Common Output Boundary
-            return self._post_process_output(
-                raw_result=raw_result,
-                output_schema=definition.output_schema,
-                duration_ms=elapsed_ms,
-            )
+                # 7. Common Output Boundary
+                return self._post_process_output(
+                    raw_result=raw_result,
+                    output_schema=definition.output_schema,
+                    duration_ms=elapsed_ms,
+                )
 
         except Exception as exc:
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)

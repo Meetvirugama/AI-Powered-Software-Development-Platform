@@ -20,10 +20,57 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "CURRENT_SCHEMA_VERSION",
     "deserialize_chunks",
+    "deserialize_retrieval_payload",
     "serialize_chunks",
+    "serialize_retrieval_payload",
 ]
 
 CURRENT_SCHEMA_VERSION = "2.0"
+
+
+def serialize_retrieval_payload(data: Any) -> str:
+    """
+    Serialize any retrieval payload (either list of CodeChunk or generic dict/list)
+    to a versioned JSON string.
+    """
+    if isinstance(data, list) and data and isinstance(data[0], CodeChunk):
+        return serialize_chunks(data)
+
+    payload = {
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "payload_type": "generic",
+        "data": data,
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def deserialize_retrieval_payload(data: str) -> Any:
+    """
+    Deserialize versioned JSON data into either a list of CodeChunk or original generic payload.
+    """
+    if not data:
+        return None
+
+    try:
+        payload = json.loads(data)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        logger.warning("cache_deserialize_json_error", extra={"error": str(exc)})
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    version = payload.get("schema_version")
+    if version != CURRENT_SCHEMA_VERSION:
+        return None
+
+    if payload.get("payload_type") == "generic":
+        return payload.get("data")
+
+    if "chunks" in payload:
+        return deserialize_chunks(data)
+
+    return None
 
 
 def serialize_chunks(chunks: list[CodeChunk]) -> str:

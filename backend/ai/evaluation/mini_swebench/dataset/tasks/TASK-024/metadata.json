@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-024",
+  "repository": "fibonacci_cache",
+  "base_commit": "main@pinned",
+  "issue_title": "Add memoization cache to recursive calculation",
+  "issue_description": "Exponential recursive call tree hangs on n=35. Use functools.lru_cache.",
+  "category": "performance",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "calc_cache.py"
+  ],
+  "license": "MIT"
+}

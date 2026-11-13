@@ -174,12 +174,19 @@ class JWTMiddleware(BaseHTTPMiddleware):
         # CSRF Protection: For state-changing requests authenticated by cookies, validate Origin
         if auth_source == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
-            trusted_origins = {o.rstrip("/") for o in get_settings().cors_origins}
+            app_settings = get_settings()
+            trusted_origins = {o.rstrip("/") for o in app_settings.cors_origins}
+            effective_regex = getattr(app_settings, "effective_cors_origin_regex", app_settings.cors_origin_regex)
             if origin:
-                if origin.rstrip("/") not in trusted_origins:
+                origin_clean = origin.rstrip("/")
+                is_trusted = origin_clean in trusted_origins
+                if not is_trusted and effective_regex:
+                    import re
+                    is_trusted = bool(re.match(effective_regex, origin_clean))
+                if not is_trusted:
                     logger.warning("untrusted_origin_rejected", extra={"origin": origin, "path": request.url.path})
                     return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")
-            elif get_settings().is_production:
+            elif app_settings.is_production:
                 referer = request.headers.get("referer")
                 if referer:
                     from urllib.parse import urlparse

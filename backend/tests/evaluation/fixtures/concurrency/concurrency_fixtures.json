@@ -1,0 +1,40 @@
+[
+  {
+    "fixture_id": "CONC-001",
+    "category": "concurrency",
+    "subcategory": "race_condition",
+    "description": "Unsynchronized shared counter mutation across threads",
+    "source_code": "import threading\n\nglobal_counter = 0\n\ndef increment_counter(amount: int) -> None:\n    \"\"\"Non-atomic increment of global state without mutex.\"\"\"\n    global global_counter\n    current = global_counter\n    # Race window\n    global_counter = current + amount\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["race_condition"],
+    "expected_findings": [
+      {
+        "type": "race_condition",
+        "category": "concurrency",
+        "severity": "high",
+        "line_number": 8,
+        "description": "Unsynchronized global mutation"
+      }
+    ]
+  },
+  {
+    "fixture_id": "CONC-002",
+    "category": "concurrency",
+    "subcategory": "inconsistent_lock_order",
+    "description": "Inconsistent lock acquisition ordering causing deadlock risk",
+    "source_code": "import threading\n\nlock_a = threading.Lock()\nlock_b = threading.Lock()\n\ndef transfer_funds_reverse(acc1, acc2, amt):\n    \"\"\"Acquires lock_b before lock_a (deadlock with normal flow).\"\"\"\n    with lock_b:\n        with lock_a:\n            acc1.balance -= amt\n            acc2.balance += amt\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["deadlock_risk"],
+    "expected_findings": [
+      {
+        "type": "deadlock_risk",
+        "category": "concurrency",
+        "severity": "high",
+        "line_number": 8,
+        "description": "Inverse lock acquisition order"
+      }
+    ]
+  }
+]

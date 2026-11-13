@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-015",
+  "repository": "password_policy",
+  "base_commit": "main@pinned",
+  "issue_title": "Validate password length and digit requirement",
+  "issue_description": "Passwords shorter than 8 chars or missing numbers must be rejected.",
+  "category": "validation",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "passwords.py"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,406 @@
+{
+  "dataset_version": "1.0.0",
+  "task_count": 25,
+  "tasks": [
+    {
+      "task_id": "TASK-001",
+      "repository": "user_service",
+      "base_commit": "main@pinned",
+      "issue_title": "Fix NoneType error in email domain parser",
+      "issue_description": "Calling extract_domain(user) crashes with AttributeError when user['email'] is None or missing.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "user_service.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-002",
+      "repository": "pagination_utils",
+      "base_commit": "main@pinned",
+      "issue_title": "Fix off-by-one error in pagination slice",
+      "issue_description": "get_page_items slice boundary is range(offset, offset + limit + 1) which returns limit + 1 items.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "pagination.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-003",
+      "repository": "tag_accumulator",
+      "base_commit": "main@pinned",
+      "issue_title": "Remove mutable default list argument in add_tag",
+      "issue_description": "def add_tag(tag, tags=[]): shares tag list state across multiple calls.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "tags.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-004",
+      "repository": "auth_policy",
+      "base_commit": "main@pinned",
+      "issue_title": "Fix inverted boolean condition in check_admin_access",
+      "issue_description": "check_admin_access returns True when is_admin is False.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "auth.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-005",
+      "repository": "math_metrics",
+      "base_commit": "main@pinned",
+      "issue_title": "Prevent ZeroDivisionError in compute_percentage",
+      "issue_description": "compute_percentage(count, total) raises ZeroDivisionError when total is 0.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "metrics.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-006",
+      "repository": "timestamp_converter",
+      "base_commit": "main@pinned",
+      "issue_title": "Handle negative timestamp offsets gracefully",
+      "issue_description": "adjust_timestamp crashes when negative offsets exceed baseline timestamp.",
+      "category": "bug_fix",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "timestamps.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-007",
+      "repository": "html_stripper",
+      "base_commit": "main@pinned",
+      "issue_title": "Fix greedy regex match in tag stripper",
+      "issue_description": "re.sub('<.*>', '', text) strips all content between first open and last close tag.",
+      "category": "bug_fix",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "stripper.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-008",
+      "repository": "config_parser",
+      "base_commit": "main@pinned",
+      "issue_title": "Use safe get with fallback for nested configuration",
+      "issue_description": "Nested dictionary access conf['database']['port'] causes KeyError when missing.",
+      "category": "bug_fix",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "config.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-009",
+      "repository": "api_router",
+      "base_commit": "main@pinned",
+      "issue_title": "Return 404 response structure when record is not found",
+      "issue_description": "find_item returns None which causes caller to raise internal 500.",
+      "category": "api_behavior",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "router.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-010",
+      "repository": "query_filter",
+      "base_commit": "main@pinned",
+      "issue_title": "Support optional status query parameter filtering",
+      "issue_description": "filter_records ignores status filter argument when passed.",
+      "category": "api_behavior",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "filter.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-011",
+      "repository": "serializer",
+      "base_commit": "main@pinned",
+      "issue_title": "Serialize datetime to ISO-8601 string in json_dump_helper",
+      "issue_description": "datetime.datetime objects raise TypeError: Object of type datetime is not JSON serializable.",
+      "category": "api_behavior",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "serializer.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-012",
+      "repository": "pagination_bounds",
+      "base_commit": "main@pinned",
+      "issue_title": "Enforce maximum limit in pagination parameters",
+      "issue_description": "Clients can request limit=1000000 causing database resource exhaustion.",
+      "category": "api_behavior",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "bounds.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-013",
+      "repository": "email_validator",
+      "base_commit": "main@pinned",
+      "issue_title": "Validate email address format with domain dot check",
+      "issue_description": "user@localhost passes basic validation but lacks a dot in domain part.",
+      "category": "validation",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "validator.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-014",
+      "repository": "order_validator",
+      "base_commit": "main@pinned",
+      "issue_title": "Reject negative numbers in order quantity",
+      "issue_description": "Orders with quantity <= 0 should raise ValueError.",
+      "category": "validation",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "orders.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-015",
+      "repository": "password_policy",
+      "base_commit": "main@pinned",
+      "issue_title": "Validate password length and digit requirement",
+      "issue_description": "Passwords shorter than 8 chars or missing numbers must be rejected.",
+      "category": "validation",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "passwords.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-016",
+      "repository": "filename_sanitizer",
+      "base_commit": "main@pinned",
+      "issue_title": "Strip directory traversal characters from uploaded filename",
+      "issue_description": "Filenames containing ../ or null bytes must be sanitized.",
+      "category": "validation",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "sanitizer.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-017",
+      "repository": "file_reader",
+      "base_commit": "main@pinned",
+      "issue_title": "Catch specific FileNotFoundError instead of broad exception",
+      "issue_description": "read_text_safely should handle missing file cleanly without catching KeyboardInterrupt.",
+      "category": "error_handling",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "reader.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-018",
+      "repository": "db_connection",
+      "base_commit": "main@pinned",
+      "issue_title": "Ensure database connection close in finally block",
+      "issue_description": "Connection remains open if cursor query raises an error.",
+      "category": "error_handling",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "db_pool.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-019",
+      "repository": "retry_executor",
+      "base_commit": "main@pinned",
+      "issue_title": "Implement maximum retry count on transient failure",
+      "issue_description": "execute_with_retry loops infinitely if operation keeps failing.",
+      "category": "error_handling",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "retry.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-020",
+      "repository": "iso_parser",
+      "base_commit": "main@pinned",
+      "issue_title": "Parse ISO datetime strings with Z suffix",
+      "issue_description": "fromisoformat in older versions fails on trailing Z. Replace Z with +00:00.",
+      "category": "data_processing",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "iso.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-021",
+      "repository": "dict_flattener",
+      "base_commit": "main@pinned",
+      "issue_title": "Flatten nested dictionary with dot notation keys",
+      "issue_description": "Nested dicts {'a': {'b': 1}} should become {'a.b': 1}.",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "flattener.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-022",
+      "repository": "order_dedup",
+      "base_commit": "main@pinned",
+      "issue_title": "Deduplicate list of strings while preserving original order",
+      "issue_description": "list(set(items)) scrambles order. Use dict.fromkeys or ordered set.",
+      "category": "data_processing",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "dedup.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-023",
+      "repository": "tag_matcher",
+      "base_commit": "main@pinned",
+      "issue_title": "Optimize tag set intersection to O(N + M)",
+      "issue_description": "Nested loops for item in list1: if item in list2: creates quadratic overhead.",
+      "category": "performance",
+      "difficulty": "medium",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "tag_matcher.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-024",
+      "repository": "fibonacci_cache",
+      "base_commit": "main@pinned",
+      "issue_title": "Add memoization cache to recursive calculation",
+      "issue_description": "Exponential recursive call tree hangs on n=35. Use functools.lru_cache.",
+      "category": "performance",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "calc_cache.py"
+      ],
+      "license": "MIT"
+    },
+    {
+      "task_id": "TASK-025",
+      "repository": "refactor_helper",
+      "base_commit": "main@pinned",
+      "issue_title": "Extract common string normalization into reusable helper",
+      "issue_description": "Duplicate lowercase and strip logic scattered across search and filter.",
+      "category": "refactoring",
+      "difficulty": "easy",
+      "language": "python",
+      "reproduction_test": "reproduction_test.py",
+      "regression_test": "regression_test.py",
+      "expected_files": [
+        "normalize.py"
+      ],
+      "license": "MIT"
+    }
+  ]
+}

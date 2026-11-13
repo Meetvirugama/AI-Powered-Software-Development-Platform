@@ -18,6 +18,8 @@ from app.schemas.plan import (
     PlanStep,
     StructuredPlan,
 )
+from ai.security.provenance import TrustLevel
+from ai.security.taint_tracker import get_taint_tracker
 
 from ai.context.task_context import TaskContextManifest
 
@@ -67,6 +69,22 @@ class PlanReplanner:
         failed_desc = getattr(failed_step, "description", "") if failed_step else "execution step"
         failed_files = getattr(failed_step, "expected_files", []) if failed_step else context.target_files
 
+        # Derive parent provenance lineage from failed step
+        parent_prov_ids: list[str] = []
+        if failed_step:
+            if getattr(failed_step, "provenance", None):
+                parent_prov_ids.append(failed_step.provenance.provenance_id)
+            parent_prov_ids.extend(getattr(failed_step, "provenance_ids", []) or [])
+
+        tracker = get_taint_tracker()
+        rec_prov = tracker.propagate(
+            parent_ids=parent_prov_ids,
+            transformation="replan_recovery",
+            trust_level=TrustLevel.MODEL_GENERATED,
+            source_type="plan_step",
+            metadata={"recovery_for_step": failed_step_id, "failure_reason": redact(failure_reason[:100])},
+        )
+
         recovery_step = PlanStep(
             step_id=recovery_step_id,
             title=f"Repair and recover: {getattr(failed_step, 'title', failed_step_id)}",
@@ -80,6 +98,9 @@ class PlanReplanner:
             depends_on=[sid for sid in completed_step_ids if sid != failed_step_id],
             tests_to_run=getattr(failed_step, "tests_to_run", []) or [context.test_command],
             verification=[f"Resolution of failure verified: {redact(failure_reason[:80])}"],
+            provenance=rec_prov,
+            provenance_ids=[rec_prov.provenance_id] + parent_prov_ids,
+            taint_status=rec_prov.is_tainted(),
         )
         new_steps.append(recovery_step)
 

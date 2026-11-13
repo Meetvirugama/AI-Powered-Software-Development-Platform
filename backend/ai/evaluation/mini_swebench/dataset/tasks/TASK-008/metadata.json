@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-008",
+  "repository": "config_parser",
+  "base_commit": "main@pinned",
+  "issue_title": "Use safe get with fallback for nested configuration",
+  "issue_description": "Nested dictionary access conf['database']['port'] causes KeyError when missing.",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "config.py"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,78 @@
+[
+  {
+    "fixture_id": "DEF-001",
+    "category": "defect_detection",
+    "subcategory": "boundary_condition",
+    "description": "Off-by-one loop indexing exceeding array length",
+    "source_code": "def process_items(items: list[str]) -> None:\n    \"\"\"Iterate over items with off-by-one boundary defect.\"\"\"\n    for i in range(0, len(items) + 1):\n        print(items[i])\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["off_by_one"],
+    "expected_findings": [
+      {
+        "type": "off_by_one",
+        "category": "logic_error",
+        "severity": "high",
+        "line_number": 3,
+        "description": "Index range exceeds valid bounds by 1"
+      }
+    ]
+  },
+  {
+    "fixture_id": "DEF-002",
+    "category": "defect_detection",
+    "subcategory": "null_safety",
+    "description": "Unchecked NoneType dereference causing AttributeError",
+    "source_code": "def extract_domain(user_record: dict) -> str:\n    \"\"\"Access nested email without checking for None.\"\"\"\n    email = user_record.get('email')\n    return email.split('@')[1]\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["null_safety"],
+    "expected_findings": [
+      {
+        "type": "null_safety",
+        "category": "runtime_error",
+        "severity": "high",
+        "line_number": 4,
+        "description": "email might be None when split is called"
+      }
+    ]
+  },
+  {
+    "fixture_id": "DEF-003",
+    "category": "defect_detection",
+    "subcategory": "mutable_default",
+    "description": "Mutable list default argument shared across invocations",
+    "source_code": "def append_tag(tag: str, tag_list: list = []) -> list:\n    \"\"\"Append item to mutable default list argument.\"\"\"\n    tag_list.append(tag)\n    return tag_list\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["mutable_default"],
+    "expected_findings": [
+      {
+        "type": "mutable_default",
+        "category": "logic_error",
+        "severity": "medium",
+        "line_number": 1,
+        "description": "Default parameter value is a mutable list"
+      }
+    ]
+  },
+  {
+    "fixture_id": "DEF-004",
+    "category": "defect_detection",
+    "subcategory": "condition_inversion",
+    "description": "Inverted boolean condition allowing unauthorized bypass",
+    "source_code": "def can_access_admin_panel(user: dict) -> bool:\n    \"\"\"Inverted permission check.\"\"\"\n    if not user.get('is_admin', False):\n        return True\n    return False\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["inverted_condition"],
+    "expected_findings": [
+      {
+        "type": "inverted_condition",
+        "category": "logic_error",
+        "severity": "high",
+        "line_number": 4,
+        "description": "Returns True when is_admin is False"
+      }
+    ]
+  }
+]

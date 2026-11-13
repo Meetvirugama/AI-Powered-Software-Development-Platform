@@ -60,3 +60,4 @@
 | **Phase 9** | Database models, audit logging & migrations | **P1** | In Scope |
 | **Phase 10** | Comprehensive testing & documentation | **P0/P1** | In Scope |
 | **Phase 11** | Candidate patch evaluation (Agentless pattern) | **P3** | Deferred to Future Work |
+

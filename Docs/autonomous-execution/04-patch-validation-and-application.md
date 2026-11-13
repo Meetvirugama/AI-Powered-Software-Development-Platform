@@ -69,3 +69,4 @@ Because stages A through G operate strictly in memory:
 1. Workspace files on disk are never left in a partially modified or corrupted state.
 2. If any validation stage fails, the disk remains 100% clean and unmodified.
 3. Only upon complete pass across all stages is atomic disk write performed.
+

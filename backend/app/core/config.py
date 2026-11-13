@@ -111,7 +111,9 @@ class Settings(BaseSettings):
     retrieval_hnsw_iterative_scan: str = "relaxed_order"
 
     retrieval_cache_enabled: bool = True
+    retrieval_redis_cache_enabled: bool = True
     retrieval_cache_ttl_seconds: int = 300
+    retrieval_cache_max_local_entries: int = 1000
     retrieval_cache_max_payload_bytes: int = 500_000
 
     retrieval_code_lexical_enabled: bool = True
@@ -127,6 +129,27 @@ class Settings(BaseSettings):
     reranker_backend: str = "pytorch"
     reranker_onnx_enabled: bool = False
     reranker_quantization: str = "none"
+
+    # --- Distributed Tracing & Observability (F31 - Issue #212) -----------
+    otel_enabled: bool = False
+    otel_service_name: str = "ai-dev-platform"
+    otel_service_version: str = "1.0.0"
+    otel_environment: str = "development"
+    otel_exporter_otlp_endpoint: str | None = None
+    otel_exporter_otlp_headers: str | None = None
+    otel_traces_exporter: str = "none"  # "otlp", "console", "none"
+    otel_metrics_enabled: bool = False
+    otel_trace_sample_rate: float = 1.0
+
+    # --- Langfuse LLM Observability ---------------------------------------
+    langfuse_enabled: bool = False
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+
+    # --- Privacy & Grounding Controls -------------------------------------
+    observability_capture_prompts: bool = False
+    observability_capture_responses: bool = False
 
     @property
     def active_chat_model(self) -> str:
@@ -200,7 +223,9 @@ class Settings(BaseSettings):
     # Comma-separated list of frontend origins allowed to call the API with
     # cookies. Never use "*" here: browsers reject "*" with credentials, and it
     # would let any website read API responses on a logged-in user's behalf.
-    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174"
+    cors_allowed_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:3000,http://127.0.0.1:3000"
+    )
     cors_origin_regex: str | None = None
     frontend_url: str | None = None
     rate_limit_enabled: bool = True
@@ -253,6 +278,15 @@ class Settings(BaseSettings):
             if clean_front and clean_front not in origins:
                 origins.append(clean_front)
         return [o for o in origins if o != "*"]
+
+    @property
+    def effective_cors_origin_regex(self) -> str | None:
+        """In development mode, permit any localhost / 127.0.0.1 port to avoid dev port collision CORS issues."""
+        if self.cors_origin_regex is not None:
+            return self.cors_origin_regex
+        if not self.is_production:
+            return r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$"
+        return None
 
     @property
     def effective_cookie_samesite(self) -> str:
@@ -347,10 +381,13 @@ class Settings(BaseSettings):
                 self.sandbox_backend = "container"
             clean_backend = (self.sandbox_backend or "").strip().lower()
             if clean_backend in ("local", "subprocess", "localsubprocess"):
-                raise ValueError(
-                    "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
-                    "SANDBOX_BACKEND must be 'container' or 'runner'."
-                )
+                if "sandbox_backend" in self.model_fields_set:
+                    raise ValueError(
+                        "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
+                        "SANDBOX_BACKEND must be 'container' or 'runner'."
+                    )
+                else:
+                    self.sandbox_backend = "container"
             if clean_backend == "runner":
                 if not self.runner_base_url or not self.runner_base_url.strip():
                     raise ValueError(

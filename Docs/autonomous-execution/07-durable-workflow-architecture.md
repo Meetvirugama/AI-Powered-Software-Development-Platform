@@ -69,3 +69,4 @@ Each step is decorated with `@dbos_step()`, recording its execution status and o
 Each step transition creates a secret-scrubbed `TaskCheckpoint` in the database. If a catastrophic system crash occurs:
 - The persistent checkpoint preserves the verified revision, plan version, step records, and remaining repair budget.
 - The `TaskRecovery` service inspects the latest checkpoint to resume or roll back safely without duplicate side-effects.
+

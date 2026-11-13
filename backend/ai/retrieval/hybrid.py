@@ -110,11 +110,17 @@ class HybridRetriever(Retriever):
         # Step 1: Detect query intent
         intent = query_intent or self._fusion.detect_query_intent(query)
 
-        # Step 2: Check Redis Cache
+        # Step 2: Check Two-Level / Distributed Cache
+        effective_index_gen = index_generation
+        if (effective_index_gen == 0 or effective_index_gen == "0") and self._cache is not None:
+            from .cache_keys import get_repository_index_version_async
+            client = getattr(self._cache, "_get_client", lambda: None)() if hasattr(self._cache, "_get_client") else None
+            effective_index_gen = await get_repository_index_version_async(repo_uuid, client)
+
         cache_key = build_retrieval_cache_key(
             query=query,
             repository_id=repo_uuid,
-            index_generation=index_generation,
+            index_generation=effective_index_gen,
             intent=str(intent),
             top_k=top_k,
             vector_top_k=self._vector_top_k,

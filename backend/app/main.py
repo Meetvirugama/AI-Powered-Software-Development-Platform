@@ -66,8 +66,9 @@ cors_middleware_kwargs: dict[str, Any] = {
     "expose_headers": ["X-Request-ID", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
     "max_age": 600,
 }
-if settings.cors_origin_regex:
-    cors_middleware_kwargs["allow_origin_regex"] = settings.cors_origin_regex
+effective_cors_regex = getattr(settings, "effective_cors_origin_regex", settings.cors_origin_regex)
+if effective_cors_regex:
+    cors_middleware_kwargs["allow_origin_regex"] = effective_cors_regex
 
 app.add_middleware(
     CORSMiddleware,

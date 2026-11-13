@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-011",
+  "repository": "serializer",
+  "base_commit": "main@pinned",
+  "issue_title": "Serialize datetime to ISO-8601 string in json_dump_helper",
+  "issue_description": "datetime.datetime objects raise TypeError: Object of type datetime is not JSON serializable.",
+  "category": "api_behavior",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "serializer.py"
+  ],
+  "license": "MIT"
+}

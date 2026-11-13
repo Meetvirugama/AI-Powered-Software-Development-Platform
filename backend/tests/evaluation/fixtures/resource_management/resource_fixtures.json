@@ -1,0 +1,40 @@
+[
+  {
+    "fixture_id": "RES-001",
+    "category": "resource_management",
+    "subcategory": "unclosed_file",
+    "description": "File handle opened without close or context manager",
+    "source_code": "def export_report_csv(filepath: str, rows: list) -> None:\n    \"\"\"File opened directly and not closed.\"\"\"\n    f = open(filepath, 'w')\n    for row in rows:\n        f.write(','.join(row) + '\\n')\n    # Missing f.close() or with open\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["unclosed_resource"],
+    "expected_findings": [
+      {
+        "type": "unclosed_resource",
+        "category": "resource_leak",
+        "severity": "medium",
+        "line_number": 3,
+        "description": "File handle not closed"
+      }
+    ]
+  },
+  {
+    "fixture_id": "RES-002",
+    "category": "resource_management",
+    "subcategory": "socket_leak",
+    "description": "Raw socket connection created without shutdown/close on exception",
+    "source_code": "import socket\n\ndef ping_daemon(host: str, port: int) -> bool:\n    \"\"\"Raw socket leak on socket error.\"\"\"\n    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n    s.connect((host, port))\n    s.sendall(b'PING\\n')\n    resp = s.recv(1024)\n    return b'PONG' in resp\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["socket_leak"],
+    "expected_findings": [
+      {
+        "type": "socket_leak",
+        "category": "resource_leak",
+        "severity": "medium",
+        "line_number": 5,
+        "description": "Socket connection not explicitly closed"
+      }
+    ]
+  }
+]

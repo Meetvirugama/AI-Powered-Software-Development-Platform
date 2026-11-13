@@ -83,3 +83,4 @@ In `handleRunAutoPilot`:
 - If the server accepts `HTTP 202`, sets `isAutoPilotRunning(true)` and begins polling status.
 - Seamlessly falls back to synchronous execution if an older backend version does not support async execution.
 - On browser refresh or reconnection, queries `getWorkflowStatus` to restore active execution state and progress bars.
+

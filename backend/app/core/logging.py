@@ -15,6 +15,8 @@ from starlette.responses import Response
 from app.core.secret_redaction import SecretRedactingFilter
 
 request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
+analysis_run_id_context: ContextVar[str | None] = ContextVar("analysis_run_id", default=None)
+agent_execution_id_context: ContextVar[str | None] = ContextVar("agent_execution_id", default=None)
 
 
 class JsonFormatter(logging.Formatter):
@@ -29,6 +31,22 @@ class JsonFormatter(logging.Formatter):
         }
         if request_id := request_id_context.get():
             payload["request_id"] = request_id
+        if run_id := analysis_run_id_context.get():
+            payload["analysis_run_id"] = run_id
+        if agent_id := agent_execution_id_context.get():
+            payload["agent_execution_id"] = agent_id
+
+        # Enrich with active OpenTelemetry trace context if present
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span and span.is_recording():
+                ctx = span.get_span_context()
+                if ctx and ctx.is_valid:
+                    payload["trace_id"] = format(ctx.trace_id, "032x")
+                    payload["span_id"] = format(ctx.span_id, "016x")
+        except Exception:
+            pass
         if record.exc_info:
             if not record.exc_text:
                 record.exc_text = self.formatException(record.exc_info)

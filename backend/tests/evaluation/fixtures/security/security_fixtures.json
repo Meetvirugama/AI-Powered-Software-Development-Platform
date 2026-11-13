@@ -1,0 +1,97 @@
+[
+  {
+    "fixture_id": "SEC-001",
+    "category": "security",
+    "subcategory": "sql_injection",
+    "description": "SQL injection via direct string interpolation in query",
+    "source_code": "def query_user_records(cursor, username: str):\n    \"\"\"Vulnerable SQL query construction.\"\"\"\n    query = f\"SELECT id, name, role FROM users WHERE username = '{username}'\"\n    return cursor.execute(query).fetchall()\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["sql_injection"],
+    "expected_findings": [
+      {
+        "type": "sql_injection",
+        "category": "security",
+        "severity": "critical",
+        "line_number": 3,
+        "description": "Unescaped string formatting in SQL statement"
+      }
+    ]
+  },
+  {
+    "fixture_id": "SEC-002",
+    "category": "security",
+    "subcategory": "command_injection",
+    "description": "Arbitrary command execution via shell=True in subprocess",
+    "source_code": "import subprocess\n\ndef run_diagnostics(target_host: str) -> str:\n    \"\"\"Command injection through shell execution.\"\"\"\n    cmd = f\"ping -c 1 {target_host}\"\n    res = subprocess.check_output(cmd, shell=True)\n    return res.decode()\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["command_injection"],
+    "expected_findings": [
+      {
+        "type": "command_injection",
+        "category": "security",
+        "severity": "critical",
+        "line_number": 5,
+        "description": "subprocess.check_output with shell=True and unvalidated input"
+      }
+    ]
+  },
+  {
+    "fixture_id": "SEC-003",
+    "category": "security",
+    "subcategory": "hardcoded_secret",
+    "description": "Hardcoded AWS secret key in source file",
+    "source_code": "def get_aws_credentials():\n    \"\"\"Hardcoded credential leakage.\"\"\"\n    aws_key = 'AKIAIOSFODNN7EXAMPLE'\n    aws_secret = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'\n    return {'key': aws_key, 'secret': aws_secret}\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["hardcoded_secret"],
+    "expected_findings": [
+      {
+        "type": "hardcoded_secret",
+        "category": "security",
+        "severity": "critical",
+        "line_number": 3,
+        "description": "Plaintext AWS Access Key detected in code"
+      }
+    ]
+  },
+  {
+    "fixture_id": "SEC-004",
+    "category": "security",
+    "subcategory": "path_traversal",
+    "description": "Arbitrary file read via unsanitized file path concatenation",
+    "source_code": "import os\n\ndef load_user_document(base_dir: str, filename: str) -> bytes:\n    \"\"\"Path traversal vulnerability.\"\"\"\n    full_path = os.path.join(base_dir, filename)\n    with open(full_path, 'rb') as f:\n        return f.read()\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["path_traversal"],
+    "expected_findings": [
+      {
+        "type": "path_traversal",
+        "category": "security",
+        "severity": "high",
+        "line_number": 5,
+        "description": "Filename parameter allows directory traversal (../)"
+      }
+    ]
+  },
+  {
+    "fixture_id": "SEC-005",
+    "category": "security",
+    "subcategory": "insecure_eval",
+    "description": "Execution of arbitrary user-supplied Python expression via eval",
+    "source_code": "def evaluate_expression(math_input: str):\n    \"\"\"Dangerous eval on untrusted user input.\"\"\"\n    return eval(math_input)\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["dangerous_eval"],
+    "expected_findings": [
+      {
+        "type": "dangerous_eval",
+        "category": "security",
+        "severity": "critical",
+        "line_number": 3,
+        "description": "eval() executes untrusted string code"
+      }
+    ]
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-023",
+  "repository": "tag_matcher",
+  "base_commit": "main@pinned",
+  "issue_title": "Optimize tag set intersection to O(N + M)",
+  "issue_description": "Nested loops for item in list1: if item in list2: creates quadratic overhead.",
+  "category": "performance",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "tag_matcher.py"
+  ],
+  "license": "MIT"
+}

@@ -95,3 +95,4 @@ class WorkflowStatusResponse(BaseModel):
     updated_at: str
     completed_at: str | None = None
     status_url: str = ""
+

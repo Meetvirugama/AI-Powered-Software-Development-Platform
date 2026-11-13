@@ -15,7 +15,7 @@ Features:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 import copy
 from itertools import cycle
 import json
@@ -34,6 +34,7 @@ from .schemas import (
     LLMRateLimitError,
     LLMRequest,
     LLMResponse,
+    LLMResponseChunk,
     LLMTimeoutError,
     LLMToolCall,
     LLMToolRequest,
@@ -136,7 +137,7 @@ class GeminiProvider(LLMProvider):
     def __init__(
         self,
         api_keys: Sequence[str],
-        default_model: str = "gemini-flash-latest",
+        default_model: str = "gemini-flash-lite-latest",
         timeout_seconds: float = 30.0,
         max_retries: int = 3,
         client: httpx.AsyncClient | None = None,
@@ -159,6 +160,17 @@ class GeminiProvider(LLMProvider):
     def provider_name(self) -> str:
         return "gemini"
 
+    def _resolve_model(self, model: str | None) -> str:
+        """Resolve requested model identifier to canonical Gemini model name."""
+        requested = (model or "").strip()
+        if (
+            not requested
+            or requested == "default"
+            or requested.startswith(("gpt-", "openai/"))
+        ):
+            return self._default_model
+        return requested.removeprefix("models/")
+
     @property
     def default_model(self) -> str:
         return self._default_model
@@ -177,7 +189,7 @@ class GeminiProvider(LLMProvider):
         return next(self._key_cycle)
 
     def _build_payload(self, request: LLMRequest) -> tuple[dict[str, Any], str]:
-        """Convert LLMRequest into Gemini JSON payload."""
+        """Convert LLMRequest into Gemini JSON payload including messages, schema, and tools."""
         system_instructions: list[str] = []
         contents: list[dict[str, Any]] = []
 
@@ -187,18 +199,36 @@ class GeminiProvider(LLMProvider):
             elif msg.role == "user":
                 contents.append({"role": "user", "parts": [{"text": msg.content}]})
             elif msg.role == "assistant":
-                contents.append({"role": "model", "parts": [{"text": msg.content}]})
+                parts: list[dict[str, Any]] = []
+                if msg.content:
+                    parts.append({"text": msg.content})
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
+                if not parts:
+                    parts.append({"text": ""})
+                contents.append({"role": "model", "parts": parts})
+            elif msg.role == "tool":
+                resp_content: Any
+                try:
+                    resp_content = json.loads(msg.content)
+                except (json.JSONDecodeError, TypeError):
+                    resp_content = {"output": msg.content}
+                fr_part = {
+                    "functionResponse": {
+                        "name": msg.name or "tool",
+                        "response": {"name": msg.name or "tool", "content": resp_content},
+                    }
+                }
+                if contents and contents[-1].get("role") == "function":
+                    contents[-1]["parts"].append(fr_part)
+                else:
+                    contents.append({
+                        "role": "function",
+                        "parts": [fr_part],
+                    })
 
-        requested_model = (request.model or "").strip()
-        if (
-            not requested_model
-            or requested_model == "default"
-            or requested_model.startswith(("gpt-", "openai/"))
-        ):
-            model_name = self._default_model
-        else:
-            model_name = requested_model
-        model_name = model_name.removeprefix("models/")
+        model_name = self._resolve_model(request.model)
 
         payload: dict[str, Any] = {"contents": contents}
 
@@ -207,20 +237,38 @@ class GeminiProvider(LLMProvider):
                 "parts": [{"text": "\n\n".join(system_instructions)}]
             }
 
+        # Tool declarations
+        if request.tools:
+            function_declarations = [t.to_gemini_dict() for t in request.tools]
+            payload["tools"] = [{"functionDeclarations": function_declarations}]
+
+        if request.tool_choice:
+            tc = request.tool_choice
+            if isinstance(tc, str):
+                mode_map = {"auto": "AUTO", "none": "NONE", "required": "ANY", "any": "ANY"}
+                mode = mode_map.get(tc.lower(), "AUTO")
+                payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
+            elif isinstance(tc, dict):
+                payload["toolConfig"] = tc
+
         generation_config: dict[str, Any] = {}
         if request.temperature is not None:
             generation_config["temperature"] = request.temperature
         if request.max_tokens is not None:
             generation_config["maxOutputTokens"] = request.max_tokens
-        if getattr(request, "response_schema", None) is not None or getattr(request, "response_format", None):
-            generation_config["responseMimeType"] = "application/json"
-            if getattr(request, "response_schema", None) is not None:
-                try:
-                    generation_config["responseSchema"] = build_strict_gemini_response_schema(
-                        request.response_schema  # type: ignore[arg-type]
-                    )
-                except Exception:
-                    pass
+
+        # Structured schema output (only when tools are not used, as Gemini does not allow simultaneous responseSchema with tools)
+        schema_mode = getattr(request, "response_schema_mode", "json")
+        if not request.tools and schema_mode != "none":
+            if getattr(request, "response_schema", None) is not None or getattr(request, "response_format", None):
+                generation_config["responseMimeType"] = "application/json"
+                if schema_mode == "strict" and getattr(request, "response_schema", None) is not None:
+                    try:
+                        generation_config["responseSchema"] = build_strict_gemini_response_schema(
+                            request.response_schema  # type: ignore[arg-type]
+                        )
+                    except Exception as exc:
+                        logger.debug("gemini_schema_build_failed: %s", exc)
 
         if generation_config:
             payload["generationConfig"] = generation_config
@@ -228,7 +276,7 @@ class GeminiProvider(LLMProvider):
         return payload, model_name
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
-        """Execute chat completion against Gemini API with retry & rotation."""
+        """Execute chat completion against Gemini API with retry, tool-calling, & key rotation."""
         async with self._semaphore:
             payload, model = self._build_payload(request)
             client = self._get_client()
@@ -270,186 +318,6 @@ class GeminiProvider(LLMProvider):
 
                         candidate = candidates[0]
                         content_parts = candidate.get("content", {}).get("parts", [])
-                        content_text = "".join(p.get("text", "") for p in content_parts)
-
-                        usage = data.get("usageMetadata", {})
-                        input_tokens = usage.get("promptTokenCount", 0)
-                        output_tokens = usage.get("candidatesTokenCount", 0)
-
-                        if request.response_schema is not None:
-                            self._validate_structured_output(content_text, request.response_schema)
-
-                        return LLMResponse(
-                            content=content_text,
-                            model=model,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            latency_ms=round(latency_ms, 2),
-                        )
-
-                    if response.status_code in (401, 403):
-                        error_msg = _redact_key(response.text, current_key)
-                        logger.error("gemini_auth_failed", extra={"status": response.status_code, "body": error_msg[:200]})
-                        raise LLMAuthenticationError(
-                            f"Gemini authentication failed (HTTP {response.status_code})",
-                            status_code=response.status_code,
-                            provider=self.provider_name,
-                        )
-
-                    if response.status_code == 429:
-                        logger.warning("gemini_rate_limited", extra={"attempt": attempt + 1})
-                        last_error = LLMRateLimitError(
-                            "Gemini rate limit exceeded (HTTP 429)",
-                            provider=self.provider_name,
-                        )
-                        await asyncio.sleep(0.1)
-                        continue
-
-                    if response.status_code in _RETRYABLE_STATUS_CODES:
-                        safe_body = _redact_key(response.text[:200], current_key)
-                        logger.warning("gemini_transient_error", extra={"status": response.status_code, "attempt": attempt + 1})
-                        last_error = LLMUnavailableError(
-                            f"Gemini service error (HTTP {response.status_code}): {safe_body}",
-                            status_code=response.status_code,
-                            provider=self.provider_name,
-                        )
-                        await asyncio.sleep(1.0 * (attempt + 1))
-                        continue
-
-                    safe_body = _redact_key(response.text[:300], current_key)
-                    raise LLMError(
-                        f"Gemini API error (HTTP {response.status_code}): {safe_body}",
-                        status_code=response.status_code,
-                        provider=self.provider_name,
-                    )
-
-                except httpx.TimeoutException as exc:
-                    safe_err = _redact_key(str(exc), current_key)
-                    last_error = LLMTimeoutError(f"Gemini request timed out: {safe_err}", provider=self.provider_name)
-                    logger.warning("gemini_timeout", extra={"attempt": attempt + 1, "error": safe_err})
-                    await asyncio.sleep(0.5)
-                except httpx.TransportError as exc:
-                    safe_err = _redact_key(str(exc), current_key)
-                    last_error = LLMUnavailableError(f"Gemini network error: {safe_err}", provider=self.provider_name)
-                    logger.warning("gemini_network_error", extra={"attempt": attempt + 1, "error": safe_err})
-                    await asyncio.sleep(0.5)
-
-            if isinstance(last_error, LLMError):
-                raise last_error
-            raise LLMUnavailableError(f"Gemini failed after {self._max_retries} attempts.", provider=self.provider_name)
-
-    def _build_tool_payload(self, request: LLMToolRequest) -> tuple[dict[str, Any], str]:
-        """Convert LLMToolRequest into Gemini JSON payload including function declarations."""
-        system_instructions: list[str] = []
-        contents: list[dict[str, Any]] = []
-
-        for msg in request.messages:
-            if msg.role == "system":
-                system_instructions.append(msg.content)
-            elif msg.role == "user":
-                contents.append({"role": "user", "parts": [{"text": msg.content}]})
-            elif msg.role == "assistant":
-                parts: list[dict[str, Any]] = []
-                if msg.content:
-                    parts.append({"text": msg.content})
-                if msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
-                if not parts:
-                    parts.append({"text": ""})
-                contents.append({"role": "model", "parts": parts})
-            elif msg.role == "tool":
-                resp_content: Any
-                try:
-                    resp_content = json.loads(msg.content)
-                except (json.JSONDecodeError, TypeError):
-                    resp_content = {"output": msg.content}
-                fr_part = {
-                    "functionResponse": {
-                        "name": msg.name or "tool",
-                        "response": {"name": msg.name or "tool", "content": resp_content},
-                    }
-                }
-                if contents and contents[-1].get("role") == "function":
-                    contents[-1]["parts"].append(fr_part)
-                else:
-                    contents.append({
-                        "role": "function",
-                        "parts": [fr_part],
-                    })
-
-        requested_model = (request.model or "").strip()
-        if (
-            not requested_model
-            or requested_model == "default"
-            or requested_model.startswith(("gpt-", "openai/"))
-        ):
-            model_name = self._default_model
-        else:
-            model_name = requested_model
-        model_name = model_name.removeprefix("models/")
-
-        payload: dict[str, Any] = {"contents": contents}
-
-        if system_instructions:
-            payload["system_instruction"] = {
-                "parts": [{"text": "\n\n".join(system_instructions)}]
-            }
-
-        if request.tools:
-            function_declarations = [t.to_gemini_dict() for t in request.tools]
-            payload["tools"] = [{"functionDeclarations": function_declarations}]
-
-        if request.tool_choice:
-            tc = request.tool_choice
-            if isinstance(tc, str):
-                mode_map = {"auto": "AUTO", "none": "NONE", "required": "ANY", "any": "ANY"}
-                mode = mode_map.get(tc.lower(), "AUTO")
-                payload["toolConfig"] = {"functionCallingConfig": {"mode": mode}}
-            elif isinstance(tc, dict):
-                payload["toolConfig"] = tc
-
-        generation_config: dict[str, Any] = {}
-        if request.temperature is not None:
-            generation_config["temperature"] = request.temperature
-        if request.max_tokens is not None:
-            generation_config["maxOutputTokens"] = request.max_tokens
-
-        if generation_config:
-            payload["generationConfig"] = generation_config
-
-        return payload, model_name
-
-    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
-        """Execute chat completion with tool-calling capabilities against Gemini REST API."""
-        async with self._semaphore:
-            payload, model = self._build_tool_payload(request)
-            client = self._get_client()
-
-            last_error: Exception | None = None
-            start_time = time.monotonic()
-
-            for attempt in range(self._max_retries):
-                current_key = self._next_key()
-                url = f"{_GEMINI_API_BASE}/{model}:generateContent"
-                headers = {"x-goog-api-key": current_key}
-
-                try:
-                    response = await client.post(url, json=payload, headers=headers)
-
-                    if response.status_code == 200:
-                        data = response.json()
-                        latency_ms = (time.monotonic() - start_time) * 1000.0
-
-                        candidates = data.get("candidates", [])
-                        if not candidates:
-                            raise LLMValidationError(
-                                f"Gemini returned 0 candidates: {data}",
-                                provider=self.provider_name,
-                            )
-
-                        candidate = candidates[0]
-                        content_parts = candidate.get("content", {}).get("parts", [])
                         text_fragments: list[str] = []
                         tool_calls: list[LLMToolCall] = []
 
@@ -474,18 +342,23 @@ class GeminiProvider(LLMProvider):
                                     )
                                 )
 
+                        content_text = "".join(text_fragments)
+                        finish_reason = candidate.get("finishReason")
                         usage = data.get("usageMetadata", {})
                         input_tokens = usage.get("promptTokenCount", 0)
                         output_tokens = usage.get("candidatesTokenCount", 0)
 
-                        return LLMToolResponse(
-                            content="".join(text_fragments),
-                            tool_calls=tool_calls,
+                        if request.response_schema is not None and not tool_calls:
+                            self._validate_structured_output(content_text, request.response_schema)
+
+                        return LLMResponse(
+                            content=content_text,
                             model=model,
                             input_tokens=input_tokens,
                             output_tokens=output_tokens,
                             latency_ms=round(latency_ms, 2),
-                            finish_reason=candidate.get("finishReason"),
+                            tool_calls=tool_calls if tool_calls else None,
+                            finish_reason=finish_reason,
                             provider=self.provider_name,
                         )
 
@@ -539,6 +412,99 @@ class GeminiProvider(LLMProvider):
             if isinstance(last_error, LLMError):
                 raise last_error
             raise LLMUnavailableError(f"Gemini failed after {self._max_retries} attempts.", provider=self.provider_name)
+
+    async def generate_stream(
+        self, request: LLMRequest
+    ) -> AsyncIterator[LLMResponseChunk]:
+        """Stream tokens from Gemini SSE endpoint (:streamGenerateContent?alt=sse)."""
+        async with self._semaphore:
+            payload, model = self._build_payload(request)
+            client = self._get_client()
+            url = f"{_GEMINI_API_BASE}/{model}:streamGenerateContent?alt=sse"
+
+            for attempt in range(self._max_retries):
+                current_key = self._next_key()
+                headers = {
+                    "x-goog-api-key": current_key,
+                    "Accept": "text/event-stream",
+                }
+                try:
+                    async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                        if resp.status_code != 200:
+                            if resp.status_code == 429 and attempt + 1 < self._max_retries:
+                                await asyncio.sleep(0.1)
+                                continue
+                            body = await resp.aread()
+                            safe_body = _redact_key(body.decode("utf-8", errors="replace")[:300], current_key)
+                            raise LLMUnavailableError(
+                                f"Gemini stream error (HTTP {resp.status_code}): {safe_body}",
+                                status_code=resp.status_code,
+                                provider=self.provider_name,
+                            )
+
+                        chunk_idx = 0
+                        async for line in resp.aiter_lines():
+                            line_str = line.strip()
+                            if not line_str.startswith("data:"):
+                                continue
+                            raw_json = line_str.removeprefix("data:").strip()
+                            if not raw_json:
+                                continue
+                            try:
+                                chunk_data = json.loads(raw_json)
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+
+                            candidates = chunk_data.get("candidates", [])
+                            if not candidates:
+                                continue
+                            cand = candidates[0]
+                            parts = cand.get("content", {}).get("parts", [])
+                            text_delta = "".join(p.get("text", "") for p in parts if "text" in p)
+                            finish_reason = cand.get("finishReason")
+                            usage = chunk_data.get("usageMetadata", {})
+
+                            yield LLMResponseChunk(
+                                delta=text_delta,
+                                index=chunk_idx,
+                                finish_reason=finish_reason,
+                                model=model,
+                                provider=self.provider_name,
+                                input_tokens=usage.get("promptTokenCount", 0),
+                                output_tokens=usage.get("candidatesTokenCount", 0),
+                            )
+                            chunk_idx += 1
+                        return
+                except (httpx.TimeoutException, httpx.TransportError) as exc:
+                    if attempt + 1 >= self._max_retries:
+                        raise LLMUnavailableError(f"Gemini stream failed: {exc}", provider=self.provider_name) from exc
+                    await asyncio.sleep(0.5)
+
+    async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
+        """Execute chat completion with tool-calling capabilities against Gemini REST API."""
+        llm_req = LLMRequest.create(
+            model=request.model,
+            messages=request.messages,
+            tools=request.tools,
+            tool_choice=request.tool_choice,
+            temperature=request.temperature,
+            max_tokens=request.max_tokens,
+            allow_fallback=request.allow_fallback,
+            request_id=request.request_id,
+            estimated_tokens=request.estimated_tokens,
+            feature=request.feature,
+        )
+        resp = await self.generate(llm_req)
+        return LLMToolResponse(
+            content=resp.content,
+            tool_calls=resp.tool_calls or [],
+            model=resp.model,
+            input_tokens=resp.input_tokens,
+            output_tokens=resp.output_tokens,
+            latency_ms=resp.latency_ms,
+            finish_reason=resp.finish_reason,
+            provider=self.provider_name,
+        )
 
     async def aclose(self) -> None:
         if self._client is not None and not self._client.is_closed:

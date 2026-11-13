@@ -1,0 +1,87 @@
+# =============================================================================
+# Nightly AI Quality & Benchmark Gating Workflow (Issue #210 / F29)
+#
+# Runs scheduled quality evaluation against recorded fixtures:
+#   1. RAG retrieval quality (Hit rate >= 80%, MRR >= 0.80, Precision@1 >= 70%)
+#   2. Bug detection accuracy (Precision >= 85%, Recall >= 85%, FPR <= 5%)
+#   3. Code review grounding (100% bounded lines, 0% hallucinations)
+#   4. Test generation safety & syntax validity (100% safety rejection)
+#   5. Expanded fixture suite verification (clean code, security, concurrency, error handling)
+#   6. Strict benchmark gating: fails CI if any mandatory metric is below threshold
+#
+# Strictly executes in --fixtures-only mode: NO live LLM calls, deterministic results.
+# =============================================================================
+
+name: Nightly AI Quality Evaluation
+
+on:
+  schedule:
+    # Run every night at 18:30 UTC (00:00 IST)
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+    inputs:
+      fixtures_only:
+        description: "Run fixtures-only offline evaluation (no live LLM tokens)"
+        required: true
+        default: true
+        type: boolean
+      fail_on_threshold:
+        description: "Fail workflow if any mandatory quality gate fails"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-evaluation:
+    name: "Evaluate AI Quality & Benchmark Gates"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "backend/requirements*.txt"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-dev.txt
+
+      - name: Create Reports Directory
+        run: mkdir -p reports
+
+      - name: Run Quality Evaluation Suite
+        run: |
+          python backend/scripts/benchmark_quality_suite.py \
+            --fixtures-only \
+            --fail-on-threshold \
+            --output-json reports/quality-metrics.json \
+            --output-md Docs/quality_benchmark_report.md
+
+      - name: Run Gate Evaluator Unit Tests
+        run: |
+          pytest backend/tests/test_benchmark_gate_evaluator.py backend/tests/test_evaluation_fixtures.py -v
+
+      - name: Upload Quality Evaluation Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-evaluation-report
+          path: |
+            Docs/quality_benchmark_report.md
+            reports/quality-metrics.json

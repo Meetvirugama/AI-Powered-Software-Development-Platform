@@ -126,3 +126,4 @@ If a step lists multiple files (e.g., `["src/auth.py", "tests/test_auth.py"]`), 
 - Endpoints subscribe to the Redis pubsub channel `platform_events`.
 - Events are scoped to users and repositories with fail-closed security.
 - Need: Publish workflow lifecycle events (`WORKFLOW_QUEUED`, `SYNTHESIS_STARTED`, `SYNTHESIS_RETRY`, `PATCH_APPLIED`, `WORKFLOW_COMPLETED`) to this channel and persist them in `task_timeline_events`.
+

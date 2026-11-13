@@ -512,5 +512,82 @@ Code retrieval quality and embedding efficiency exhibited five engineering gaps:
    - Keep ADR-008 (`_PERMITTED_PROVIDERS = {"gemini", "groq"}` in `ai_quality_evaluator.py` and `_ALLOWED_EMBEDDING_PROVIDERS = {"gemini"}` in `config.py`) strictly enforced by default.
    - Gate `CodeRankEmbedProvider` (`nomic-ai/CodeRankEmbed`, 768-d, 8192 context, query prefix `"Represent this query for searching relevant code: "`) behind explicit `allow_local_embeddings=True` opt-in with an isolated `EmbeddingProfile(provider="local_coderank", model="nomic-ai/CodeRankEmbed", dimensions=768, profile_version="v2")`.
 
+---
+
+## ADR-017: OpenTelemetry Distributed Tracing, GenAI Semantic Spans & Fail-Safe Langfuse Observability
+
+| Field | Value |
+|---|---|
+| **Title** | OpenTelemetry Distributed Tracing, GenAI Semantic Conventions, Autonomous Tool Tracing & Fail-Safe Langfuse Observability |
+| **Date** | 2026-11-13 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+As the platform expanded from single LLM requests into autonomous multi-turn agents, workflow loops, and tool-assisted code modifications, visibility across boundaries became fractured:
+1. Tracing across FastAPI ingress, database queries, Redis caching, outbound HTTP calls, and internal LLM gateway invocations lacked unified context propagation.
+2. Debugging LLM degradation, token consumption spikes, and transient rate-limiting required dedicated GenAI semantic tracing without fragmenting logs.
+3. Autonomous agent execution loops and tool routing (`ToolRouter.route()`) lacked hierarchical parent-child span correlation.
+4. LLM-specific observability (evaluations, prompt versioning, token cost tracking) required a dedicated dashboard interface (Langfuse) without creating a single point of failure or violating enterprise privacy.
+5. In-app stage-level telemetry (`AnalysisRun.result_payload["stage_metrics"]`) and existing health check contracts (`/health/ready`) needed strict preservation.
+
+**Decision:**
+1. **OpenTelemetry as the Unified Tracing Standard:**
+   - Establish `TelemetryManager` as the process-wide OpenTelemetry singleton managing `TracerProvider`, `MeterProvider`, and resource attributes (`service.name`, `service.version`, `deployment.environment`).
+   - Propagate trace context via W3C TraceContext standards (`traceparent`).
+   - Implement framework auto-instrumentation for FastAPI (excluding health endpoints), HTTPX, SQLAlchemy, and Redis with secret redaction.
+   - Enrich existing structured logging (`JsonFormatter`) with dynamic `trace_id`, `span_id`, `request_id`, `analysis_run_id`, and `agent_execution_id`.
+2. **GenAI Semantic Spans & Fallback Tracking:**
+   - Instrument `LLMGateway.generate` and `LLMGateway.generate_stream` with standardized OpenTelemetry GenAI semantic conventions (`gen_ai.system`, `gen_ai.request.model`, `gen_ai.response.model`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `gen_ai.usage.total_tokens`).
+   - Explicitly track provider fallback events (`gen_ai.fallback.attempted`, `gen_ai.fallback.provider`, `gen_ai.fallback.status`, `gen_ai.primary.error`).
+   - Monitor streaming latency (TTFT) and token cost estimation based on model-aware pricing.
+3. **Autonomous Agent & Tool Invocation Tracing:**
+   - Create root `agent.execution` spans around autonomous agent reasoning loops via `trace_agent_execution`.
+   - Wrap tool executions in child spans `tool:{tool_name}` within `ToolRouter.route()` via `trace_tool_invocation`, capturing duration, execution ID, and sanitized tool metadata.
+4. **Fail-Safe Langfuse Adapter & Privacy Opt-in:**
+   - Wrap the `langfuse` SDK inside `LangfuseAdapter` with defensive error boundaries and no-op fallback when unconfigured.
+   - Enforce zero raw content retention by default (`OBSERVABILITY_CAPTURE_PROMPTS=False`, `OBSERVABILITY_CAPTURE_RESPONSES=False`), transmitting only model identifiers, token counts, latency, and cost unless explicit user opt-in is granted.
+   - Redact all sensitive tokens and credentials via `app.core.secret_redaction` even when debugging capture is active.
+5. **Decoupled Health Endpoints & Metric Cardinality Governance:**
+   - Preserve `/health`, `/health/live`, and `/health/ready` checking only database and cache connectivity; external OTLP or Langfuse outages never affect platform readiness.
+   - Enforce strict low-cardinality governance on OpenTelemetry metrics (`llm_requests_total`, `llm_request_duration_seconds`, `agent_executions_total`, `tool_invocations_total`), forbidding high-cardinality IDs from metric label sets.
+   - Retain full backwards compatibility with `AnalysisRun.result_payload["stage_metrics"]` and `StageExecutionTimer`.
+
+---
+
+## ADR-018: Two-Level Distributed Retrieval Query Caching & Version-Aware Repository Invalidation
+
+| Field | Value |
+|---|---|
+| **Title** | Two-Level Distributed Retrieval Query Caching & Version-Aware Repository Invalidation |
+| **Date** | 2026-11-13 |
+| **Status** | Accepted |
+| **Owner** | Meet |
+
+**Context:**
+The platform's multi-stage hybrid code retrieval engine (combining dense vector search, lexical BM25, and reciprocal rank fusion) requires substantial computation and database IO. Previously:
+1. In-process LRU caching (`LRUQueryCache` in `retrieval_optimizer.py`) was isolated within individual worker processes, causing redundant embedding and database queries across multi-worker deployments.
+2. An optional Redis result cache existed in `HybridRetriever` but was uncoordinated with local memory, incurring unnecessary network roundtrips for hot query loops.
+3. Repository synchronization updates code files, AST symbols, dense vector embeddings, and lexical search indexes. Without coordinated invalidation, workers could serve stale cached code results across instances.
+4. The platform enforces a strict Service Level Objective (`P95 Retrieval Latency < 400ms`) and task/step token budget ceilings that must not be degraded by distributed caching overhead.
+
+**Decision:**
+1. **Two-Level (L1 / L2) Hierarchical Cache Coordination:**
+   - Establish `TwoLevelRetrievalCache` orchestrating an L1 local in-memory LRU cache (`InMemoryRetrievalCache` / `LRUQueryCache`) and an L2 shared distributed cache (`RedisRetrievalCache` / `RetrievalResultCache`).
+   - Execute lookups local-first: L1 hits return in `< 0.2ms` with zero network overhead. L1 misses query L2 Redis; on an L2 hit (`1.8 - 3.2ms`), L1 is populated automatically. On dual misses, retrieval is executed and backfilled into both tiers.
+2. **Version-Aware Key Formulation & Deterministic Hashing:**
+   - Format all cache keys using `retrieval:v2:{scope}:{repo_id}:{index_version}:{query_hash}`.
+   - Compute `{query_hash}` via SHA-256 over normalized canonical JSON query and configuration parameters (`top_k`, `retrieval_mode`, `filters`).
+   - Incorporate dynamic `{index_version}` resolved from Redis pointer `retrieval:repo_index_version:{repo_id}`.
+3. **Instant Cache Invalidation on Repository Synchronization:**
+   - Hook cache invalidation into `sync_worker.py` strictly after `db.commit()` marks repository state as `SYNCED`.
+   - Update repository index version in Redis to the latest commit SHA, rendering all pre-sync cached results instantly unreachable across all cluster workers.
+   - Perform safe, non-blocking asynchronous garbage collection of old keys via bounded cursor scanning (`SCAN ... MATCH ... COUNT 100`).
+4. **Resilient Failure Boundaries & Backward Compatibility:**
+   - Ensure Redis connectivity, timeout, or serialization failures never raise exceptions or fail retrieval requests. Redis errors gracefully fall back to local LRU caching and direct database execution.
+   - Retain full backward compatibility for deployments running without Redis (`RETRIEVAL_REDIS_CACHE_ENABLED=false`).
+   - Preserve existing `RetrievalLatencyOptimizer` percentile tracking (P50, P90, P95, P99) and `AgentTokenBudgetManager` token ceilings with zero regressions.
+
+
 
 

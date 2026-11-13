@@ -43,6 +43,8 @@ from app.schemas.plan import (
     PlanTransition,
     StepVerification,
 )
+from ai.security.provenance import TrustLevel
+from ai.security.taint_tracker import get_taint_tracker
 from app.schemas.task import TaskAssumption
 
 if TYPE_CHECKING:
@@ -265,7 +267,29 @@ class TaskPlanner:
             "forbidden_lower": forbidden_lower,
             "manifest": manifest,
             "localization_targets": localization_targets,
+            "task_provenance_ids": self._extract_task_provenance_ids(task),
         }
+
+    @staticmethod
+    def _extract_task_provenance_ids(task: AgentTask) -> list[str]:
+        pids: list[str] = []
+        for req in getattr(task, "requirements", []) or []:
+            if isinstance(req, dict):
+                if req.get("provenance_ids"):
+                    pids.extend(req["provenance_ids"])
+                if isinstance(req.get("provenance"), dict) and req["provenance"].get("provenance_id"):
+                    pids.append(req["provenance"]["provenance_id"])
+            elif hasattr(req, "provenance_ids"):
+                pids.extend(req.provenance_ids)
+                if getattr(req, "provenance", None):
+                    pids.append(req.provenance.provenance_id)
+        for asm in getattr(task, "assumptions", []) or []:
+            if isinstance(asm, dict):
+                if asm.get("provenance_ids"):
+                    pids.extend(asm["provenance_ids"])
+            elif hasattr(asm, "provenance_ids"):
+                pids.extend(asm.provenance_ids)
+        return list(dict.fromkeys(pids))
 
     # ------------------------------------------------------------------
     # Deterministic Fallback & Normalization
@@ -418,6 +442,21 @@ class TaskPlanner:
             ),
         ]
 
+        # Attach provenance lineage to deterministic steps
+        tracker = get_taint_tracker()
+        task_prov_ids = ctx.get("task_provenance_ids") or self._extract_task_provenance_ids(task)
+        for st in steps:
+            st_prov = tracker.propagate(
+                parent_ids=task_prov_ids,
+                transformation="deterministic_task_plan",
+                trust_level=TrustLevel.MODEL_GENERATED,
+                source_type="plan_step",
+                metadata={"step_id": st.step_id, "action_type": st.action_type},
+            )
+            st.provenance = st_prov
+            st.provenance_ids = [st_prov.provenance_id] + task_prov_ids
+            st.taint_status = st_prov.is_tainted()
+
         max_tokens = 20_000
         for cst in task.constraints or []:
             if isinstance(cst, dict) and cst.get("max_budget_tokens"):
@@ -505,6 +544,8 @@ class TaskPlanner:
                 lt for lt in plan.localization_targets if lt.file_path.lower() not in forbidden_lower
             ]
 
+        tracker = get_taint_tracker()
+        task_prov_ids = ctx.get("task_provenance_ids") or []
         for step in plan.steps:
             if not step.localization_targets and plan.localization_targets:
                 step_matches = [
@@ -514,6 +555,31 @@ class TaskPlanner:
                 ]
                 if step_matches:
                     step.localization_targets = step_matches
+
+            # Ensure model output preserves parent lineage and receives MODEL_GENERATED trust
+            if not getattr(step, "provenance", None):
+                step_prov = tracker.propagate(
+                    parent_ids=task_prov_ids,
+                    transformation="llm_plan",
+                    trust_level=TrustLevel.MODEL_GENERATED,
+                    source_type="plan_step",
+                    metadata={"step_id": step.step_id, "action_type": step.action_type},
+                )
+                step.provenance = step_prov
+                step.provenance_ids = [step_prov.provenance_id] + task_prov_ids
+                step.taint_status = step_prov.is_tainted()
+            else:
+                # Validate that trust level cannot exceed MODEL_GENERATED
+                if step.provenance.trust_level not in (TrustLevel.MODEL_GENERATED, TrustLevel.EXTERNAL_UNTRUSTED):
+                    step_prov = tracker.propagate(
+                        parent_ids=task_prov_ids + [step.provenance.provenance_id],
+                        transformation="llm_plan",
+                        trust_level=TrustLevel.MODEL_GENERATED,
+                        source_type="plan_step",
+                    )
+                    step.provenance = step_prov
+                    step.provenance_ids = [step_prov.provenance_id] + task_prov_ids
+                    step.taint_status = step_prov.is_tainted()
 
         return plan
 

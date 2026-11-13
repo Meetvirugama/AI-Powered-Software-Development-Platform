@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-006",
+  "repository": "timestamp_converter",
+  "base_commit": "main@pinned",
+  "issue_title": "Handle negative timestamp offsets gracefully",
+  "issue_description": "adjust_timestamp crashes when negative offsets exceed baseline timestamp.",
+  "category": "bug_fix",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "timestamps.py"
+  ],
+  "license": "MIT"
+}

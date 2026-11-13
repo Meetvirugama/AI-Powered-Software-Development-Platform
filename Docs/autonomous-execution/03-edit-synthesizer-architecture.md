@@ -107,3 +107,4 @@ This resulted in catastrophic cross-contamination where a payload meant for `src
 1. Caller-supplied payload for the *specific* step ID takes highest priority.
 2. If missing, `EditSynthesizer.synthesize_sync()` is invoked autonomously with the step's specific target file.
 3. If synthesis fails or is rejected, the step fails closed. No fallback across unrelated steps is ever permitted.
+

@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-001",
+  "repository": "user_service",
+  "base_commit": "main@pinned",
+  "issue_title": "Fix NoneType error in email domain parser",
+  "issue_description": "Calling extract_domain(user) crashes with AttributeError when user['email'] is None or missing.",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "user_service.py"
+  ],
+  "license": "MIT"
+}

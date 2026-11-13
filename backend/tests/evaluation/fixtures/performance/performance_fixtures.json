@@ -1,0 +1,40 @@
+[
+  {
+    "fixture_id": "PERF-001",
+    "category": "performance",
+    "subcategory": "n_plus_one_query",
+    "description": "N+1 query defect loading related records inside a loop",
+    "source_code": "def get_user_order_summaries(session, user_ids: list[int]) -> list[dict]:\n    \"\"\"N+1 query issue loading orders per user inside loop.\"\"\"\n    results = []\n    for uid in user_ids:\n        user = session.query(User).get(uid)\n        orders = session.query(Order).filter_by(user_id=uid).all()\n        results.append({'user': user.name, 'order_count': len(orders)})\n    return results\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["n_plus_one"],
+    "expected_findings": [
+      {
+        "type": "n_plus_one",
+        "category": "performance",
+        "severity": "medium",
+        "line_number": 6,
+        "description": "Database query executed in tight loop"
+      }
+    ]
+  },
+  {
+    "fixture_id": "PERF-002",
+    "category": "performance",
+    "subcategory": "quadratic_string_concatenation",
+    "description": "Quadratic complexity string accumulation in loop instead of str.join",
+    "source_code": "def build_large_payload(records: list[str]) -> str:\n    \"\"\"Repeated string concatenation creating O(N^2) memory copies.\"\"\"\n    out = \"\"\n    for r in records:\n        out = out + r + \"\\n\"\n    return out\n",
+    "language": "python",
+    "has_defect": true,
+    "expected_defects": ["string_concatenation_loop"],
+    "expected_findings": [
+      {
+        "type": "string_concatenation_loop",
+        "category": "performance",
+        "severity": "low",
+        "line_number": 5,
+        "description": "Quadratic string concatenation in loop"
+      }
+    ]
+  }
+]

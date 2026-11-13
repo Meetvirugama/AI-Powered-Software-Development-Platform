@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-010",
+  "repository": "query_filter",
+  "base_commit": "main@pinned",
+  "issue_title": "Support optional status query parameter filtering",
+  "issue_description": "filter_records ignores status filter argument when passed.",
+  "category": "api_behavior",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "filter.py"
+  ],
+  "license": "MIT"
+}

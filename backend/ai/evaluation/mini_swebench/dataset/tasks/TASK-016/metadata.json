@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-016",
+  "repository": "filename_sanitizer",
+  "base_commit": "main@pinned",
+  "issue_title": "Strip directory traversal characters from uploaded filename",
+  "issue_description": "Filenames containing ../ or null bytes must be sanitized.",
+  "category": "validation",
+  "difficulty": "medium",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "sanitizer.py"
+  ],
+  "license": "MIT"
+}

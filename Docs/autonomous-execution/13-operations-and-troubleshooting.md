@@ -44,3 +44,4 @@ This operational guide provides diagnostic procedures, failure recovery steps, a
 ### 2.5 Duplicate Workflow Submission (Idempotency)
 - **Symptoms**: User double-clicks "Run Auto-Pilot".
 - **Expected Behavior**: The server detects active workflow via `_registry_lock` and returns `HTTP 202 Accepted` referencing the existing `workflow_id` with `is_new=False`. No duplicate threads or processes are launched.
+

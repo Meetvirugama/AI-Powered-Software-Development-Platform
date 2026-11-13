@@ -1,0 +1,16 @@
+{
+  "task_id": "TASK-002",
+  "repository": "pagination_utils",
+  "base_commit": "main@pinned",
+  "issue_title": "Fix off-by-one error in pagination slice",
+  "issue_description": "get_page_items slice boundary is range(offset, offset + limit + 1) which returns limit + 1 items.",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "language": "python",
+  "reproduction_test": "reproduction_test.py",
+  "regression_test": "regression_test.py",
+  "expected_files": [
+    "pagination.py"
+  ],
+  "license": "MIT"
+}
