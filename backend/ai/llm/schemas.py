@@ -11,7 +11,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -239,6 +239,12 @@ class LLMRequest(BaseModel):
         temperature: Sampling temperature between 0.0 (deterministic) and 2.0 (creative).
         max_tokens: Maximum tokens in generated completion.
         response_schema: Optional Pydantic model for JSON-mode schema validation.
+        response_format: Optional provider response format dictionary.
+        tools: Optional tool definitions exposed to the model for function calling.
+        tool_choice: Optional tool selection directive ('auto', 'none', 'required', or tool name).
+        stream: Whether to stream the generated response.
+        response_schema_mode: Schema enforcement mode: 'strict' (JSON schema AST), 'json' (json_object), or 'none'.
+        allow_fallback: Whether fallback provider may be attempted on outage.
     """
 
     model: str = Field(..., description="Provider model identifier, e.g. 'gpt-4o'")
@@ -253,6 +259,26 @@ class LLMRequest(BaseModel):
     response_format: dict[str, Any] | None = Field(
         default=None,
         description="Optional provider response format dictionary, e.g. {'type': 'json_object'}.",
+    )
+    tools: list[LLMToolDefinition] | None = Field(
+        default=None,
+        description="Optional tool definitions exposed to the model for function calling.",
+    )
+    tool_choice: str | dict[str, Any] | None = Field(
+        default=None,
+        description="Optional tool selection directive: 'auto', 'none', 'required', or specific tool name.",
+    )
+    stream: bool = Field(
+        default=False,
+        description="Whether to stream the generated response chunks.",
+    )
+    response_schema_mode: Literal["strict", "json", "none"] = Field(
+        default="json",
+        description="Schema enforcement mode: 'strict' (strict JSON Schema), 'json' (json_object mode), or 'none'.",
+    )
+    allow_fallback: bool = Field(
+        default=True,
+        description="Whether fallback provider may be attempted on outage.",
     )
     request_id: str | None = Field(
         default=None,
@@ -278,6 +304,11 @@ class LLMRequest(BaseModel):
         max_tokens: int = 2048,
         response_schema: type[BaseModel] | None = None,
         response_format: dict[str, Any] | None = None,
+        tools: Sequence[LLMToolDefinition] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        stream: bool = False,
+        response_schema_mode: Literal["strict", "json", "none"] = "json",
+        allow_fallback: bool = True,
         request_id: str | None = None,
         estimated_tokens: int | None = None,
         feature: str | None = None,
@@ -292,6 +323,11 @@ class LLMRequest(BaseModel):
             max_tokens=max_tokens,
             response_schema=response_schema,
             response_format=response_format,
+            tools=list(tools) if tools is not None else None,
+            tool_choice=tool_choice,
+            stream=stream,
+            response_schema_mode=response_schema_mode,
+            allow_fallback=allow_fallback,
             request_id=request_id,
             estimated_tokens=estimated_tokens,
             feature=feature,
@@ -300,7 +336,7 @@ class LLMRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Response Primitive
+# Response Primitives
 # ---------------------------------------------------------------------------
 
 
@@ -314,15 +350,40 @@ class LLMResponse(BaseModel):
         input_tokens: Number of prompt/input tokens consumed.
         output_tokens: Number of completion/output tokens generated.
         latency_ms: Round-trip execution time in milliseconds.
+        tool_calls: Optional tool calls requested by the model.
+        finish_reason: Provider completion reason ('stop', 'tool_calls', 'length', etc.).
+        provider: Name of the executing provider ('gemini', 'groq').
     """
 
-    content: str
+    content: str = ""
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
     latency_ms: float = 0.0
+    tool_calls: list[LLMToolCall] | None = Field(
+        default=None,
+        description="Optional tool calls requested by the model.",
+    )
+    finish_reason: str | None = Field(
+        default=None,
+        description="Finish reason reported by provider (e.g. 'stop', 'tool_calls', 'length').",
+    )
+    provider: str | None = Field(
+        default=None,
+        description="Provider name executing the request.",
+    )
 
     model_config = ConfigDict(frozen=True)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _coerce_content(cls, v: Any) -> str:
+        return "" if v is None else str(v)
+
+    @property
+    def is_final(self) -> bool:
+        """True if the model produced a final textual answer rather than calling tools."""
+        return not bool(self.tool_calls)
 
     @property
     def total_tokens(self) -> int:
@@ -347,6 +408,38 @@ class LLMResponse(BaseModel):
             LLMValidationError: If parsing or schema validation fails.
         """
         return validate_structured_payload(self.content, schema_cls, provider=None)
+
+
+class LLMResponseChunk(BaseModel):
+    """
+    Normalized streaming chunk emitted during token generation.
+
+    Attributes:
+        delta: Incremental text generated in this chunk.
+        index: Zero-based sequential chunk index.
+        finish_reason: Optional finish reason if this is the terminating chunk.
+        tool_calls: Optional partial or complete tool call objects.
+        model: Model executing the stream.
+        provider: Provider executing the stream.
+        input_tokens: Final prompt token count (if available on terminal chunk).
+        output_tokens: Final completion token count (if available on terminal chunk).
+    """
+
+    delta: str = ""
+    index: int = 0
+    finish_reason: str | None = None
+    tool_calls: list[LLMToolCall] | None = None
+    model: str = ""
+    provider: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    model_config = ConfigDict(frozen=True)
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens (input + output) consumed by this request."""
+        return self.input_tokens + self.output_tokens
 
 
 # ---------------------------------------------------------------------------
@@ -635,6 +728,7 @@ __all__ = [
     "LLMRateLimitError",
     "LLMRequest",
     "LLMResponse",
+    "LLMResponseChunk",
     "LLMTimeoutError",
     "LLMToolCall",
     "LLMToolDefinition",

@@ -14,8 +14,7 @@ Architecture & System Contracts (team_rules.md):
   * Resource safety on aclose() (both providers cleaned up reliably).
 """
 
-from __future__ import annotations
-
+from collections.abc import AsyncIterator
 import asyncio
 import logging
 import time
@@ -29,6 +28,7 @@ from .schemas import (
     LLMRateLimitError,
     LLMRequest,
     LLMResponse,
+    LLMResponseChunk,
     LLMTimeoutError,
     LLMToolRequest,
     LLMToolResponse,
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Canonical cross-vendor model translations
 CROSS_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "groq": "openai/gpt-oss-120b",
-    "gemini": "gemini-flash-latest",
+    "gemini": "gemini-flash-lite-latest",
 }
 
 EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
@@ -50,9 +50,10 @@ EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
     ("gemini-1.5-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-2.0-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-1.5-pro", "groq"): "openai/gpt-oss-120b",
-    ("openai/gpt-oss-120b", "gemini"): "gemini-flash-latest",
-    ("llama-3.3-70b-versatile", "gemini"): "gemini-flash-latest",
-    ("qwen/qwen3.8-27b", "gemini"): "gemini-flash-latest",
+    ("openai/gpt-oss-120b", "gemini"): "gemini-flash-lite-latest",
+    ("openai/gpt-oss-20b", "gemini"): "gemini-flash-lite-latest",
+    ("llama-3.3-70b-versatile", "gemini"): "gemini-flash-lite-latest",
+    ("qwen/qwen3.8-27b", "gemini"): "gemini-flash-lite-latest",
 }
 
 
@@ -77,16 +78,19 @@ class LLMGateway:
 
     def __init__(
         self,
-        provider: LLMProvider,
+        provider: LLMProvider | None = None,
         fallback_provider: LLMProvider | None = None,
         *,
+        primary: LLMProvider | None = None,
+        secondary: LLMProvider | None = None,
         fallback_on_auth_error: bool = False,
         model_map: dict[tuple[str, str], str] | None = None,
     ) -> None:
-        if provider is None:
+        effective_provider = provider or primary
+        if effective_provider is None:
             raise ValueError("LLMGateway requires a valid LLMProvider.")
-        self._provider = provider
-        self._fallback_provider = fallback_provider
+        self._provider = effective_provider
+        self._fallback_provider = fallback_provider or secondary
         self._fallback_on_auth_error = fallback_on_auth_error
         self._model_map = model_map or {}
 
@@ -272,8 +276,57 @@ class LLMGateway:
                     "latency_ms": round(latency_ms, 2),
                     "success": success,
                     "error_type": error_type,
+                    "tool_calls_count": len(response.tool_calls) if response and response.tool_calls else 0,
+                    "finish_reason": response.finish_reason if response else None,
                 },
             )
+
+    async def generate_stream(
+        self, request: LLMRequest
+    ) -> AsyncIterator[LLMResponseChunk]:
+        """
+        Execute streaming inference through the provider with chunk yield and fallback.
+        """
+        if not isinstance(request, LLMRequest):
+            raise TypeError(f"Expected LLMRequest instance, got {type(request).__name__}")
+        if not request.messages:
+            raise ValueError("LLMRequest must contain at least one Message turn.")
+
+        request_id = request.request_id or uuid.uuid4().hex[:12]
+        req_with_id = request if request.request_id else request.model_copy(update={"request_id": request_id})
+
+        try:
+            async for chunk in self._provider.generate_stream(req_with_id):
+                yield chunk
+        except Exception as exc:
+            if not self._should_attempt_fallback(exc) or not self._fallback_provider:
+                raise
+            fallback_request = self._build_fallback_request(req_with_id)
+            logger.warning(
+                "llm_stream_primary_failed_attempting_fallback",
+                extra={
+                    "error": str(exc),
+                    "fallback_provider": self._fallback_provider.provider_name,
+                    "fallback_model": fallback_request.model,
+                    "request_id": request_id,
+                },
+            )
+            async for chunk in self._fallback_provider.generate_stream(fallback_request):
+                yield chunk
+
+    def _should_attempt_fallback(self, exc: Exception) -> bool:
+        """Determine whether an exception qualifies for fallback execution."""
+        if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
+            return False
+        return isinstance(
+            exc,
+            (
+                LLMUnavailableError,
+                LLMTimeoutError,
+                LLMRateLimitError,
+                LLMAuthenticationError,
+            ),
+        )
 
     async def generate_with_tools(self, request: LLMToolRequest) -> LLMToolResponse:
         """
@@ -514,7 +567,14 @@ class LLMGateway:
             max_tokens=request.max_tokens,
             response_schema=request.response_schema,
             response_format=getattr(request, "response_format", None),
+            tools=getattr(request, "tools", None),
+            tool_choice=getattr(request, "tool_choice", None),
+            stream=getattr(request, "stream", False),
+            response_schema_mode=getattr(request, "response_schema_mode", "json"),
+            allow_fallback=getattr(request, "allow_fallback", True),
             request_id=getattr(request, "request_id", None),
+            estimated_tokens=getattr(request, "estimated_tokens", None),
+            feature=getattr(request, "feature", None),
         )
 
     async def aclose(self) -> None:

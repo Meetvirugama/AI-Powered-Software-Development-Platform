@@ -29,6 +29,7 @@
 | [17b](./17_github_webhook_automation_design.md) | **GitHub Webhook Automation Design** | Batch 2 durable webhook state machine & lease worker design | Active |
 | [Retrieval](../retrieval/README.md) | **Multi-Stage Code Retrieval Engine** | 7-stage retrieval, lexical search, adaptive HNSW, ONNX reranker, Redis cache | Active |
 | [Agentic Chat](../agentic-chat/README.md) | **Bounded Agentic Repository Chat** | Normalized tool calling, read-only repo tools, sandbox policy, budget manager | Active |
+| [29](./29_llm_gateway_providers_tool_calling_and_telemetry.md) | **LLM Gateway, Tool Calling & Telemetry (F28)** | Unified primitives, streaming, strict schemas & cost calibration | Active |
 
 ---
 
