@@ -18,6 +18,7 @@ import type { ApiError } from '../../types/api';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { ErrorMessage } from '../shared/ErrorMessage';
 import { cn } from '../../lib/utils';
+import { tokenizeCodeLine, TOKEN_COLOR_CLASS } from '../../utils/virtualizationAndSyntax';
 
 export interface CodeChangesPanelProps {
   taskId?: string;
@@ -338,9 +339,29 @@ export function CodeChangesPanel({
                               lineStyle = 'text-cyan-400 bg-cyan-950/30 block px-1 font-semibold rounded-xs';
                             }
 
+                            const isHeaderOrHunk = line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@');
+                            const prefixChar = !isHeaderOrHunk && (line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')) ? line[0] : '';
+                            const codeBody = prefixChar ? line.slice(1) : line;
+                            const syntaxTokens = isHeaderOrHunk ? null : tokenizeCodeLine(codeBody);
+
                             return (
                               <span key={idx} className={lineStyle}>
-                                {line || ' '}
+                                {line ? (
+                                  syntaxTokens ? (
+                                    <>
+                                      {prefixChar}
+                                      {syntaxTokens.map((tok, tIdx) => (
+                                        <span key={tIdx} className={tok.kind === 'plain' ? undefined : TOKEN_COLOR_CLASS[tok.kind]}>
+                                          {tok.text}
+                                        </span>
+                                      ))}
+                                    </>
+                                  ) : (
+                                    line
+                                  )
+                                ) : (
+                                  ' '
+                                )}
                               </span>
                             );
                           })}

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { cn } from '../../lib/utils';
+import { useVirtualRange } from '../../utils/virtualizationAndSyntax';
 import type { RepositoryFile } from '../../types/api';
 
 export interface FileTreeProps {
@@ -157,6 +158,83 @@ export function FileTree({
 
   const isSearching = Boolean(filter.trim());
 
+  const flatNodes = useMemo(() => {
+    const out: Array<{ node: TreeNode; depth: number }> = [];
+    function walk(nodes: TreeNode[], depth: number) {
+      for (const n of nodes) {
+        out.push({ node: n, depth });
+        if (n.isDir) {
+          const isCollapsed = isSearching ? false : Boolean(collapsedDirs[n.path]);
+          if (!isCollapsed && n.children.length > 0) {
+            walk(n.children, depth + 1);
+          }
+        }
+      }
+    }
+    walk(treeData, 0);
+    return out;
+  }, [treeData, isSearching, collapsedDirs]);
+
+  const { windowSlice: treeWindow, onScroll: onTreeScroll } = useVirtualRange({
+    totalCount: flatNodes.length,
+    itemHeightPx: 26,
+    viewportHeightPx: 520,
+    overscan: 15,
+    resetKey: filter,
+    virtualizeThreshold: 200,
+  });
+
+  function renderFlatNode(node: TreeNode, depth: number) {
+    if (node.isDir) {
+      const isCollapsed = isSearching ? false : Boolean(collapsedDirs[node.path]);
+      return (
+        <button
+          key={node.path}
+          type="button"
+          onClick={() => toggleDir(node.path)}
+          style={{ paddingLeft: `${depth * 12 + 6}px` }}
+          className="flex items-center gap-1.5 w-full py-1 pr-1.5 hover:bg-accent/60 rounded text-foreground font-medium transition-colors text-left group"
+        >
+          {isCollapsed ? (
+            <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+          ) : (
+            <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
+          )}
+          {isCollapsed ? (
+            <Folder className="h-3.5 w-3.5 text-amber-500 fill-amber-500/20 shrink-0" />
+          ) : (
+            <FolderOpen className="h-3.5 w-3.5 text-amber-500 fill-amber-500/20 shrink-0" />
+          )}
+          <span className="truncate flex-1 text-xs">{node.name}</span>
+          <span className="text-[10px] text-muted-foreground/60 font-mono opacity-0 group-hover:opacity-100 transition-opacity">
+            {node.children.length}
+          </span>
+        </button>
+      );
+    }
+
+    const isSelected = selectedFile?.id === node.file?.id || selectedFile?.path === node.path;
+    return (
+      <button
+        key={node.path}
+        type="button"
+        onClick={() => node.file && onSelectFile(node.file)}
+        style={{ paddingLeft: `${depth * 12 + 18}px` }}
+        className={cn(
+          'flex w-full items-center gap-1.5 py-1 pr-1.5 rounded text-left transition-colors text-xs font-mono',
+          isSelected
+            ? 'bg-primary/15 text-primary font-medium border-l-2 border-primary'
+            : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
+        )}
+      >
+        {getFileIcon(node.name)}
+        <span className="truncate flex-1" title={node.path}>
+          {node.name}
+        </span>
+      </button>
+    );
+  }
+
   function renderNode(node: TreeNode, depth: number = 0) {
     if (node.isDir) {
       // If user is searching, keep folders expanded by default so results are visible
@@ -243,8 +321,8 @@ export function FileTree({
         </div>
       </div>
 
-      {/* Tree list */}
-      <div className="flex-1 min-h-0 overflow-y-auto p-2 text-xs select-none space-y-0.5">
+      {/* Tree list (virtualized when > 200 visible nodes) */}
+      <div onScroll={onTreeScroll} className="flex-1 min-h-0 overflow-y-auto p-2 text-xs select-none space-y-0.5">
         {isLoading ? (
           <div className="flex justify-center py-8">
             <LoadingSpinner size="sm" label="Loading tree…" />
@@ -255,6 +333,12 @@ export function FileTree({
           <p className="text-xs text-muted-foreground italic p-2 text-center">
             {filter ? `No files matching "${filter}"` : 'No files indexed yet.'}
           </p>
+        ) : flatNodes.length > 200 ? (
+          <div style={{ paddingTop: treeWindow.topPaddingPx, paddingBottom: treeWindow.bottomPaddingPx }}>
+            {flatNodes.slice(treeWindow.startIndex, treeWindow.endIndex).map(({ node, depth }) =>
+              renderFlatNode(node, depth)
+            )}
+          </div>
         ) : (
           treeData.map((node) => renderNode(node, 0))
         )}
