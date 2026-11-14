@@ -30,19 +30,26 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     RepairAttemptRecord,
+    TestCoverageSummary,
     TestFailureClassification,
     TestOutcomeStatus,
+    TestSuiteResult,
     WorkspaceRepairBudgetStatus,
     WorkspaceTestExecutionRequest,
     WorkspaceTestExecutionResult,
 )
 from scanner.framework_detector import FrameworkDetectionResult, FrameworkDetector
 
+if TYPE_CHECKING:
+    from sandbox.backend import SandboxBackend
+
 from sandbox.command_runner import WorkspaceCommandRunner
+from sandbox.test_reports import CoverageReportParser, JUnitReportParser
 from sandbox.constants import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
     DISALLOWED_COMMAND_TOKENS,
@@ -111,8 +118,11 @@ class WorkspaceTestRunner:
         max_output_bytes: int = MAX_COMMAND_OUTPUT_BYTES,
         default_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         max_repair_attempts: int = MAX_REPAIR_ATTEMPTS,
+        backend: SandboxBackend | None = None,
     ) -> None:
-        self._command_runner = command_runner or WorkspaceCommandRunner()
+        self._command_runner = command_runner or WorkspaceCommandRunner(backend=backend)
+        if backend is not None and self._command_runner.backend is None:
+            self._command_runner.backend = backend
         self._framework_detector = framework_detector or FrameworkDetector()
         self._max_output_bytes = max_output_bytes
         self._default_timeout_seconds = default_timeout_seconds
@@ -121,6 +131,15 @@ class WorkspaceTestRunner:
         # In-memory repair attempts and patch signatures indexed by task_id
         self._repair_attempts: dict[str, list[RepairAttemptRecord]] = {}
         self._applied_patch_hashes: dict[str, set[str]] = {}
+
+    @property
+    def backend(self) -> SandboxBackend | None:
+        """Return the bound sandbox execution backend (e.g. ContainerBackend)."""
+        return self._command_runner.backend
+
+    @backend.setter
+    def backend(self, value: SandboxBackend | None) -> None:
+        self._command_runner.backend = value
 
     # -----------------------------------------------------------------------
     # 1. Framework & Test Command Detection
@@ -517,6 +536,48 @@ class WorkspaceTestRunner:
         if request.arguments:
             all_args.extend(request.arguments)
 
+        # Designated reports directory within workspace
+        reports_dir = workspace_root / ".test_reports"
+        try:
+            reports_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        # Configure container backend if explicitly requested
+        if request.sandbox_backend:
+            backend_choice = request.sandbox_backend.strip().lower()
+            if backend_choice in ("container", "docker", "gvisor") and (
+                self._command_runner.backend is None
+                or getattr(self._command_runner.backend, "backend_type", "") != "container"
+            ):
+                from sandbox.container_backend import ContainerBackend
+                self._command_runner.backend = ContainerBackend(
+                    base_workspaces_dir=workspace_root.parent
+                )
+
+        # Inject structured test reporting and coverage flags where appropriate
+        if framework == "pytest":
+            if getattr(request, "junit_xml", True) and not any(a.startswith("--junitxml") for a in all_args):
+                all_args.extend(["--junitxml=.test_reports/junit.xml", "-o", "junit_family=xunit2"])
+            if getattr(request, "collect_coverage", True) and not any(a.startswith("--cov") for a in all_args):
+                import importlib.util
+                if importlib.util.find_spec("pytest_cov") is not None:
+                    all_args.extend(["--cov=.", "--cov-report=json:.test_reports/coverage.json"])
+
+        elif framework in ("jest", "npm"):
+            if getattr(request, "collect_coverage", True) and not any(a.startswith("--coverage") for a in all_args):
+                all_args.extend([
+                    "--coverage",
+                    "--coverageReporters=json-summary",
+                    f"--coverageDirectory=.test_reports/coverage",
+                ])
+
+        elif framework == "vitest":
+            if getattr(request, "junit_xml", True) and not any(a.startswith("--reporter=junit") for a in all_args):
+                all_args.extend(["--reporter=default", "--reporter=junit", "--outputFile=.test_reports/junit.xml"])
+            if getattr(request, "collect_coverage", True) and not any(a.startswith("--coverage") for a in all_args):
+                all_args.extend(["--coverage", "--coverage.reporter=json-summary"])
+
         # 3. Security & Policy Validation
         try:
             self.validate_test_request(
@@ -572,13 +633,64 @@ class WorkspaceTestRunner:
         if len(clean_stderr.encode("utf-8")) > self._max_output_bytes:
             clean_stderr = clean_stderr[: self._max_output_bytes] + "\n... [TRUNCATED: error output exceeded size limit]"
 
-        # 6. Parse Output
+        # 6. Parse Output (stdout fallback)
         passed, failed, skipped, errors, total, failed_names, details = self.parse_test_output(
             framework=framework,
             stdout=clean_stdout,
             stderr=clean_stderr,
             exit_code=cmd_result.exit_code,
         )
+
+        # 6a. Parse structured JUnit XML report if emitted (F23)
+        junit_report: TestSuiteResult | None = None
+        junit_candidates = [
+            reports_dir / "junit.xml",
+            workspace_root / "junit.xml",
+            workspace_root / ".test_reports" / "junit.xml",
+        ]
+        for candidate in junit_candidates:
+            if candidate.is_file():
+                parsed_suite = JUnitReportParser.parse_file(candidate)
+                if parsed_suite.test_cases:
+                    junit_report = parsed_suite
+                    passed = parsed_suite.passed
+                    failed = parsed_suite.failed
+                    skipped = parsed_suite.skipped
+                    errors = parsed_suite.errors
+                    total = parsed_suite.tests_total
+                    xml_failed_names = [
+                        f"{tc.classname}::{tc.name}" if tc.classname else tc.name
+                        for tc in parsed_suite.test_cases
+                        if tc.status in ("failed", "error")
+                    ]
+                    if xml_failed_names:
+                        failed_names = xml_failed_names
+                    for tc in parsed_suite.test_cases:
+                        if tc.status in ("failed", "error"):
+                            if tc.failure_message and tc.failure_message not in details:
+                                details.append(tc.failure_message)
+                            elif tc.traceback:
+                                tb_lines = [l.strip() for l in tc.traceback.strip().splitlines() if l.strip()]
+                                if tb_lines and tb_lines[-1] not in details:
+                                    details.append(tb_lines[-1])
+                    break
+
+        # 6b. Parse structured coverage report if emitted (F23/F13)
+        coverage_summary: TestCoverageSummary | None = None
+        cov_candidates = [
+            reports_dir / "coverage.json",
+            reports_dir / "coverage" / "coverage-summary.json",
+            reports_dir / "coverage-summary.json",
+            workspace_root / "coverage.json",
+            workspace_root / "coverage" / "coverage-summary.json",
+            workspace_root / ".test_reports" / "coverage.json",
+        ]
+        for candidate in cov_candidates:
+            if candidate.is_file():
+                parsed_cov = CoverageReportParser.parse_file(candidate, framework=framework)
+                if parsed_cov.total_percent > 0.0 or parsed_cov.lines.total > 0:
+                    coverage_summary = parsed_cov
+                    break
 
         # 7. Classify Failure & Determine Repair Eligibility
         outcome_status, classification, is_repair_eligible = self.classify_failure(
@@ -620,6 +732,8 @@ class WorkspaceTestRunner:
             timed_out=cmd_result.timed_out,
             error=cmd_result.error,
             workspace_revision=workspace_revision,
+            junit_report=junit_report,
+            coverage=coverage_summary,
         )
 
     # -----------------------------------------------------------------------

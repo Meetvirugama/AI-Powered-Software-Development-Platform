@@ -471,6 +471,89 @@ class TestFailureClassification(str, Enum):
     SECURITY_VIOLATION = "SECURITY_VIOLATION"  # Prohibited command or flag -> Not eligible
 
 
+# ---------------------------------------------------------------------------
+# 9a. Structured JUnit XML & Coverage Metrics (Issue #204 / F23)
+# ---------------------------------------------------------------------------
+
+class TestCaseResult(BaseModel):
+    """Structured result of an individual test case parsed from JUnit XML."""
+
+    __test__ = False
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(..., description="Test function or method name.")
+    classname: str | None = Field(default=None, description="Class or module enclosing the test.")
+    file: str | None = Field(default=None, description="Source file containing the test.")
+    time_s: float = Field(default=0.0, ge=0.0, description="Execution duration in seconds.")
+    status: str = Field(default="passed", description="Status: passed, failed, error, skipped.")
+    failure_message: str | None = Field(default=None, description="Concise failure assertion message.")
+    failure_type: str | None = Field(default=None, description="Exception or failure type.")
+    traceback: str | None = Field(default=None, description="Failure stack trace or detail.")
+
+
+class TestSuiteResult(BaseModel):
+    """Structured test suite aggregation parsed from standard JUnit XML."""
+
+    __test__ = False
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str = Field(default="default", description="Test suite name.")
+    tests_total: int = Field(default=0, ge=0, description="Total number of tests executed.")
+    passed: int = Field(default=0, ge=0, description="Count of passing tests.")
+    failed: int = Field(default=0, ge=0, description="Count of failing tests.")
+    skipped: int = Field(default=0, ge=0, description="Count of skipped tests.")
+    errors: int = Field(default=0, ge=0, description="Count of errored tests.")
+    time_s: float = Field(default=0.0, ge=0.0, description="Total execution time in seconds.")
+    test_cases: list[TestCaseResult] = Field(
+        default_factory=list,
+        description="Individual test cases with status and tracebacks.",
+    )
+    raw_xml_path: str | None = Field(default=None, description="Path to generated JUnit XML file.")
+
+
+class CoverageMetric(BaseModel):
+    """Coverage counts and computed percentage for a single dimension."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total: int = Field(default=0, ge=0, description="Total statements, lines, or branches.")
+    covered: int = Field(default=0, ge=0, description="Covered count.")
+    skipped: int = Field(default=0, ge=0, description="Skipped or excluded count.")
+    percent: float = Field(default=0.0, ge=0.0, le=100.0, description="Coverage percentage (0-100%).")
+
+
+class FileCoverageDetail(BaseModel):
+    """Per-file coverage breakdown for lines, branches, and missing lines."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    file_path: str = Field(..., description="Repository-relative file path.")
+    lines: CoverageMetric = Field(default_factory=CoverageMetric)
+    branches: CoverageMetric = Field(default_factory=CoverageMetric)
+    statements: CoverageMetric = Field(default_factory=CoverageMetric)
+    functions: CoverageMetric = Field(default_factory=CoverageMetric)
+    missing_lines: list[int] = Field(default_factory=list, description="Uncovered line numbers.")
+    executed_lines: list[int] = Field(default_factory=list, description="Covered line numbers.")
+
+
+class TestCoverageSummary(BaseModel):
+    """Aggregated test coverage metrics supporting line and branch analysis (F23/F13)."""
+
+    __test__ = False
+    model_config = ConfigDict(from_attributes=True)
+
+    lines: CoverageMetric = Field(default_factory=CoverageMetric)
+    branches: CoverageMetric = Field(default_factory=CoverageMetric)
+    statements: CoverageMetric = Field(default_factory=CoverageMetric)
+    functions: CoverageMetric = Field(default_factory=CoverageMetric)
+    files: dict[str, FileCoverageDetail] = Field(
+        default_factory=dict,
+        description="Map of file paths to their individual coverage details.",
+    )
+    total_percent: float = Field(default=0.0, ge=0.0, le=100.0, description="Overall coverage percentage.")
+    raw_report_path: str | None = Field(default=None, description="Path to coverage report JSON or XML.")
+
+
 class WorkspaceTestExecutionRequest(BaseModel):
     """Request payload to execute tests inside the task workspace."""
 
@@ -480,6 +563,18 @@ class WorkspaceTestExecutionRequest(BaseModel):
     arguments: list[str] = Field(default_factory=list, description="Additional permitted arguments for test runner.")
     timeout_seconds: int | None = Field(default=None, ge=1, le=300, description="Execution timeout.")
     environment: dict[str, str] = Field(default_factory=dict, description="Custom environment variables.")
+    collect_coverage: bool = Field(
+        default=True,
+        description="Whether to collect line and branch coverage metrics (F23/F13).",
+    )
+    junit_xml: bool = Field(
+        default=True,
+        description="Whether to emit and parse structured JUnit XML report (F23).",
+    )
+    sandbox_backend: str | None = Field(
+        default=None,
+        description="Execution isolation backend (e.g. 'container' / 'gvisor' / 'subprocess').",
+    )
 
 
 class WorkspaceTestExecutionResult(BaseModel):
@@ -512,6 +607,14 @@ class WorkspaceTestExecutionResult(BaseModel):
     workspace_revision: str | None = None
     executed_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    junit_report: TestSuiteResult | None = Field(
+        default=None,
+        description="Structured test suite result parsed from JUnit XML (F23).",
+    )
+    coverage: TestCoverageSummary | None = Field(
+        default=None,
+        description="Line and branch test coverage summary (F23/F13).",
     )
 
 
@@ -970,5 +1073,10 @@ __all__ = [
     "WorkspaceToolPolicyRequest",
     "WorkspaceToolPolicyResult",
     "can_transition_workspace",
+    "CoverageMetric",
+    "FileCoverageDetail",
+    "TestCaseResult",
+    "TestCoverageSummary",
+    "TestSuiteResult",
 ]
 

@@ -1428,6 +1428,48 @@ ecover_interrupted_tasks.
 
 ---
 
+### [PW3-10] 2026-11-14 — F23 Restricted Test Runner (Issue #204)
+**Type:** Feature / Testing / Sandbox / Quality  
+**Developer:** Om (`OM202401238`)  
+**Changes:**
+- `backend/app/schemas/workspace.py`:
+  - Defined `TestCaseResult` model (`name`, `classname`, `file`, `time_s`, `status`, `failure_message`, `failure_type`, `traceback`) with `__test__ = False`.
+  - Defined `TestSuiteResult` model (`name`, `tests_total`, `passed`, `failed`, `skipped`, `errors`, `time_s`, `test_cases`, `raw_xml_path`) with `__test__ = False`.
+  - Defined `CoverageMetric` model (`total`, `covered`, `skipped`, `percent`).
+  - Defined `FileCoverageDetail` model (`file_path`, `lines`, `branches`, `statements`, `functions`, `missing_lines`, `executed_lines`).
+  - Defined `TestCoverageSummary` model (`lines`, `branches`, `statements`, `functions`, `files`, `total_percent`, `raw_report_path`) with `__test__ = False`.
+  - Extended `WorkspaceTestExecutionRequest` with `collect_coverage`, `junit_xml`, and `sandbox_backend`.
+  - Extended `WorkspaceTestExecutionResult` with `junit_report: TestSuiteResult | None` and `coverage: TestCoverageSummary | None`.
+  - Updated `__all__` and exported schemas in `backend/app/schemas/__init__.py`.
+- `backend/sandbox/test_reports.py`:
+  - Implemented `JUnitReportParser` parsing standard JUnit XML files and strings (`pytest`, `jest`, `vitest`), extracting exact counts, failure assertion messages, failure types, and stack tracebacks with resilient error handling.
+  - Implemented `CoverageReportParser` parsing Python `coverage.py` / `pytest-cov` JSON and JavaScript `jest` / `istanbul` summary JSON, extracting statement, line, branch, and function metrics with per-file missing lines breakdown.
+- `backend/sandbox/test_runner.py`:
+  - Added `backend: SandboxBackend | None = None` parameter to `WorkspaceTestRunner.__init__`, configuring `_command_runner.backend` for container isolation (F20).
+  - Added `backend` property with getter and setter.
+  - Created `.test_reports/` directory in task workspace for isolated test artifact storage.
+  - Injected standard structured report CLI flags: `--junitxml=.test_reports/junit.xml`, `-o junit_family=xunit2`, `--cov=. --cov-report=json:.test_reports/coverage.json` for pytest; `--coverage --coverageReporters=json-summary` for Jest/Vitest.
+  - Integrated `JUnitReportParser` to parse emitted XML, replacing fragile stdout regex scraping with high-precision failure diagnosis and exact failure names/tracebacks.
+  - Integrated `CoverageReportParser` to parse emitted coverage reports, serving as the quantitative foundation for framework-aware test generation (F13).
+- `backend/sandbox/workspace_manager.py`:
+  - Passed `backend=self._backend` to `WorkspaceTestRunner` on initialization.
+- `backend/sandbox/tool_policy_bridge.py`:
+  - Updated `TOOL_RUN_TESTS` input parameter schema with `collect_coverage`, `junit_xml`, and `sandbox_backend`.
+  - Wired `junit_report` and `coverage` into `ToolResult.output`.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Updated `execute_task_tests` to accept and pass `collect_coverage`, `junit_xml`, and `sandbox_backend` into `WorkspaceTestExecutionRequest`.
+- `backend/tests/test_restricted_test_runner_f23.py`:
+  - Authored comprehensive test suite covering `JUnitReportParser`, `CoverageReportParser`, container backend binding with `network_enabled=False`, argument injection, and `ToolPolicyBridge` integration (14/14 tests passing).
+- `Docs/testing/restricted_test_runner_f23_report.md`:
+  - Published comprehensive technical architecture and verification acceptance report.
+- `Docs/engineering/10_development_tasks.md`:
+  - Recorded PW3-07 under Om on the master task board.
+
+**Impact:** Fulfills all recommendations of Issue #204 by enforcing container backend execution (F20) with offline network isolation, replacing fragile stdout scraping with high-precision JUnit XML failure diagnosis, and collecting line and branch coverage metrics required for F13 test generation.
+
+**Related Docs:** `Docs/testing/restricted_test_runner_f23_report.md`, `Docs/engineering/10_development_tasks.md`
+
+---
 ### [PW3-11] 2026-11-14 — Amortized Static Scanner Subprocess Execution & Parallel Analysis (F39)
 **Type:** Feature / Performance / Code Review  
 **Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
@@ -1515,12 +1557,4 @@ ecover_interrupted_tasks.
 **Impact:** Eliminates Out-Of-Memory (OOM) risks during large refactor diff verification in memory-constrained Docker containers, guarantees peak heap memory < 20MB, intercepts path traversal attacks on header lines, and preserves complete backward compatibility.
 
 **Related Docs:** `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`, `Docs/engineering/13_architecture_decisions.md`
-
-
-
-
-
-
-
-
 

@@ -710,6 +710,9 @@ class TaskExecutionOrchestrator:
         framework: str | None = None,
         arguments: list[str] | None = None,
         timeout_seconds: int = 60,
+        collect_coverage: bool = True,
+        junit_xml: bool = True,
+        sandbox_backend: str | None = None,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
         task_repo.verify_execution_approval_gate(task)
@@ -741,6 +744,9 @@ class TaskExecutionOrchestrator:
             test_path=test_path,
             arguments=arguments or [],
             timeout_seconds=timeout_seconds,
+            collect_coverage=collect_coverage,
+            junit_xml=junit_xml,
+            sandbox_backend=sandbox_backend,
         )
         result = self.workspace_manager.run_tests(test_req)
 

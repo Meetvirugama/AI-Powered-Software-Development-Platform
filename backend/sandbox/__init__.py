@@ -79,6 +79,10 @@ from sandbox.local_backend import LocalSubprocessBackend
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
 from sandbox.runner_client import RunnerClient
+from sandbox.test_reports import (
+    CoverageReportParser,
+    JUnitReportParser,
+)
 from sandbox.test_runner import (
     MAX_REPAIR_ATTEMPTS,
     WorkspaceTestRunner,
@@ -155,6 +159,8 @@ __all__ = [
     "TOOL_VERIFY_DIFF_IMMUTABILITY",
     "TOOL_WRITE_FILE",
     "ContainerBackend",
+    "CoverageReportParser",
+    "JUnitReportParser",
     "LocalSubprocessBackend",
     "RunnerAuthenticationError",
     "RunnerClient",
