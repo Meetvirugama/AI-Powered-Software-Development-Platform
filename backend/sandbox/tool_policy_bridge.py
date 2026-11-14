@@ -381,6 +381,9 @@ class WorkspaceToolPolicyBridge:
                     arguments=args.get("arguments", []),
                     timeout_seconds=args.get("timeout_seconds"),
                     environment=args.get("environment", {}),
+                    collect_coverage=args.get("collect_coverage", True),
+                    junit_xml=args.get("junit_xml", True),
+                    sandbox_backend=args.get("sandbox_backend"),
                 )
                 test_res = self._workspace_manager.run_tests(test_req)
                 return ToolResult(
@@ -401,6 +404,8 @@ class WorkspaceToolPolicyBridge:
                         "stderr": test_res.stderr,
                         "timed_out": test_res.timed_out,
                         "framework": test_res.framework,
+                        "junit_report": test_res.junit_report.model_dump() if test_res.junit_report else None,
+                        "coverage": test_res.coverage.model_dump() if test_res.coverage else None,
                     },
                     error=test_res.error,
                 )
@@ -867,6 +872,20 @@ def register_workspace_tools(
                         "type": "integer",
                         "description": "Test execution timeout in seconds (default: 60, max: 300).",
                         "default": 60,
+                    },
+                    "collect_coverage": {
+                        "type": "boolean",
+                        "description": "Whether to collect line and branch coverage metrics (F23/F13).",
+                        "default": True,
+                    },
+                    "junit_xml": {
+                        "type": "boolean",
+                        "description": "Whether to emit and parse structured JUnit XML report (F23).",
+                        "default": True,
+                    },
+                    "sandbox_backend": {
+                        "type": "string",
+                        "description": "Execution isolation backend (e.g. 'container' / 'gvisor' / 'subprocess').",
                     },
                 },
             },
