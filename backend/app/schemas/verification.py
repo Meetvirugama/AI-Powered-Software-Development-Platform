@@ -113,6 +113,51 @@ class VerificationFinding(BaseModel):
             return value.replace("\\", "/").strip()
 
 
+class DiffHunkCitation(BaseModel):
+    """Structured citation to a specific diff hunk satisfying an acceptance criterion (P-28)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    file_path: str = Field(..., description="Repository-relative file path of the cited diff.")
+    hunk_index: int = Field(default=0, ge=0, description="0-indexed position of the hunk within the file diff.")
+    old_start: int = Field(default=0, ge=0, description="Old file start line number.")
+    new_start: int = Field(default=0, ge=0, description="New file start line number.")
+    line_range: str = Field(default="", description="Human-readable line range (e.g. 'L10-L25').")
+    hunk_header: str = Field(default="", description="Diff hunk header (e.g. '@@ -10,4 +10,12 @@').")
+    snippet: str = Field(default="", description="Redacted diff hunk code addition snippet.")
+
+
+class CriterionJudgeEvidence(BaseModel):
+    """Structured verification evidence produced by LLM-as-judge for an acceptance criterion (P-28)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    criterion_id: str = Field(..., description="Acceptance criterion identifier or statement.")
+    requirement_id: str = Field(..., description="Associated parent requirement ID.")
+    verdict: Literal["PASS", "FAIL", "PARTIAL", "INCONCLUSIVE", "UNMET"] = Field(
+        default="PASS",
+        description="LLM-as-judge verification verdict.",
+    )
+    confidence: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score (0.0 to 1.0) of the criterion evaluation.",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Detailed reasoning explaining how the cited diff hunks satisfy the criterion.",
+    )
+    citations: list[DiffHunkCitation] = Field(
+        default_factory=list,
+        description="Explicit citations to diff hunks demonstrating criterion satisfaction.",
+    )
+    judge_model: str = Field(
+        default="llm-as-judge",
+        description="Identifier of the judge engine/model that evaluated the criterion.",
+    )
+
+
 class VerificationCheckItem(BaseModel):
     """Individual verification gate check (tests, static analysis, review, etc.).
 
@@ -270,6 +315,18 @@ class VerificationContext(BaseModel):
     execution_time_s: float = Field(default=0.0, ge=0.0, description="Task execution time in seconds.")
     timeout_s: float = Field(default=300.0, ge=1.0, description="Task timeout limit in seconds.")
 
+    # Optional task requirements for P-28 LLM-as-judge acceptance check
+    requirements: list[Any] | None = Field(
+        default=None,
+        description="Optional requirements list for P-28 LLM-as-judge criteria verification.",
+    )
+
+    # Structured P-28 LLM-as-judge evidence with diff hunk citations
+    requirement_evidence: list[CriterionJudgeEvidence] = Field(
+        default_factory=list,
+        description="Structured LLM-as-judge criteria evidence with diff citations.",
+    )
+
 
 class VerificationResult(BaseModel):
     """Independent verification result envelope matching Docs/week3.md §6 F36.
@@ -292,6 +349,10 @@ class VerificationResult(BaseModel):
     warnings: list[VerificationFinding] = Field(
         default_factory=list,
         description="Non-blocking observations or warnings.",
+    )
+    requirement_evidence: list[CriterionJudgeEvidence] = Field(
+        default_factory=list,
+        description="Structured LLM-as-judge requirement evidence with diff hunk citations (P-28).",
     )
     pr_summary: str = Field(
         default="",
@@ -396,6 +457,8 @@ class VerificationResult(BaseModel):
 
 
 __all__ = [
+    "CriterionJudgeEvidence",
+    "DiffHunkCitation",
     "VerificationCheckItem",
     "VerificationCheckStatus",
     "VerificationContext",
