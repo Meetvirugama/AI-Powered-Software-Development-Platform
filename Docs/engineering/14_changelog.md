@@ -1485,6 +1485,38 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/33_redis_singleton_and_bounded_connection_pooling.md`, `Docs/engineering/13_architecture_decisions.md`
 
+---
+
+### [PW3-13] 2026-11-14 — Stream Unified Git Diffs & Memory-Bound Patch Verification (F40/F41)
+**Type:** Feature / Performance / Sandbox Reliability  
+**Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
+**Changes:**
+- `backend/sandbox/diff_verifier.py`:
+  - Implemented streaming line generator `iter_diff_lines` with bounded byte accounting (`DEFAULT_MAX_DIFF_BYTES = 10MB`) and truncation markers (`DIFF_TRUNCATION_MARKER`), eliminating $O(\text{diff\_size})$ contiguous heap allocations.
+  - Implemented streaming diff parser `iter_parse_unified_diff` state machine consuming lines iteratively with $O(1)$ buffer consumption, yielding `FileDiffSummary` as each file completes.
+  - Added early path guard checking on file headers (`diff --git`, `---`, `+++`), validating `validate_repo_relative_path` and workspace containment immediately, halting with `UnsafePathError` before consuming subsequent diff chunks.
+  - Added streaming primary secret scanning `iter_scan_secrets_lines` evaluating added lines line-by-line via generator pipelines.
+  - Enhanced `extract_diff` to stream from git (`_stream_git_diff_lines`) or filesystem (`_stream_fs_diff_lines`), safely terminating git subprocesses upon exceeding 10MB and setting truncation errors without memory explosion.
+  - Added streaming verification entrypoint `stream_validate_diff` for end-to-end evaluation with minimal peak memory.
+- `backend/sandbox/gitleaks_scanner.py`:
+  - Added `scan_diff_stream` and `iter_scan_rules` to evaluate canonical Gitleaks rules iteratively across streamed diff lines without full-diff text duplication.
+- `backend/app/services/repair_service.py`:
+  - Implemented `iter_modified_files_from_diff` and upgraded `extract_modified_files_from_diff` to accept both raw strings and streaming line iterables with optional early path guard checking.
+  - Updated `RepairPatchValidator.validate_patch` with early path guard checking support.
+- `backend/sandbox/__init__.py`:
+  - Exported `DEFAULT_MAX_DIFF_BYTES`, `DIFF_TRUNCATION_MARKER`, `iter_diff_lines`, and `iter_parse_unified_diff`.
+- `backend/tests/test_stream_diff_verifier_f40.py`:
+  - Added 19 comprehensive unit and integration tests verifying incremental line streaming, multi-file generator parsing, early path guard interception halting generators, byte threshold truncation marker enforcement, subprocess termination on limit, peak heap memory strictly bounded under 20MB (`tracemalloc` across 400-file, 30MB+ diff streams), streaming secret scanning, and 100% schema backward compatibility.
+- Documentation:
+  - Added **ADR-021: Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors** to `Docs/engineering/13_architecture_decisions.md`.
+  - Created `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`.
+  - Updated `Docs/engineering/README.md`, `Docs/README.md`, and `Docs/engineering/10_development_tasks.md` (PW3-09).
+
+**Impact:** Eliminates Out-Of-Memory (OOM) risks during large refactor diff verification in memory-constrained Docker containers, guarantees peak heap memory < 20MB, intercepts path traversal attacks on header lines, and preserves complete backward compatibility.
+
+**Related Docs:** `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`, `Docs/engineering/13_architecture_decisions.md`
+
+
 
 
 

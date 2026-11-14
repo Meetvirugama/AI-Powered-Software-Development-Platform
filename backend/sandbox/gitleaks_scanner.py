@@ -12,16 +12,15 @@ Supports:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Generator, Iterable
 from pathlib import Path
-from typing import Any
 
 from app.core.secret_redaction import redact
 from app.schemas.workspace import SecretScanFinding
@@ -151,7 +150,7 @@ class GitleaksDiffScanner:
             if self.config_path.exists():
                 cmd.extend(["--config", str(self.config_path)])
 
-            proc = subprocess.run(
+            subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -183,17 +182,25 @@ class GitleaksDiffScanner:
 
         return None
 
-    def _scan_with_rules(
+    def scan_diff_stream(
         self,
-        diff_text: str,
+        lines: Iterable[str],
         file_path_hint: str | None = None,
-    ) -> list[SecretScanFinding]:
-        """Execute built-in Gitleaks rule evaluation over added lines in diff."""
-        findings: list[SecretScanFinding] = []
+    ) -> Generator[SecretScanFinding, None, None]:
+        """Streamingly scan diff lines using Gitleaks rules."""
+        yield from self.iter_scan_rules(lines, file_path_hint=file_path_hint)
+
+    def iter_scan_rules(
+        self,
+        lines: Iterable[str],
+        file_path_hint: str | None = None,
+    ) -> Generator[SecretScanFinding, None, None]:
+        """Execute built-in Gitleaks rule evaluation over added lines in diff stream."""
         current_file = file_path_hint or "unknown"
         current_line_no = 0
 
-        for line in diff_text.splitlines():
+        for raw_line in lines:
+            line = raw_line.rstrip("\r\n")
             # Track file headers in unified diff
             if line.startswith("+++ b/"):
                 current_file = line[6:].strip()
@@ -225,15 +232,19 @@ class GitleaksDiffScanner:
 
                 for rule_id, pattern in self.rules.items():
                     if pattern.search(content):
-                        findings.append(
-                            SecretScanFinding(
-                                file_path=current_file,
-                                line_number=current_line_no,
-                                secret_type=rule_id,
-                                redacted_preview=redact(content[:80]),
-                            )
+                        yield SecretScanFinding(
+                            file_path=current_file,
+                            line_number=current_line_no,
+                            secret_type=rule_id,
+                            redacted_preview=redact(content[:80]),
                         )
             elif not line.startswith("-"):
                 current_line_no += 1
 
-        return findings
+    def _scan_with_rules(
+        self,
+        diff_text: str,
+        file_path_hint: str | None = None,
+    ) -> list[SecretScanFinding]:
+        """Execute built-in Gitleaks rule evaluation over added lines in diff."""
+        return list(self.iter_scan_rules(io.StringIO(diff_text), file_path_hint=file_path_hint))

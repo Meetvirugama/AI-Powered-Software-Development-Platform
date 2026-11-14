@@ -34,6 +34,7 @@
 | [31](./31_distributed_retrieval_cache_and_invalidation.md) | **Distributed Retrieval Cache & Invalidation (F37)** | Two-level caching, Redis coordination, version-aware sync invalidation | Active |
 | [32](./32_amortized_static_scanner_parallel_analysis.md) | **Amortized Static Scanner & Parallel Analysis (F39)** | Batch CLI target amortization, concurrent subprocesses, AST multi-file scan | Active |
 | [33](./33_redis_singleton_and_bounded_connection_pooling.md) | **Redis Singleton & Bounded Connection Pooling (F40)** | Thread/coroutine-safe double-checked lock, max_connections, backoff & draining | Active |
+| [34](./34_stream_unified_git_diffs_and_memory_bound_patch_verification.md) | **Stream Unified Git Diffs & Memory-Bound Patch Verification (F40/F41)** | Generator diff parsing, 10MB threshold, early path guard, peak memory < 20MB | Active |
 
 ---
 

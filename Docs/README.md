@@ -86,6 +86,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [31. Distributed Retrieval Cache & Invalidation](./engineering/31_distributed_retrieval_cache_and_invalidation.md) — Two-Level Hierarchical Query Caching, Redis Distributed Sharing & Sync Invalidation (Issue #218 / F37).
 - [32. Amortized Static Scanner & Parallel Analysis](./engineering/32_amortized_static_scanner_parallel_analysis.md) — Batch CLI target amortization, concurrent subprocess execution, and AST multi-file scan (Issue #243 / F39).
 - [33. Redis Singleton & Bounded Connection Pooling](./engineering/33_redis_singleton_and_bounded_connection_pooling.md) — Thread/coroutine-safe singleton initialization, max_connections pool bounding, and backoff (Issue #244 / F40).
+- [34. Stream Unified Git Diffs & Memory-Bound Patch Verification](./engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md) — Streaming generator diff parsing, 10MB memory threshold, early path guard, and peak memory < 20MB (Issue #245 / F40).
 
 ---
 
