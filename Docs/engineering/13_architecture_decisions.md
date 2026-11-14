@@ -620,6 +620,40 @@ During code review and pull request analysis, static analysis tools (`ruff`, `ba
    - Preserve 100% backward compatibility for single-string `target_path` arguments.
    - Retain exact `StaticFinding` dataclass structure, severity thresholds, redaction of sensitive metadata, and API return schema (`findings`, `static_findings_count`, `ai_findings_count`, `total_findings`).
 
+## ADR-020: Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling
+
+| Field | Value |
+|---|---|
+| **Title** | Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+The platform relies on Redis across core pathways: JWT revocation checking in authentication middleware, tenant Server-Sent Events (SSE) streaming, API rate-limiting, two-level hybrid retrieval caching, and reliable background synchronization workers. Previously:
+1. `backend/app/core/redis.py` initialized `_async_redis_client` via an unguarded global check (`if _async_redis_client is None:`), allowing race conditions during concurrent startup or traffic spikes.
+2. Multiple coroutines racing during application bootstrap created uncoordinated client instances and redundant connection pools.
+3. Neither synchronous nor asynchronous Redis connection pools specified an upper `max_connections` ceiling, leading to unconstrained connection creation that exhausted quotas on hosted Redis tiers (e.g., Upstash or Azure Managed Redis) and produced `ConnectionError: Too many connections`.
+4. There was no exponential backoff or retry mechanism for momentary connection saturation, causing unhandled 500 errors.
+
+**Decision:**
+1. **Thread-Safe and Coroutine-Safe Singleton Synchronization:**
+   - Implement thread-safe double-checked locking using a dedicated `threading.Lock` within `get_async_redis_client()` and `get_redis()`.
+   - Protect coroutine calls in `get_redis_async()` with a running loop-aware `asyncio.Lock()`, guaranteeing that exactly one shared async client and connection pool are initialized regardless of concurrency.
+2. **Explicit Bounded Connection Pooling (`max_connections`):**
+   - Bind `redis.asyncio.ConnectionPool` and synchronous `redis.ConnectionPool` with explicit `max_connections=settings.redis_max_connections` (default: 50).
+   - Configure socket timeouts (`redis_socket_timeout=10.0`), connect timeouts (`redis_connection_timeout=5.0`), health check intervals (30s on Upstash/TLS), and automatic reconnection on timeout.
+3. **Graceful Degradation & Exponential Backoff:**
+   - Provide `run_with_redis_retry` with exponential backoff and jitter for transient connection pool exhaustion (`is_redis_pool_exhausted_error`).
+   - If exhaustion persists beyond bounded retries, raise `RedisPoolExhaustedError` rather than unhandled raw connection crashes.
+4. **Clean Draining & Lifecycle Management:**
+   - Explicitly disconnect the underlying `ConnectionPool` alongside client closing in `close_redis_async()` and `close_redis()`.
+   - Ensure clean shutdown in `backend/app/core/lifespan.py` releases all pooled socket descriptors cleanly.
+5. **Zero Breaking Changes:**
+   - Preserve all existing function signatures: `get_redis()`, `get_async_redis_client()`, `get_redis_async()`, `close_redis()`, and `close_redis_async()`.
+   - Provide `get_redis.cache_clear()` alias for legacy lru_cache callers.
+
+
 
 
 

@@ -64,7 +64,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [10. Development Tasks](./engineering/10_development_tasks.md) — Master task boards for Week 1, Week 2, Week 3, and Post-Week 3.
 - [11. Testing & QA](./engineering/11_testing_qa.md) — Test strategies, fixture suites, and coverage policies.
 - [12. Deployment & DevOps](./engineering/12_deployment_devops.md) — Local setup, Docker Compose, and environment variables.
-- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-019).
+- [13. Architecture Decisions](./engineering/13_architecture_decisions.md) — Architecture Decision Records (ADR-001 through ADR-020).
 - [14. Changelog](./engineering/14_changelog.md) — Chronological log of major codebase milestones.
 - [15. Authentication & Authorization Security Audit](./engineering/15_authentication_authorization_audit.md) — Timing-safe HMAC, secret validation, and token rotation audit.
 - [16. Issue #181 Implementation Plan](./engineering/16_issue181_implementation_plan.md) — Implementation blueprint for JWT and OAuth hardening.
@@ -85,6 +85,7 @@ The [engineering/](./engineering/) directory contains deep-dive architectural sp
 - [30. Distributed Tracing & LLM Observability](./engineering/30_distributed_tracing_llm_observability_and_agent_monitoring.md) — OpenTelemetry Tracing, GenAI Semantic Spans, Tool Invocations & Langfuse (Issue #212 / F31).
 - [31. Distributed Retrieval Cache & Invalidation](./engineering/31_distributed_retrieval_cache_and_invalidation.md) — Two-Level Hierarchical Query Caching, Redis Distributed Sharing & Sync Invalidation (Issue #218 / F37).
 - [32. Amortized Static Scanner & Parallel Analysis](./engineering/32_amortized_static_scanner_parallel_analysis.md) — Batch CLI target amortization, concurrent subprocess execution, and AST multi-file scan (Issue #243 / F39).
+- [33. Redis Singleton & Bounded Connection Pooling](./engineering/33_redis_singleton_and_bounded_connection_pooling.md) — Thread/coroutine-safe singleton initialization, max_connections pool bounding, and backoff (Issue #244 / F40).
 
 ---
 
