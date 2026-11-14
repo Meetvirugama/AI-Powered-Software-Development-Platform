@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://platform:platform@localhost:5433/agent_platform"
     redis_url: str = "redis://localhost:6379/0"
 
+    # Redis connection pool and reliability settings (F40 / Issue #244)
+    redis_max_connections: int = 50
+    redis_connection_timeout: float = 5.0
+    redis_socket_timeout: float = 10.0
+    redis_health_check_interval: int = 30
+    redis_retry_on_timeout: bool = True
+
     # PostgreSQL connection pool settings for concurrent analysis workloads (Week 2 Section 12 Item 17, B-14)
     db_pool_size: int = 20
     db_max_overflow: int = 10

@@ -1459,6 +1459,33 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/32_amortized_static_scanner_parallel_analysis.md`, `Docs/code-review/AMORTIZED_STATIC_SCANNER_PERFORMANCE.md`, `Docs/engineering/13_architecture_decisions.md`
 
+---
+
+### [PW3-12] 2026-11-14 — Redis Thread/Coroutine-Safe Singleton & Bounded Connection Pooling (F40)
+**Type:** Feature / Reliability / Infrastructure  
+**Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
+**Changes:**
+- `backend/app/core/redis.py`:
+  - Implemented thread-safe double-checked locking using `threading.Lock` within `get_async_redis_client()` and `get_redis()`, preventing race conditions during application bootstrap and traffic bursts.
+  - Added coroutine-safe synchronization with running-loop-aware `asyncio.Lock` in `get_redis_async()`.
+  - Configured explicit connection pool limits using `redis.asyncio.ConnectionPool` and `redis.ConnectionPool` with `max_connections=settings.redis_max_connections` (default: 50).
+  - Implemented `run_with_redis_retry` and `is_redis_pool_exhausted_error` with exponential backoff and jitter for transient connection pool exhaustion, raising descriptive `RedisPoolExhaustedError` on persistent failure.
+  - Enhanced `close_redis_async()` and `close_redis()` to disconnect underlying connection pools alongside client handles for leak-free draining.
+  - Preserved backward compatibility with `get_redis.cache_clear()` alias and seamless synchronous/asynchronous calling conventions.
+- `backend/app/core/config.py`:
+  - Added Redis connection pooling and reliability settings: `redis_max_connections` (50), `redis_connection_timeout` (5.0s), `redis_socket_timeout` (10.0s), `redis_health_check_interval` (30s), and `redis_retry_on_timeout` (True).
+- `backend/tests/test_redis_reliability_f40.py`:
+  - Added 12 comprehensive unit and integration tests covering concurrent coroutine singleton creation (50 coroutines), multithreaded singleton access (32 worker threads), pool size bounding, custom settings overrides, clean lifecycle draining, transient exhaustion backoff, persistent exhaustion error handling, and zero breaking changes.
+- Documentation:
+  - Added **ADR-020: Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling** to `Docs/engineering/13_architecture_decisions.md`.
+  - Created `Docs/engineering/33_redis_singleton_and_bounded_connection_pooling.md`.
+  - Updated `Docs/engineering/README.md`, `Docs/README.md`, and `Docs/engineering/10_development_tasks.md` (PW3-08).
+
+**Impact:** Eliminates Redis connection pool race conditions, prevents `ConnectionError: Too many connections` socket exhaustion on hosted Redis tiers, and ensures graceful degradation under peak load.
+
+**Related Docs:** `Docs/engineering/33_redis_singleton_and_bounded_connection_pooling.md`, `Docs/engineering/13_architecture_decisions.md`
+
+
 
 
 
