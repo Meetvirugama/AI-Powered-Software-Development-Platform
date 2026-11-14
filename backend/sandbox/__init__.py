@@ -5,11 +5,6 @@ Owner: Prit Zania — Week 3 Day 1 Deliverable (Docs/week3.md §6 F33, §8 Day 1
 
 from sandbox.backend import SandboxBackend
 from sandbox.command_runner import WorkspaceCommandRunner, kill_process_tree
-from sandbox.container_backend import ContainerBackend
-from sandbox.factory import SandboxFactory
-from sandbox.local_backend import LocalSubprocessBackend
-from sandbox.runner_client import RunnerClient
-from sandbox.two_phase_pipeline import TwoPhaseExecutionService
 from sandbox.constants import (
     ALLOWED_COMMAND_TEMPLATES,
     CRITICAL_PROJECT_FILES,
@@ -32,7 +27,14 @@ from sandbox.constants import (
     SECRET_SCAN_PATTERNS,
     SENSITIVE_ENV_VARS,
 )
-from sandbox.diff_verifier import WorkspaceDiffVerifier
+from sandbox.container_backend import ContainerBackend
+from sandbox.diff_verifier import (
+    DEFAULT_MAX_DIFF_BYTES,
+    DIFF_TRUNCATION_MARKER,
+    WorkspaceDiffVerifier,
+    iter_diff_lines,
+    iter_parse_unified_diff,
+)
 from sandbox.exceptions import (
     RunnerAuthenticationError,
     RunnerUnavailableError,
@@ -72,8 +74,11 @@ from sandbox.exceptions import (
     WorkspaceTestExecutionError,
     WorkspaceUnsupportedFrameworkError,
 )
+from sandbox.factory import SandboxFactory
+from sandbox.local_backend import LocalSubprocessBackend
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
+from sandbox.runner_client import RunnerClient
 from sandbox.test_runner import (
     MAX_REPAIR_ATTEMPTS,
     WorkspaceTestRunner,
@@ -102,14 +107,15 @@ from sandbox.tool_policy_bridge import (
     WorkspaceToolPolicyBridge,
     register_workspace_tools,
 )
+from sandbox.two_phase_pipeline import TwoPhaseExecutionService
 from sandbox.workspace_manager import WorkspaceManager
 
 __all__ = [
     "ALLOWED_COMMAND_TEMPLATES",
     "CANONICAL_WORKSPACE_TOOLS",
     "CRITICAL_PROJECT_FILES",
-    "ContainerBackend",
     "DEFAULT_COMMAND_TIMEOUT_SECONDS",
+    "DEFAULT_MAX_DIFF_BYTES",
     "DEFAULT_MAX_DISK_BYTES",
     "DEFAULT_MAX_FILES_MODIFIED",
     "DEFAULT_MAX_FILE_SIZE_BYTES",
@@ -117,9 +123,9 @@ __all__ = [
     "DEFAULT_MAX_WORKSPACE_FILES",
     "DEFAULT_TIMEOUT_SECONDS",
     "DEFAULT_WORKSPACE_SUBDIR",
+    "DIFF_TRUNCATION_MARKER",
     "DISALLOWED_COMMAND_TOKENS",
     "FORBIDDEN_FILE_PATTERNS",
-    "LocalSubprocessBackend",
     "MAX_COMMAND_OUTPUT_BYTES",
     "MAX_REPAIR_ATTEMPTS",
     "MAX_TASK_LOCK_TIMEOUT_SECONDS",
@@ -127,15 +133,6 @@ __all__ = [
     "PROTECTED_BRANCHES",
     "PROTECTED_SYSTEM_PREFIXES",
     "RECOVERY_STALE_TIMEOUT_SECONDS",
-    "RunnerAuthenticationError",
-    "RunnerClient",
-    "RunnerUnavailableError",
-    "SandboxBackend",
-    "SandboxBackendError",
-    "SandboxConfigurationError",
-    "SandboxFactory",
-    "SandboxResourceLimitError",
-    "SandboxSecurityError",
     "SECRET_SCAN_PATTERNS",
     "SENSITIVE_ENV_VARS",
     "TOOL_CHECK_DISK_BUDGET",
@@ -157,6 +154,17 @@ __all__ = [
     "TOOL_VALIDATE_INVARIANTS",
     "TOOL_VERIFY_DIFF_IMMUTABILITY",
     "TOOL_WRITE_FILE",
+    "ContainerBackend",
+    "LocalSubprocessBackend",
+    "RunnerAuthenticationError",
+    "RunnerClient",
+    "RunnerUnavailableError",
+    "SandboxBackend",
+    "SandboxBackendError",
+    "SandboxConfigurationError",
+    "SandboxFactory",
+    "SandboxResourceLimitError",
+    "SandboxSecurityError",
     "TwoPhaseExecutionService",
     "WorkspaceAuthorizationError",
     "WorkspaceCleanupError",
@@ -196,6 +204,8 @@ __all__ = [
     "WorkspaceTestRunner",
     "WorkspaceToolPolicyBridge",
     "WorkspaceUnsupportedFrameworkError",
+    "iter_diff_lines",
+    "iter_parse_unified_diff",
     "kill_process_tree",
     "register_workspace_tools",
 ]

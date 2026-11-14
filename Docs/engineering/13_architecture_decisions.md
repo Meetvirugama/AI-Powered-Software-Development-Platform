@@ -653,6 +653,38 @@ The platform relies on Redis across core pathways: JWT revocation checking in au
    - Preserve all existing function signatures: `get_redis()`, `get_async_redis_client()`, `get_redis_async()`, `close_redis()`, and `close_redis_async()`.
    - Provide `get_redis.cache_clear()` alias for legacy lru_cache callers.
 
+## ADR-021: Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors
+
+| Field | Value |
+|---|---|
+| **Title** | Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+In `backend/sandbox/diff_verifier.py` and `backend/app/services/repair_service.py`, git diff extraction and patch verification historically buffered entire raw command outputs and unified diff strings directly into contiguous Python heap memory (`.read()`, `p.stdout.decode()`, `raw_diff.split("diff --git ")`).
+For tasks that touch numerous files or involve large repository diffs (e.g., major multi-file refactoring, bulk asset updates, or generated code verification), buffering multi-megabyte diff payloads created $O(\text{diff\_size})$ contiguous memory allocations, frequent garbage collection pauses, and potential Out-Of-Memory (OOM) kills inside memory-constrained Docker containers (e.g., 512MB–1GB RAM limits).
+Furthermore, path traversal validation and secret scanning waited until the entire diff payload was buffered into memory before checking file safety, wasting memory and CPU cycles on malicious or malformed payloads.
+
+**Decision:**
+1. **Streaming Generator for Diff Parsing:**
+   - Refactor `diff_verifier` and patch extraction to consume diff lines via an iterator/generator pipeline (`iter_diff_lines`, `iter_parse_unified_diff`, `iter_modified_files_from_diff`).
+   - Process file headers (`diff --git a/... b/...`, `--- a/...`, `+++ b/...`) and hunks (`@@ -old,len +new,len @@`) incrementally via a streaming state machine with $O(1)$ buffer consumption.
+2. **Bounded Output Memory Threshold & Truncation Markers:**
+   - Enforce an upper stream memory ceiling (`DEFAULT_MAX_DIFF_BYTES = 10 * 1024 * 1024` = 10MB per task diff).
+   - If diff size exceeds safe operational bounds, terminate subprocess/stream reading cleanly and append a standard truncation marker (`[DIFF TRUNCATED: Diff stream exceeded maximum memory limit of 10485760 bytes]`).
+   - Guarantee strict peak heap memory ceiling under 20MB (`MAX_PEAK_MEMORY_BYTES = 20 * 1024 * 1024`).
+3. **Early Path Guard Checking on File Headers:**
+   - Validate repository-relative path safety immediately on file header lines (`diff --git`, `---`, `+++`) as they are streamed.
+   - When `raise_on_traversal=True` or during fail-fast validation, abort iteration immediately on the header line with `UnsafePathError` or `WorkspacePathEscapeError` before reading or buffering any remaining diff chunks.
+4. **Dual-Engine Secret Scanning via Generator Pipelines:**
+   - Stream added diff lines (`+` lines) through primary regex patterns and canonical Gitleaks rules iteratively (`iter_scan_secrets_lines`, `scan_diff_stream`, `iter_scan_rules`) without buffering hunk contents.
+5. **Zero Breaking Changes:**
+   - Maintain 100% backward-compatible dataclass and schema contracts: `WorkspaceDiffResult`, `DiffValidationResult`, `PatchValidationResult`, and `FileDiffSummary`.
+   - Support both raw strings and line iterators across all public parsing and validation entrypoints.
+
+
 
 
 
