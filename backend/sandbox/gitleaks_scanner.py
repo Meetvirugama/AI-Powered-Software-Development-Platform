@@ -99,22 +99,33 @@ class GitleaksDiffScanner:
     ) -> list[SecretScanFinding]:
         """Scan a unified git diff for hardcoded credentials using Gitleaks rules.
 
-        Attempts CLI execution first if available; falls back smoothly to internal
-        Gitleaks-standard rules engine.
+        Attempts CLI execution first if available; supplements and falls back smoothly
+        to internal Gitleaks-standard rules engine.
         """
         if not diff_text or not diff_text.strip():
             return []
 
+        findings: list[SecretScanFinding] = []
+
         # Attempt CLI if available and not explicitly disabled
         if self._gitleaks_binary:
             try:
-                findings = self._scan_with_cli(diff_text)
-                if findings is not None:
-                    return findings
+                cli_findings = self._scan_with_cli(diff_text)
+                if cli_findings:
+                    findings.extend(cli_findings)
             except Exception as exc:
                 logger.debug("Native gitleaks CLI scan failed, falling back to built-in rules: %s", exc)
 
-        return self._scan_with_rules(diff_text, file_path_hint=file_path_hint)
+        # Supplement with built-in canonical Gitleaks rules to guarantee pattern detection
+        rule_findings = self._scan_with_rules(diff_text, file_path_hint=file_path_hint)
+        for rf in rule_findings:
+            if not any(
+                f.file_path == rf.file_path and f.line_number == rf.line_number and f.secret_type == rf.secret_type
+                for f in findings
+            ):
+                findings.append(rf)
+
+        return findings
 
     def _scan_with_cli(self, diff_text: str) -> list[SecretScanFinding] | None:
         """Execute native gitleaks CLI with piping."""

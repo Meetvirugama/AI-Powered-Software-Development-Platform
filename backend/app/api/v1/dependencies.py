@@ -1,5 +1,5 @@
 """
-Shared API dependencies and tenant isolation helpers for FastAPI v1 endpoints.
+Shared API dependencies, tenant isolation helpers, and Role-Based Access Control (RBAC) guards for FastAPI v1 endpoints (F01 / F30).
 """
 
 from __future__ import annotations
@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError, ErrorCode
 from app.models.repository import Repository
+from app.models.user import UserRole
 from app.repositories.repository_repository import RepositoryRepository
+
+ROLE_HIERARCHY: dict[str, int] = {
+    UserRole.VIEWER.value: 1,
+    UserRole.DEVELOPER.value: 2,
+    UserRole.ADMIN.value: 3,
+}
 
 
 def get_request_user_id(request: Request) -> UUID:
@@ -26,19 +33,103 @@ def get_request_user_id(request: Request) -> UUID:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
 
 
+def get_request_user_role(request: Request) -> str:
+    """Extract authenticated user's role from request state, defaulting to 'developer'."""
+    return getattr(request.state, "role", UserRole.DEVELOPER.value) or UserRole.DEVELOPER.value
+
+
+def require_role(*allowed_roles: str | UserRole):
+    """
+    FastAPI dependency factory enforcing Role-Based Access Control (RBAC).
+    Raises HTTP 403 Forbidden with ErrorCode.FORBIDDEN if user role is not permitted.
+    """
+    normalized_allowed = {
+        (r.value if isinstance(r, UserRole) else str(r)).lower()
+        for r in allowed_roles
+    }
+
+    def _dependency(request: Request) -> str:
+        current_role = get_request_user_role(request).lower()
+        if current_role not in normalized_allowed:
+            raise APIError(
+                403,
+                ErrorCode.FORBIDDEN,
+                f"Insufficient privileges. Role '{current_role}' is not authorized for this resource.",
+            )
+        return current_role
+
+    return _dependency
+
+
+def require_min_role(min_role: str | UserRole):
+    """
+    FastAPI dependency factory enforcing a minimum role in the hierarchy (VIEWER < DEVELOPER < ADMIN).
+    """
+    min_role_str = (min_role.value if isinstance(min_role, UserRole) else str(min_role)).lower()
+    min_level = ROLE_HIERARCHY.get(min_role_str, 2)
+
+    def _dependency(request: Request) -> str:
+        current_role = get_request_user_role(request).lower()
+        current_level = ROLE_HIERARCHY.get(current_role, 1)
+        if current_level < min_level:
+            raise APIError(
+                403,
+                ErrorCode.FORBIDDEN,
+                f"Insufficient privileges. Action requires at least '{min_role_str}' role.",
+            )
+        return current_role
+
+    return _dependency
+
+
+def require_permission(permission: str):
+    """
+    FastAPI dependency factory enforcing granular permission check.
+    Admin role automatically possesses all permissions.
+    """
+    def _dependency(request: Request) -> str:
+        current_role = get_request_user_role(request).lower()
+        if current_role == UserRole.ADMIN.value:
+            return permission
+        perms = set(getattr(request.state, "permissions", []))
+        if permission not in perms:
+            raise APIError(
+                403,
+                ErrorCode.FORBIDDEN,
+                f"Missing required permission: '{permission}'.",
+            )
+        return permission
+
+    return _dependency
+
+
 def get_owned_repository(
     repository_id: UUID,
     request: Request,
     db: Session,
     repo_cls: Any = None,
+    min_role: str | UserRole | None = None,
 ) -> Repository:
     """
     Ensure the repository exists and belongs to the authenticated user.
-    Enforces strict tenant isolation across all endpoints.
+    Enforces strict tenant isolation and optional minimum RBAC role across all endpoints.
     """
     if repo_cls is None:
         repo_cls = RepositoryRepository
     user_id = get_request_user_id(request)
+
+    if min_role is not None:
+        min_role_str = (min_role.value if isinstance(min_role, UserRole) else str(min_role)).lower()
+        min_level = ROLE_HIERARCHY.get(min_role_str, 2)
+        current_role = get_request_user_role(request).lower()
+        current_level = ROLE_HIERARCHY.get(current_role, 1)
+        if current_level < min_level:
+            raise APIError(
+                403,
+                ErrorCode.FORBIDDEN,
+                f"Insufficient privileges for repository operations. Requires at least '{min_role_str}' role.",
+            )
+
     repository = repo_cls(db).get_for_user(repository_id, user_id)
     if repository is None:
         raise APIError(
@@ -54,11 +145,24 @@ def get_owned_task(
     request: Request,
     db: Session,
     task_repo_cls: Any = None,
+    min_role: str | UserRole | None = None,
 ) -> tuple[Any, UUID]:
     """
     Ensure the task exists and belongs to the authenticated user.
-    Enforces strict tenant isolation across all task endpoints.
+    Enforces strict tenant isolation and optional minimum RBAC role across all task endpoints.
     """
+    if min_role is not None:
+        min_role_str = (min_role.value if isinstance(min_role, UserRole) else str(min_role)).lower()
+        min_level = ROLE_HIERARCHY.get(min_role_str, 2)
+        current_role = get_request_user_role(request).lower()
+        current_level = ROLE_HIERARCHY.get(current_role, 1)
+        if current_level < min_level:
+            raise APIError(
+                403,
+                ErrorCode.FORBIDDEN,
+                f"Insufficient privileges for task operations. Requires at least '{min_role_str}' role.",
+            )
+
     if task_repo_cls is None:
         from app.repositories.task_repository import TaskRepository
         task_repo_cls = TaskRepository
@@ -77,5 +181,6 @@ def get_owned_task(
 _request_user_id = get_request_user_id
 _owned_repository = get_owned_repository
 _owned_task = get_owned_task
+
 
 

@@ -324,7 +324,8 @@ async def github_callback(
         github_user.get("email") if isinstance(github_user.get("email"), str) else None,
         github_user.get("avatar_url") if isinstance(github_user.get("avatar_url"), str) else None,
     )
-    token, expires_in = create_access_token(str(user.id))
+    user_role = getattr(user, "role", "developer") or "developer"
+    token, expires_in = create_access_token(str(user.id), role=user_role)
 
     final_destination = target_redirect or f"{frontend_base}/auth/callback"
     redirect = RedirectResponse(
@@ -393,7 +394,8 @@ def dev_login(
                 email=f"{target_login.lower()}@example.com",
             )
 
-    token, expires_in = create_access_token(user.id)
+    user_role = getattr(user, "role", "developer") or "developer"
+    token, expires_in = create_access_token(user.id, role=user_role)
     response.set_cookie(
         settings.auth_cookie_name,
         token,
@@ -498,4 +500,5 @@ def _user_response(user: object) -> AuthenticatedUser:
         login=user.login,
         email=user.email,
         avatar_url=user.avatar_url,
+        role=getattr(user, "role", "developer") or "developer",
     )

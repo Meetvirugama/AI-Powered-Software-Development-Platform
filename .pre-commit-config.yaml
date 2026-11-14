@@ -2,7 +2,14 @@
 # Primary purpose: prevent committing API keys, tokens, or credentials
 
 repos:
-  # ── Secret detection (detect-secrets) ──────────────────────────────────────
+  # ── Secret detection (Gitleaks - modernized secret scanner) ────────────────
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+        args: ["--config", ".gitleaks.toml", "--verbose"]
+
+  # ── Secret detection (detect-secrets baseline) ────────────────────────────
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
