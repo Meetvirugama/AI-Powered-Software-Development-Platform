@@ -153,11 +153,8 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                 from app.core.redis import get_async_redis_client
                 r_client = get_async_redis_client()
                 if r_client is not None:
-                    from ai.retrieval.cache import RetrievalResultCache
-                    cache = RetrievalResultCache(
-                        redis_client=r_client,
-                        default_ttl_seconds=getattr(settings, "retrieval_cache_ttl_seconds", 3600),
-                    )
+                    from ai.retrieval.cache import get_retrieval_cache
+                    cache = get_retrieval_cache(redis_client=r_client)
             except Exception as c_exc:  # noqa: BLE001
                 logger.warning("retrieval_cache_init_failed", extra={"error": str(c_exc)})
 

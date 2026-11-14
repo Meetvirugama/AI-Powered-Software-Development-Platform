@@ -290,3 +290,11 @@ def auth_headers(test_user, monkeypatch) -> dict[str, str]:
 
     token, _ = create_access_token(user_id=str(test_user.id))
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def vcr_llm_cassette():
+    """Return deterministic pre-recorded VCRLLMCassette fixture in replay mode (Issue 3)."""
+    from tests.fixtures.vcr_llm_cassette import VCRLLMCassette
+    cassette_path = Path(__file__).resolve().parent / "fixtures" / "cassettes" / "platform_llm_vcr.json"
+    return VCRLLMCassette(cassette_path=cassette_path, mode="replay")

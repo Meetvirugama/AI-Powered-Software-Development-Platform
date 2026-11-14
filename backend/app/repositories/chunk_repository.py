@@ -1,9 +1,11 @@
+import json
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
+from app.core.secret_redaction import redact
 from app.models.code_chunk import CodeChunk
 
 
@@ -21,7 +23,7 @@ class ChunkRepository:
         )
         if query:
             stmt = stmt.where(CodeChunk.content.ilike(f"%{query}%"))
-            
+
         return list(self.session.scalars(stmt).all())
 
     def get_by_content_hash(self, repository_id: uuid.UUID, file_id: uuid.UUID, content_hash: str) -> Optional[CodeChunk]:
@@ -48,18 +50,19 @@ class ChunkRepository:
         self.session.execute(stmt)
         self.session.commit()
 
-    def create_batch(self, chunks_data: list[dict]) -> int:
+    def create_batch(self, chunks_data: list[dict], batch_size: int = 250) -> int:
         """
-        Insert multiple code chunks in a single database batch query.
-        
-        Simple explanation:
-        Instead of calling insert separately for each code chunk, this method
-        batches all chunk records together and writes them in one database operation.
+        Insert multiple code chunks in chunked database batch queries.
+
+        Slices inserts into `batch_size` (default 250) to prevent exceeding
+        PostgreSQL's 65,535 bind-parameter limit on large files/repositories,
+        and enforces mandatory secret redaction on chunk content.
         """
         if not chunks_data:
             return 0
-        import json
-        from sqlalchemy import insert
+        if batch_size <= 0:
+            batch_size = 250
+
         cleaned = []
         for c in chunks_data:
             row = dict(c)
@@ -69,7 +72,10 @@ class ChunkRepository:
                     try:
                         row[k] = uuid.UUID(row[k])
                     except (ValueError, TypeError):
-                        pass
+                        row[k] = None if k == "symbol_id" else row[k]
+            # Enforce defence-in-depth secret redaction on stored chunk content
+            if "content" in row and isinstance(row["content"], str):
+                row["content"] = redact(row["content"])
             # If metadata was passed as string JSON, convert to dict for JSONB column
             if "metadata" in row and isinstance(row["metadata"], str):
                 try:
@@ -83,6 +89,8 @@ class ChunkRepository:
                 except Exception:
                     pass
             cleaned.append(row)
+
         stmt = insert(CodeChunk)
-        self.session.execute(stmt, cleaned)
+        for i in range(0, len(cleaned), batch_size):
+            self.session.execute(stmt, cleaned[i : i + batch_size])
         return len(cleaned)

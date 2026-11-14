@@ -139,6 +139,15 @@ class InMemoryRetrievalCache(RetrievalCache):
         return self._lru.stats
 
 
+_RELEASE_STAMPEDE_LOCK_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+
 class RetrievalResultCache(RetrievalCache):
     """
     Asynchronous Redis distributed query cache (L2).
@@ -299,14 +308,22 @@ class RetrievalResultCache(RetrievalCache):
             return None
 
     async def release_stampede_lock(self, key: str, lock_token: str) -> bool:
-        """Release a stampede lock only if the token matches ownership."""
+        """Atomically release a stampede lock only if the token matches ownership."""
         if not self._enabled or not lock_token:
             return False
 
         lock_key = f"lock:{key}"
         try:
             client = self._get_client()
+            if hasattr(client, "eval"):
+                try:
+                    res = await client.eval(_RELEASE_STAMPEDE_LOCK_LUA, 1, lock_key, lock_token)
+                    return bool(int(res or 0) == 1)
+                except Exception:
+                    pass
             current_val = await client.get(lock_key)
+            if isinstance(current_val, bytes):
+                current_val = current_val.decode("utf-8", errors="replace")
             if current_val == lock_token:
                 await client.delete(lock_key)
                 return True
@@ -352,6 +369,11 @@ class TwoLevelRetrievalCache(RetrievalCache):
     @property
     def enabled(self) -> bool:
         return self._enabled
+
+    def _get_client(self) -> AsyncRedis | Any:
+        if self.l2 is not None and hasattr(self.l2, "_get_client"):
+            return self.l2._get_client()
+        return None
 
     async def get(self, key: str) -> Any | None:
         """Execute two-level cache lookup (L1 local-first, L2 Redis fallback)."""

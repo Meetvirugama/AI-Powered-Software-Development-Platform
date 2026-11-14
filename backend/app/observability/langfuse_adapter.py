@@ -2,7 +2,7 @@
 Langfuse LLM Observability Adapter.
 
 Provides dedicated LLM and agent observation tracking (generations, spans, token usage,
-model parameters, and latency) with fail-closed safety and privacy redaction.
+model parameters, and latency) with fail-closed safety, SSRF host validation, and privacy redaction.
 """
 
 from __future__ import annotations
@@ -10,9 +10,31 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.core.secret_redaction import redact, redact_obj
+from app.services.mcp_elicitation_service import validate_mcp_url
+
 logger = logging.getLogger(__name__)
 
 _LANGFUSE_ADAPTER: LangfuseAdapter | None = None
+
+
+def _sanitize_langfuse_input(payload: Any) -> Any:
+    """Recursively convert message models or dicts into secret-redacted structures."""
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        return redact(payload)
+    if isinstance(payload, list):
+        sanitized_list = []
+        for item in payload:
+            if hasattr(item, "to_dict") and callable(item.to_dict):
+                sanitized_list.append(redact_obj(item.to_dict()))
+            elif hasattr(item, "model_dump") and callable(item.model_dump):
+                sanitized_list.append(redact_obj(item.model_dump()))
+            else:
+                sanitized_list.append(redact_obj(item))
+        return sanitized_list
+    return redact_obj(payload)
 
 
 class LangfuseAdapter:
@@ -38,15 +60,16 @@ class LangfuseAdapter:
 
         if self.enabled and self._client is None:
             try:
+                safe_host = validate_mcp_url(base_url)
                 from langfuse import Langfuse
                 self._client = Langfuse(
                     public_key=public_key,
                     secret_key=secret_key,
-                    host=base_url,
+                    host=safe_host,
                 )
-                logger.info("langfuse_adapter_initialized", extra={"host": base_url})
+                logger.info("langfuse_adapter_initialized", extra={"host": safe_host})
             except Exception as exc:
-                logger.warning("langfuse_adapter_init_failed", extra={"error": str(exc)})
+                logger.warning("langfuse_adapter_init_failed", extra={"error": redact(str(exc))})
                 self.enabled = False
                 self._client = None
 
@@ -70,15 +93,16 @@ class LangfuseAdapter:
         completion: str | None = None,
         error: str | None = None,
     ) -> None:
-        """Record an LLM generation event in Langfuse."""
+        """Record an LLM generation event in Langfuse with mandatory secret redaction."""
         if not self.is_active:
             return
 
         try:
-            input_payload = prompt if self.capture_prompts else None
-            output_payload = completion if self.capture_responses else None
+            input_payload = _sanitize_langfuse_input(prompt) if self.capture_prompts else None
+            output_payload = redact(completion) if (self.capture_responses and completion is not None) else None
+            safe_error = redact(str(error)) if error else None
 
-            meta = dict(metadata or {})
+            meta = redact_obj(dict(metadata or {}))
             meta["provider"] = provider
             meta["latency_ms"] = round(latency_ms, 2)
             if finish_reason:
@@ -90,7 +114,6 @@ class LangfuseAdapter:
                 "total": input_tokens + output_tokens,
             }
 
-            # Use modern or fallback generation API safely
             if hasattr(self._client, "generation"):
                 self._client.generation(
                     trace_id=trace_id,
@@ -100,8 +123,8 @@ class LangfuseAdapter:
                     output=output_payload,
                     usage=usage_dict,
                     metadata=meta,
-                    level="ERROR" if error else "DEFAULT",
-                    status_message=error,
+                    level="ERROR" if safe_error else "DEFAULT",
+                    status_message=safe_error,
                 )
             elif hasattr(self._client, "trace"):
                 t = self._client.trace(id=trace_id)
@@ -112,11 +135,11 @@ class LangfuseAdapter:
                     output=output_payload,
                     usage=usage_dict,
                     metadata=meta,
-                    level="ERROR" if error else "DEFAULT",
-                    status_message=error,
+                    level="ERROR" if safe_error else "DEFAULT",
+                    status_message=safe_error,
                 )
         except Exception as exc:
-            logger.debug("langfuse_record_generation_failed", extra={"error": str(exc)})
+            logger.debug("langfuse_record_generation_failed", extra={"error": redact(str(exc))})
 
     def record_tool_call(
         self,
@@ -128,13 +151,14 @@ class LangfuseAdapter:
         error_message: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
-        """Record a tool invocation span in Langfuse."""
+        """Record a tool invocation span in Langfuse with mandatory secret redaction."""
         if not self.is_active:
             return
 
         try:
-            meta = dict(metadata or {})
+            meta = redact_obj(dict(metadata or {}))
             meta["duration_ms"] = round(duration_ms, 2)
+            safe_err_msg = redact(str(error_message)) if error_message else None
 
             if hasattr(self._client, "span"):
                 self._client.span(
@@ -142,7 +166,7 @@ class LangfuseAdapter:
                     name=f"tool:{tool_name}",
                     metadata=meta,
                     level="ERROR" if is_error else "DEFAULT",
-                    status_message=error_message,
+                    status_message=safe_err_msg,
                 )
             elif hasattr(self._client, "trace"):
                 t = self._client.trace(id=trace_id)
@@ -150,10 +174,10 @@ class LangfuseAdapter:
                     name=f"tool:{tool_name}",
                     metadata=meta,
                     level="ERROR" if is_error else "DEFAULT",
-                    status_message=error_message,
+                    status_message=safe_err_msg,
                 )
         except Exception as exc:
-            logger.debug("langfuse_record_tool_call_failed", extra={"error": str(exc)})
+            logger.debug("langfuse_record_tool_call_failed", extra={"error": redact(str(exc))})
 
     def flush(self) -> None:
         """Flush pending observations."""
@@ -163,7 +187,7 @@ class LangfuseAdapter:
             if hasattr(self._client, "flush"):
                 self._client.flush()
         except Exception as exc:
-            logger.debug("langfuse_flush_error", extra={"error": str(exc)})
+            logger.debug("langfuse_flush_error", extra={"error": redact(str(exc))})
 
     def shutdown(self) -> None:
         """Flush and terminate Langfuse client."""
@@ -175,7 +199,7 @@ class LangfuseAdapter:
             elif hasattr(self._client, "flush"):
                 self._client.flush()
         except Exception as exc:
-            logger.debug("langfuse_shutdown_error", extra={"error": str(exc)})
+            logger.debug("langfuse_shutdown_error", extra={"error": redact(str(exc))})
         self._client = None
         self.enabled = False
 

@@ -1,15 +1,6 @@
 """
 Stable cache-key generation for hybrid retrieval results (R03, R04).
 Owner: Meet — W1-12
-
-Distinguishes:
-- tenant / access scope
-- repository ID
-- active index generation or commit SHA
-- query intent
-- normalized query hash (SHA-256)
-- candidate & final limits (top_k, vector_top_k, lexical_top_k)
-- pipeline component versions (embedding, chunker, tokenizer, rrf, reranker)
 """
 
 from __future__ import annotations
@@ -44,6 +35,13 @@ DEFAULT_VERSIONS = {
 _LOCAL_REPO_INDEX_VERSIONS: dict[str, str] = {}
 
 
+def _decode_redis_str(val: Any) -> str:
+    """Safely normalize Redis bytes or string return values to clean UTF-8 strings."""
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace")
+    return str(val)
+
+
 def normalize_retrieval_query(query: str) -> str:
     """Normalize query text: strip whitespace, lowercase, collapse internal whitespace."""
     if not query:
@@ -56,15 +54,9 @@ def generate_query_hash(
     query: str,
     retrieval_config: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Generate a deterministic SHA-256 hash across normalized query text and all
-    result-affecting retrieval parameters.
-
-    Never includes secrets or unhashed queries.
-    """
+    """Generate a deterministic SHA-256 hash across normalized query text and parameters."""
     norm_query = normalize_retrieval_query(query)
     cfg = retrieval_config or {}
-
     payload: dict[str, Any] = {
         "norm_query": norm_query,
         "intent": str(cfg.get("intent", "conceptual")).lower(),
@@ -96,14 +88,7 @@ def build_retrieval_cache_key(
     index_version: int | str | None = None,
     filters: dict[str, Any] | None = None,
 ) -> str:
-    """
-    Construct a stable, collision-resistant Redis key for hybrid retrieval results.
-
-    Format:
-        retrieval:v2:{scope}:{repository_id}:{index_version}:{query_hash}
-
-    Never contains raw source code or unhashed query strings.
-    """
+    """Construct a stable, collision-resistant Redis key for hybrid retrieval results."""
     repo_str = str(repository_id)
     effective_version = str(index_version if index_version is not None else index_generation)
 
@@ -130,7 +115,7 @@ async def get_repository_index_version_async(
         try:
             val = await redis_client.get(f"retrieval:index_version:{repo_str}")
             if val:
-                return str(val)
+                return _decode_redis_str(val)
         except Exception:
             pass
     return _LOCAL_REPO_INDEX_VERSIONS.get(repo_str, "0")
@@ -146,7 +131,7 @@ def get_repository_index_version(
         try:
             val = redis_client.get(f"retrieval:index_version:{repo_str}")
             if val:
-                return str(val)
+                return _decode_redis_str(val)
         except Exception:
             pass
     return _LOCAL_REPO_INDEX_VERSIONS.get(repo_str, "0")
@@ -163,7 +148,6 @@ async def set_repository_index_version_async(
     _LOCAL_REPO_INDEX_VERSIONS[repo_str] = v_str
     if redis_client is not None:
         try:
-            # 30 days TTL on index version tracking
             await redis_client.set(f"retrieval:index_version:{repo_str}", v_str, ex=2592000)
         except Exception:
             pass

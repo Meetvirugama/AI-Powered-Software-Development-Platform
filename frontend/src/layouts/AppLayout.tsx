@@ -4,7 +4,7 @@ import { useAppStore } from '../stores/useAppStore';
 import { useAuth } from '../hooks/useAuth';
 import { useRealtimeRepositories } from '../hooks/useRealtimeRepositories';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
-import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu, ListTodo } from 'lucide-react';
+import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu, ListTodo, Wrench } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function AppLayout() {
@@ -71,6 +71,12 @@ export function AppLayout() {
             to="/app/tasks"
             icon={<ListTodo className="h-4 w-4 flex-shrink-0" />}
             label="Tasks"
+            collapsed={!sidebarOpen}
+          />
+          <SidebarLink
+            to="/app/tools"
+            icon={<Wrench className="h-4 w-4 flex-shrink-0" />}
+            label="Tools & MCP"
             collapsed={!sidebarOpen}
           />
         </nav>

@@ -33,6 +33,9 @@ const NotFound = lazy(() => import('./pages/NotFound').then((m) => ({ default: m
 const Tasks = lazy(() => import('./pages/Tasks').then((m) => ({ default: m.Tasks })));
 const CreateTask = lazy(() => import('./pages/CreateTask').then((m) => ({ default: m.CreateTask })));
 const TaskDetail = lazy(() => import('./pages/TaskDetail').then((m) => ({ default: m.TaskDetail })));
+const ToolsIntegrationsAdminPage = lazy(() =>
+  import('./pages/ToolsIntegrationsAdminPage').then((m) => ({ default: m.ToolsIntegrationsAdminPage }))
+);
 
 function RouteFallback() {
   return (
@@ -60,6 +63,7 @@ export function App() {
                 <Route path="tasks" element={<Tasks />} />
                 <Route path="tasks/new" element={<CreateTask />} />
                 <Route path="tasks/:taskId" element={<TaskDetail />} />
+                <Route path="tools" element={<ToolsIntegrationsAdminPage />} />
 
                 {/* Dedicated Antigravity-Style Repository Workspace Studios */}
                 <Route path="repositories/:id" element={<RepositoryStudioLayout />}>

@@ -3,6 +3,7 @@ import { Copy, Check, Hash, Layers, X, Target, Sparkles, FileCode, Code } from '
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { useRepositoryFileContent } from '../../hooks/useRepositories';
 import { cn } from '../../lib/utils';
+import { useVirtualRange } from '../../utils/virtualizationAndSyntax';
 import type { RepositoryFile, CodeSymbol } from '../../types/api';
 import type { AnalysisTarget, SourceReference } from '../../types/analysis';
 
@@ -233,6 +234,16 @@ export function CodeViewer({
     return lines.map((line) => tokenizeLine(line, file.language || file.path));
   }, [lines, file.language, file.path]);
 
+  // Virtualize long code documents (> 200 lines) while rendering <= 200 lines directly
+  const { windowSlice, onScroll } = useVirtualRange({
+    totalCount: lines.length,
+    itemHeightPx: 20,
+    viewportHeightPx: 640,
+    overscan: 20,
+    resetKey: file.id,
+    virtualizeThreshold: 200,
+  });
+
   // Auto-scroll to cited reference when set
   useEffect(() => {
     if (
@@ -438,7 +449,7 @@ export function CodeViewer({
       )}
 
       {/* Code Viewer Body */}
-      <div ref={codeContainerRef} className="flex-1 min-h-0 overflow-auto relative font-mono text-xs">
+      <div ref={codeContainerRef} onScroll={onScroll} className="flex-1 min-h-0 overflow-auto relative font-mono text-xs">
         {/* Floating copy button */}
         {content && (
           <button
@@ -478,9 +489,13 @@ export function CodeViewer({
           </div>
         ) : (
           <div className="flex min-w-full leading-5 select-text py-2">
-            {/* Line numbers gutter (clickable for range targeting) */}
-            <div className="shrink-0 text-right text-muted-foreground/40 select-none bg-muted/5 border-r border-border/40 font-mono text-[11px]">
-              {lines.map((_, i) => {
+            {/* Line numbers gutter (clickable for range targeting, virtualized for large files) */}
+            <div
+              style={{ paddingTop: windowSlice.topPaddingPx, paddingBottom: windowSlice.bottomPaddingPx }}
+              className="shrink-0 text-right text-muted-foreground/40 select-none bg-muted/5 border-r border-border/40 font-mono text-[11px]"
+            >
+              {lines.slice(windowSlice.startIndex, windowSlice.endIndex).map((_, idx) => {
+                const i = windowSlice.startIndex + idx;
                 const lineNum = i + 1;
                 const isInTarget =
                   isTargetRange &&
@@ -513,9 +528,13 @@ export function CodeViewer({
               })}
             </div>
 
-            {/* Code content with lightweight syntax highlighting */}
-            <div className="flex-1 px-4 text-foreground whitespace-pre overflow-x-auto min-w-0">
-              {tokenizedLines.map((tokens, i) => {
+            {/* Code content with syntax highlighting & virtualized windowing */}
+            <div
+              style={{ paddingTop: windowSlice.topPaddingPx, paddingBottom: windowSlice.bottomPaddingPx }}
+              className="flex-1 px-4 text-foreground whitespace-pre overflow-x-auto min-w-0"
+            >
+              {tokenizedLines.slice(windowSlice.startIndex, windowSlice.endIndex).map((tokens, idx) => {
+                const i = windowSlice.startIndex + idx;
                 const lineNum = i + 1;
                 const isInTarget =
                   isTargetRange &&

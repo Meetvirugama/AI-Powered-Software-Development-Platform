@@ -18,17 +18,14 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  FileCode,
   FileDiff,
   FlaskConical,
   FolderGit2,
   GitBranch,
-  GitCommit,
   GitPullRequest,
   History,
   ListChecks,
   Loader2,
-  Pause,
   Play,
   Plus,
   RefreshCw,
@@ -75,16 +72,20 @@ import {
   triggerTaskVerification,
 } from '../services/tasks';
 import type {
-  PlanStep,
   TaskDetail,
   TaskEvent,
   TaskPullRequestResponse,
   TaskSummary,
 } from '../types/task';
-import { CodeChangesPanel } from '../components/tasks/CodeChangesPanel';
-import { TestExecutionPanel } from '../components/tasks/TestExecutionPanel';
-import { VerificationPanel } from '../components/tasks/VerificationPanel';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
+import {
+  RepositoryTaskChangesTab,
+  RepositoryTaskPlanTab,
+  RepositoryTaskPrTab,
+  RepositoryTaskTestsTab,
+  RepositoryTaskVerificationTab,
+  RepositoryTaskWorkspaceTab,
+} from '../components/taskStudio/TaskPhasePanels';
 
 const STATUS_BADGE_MAP: Record<
   string,
@@ -1286,515 +1287,80 @@ export function RepositoryTaskStudio() {
               </div>
 
               {/* ------------------------------------------------------------ */}
-              {/* TAB 1: Plan & Scope                                          */}
+              {/* Decomposed Per-Phase Studio Subcomponents (Issue 2 — C.3)    */}
               {/* ------------------------------------------------------------ */}
               {activeTab === 'plan' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  {/* Approval / Review Action Box (when pending approval) */}
-                  {taskDetail.status === 'PENDING_APPROVAL' && latestPlan && (
-                    <div className="rounded-xl border border-emerald-500/40 bg-emerald-500/5 p-4.5 space-y-3">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <div className="flex items-center gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                          <span className="text-xs font-bold text-foreground">
-                            Plan v{latestPlan.plan_version} Ready for Approval
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setShowRevisionInput(!showRevisionInput)}
-                            className="text-xs text-muted-foreground hover:text-foreground underline cursor-pointer"
-                          >
-                            {showRevisionInput ? 'Hide Revision Notes' : 'Request Revision'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setShowRejectionInput(!showRejectionInput)}
-                            className="text-xs text-rose-400 hover:text-rose-300 underline cursor-pointer"
-                          >
-                            {showRejectionInput ? 'Hide Rejection' : 'Reject'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {showRevisionInput && (
-                        <div className="flex items-center gap-2 pt-2 border-t border-border/40">
-                          <input
-                            type="text"
-                            placeholder="Provide feedback to refine the plan..."
-                            value={revisionNotes}
-                            onChange={(e) => setRevisionNotes(e.target.value)}
-                            className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-                          />
-                          <button
-                            type="button"
-                            disabled={actionBusy !== null || !revisionNotes.trim()}
-                            onClick={handleGenerateOrRevisePlan}
-                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-card border border-border hover:bg-accent cursor-pointer"
-                          >
-                            Synthesize v{latestPlan.plan_version + 1}
-                          </button>
-                        </div>
-                      )}
-
-                      {showRejectionInput && (
-                        <div className="flex items-center gap-2 pt-2 border-t border-border/40">
-                          <input
-                            type="text"
-                            placeholder="Reason for rejecting plan..."
-                            value={rejectionReason}
-                            onChange={(e) => setRejectionReason(e.target.value)}
-                            className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-rose-500/40 bg-background text-foreground"
-                          />
-                          <button
-                            type="button"
-                            disabled={actionBusy !== null}
-                            onClick={handleRejectPlan}
-                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-600 text-white hover:bg-rose-500 cursor-pointer"
-                          >
-                            Reject Plan
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="flex items-center gap-2.5 pt-1">
-                        <input
-                          type="text"
-                          placeholder="Optional approval comment..."
-                          value={approvalComment}
-                          onChange={(e) => setApprovalComment(e.target.value)}
-                          className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground"
-                        />
-                        <button
-                          type="button"
-                          disabled={actionBusy !== null}
-                          onClick={handleApprovePlan}
-                          className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
-                        >
-                          Approve Plan
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Structured Plan Summary & Steps */}
-                  {latestPlan ? (
-                    <div className="rounded-xl border border-border bg-card p-4.5 space-y-4">
-                      <div className="space-y-1">
-                        <div className="text-[11px] font-mono uppercase text-primary font-bold">
-                          AI Implementation Plan (v{latestPlan.plan_version})
-                        </div>
-                        <p className="text-sm font-medium text-foreground leading-snug break-words">
-                          {latestPlan.summary}
-                        </p>
-                        {latestPlan.problem_statement && (
-                          <p className="text-xs text-muted-foreground break-words pt-1">
-                            {latestPlan.problem_statement}
-                          </p>
-                        )}
-                      </div>
-
-                      {/* Implementation Steps Checklist */}
-                      <div className="space-y-2">
-                        <div className="text-[11px] font-mono uppercase text-muted-foreground font-bold">
-                          Ordered Execution Steps ({latestPlan.steps?.length ?? 0})
-                        </div>
-                        <div className="space-y-2">
-                          {latestPlan.steps?.map((s: PlanStep, idx: number) => (
-                            <div
-                              key={s.step_id || idx}
-                              className="p-3 rounded-lg bg-muted/20 border border-border/60 space-y-1.5 text-xs"
-                            >
-                              <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-mono text-[10px] text-primary font-bold px-1.5 py-0.5 rounded bg-primary/10">
-                                    Step {idx + 1}
-                                  </span>
-                                  <span className="font-mono text-[10px] uppercase font-bold text-muted-foreground px-1.5 py-0.5 rounded bg-muted">
-                                    {s.action_type || s.step_type || 'modify'}
-                                  </span>
-                                  <span className="font-semibold text-foreground">
-                                    {s.description}
-                                  </span>
-                                </div>
-                                {s.risk_level && (
-                                  <span
-                                    className={cn(
-                                      'px-2 py-0.5 rounded text-[10px] font-mono border uppercase font-semibold',
-                                      s.risk_level === 'low'
-                                        ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
-                                        : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                                    )}
-                                  >
-                                    Risk: {s.risk_level}
-                                  </span>
-                                )}
-                              </div>
-
-                              {s.expected_files && s.expected_files.length > 0 && (
-                                <div className="text-[11px] font-mono text-muted-foreground flex items-center gap-1.5 flex-wrap pt-0.5">
-                                  <FileCode className="h-3 w-3 text-primary/70 shrink-0" />
-                                  <span>Target Files:</span>
-                                  {s.expected_files.map((f: string) => (
-                                    <span
-                                      key={f}
-                                      className="px-1.5 py-0.2 rounded bg-background border border-border text-[10px]"
-                                    >
-                                      {f}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-8 text-center text-xs text-muted-foreground space-y-2 border border-border rounded-xl bg-card">
-                      <p>No implementation plan generated yet.</p>
-                      <button
-                        type="button"
-                        onClick={handleGenerateOrRevisePlan}
-                        className="px-3.5 py-1.5 rounded-lg bg-primary text-primary-foreground font-semibold text-xs cursor-pointer"
-                      >
-                        Synthesize Plan
-                      </button>
-                    </div>
-                  )}
-
-                  {/* Requirements & Protected Constraints */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                      <div className="text-[11px] font-mono uppercase text-primary font-bold">
-                        Requirements ({taskDetail.requirements?.length ?? 0})
-                      </div>
-                      <div className="space-y-1 text-xs">
-                        {taskDetail.requirements && taskDetail.requirements.length > 0 ? (
-                          taskDetail.requirements.map((r) => (
-                            <div key={r.id} className="text-foreground/90 break-words">
-                              • {r.description}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-muted-foreground">Autonomous functional repair.</div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                      <div className="text-[11px] font-mono uppercase text-rose-400 font-bold">
-                        Protected Safety Boundaries
-                      </div>
-                      <div className="space-y-1 text-xs text-muted-foreground">
-                        <p>Strictly shielded from modification:</p>
-                        <div className="flex items-center gap-1.5 font-mono text-[11px] text-rose-300 pt-1">
-                          <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30">.env</span>
-                          <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30">.github/workflows/deploy.yml</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <RepositoryTaskPlanTab
+                  taskDetail={taskDetail}
+                  latestPlan={latestPlan}
+                  showRevisionInput={showRevisionInput}
+                  setShowRevisionInput={setShowRevisionInput}
+                  showRejectionInput={showRejectionInput}
+                  setShowRejectionInput={setShowRejectionInput}
+                  revisionNotes={revisionNotes}
+                  setRevisionNotes={setRevisionNotes}
+                  rejectionReason={rejectionReason}
+                  setRejectionReason={setRejectionReason}
+                  approvalComment={approvalComment}
+                  setApprovalComment={setApprovalComment}
+                  actionBusy={actionBusy}
+                  handleGenerateOrRevisePlan={handleGenerateOrRevisePlan}
+                  handleRejectPlan={handleRejectPlan}
+                  handleApprovePlan={handleApprovePlan}
+                />
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* TAB 2: Workspace Sandbox & Live Execution                    */}
-              {/* ------------------------------------------------------------ */}
               {activeTab === 'workspace' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  {hasWorkspace && workspaceMeta ? (
-                    <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4.5 space-y-4">
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <div className="flex items-center gap-2">
-                          <Terminal className="h-4 w-4 text-indigo-400" />
-                          <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                            Isolated Sandbox Status
-                          </h3>
-                          <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
-                            {workspaceMeta.status}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          {workspaceMeta.status === 'IN_USE' && (
-                            <button
-                              type="button"
-                              disabled={actionBusy !== null}
-                              onClick={handlePauseTask}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-medium hover:bg-amber-500/20 cursor-pointer"
-                            >
-                              <Pause className="h-3 w-3" />
-                              <span>Pause</span>
-                            </button>
-                          )}
-                          {workspaceMeta.status === 'STOPPED' && (
-                            <button
-                              type="button"
-                              disabled={actionBusy !== null}
-                              onClick={handleResumeTask}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs font-medium hover:bg-emerald-500/20 cursor-pointer"
-                            >
-                              <Play className="h-3 w-3" />
-                              <span>Resume</span>
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            disabled={actionBusy !== null}
-                            onClick={handleCommitChanges}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background text-foreground text-xs font-medium hover:bg-accent cursor-pointer"
-                          >
-                            <GitCommit className="h-3 w-3" />
-                            <span>Commit</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                        <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
-                          <span className="text-[10px] font-mono text-muted-foreground uppercase">Isolated Branch</span>
-                          <div className="font-mono text-xs text-foreground font-semibold flex items-center gap-1.5">
-                            <GitBranch className="h-3.5 w-3.5 text-primary" />
-                            <span>{workspaceMeta.branch_name}</span>
-                          </div>
-                        </div>
-
-                        <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
-                          <span className="text-[10px] font-mono text-muted-foreground uppercase">Sandbox Location</span>
-                          <div className="font-mono text-[11px] text-muted-foreground truncate" title={workspaceMeta.workspace_path}>
-                            {workspaceMeta.workspace_path}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Step Execution Telemetry */}
-                      <div className="p-3 rounded-lg bg-background/70 border border-border/60 space-y-2">
-                        <div className="text-[10px] font-mono uppercase text-muted-foreground font-bold">
-                          Step Execution Progress
-                        </div>
-                        <div className="space-y-1.5">
-                          {latestPlan?.steps?.map((s: PlanStep, i: number) => (
-                            <div
-                              key={s.step_id || i}
-                              className="flex items-center justify-between text-xs py-1 px-2 rounded bg-muted/20"
-                            >
-                              <div className="flex items-center gap-2">
-                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                                <span className="font-semibold text-foreground">Step {i + 1}: {s.description}</span>
-                              </div>
-                              <span className="font-mono text-[10px] text-emerald-400 font-bold uppercase">
-                                COMPLETED
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="p-8 text-center text-xs text-muted-foreground space-y-3 border border-border rounded-xl bg-card">
-                      <Terminal className="h-8 w-8 text-muted-foreground/40 mx-auto" />
-                      <p>Workspace has not been provisioned yet.</p>
-                      <button
-                        type="button"
-                        onClick={() => handleExecuteTask(true)}
-                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
-                      >
-                        Start Workspace Execution
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <RepositoryTaskWorkspaceTab
+                  hasWorkspace={hasWorkspace}
+                  workspaceMeta={workspaceMeta}
+                  latestPlan={latestPlan}
+                  actionBusy={actionBusy}
+                  handlePauseTask={handlePauseTask}
+                  handleResumeTask={handleResumeTask}
+                  handleCommitChanges={handleCommitChanges}
+                  handleExecuteTask={handleExecuteTask}
+                />
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* TAB 3: Automated Tests & Self-Repair                         */}
-              {/* ------------------------------------------------------------ */}
               {activeTab === 'tests' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                        Automated Test Suite & Self-Healing Loop
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Validates repository functionality on the isolated sandbox branch.
-                      </p>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={actionBusy !== null}
-                        onClick={handleRunTests}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer"
-                      >
-                        <FlaskConical className="h-3.5 w-3.5" />
-                        <span>Run Pytest</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        disabled={
-                          actionBusy !== null ||
-                          repairAttemptsUsed >= repairAttemptsMax
-                        }
-                        onClick={handleRunRepair}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-purple-500/40 bg-purple-500/10 text-purple-300 hover:bg-purple-500/20 text-xs font-semibold cursor-pointer disabled:opacity-40"
-                      >
-                        <Wrench className="h-3.5 w-3.5" />
-                        <span>
-                          Self-Repair ({repairAttemptsUsed}/{repairAttemptsMax})
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <TestExecutionPanel
-                    taskId={taskDetail.task_id}
-                    testResults={testResults}
-                  />
-                </div>
+                <RepositoryTaskTestsTab
+                  taskId={taskDetail.task_id}
+                  testResults={testResults}
+                  actionBusy={actionBusy}
+                  repairAttemptsUsed={repairAttemptsUsed}
+                  repairAttemptsMax={repairAttemptsMax}
+                  handleRunTests={handleRunTests}
+                  handleRunRepair={handleRunRepair}
+                />
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* TAB 4: Code Changes (Diff)                                   */}
-              {/* ------------------------------------------------------------ */}
               {activeTab === 'changes' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                        Workspace Code Changes
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        Inspect modifications made by the AI agent before committing.
-                      </p>
-                    </div>
-                  </div>
-
-                  <CodeChangesPanel
-                    taskId={taskDetail.task_id}
-                    repositoryId={repoId}
-                    plannedTargetFiles={latestPlan?.expected_files ?? []}
-                  />
-                </div>
+                <RepositoryTaskChangesTab
+                  taskId={taskDetail.task_id}
+                  repositoryId={repoId}
+                  plannedTargetFiles={latestPlan?.expected_files ?? []}
+                />
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* TAB 5: Independent Verification Gates                        */}
-              {/* ------------------------------------------------------------ */}
               {activeTab === 'verification' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                        Independent Quality & Security Verification
-                      </h3>
-                      <p className="text-xs text-muted-foreground">
-                        5-point validation across tests, diff scope, secret detection, static analysis, and review.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={actionBusy !== null}
-                      onClick={handleRunVerification}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold cursor-pointer"
-                    >
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      <span>Run Verification</span>
-                    </button>
-                  </div>
-
-                  <VerificationPanel
-                    taskId={taskDetail.task_id}
-                    currentRevision={taskDetail.base_revision}
-                  />
-                </div>
+                <RepositoryTaskVerificationTab
+                  taskId={taskDetail.task_id}
+                  currentRevision={taskDetail.base_revision}
+                  actionBusy={actionBusy}
+                  handleRunVerification={handleRunVerification}
+                />
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* TAB 6: GitHub Draft PR & Publication                         */}
-              {/* ------------------------------------------------------------ */}
               {activeTab === 'pr' && (
-                <div className="space-y-4 animate-in fade-in duration-150">
-                  {draftPR ? (
-                    <div className="rounded-xl border border-purple-500/40 bg-purple-500/10 p-5 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <GitPullRequest className="h-5 w-5 text-purple-400" />
-                          <h3 className="text-sm font-bold text-foreground">
-                            Draft Pull Request #{draftPR.pr_number} Active
-                          </h3>
-                        </div>
-                        <a
-                          href={draftPR.pr_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition-colors"
-                        >
-                          <span>Open on GitHub</span>
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </a>
-                      </div>
-                      <p className="text-xs text-purple-200/90 leading-relaxed">
-                        The AI agent published this draft pull request to GitHub. Changes are verified and ready for review.
-                      </p>
-                      <div className="text-[11px] font-mono text-muted-foreground flex items-center gap-3 pt-1">
-                        <span>Branch: {draftPR.head_branch || draftPR.pr_id}</span>
-                        <span>→</span>
-                        <span>Target: {draftPR.base_branch}</span>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-border bg-card p-5 space-y-4">
-                      <div>
-                        <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                          Publish GitHub Draft Pull Request
-                        </h3>
-                        <p className="text-xs text-muted-foreground pt-0.5">
-                          Push isolated task branch and open a review-ready Draft PR on GitHub.
-                        </p>
-                      </div>
-
-                      <div className="p-3.5 rounded-lg bg-muted/20 border border-border/60 space-y-2 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-foreground">Verification Requirement</span>
-                          <span className="font-mono text-[10px] text-teal-400 font-bold uppercase">
-                            {verificationResult?.status || 'REQUIRES VERIFICATION'}
-                          </span>
-                        </div>
-                        <p className="text-muted-foreground text-[11px]">
-                          All unit tests and scope bounds are verified before pull request publication is unlocked.
-                        </p>
-                      </div>
-
-                      <label className="flex items-start gap-2.5 text-xs text-foreground cursor-pointer pt-1">
-                        <input
-                          type="checkbox"
-                          checked={publicationAuthorized}
-                          onChange={(e) => setPublicationAuthorized(e.target.checked)}
-                          className="mt-0.5 rounded border-border text-primary focus:ring-primary/40"
-                        />
-                        <span>
-                          I authorize pushing the isolated task branch to remote GitHub and creating a Draft Pull Request.
-                        </span>
-                      </label>
-
-                      <button
-                        type="button"
-                        disabled={actionBusy !== null || !publicationAuthorized}
-                        onClick={handleCreateDraftPR}
-                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold shadow-md shadow-purple-600/20 disabled:opacity-40 cursor-pointer"
-                      >
-                        <GitPullRequest className="h-4 w-4" />
-                        <span>Publish Draft Pull Request</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
+                <RepositoryTaskPrTab
+                  draftPR={draftPR}
+                  verificationResult={verificationResult}
+                  publicationAuthorized={publicationAuthorized}
+                  setPublicationAuthorized={setPublicationAuthorized}
+                  actionBusy={actionBusy}
+                  handleCreateDraftPR={handleCreateDraftPR}
+                />
               )}
             </div>
           )}

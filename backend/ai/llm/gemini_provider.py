@@ -262,7 +262,7 @@ class GeminiProvider(LLMProvider):
         if not request.tools and schema_mode != "none":
             if getattr(request, "response_schema", None) is not None or getattr(request, "response_format", None):
                 generation_config["responseMimeType"] = "application/json"
-                if schema_mode == "strict" and getattr(request, "response_schema", None) is not None:
+                if schema_mode in ("strict", "json") and getattr(request, "response_schema", None) is not None:
                     try:
                         generation_config["responseSchema"] = build_strict_gemini_response_schema(
                             request.response_schema  # type: ignore[arg-type]

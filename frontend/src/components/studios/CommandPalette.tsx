@@ -8,6 +8,7 @@ import {
   FlaskConical,
   FileCheck,
   ListTodo,
+  Wrench,
   Search,
   FileCode,
   X,
@@ -135,6 +136,17 @@ function CommandPaletteModal({ repoId, onClose }: { repoId: string; onClose: () 
         icon: ListTodo,
         action: () => {
           navigate(`/app/repositories/${repoId}/tasks`);
+          onClose();
+        },
+      },
+      {
+        id: 'studio-tools-mcp',
+        type: 'studio',
+        title: 'Tools & MCP Integrations',
+        subtitle: 'Manage MCP server registry, tool JSON schemas, and approval gates',
+        icon: Wrench,
+        action: () => {
+          navigate('/app/tools');
           onClose();
         },
       },

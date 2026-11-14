@@ -1,0 +1,35 @@
+{
+  "interactions": [
+    {
+      "fingerprint": "62ba4e977f5e371403ee2fac48a176661a6501db30f9876c1b1969967c342aa9",
+      "model": "gemini-flash-lite-latest",
+      "provider": "gemini",
+      "request": {
+        "messages": [
+          {
+            "content": "Explain backend/app/api/v1/events.py",
+            "role": "user"
+          }
+        ],
+        "response_schema": null,
+        "temperature": 0.0,
+        "tools": null
+      },
+      "response": {
+        "content": "events.py streams real-time SSE updates with Last-Event-ID Redis Streams replay.",
+        "finish_reason": "STOP",
+        "input_tokens": 24,
+        "latency_ms": 0.4,
+        "model": "gemini-flash-lite-latest",
+        "output_tokens": 16,
+        "provider": "gemini"
+      },
+      "stream_chunks": [
+        "events.py streams ",
+        "real-time SSE updates ",
+        "with Last-Event-ID Redis Streams replay."
+      ]
+    }
+  ],
+  "version": 1
+}
