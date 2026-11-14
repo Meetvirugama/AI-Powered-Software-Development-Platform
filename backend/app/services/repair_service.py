@@ -20,15 +20,17 @@ Key Responsibilities:
 from __future__ import annotations
 
 import hashlib
+import io
 import re
+from collections.abc import Generator, Iterable
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact, redact_secrets
 from app.schemas.repair import (
+    MAX_DIFF_CHARS,
     DiagnosedFailure,
     FailureCategory,
     FailureClassification,
-    MAX_DIFF_CHARS,
     PatchValidationResult,
     RepairPatchPayload,
     TestFrameworkName,
@@ -87,30 +89,65 @@ _CODE_ERROR_PATTERNS = [
 # Diff Parsing Helpers
 # ---------------------------------------------------------------------------
 
-def extract_modified_files_from_diff(diff_text: str) -> list[str]:
-    """Parse a unified diff and extract unique repo-relative file paths.
+def iter_modified_files_from_diff(
+    diff_source: str | Iterable[str],
+    early_path_guard: bool = False,
+) -> Generator[str, None, None]:
+    """Streamingly parse a unified diff and extract unique repo-relative file paths.
 
     Correctly handles '+++ b/path', '--- a/path', timestamps, and /dev/null.
+    Supports both raw unified diff strings and streaming line iterables.
 
     Args:
-        diff_text: Raw unified diff string.
+        diff_source: Raw unified diff string or iterable of diff lines.
+        early_path_guard: When True, validates repository-relative path safety
+            immediately on header lines (+++ b/... or --- a/...), raising UnsafePathError
+            immediately upon detecting directory traversal without reading remaining chunks.
 
-    Returns:
-        list[str]: Cleaned list of repo-relative modified file paths.
+    Yields:
+        str: Cleaned repo-relative modified file paths in order of encounter.
     """
-    files: set[str] = set()
-    for line in diff_text.splitlines():
-        if line.startswith("+++ ") or line.startswith("--- "):
+    if not diff_source:
+        return
+
+    seen: set[str] = set()
+    line_iter: Iterable[str] = (
+        io.StringIO(diff_source) if isinstance(diff_source, str) else diff_source
+    )
+
+    for line in line_iter:
+        if line.startswith(("+++ ", "--- ")):
             parts = line.split()
             if len(parts) >= 2:
                 raw_path = parts[1].strip()
-                if raw_path.startswith("a/") or raw_path.startswith("b/"):
+                if raw_path.startswith(("a/", "b/")):
                     raw_path = raw_path[2:]
                 raw_path = raw_path.replace("\\", "/").lstrip("/")
                 if raw_path and raw_path != "dev/null":
-                    files.add(raw_path)
+                    if early_path_guard:
+                        validate_repo_relative_path(raw_path)
+                    if raw_path not in seen:
+                        seen.add(raw_path)
+                        yield raw_path
 
-    return sorted(files)
+
+def extract_modified_files_from_diff(
+    diff_text: str | Iterable[str],
+    early_path_guard: bool = False,
+) -> list[str]:
+    """Parse a unified diff and extract unique repo-relative file paths.
+
+    Correctly handles '+++ b/path', '--- a/path', timestamps, and /dev/null.
+    Supports both raw strings and streaming line iterables.
+
+    Args:
+        diff_text: Raw unified diff string or streaming line iterable.
+        early_path_guard: Validate path safety immediately on header lines.
+
+    Returns:
+        list[str]: Cleaned list of repo-relative modified file paths (sorted).
+    """
+    return sorted(iter_modified_files_from_diff(diff_text, early_path_guard=early_path_guard))
 
 
 def compute_normalized_patch_hash(diff_text: str) -> str:
@@ -571,6 +608,7 @@ class RepairPatchValidator:
         forbidden_files: list[str] | None = None,
         max_attempts: int = 3,
         allow_test_edits: bool = False,
+        early_path_guard: bool = False,
     ) -> PatchValidationResult:
         """Evaluate a candidate repair patch before workspace application.
 
@@ -604,8 +642,13 @@ class RepairPatchValidator:
             )
 
         # 3. Path Extraction & Traversal Gate
-        extracted_files = extract_modified_files_from_diff(payload.diff)
-        if not extracted_files:
+        try:
+            extracted_files = extract_modified_files_from_diff(payload.diff, early_path_guard=early_path_guard)
+        except UnsafePathError as exc:
+            violations.append(f"Unsafe path traversal in patch diff: {exc}")
+            extracted_files = []
+
+        if not extracted_files and not violations:
             violations.append("Unified diff does not specify any modified or created target files.")
 
         validated_files: list[str] = []
@@ -734,4 +777,5 @@ __all__ = [
     "extract_application_frames_from_traceback",
     "extract_modified_files_from_diff",
     "is_test_file",
+    "iter_modified_files_from_diff",
 ]

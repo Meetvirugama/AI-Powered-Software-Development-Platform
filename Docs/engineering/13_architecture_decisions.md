@@ -588,6 +588,105 @@ The platform's multi-stage hybrid code retrieval engine (combining dense vector 
    - Retain full backward compatibility for deployments running without Redis (`RETRIEVAL_REDIS_CACHE_ENABLED=false`).
    - Preserve existing `RetrievalLatencyOptimizer` percentile tracking (P50, P90, P95, P99) and `AgentTokenBudgetManager` token ceilings with zero regressions.
 
+## ADR-019: Amortized Batch Target Invocations & Concurrent Static Scanner Execution
+
+| Field | Value |
+|---|---|
+| **Title** | Amortized Batch Target Invocations & Concurrent Static Scanner Execution |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+During code review and pull request analysis, static analysis tools (`ruff`, `bandit`, `eslint`, `biome`) verify code hygiene, lint rules, and security vulnerabilities. Previously:
+1. `StaticReviewer` executed static scanners via sequential loops per modified file ($O(M \times S)$ subprocess launches where $M$ is modified files and $S$ is scanners). For a pull request with 10 modified files across 4 scanners, this incurred 40 separate subprocess executions, resulting in 20–30s review latency.
+2. Synchronous `subprocess.run` calls blocked worker threads and FastAPI async workers during multi-file reviews.
+3. Node and Python runtimes repeated interpreter startup, configuration loading, and dependency initialization overhead on every single file invocation.
+4. An optimization was required to batch file targets without introducing command/option injection vulnerabilities or breaking finding normalization schemas.
+
+**Decision:**
+1. **Batch Target Amortization:**
+   - Partition modified files by applicable static scanners (`_group_files_by_scanner`) based on file extension and repository configuration.
+   - Pass all targets matching a scanner in a single CLI invocation after `--` (e.g. `ruff check --output-format json -- f1.py f2.py ...`), amortizing subprocess execution from $O(M \times S)$ down to $O(S)$ launches.
+2. **Asynchronous & Concurrent Execution:**
+   - Introduce `run_scanner_async` backed by `asyncio.create_subprocess_exec` with non-blocking pipe reads and enforced process timeouts with active subprocess kill guarantees.
+   - Implement `review_modified_files_async` executing independent scanner processes concurrently via `asyncio.gather`, reducing multi-scanner latency from $\sum \text{latency}(s)$ to $\max \text{latency}(s)$.
+   - Provide multi-threaded parallel execution (`ThreadPoolExecutor`) in synchronous `review_modified_files` and `StaticBugScanner.scan_files`.
+3. **Hardened Option Injection Defense:**
+   - Validate and sanitize all target paths via `_sanitize_target_paths`: strictly reject empty paths, option-like strings starting with `-`, and null bytes (`\x00`).
+   - Explicitly prepend `--` before target file paths across all scanner commands (`ruff`, `bandit`, `eslint`, `biome`) to guarantee CLI parsers treat arguments strictly as positional path targets.
+   - Maintain `--no-install` on `npx` invocations and enforce a minimal sanitized environment (`PATH`, `HOME`, `LANG`, `NODE_ENV`).
+4. **Schema & Finding Compatibility:**
+   - Preserve 100% backward compatibility for single-string `target_path` arguments.
+   - Retain exact `StaticFinding` dataclass structure, severity thresholds, redaction of sensitive metadata, and API return schema (`findings`, `static_findings_count`, `ai_findings_count`, `total_findings`).
+
+## ADR-020: Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling
+
+| Field | Value |
+|---|---|
+| **Title** | Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+The platform relies on Redis across core pathways: JWT revocation checking in authentication middleware, tenant Server-Sent Events (SSE) streaming, API rate-limiting, two-level hybrid retrieval caching, and reliable background synchronization workers. Previously:
+1. `backend/app/core/redis.py` initialized `_async_redis_client` via an unguarded global check (`if _async_redis_client is None:`), allowing race conditions during concurrent startup or traffic spikes.
+2. Multiple coroutines racing during application bootstrap created uncoordinated client instances and redundant connection pools.
+3. Neither synchronous nor asynchronous Redis connection pools specified an upper `max_connections` ceiling, leading to unconstrained connection creation that exhausted quotas on hosted Redis tiers (e.g., Upstash or Azure Managed Redis) and produced `ConnectionError: Too many connections`.
+4. There was no exponential backoff or retry mechanism for momentary connection saturation, causing unhandled 500 errors.
+
+**Decision:**
+1. **Thread-Safe and Coroutine-Safe Singleton Synchronization:**
+   - Implement thread-safe double-checked locking using a dedicated `threading.Lock` within `get_async_redis_client()` and `get_redis()`.
+   - Protect coroutine calls in `get_redis_async()` with a running loop-aware `asyncio.Lock()`, guaranteeing that exactly one shared async client and connection pool are initialized regardless of concurrency.
+2. **Explicit Bounded Connection Pooling (`max_connections`):**
+   - Bind `redis.asyncio.ConnectionPool` and synchronous `redis.ConnectionPool` with explicit `max_connections=settings.redis_max_connections` (default: 50).
+   - Configure socket timeouts (`redis_socket_timeout=10.0`), connect timeouts (`redis_connection_timeout=5.0`), health check intervals (30s on Upstash/TLS), and automatic reconnection on timeout.
+3. **Graceful Degradation & Exponential Backoff:**
+   - Provide `run_with_redis_retry` with exponential backoff and jitter for transient connection pool exhaustion (`is_redis_pool_exhausted_error`).
+   - If exhaustion persists beyond bounded retries, raise `RedisPoolExhaustedError` rather than unhandled raw connection crashes.
+4. **Clean Draining & Lifecycle Management:**
+   - Explicitly disconnect the underlying `ConnectionPool` alongside client closing in `close_redis_async()` and `close_redis()`.
+   - Ensure clean shutdown in `backend/app/core/lifespan.py` releases all pooled socket descriptors cleanly.
+5. **Zero Breaking Changes:**
+   - Preserve all existing function signatures: `get_redis()`, `get_async_redis_client()`, `get_redis_async()`, `close_redis()`, and `close_redis_async()`.
+   - Provide `get_redis.cache_clear()` alias for legacy lru_cache callers.
+
+## ADR-021: Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors
+
+| Field | Value |
+|---|---|
+| **Title** | Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+In `backend/sandbox/diff_verifier.py` and `backend/app/services/repair_service.py`, git diff extraction and patch verification historically buffered entire raw command outputs and unified diff strings directly into contiguous Python heap memory (`.read()`, `p.stdout.decode()`, `raw_diff.split("diff --git ")`).
+For tasks that touch numerous files or involve large repository diffs (e.g., major multi-file refactoring, bulk asset updates, or generated code verification), buffering multi-megabyte diff payloads created $O(\text{diff\_size})$ contiguous memory allocations, frequent garbage collection pauses, and potential Out-Of-Memory (OOM) kills inside memory-constrained Docker containers (e.g., 512MB–1GB RAM limits).
+Furthermore, path traversal validation and secret scanning waited until the entire diff payload was buffered into memory before checking file safety, wasting memory and CPU cycles on malicious or malformed payloads.
+
+**Decision:**
+1. **Streaming Generator for Diff Parsing:**
+   - Refactor `diff_verifier` and patch extraction to consume diff lines via an iterator/generator pipeline (`iter_diff_lines`, `iter_parse_unified_diff`, `iter_modified_files_from_diff`).
+   - Process file headers (`diff --git a/... b/...`, `--- a/...`, `+++ b/...`) and hunks (`@@ -old,len +new,len @@`) incrementally via a streaming state machine with $O(1)$ buffer consumption.
+2. **Bounded Output Memory Threshold & Truncation Markers:**
+   - Enforce an upper stream memory ceiling (`DEFAULT_MAX_DIFF_BYTES = 10 * 1024 * 1024` = 10MB per task diff).
+   - If diff size exceeds safe operational bounds, terminate subprocess/stream reading cleanly and append a standard truncation marker (`[DIFF TRUNCATED: Diff stream exceeded maximum memory limit of 10485760 bytes]`).
+   - Guarantee strict peak heap memory ceiling under 20MB (`MAX_PEAK_MEMORY_BYTES = 20 * 1024 * 1024`).
+3. **Early Path Guard Checking on File Headers:**
+   - Validate repository-relative path safety immediately on file header lines (`diff --git`, `---`, `+++`) as they are streamed.
+   - When `raise_on_traversal=True` or during fail-fast validation, abort iteration immediately on the header line with `UnsafePathError` or `WorkspacePathEscapeError` before reading or buffering any remaining diff chunks.
+4. **Dual-Engine Secret Scanning via Generator Pipelines:**
+   - Stream added diff lines (`+` lines) through primary regex patterns and canonical Gitleaks rules iteratively (`iter_scan_secrets_lines`, `scan_diff_stream`, `iter_scan_rules`) without buffering hunk contents.
+5. **Zero Breaking Changes:**
+   - Maintain 100% backward-compatible dataclass and schema contracts: `WorkspaceDiffResult`, `DiffValidationResult`, `PatchValidationResult`, and `FileDiffSummary`.
+   - Support both raw strings and line iterators across all public parsing and validation entrypoints.
+
+
+
+
 
 
 

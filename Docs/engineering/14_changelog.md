@@ -1428,7 +1428,7 @@ ecover_interrupted_tasks.
 
 ---
 
-### [PW3-Batch13] 2026-11-14 — F23 Restricted Test Runner (Issue #204)
+### [PW3-10] 2026-11-14 — F23 Restricted Test Runner (Issue #204)
 **Type:** Feature / Testing / Sandbox / Quality  
 **Developer:** Om (`OM202401238`)  
 **Changes:**
@@ -1469,9 +1469,92 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/testing/restricted_test_runner_f23_report.md`, `Docs/engineering/10_development_tasks.md`
 
+---
+### [PW3-11] 2026-11-14 — Amortized Static Scanner Subprocess Execution & Parallel Analysis (F39)
+**Type:** Feature / Performance / Code Review  
+**Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
+**Changes:**
+- `backend/review/static_reviewer.py`:
+  - Implemented `_sanitize_target_paths` with strict validation against command and option injection (`-` prefix, `\x00`, empty strings).
+  - Implemented `_build_scanner_command` with `--` end-of-options delimiter preceding batch file targets for `ruff`, `bandit`, `eslint`, and `biome`.
+  - Implemented `_parse_scanner_output` consolidating JSON parsing, line offset derivation, and schema normalization across sync and async callers.
+  - Implemented `_group_files_by_scanner` to partition modified files into tool-specific target lists based on file extension and repository configuration.
+  - Enhanced `run_scanner` to accept `target_path: str | Sequence[str]` for full backward compatibility and batch amortization.
+  - Implemented `run_scanner_async` using `asyncio.create_subprocess_exec` with non-blocking pipe reads, 60s timeout handling, and process termination guarantees.
+  - Enhanced `review_modified_files` with default `batch=True` and `parallel=True` via `ThreadPoolExecutor`, reducing sequential launches from $O(M \times S)$ to $O(S)$.
+  - Implemented `review_modified_files_async` leveraging `asyncio.gather` for concurrent scanner subprocess execution.
+- `backend/scanner/static_bug_scanner.py`:
+  - Added `scan_files` for multi-file AST scanning with optional parallel thread pool execution and aggregated metrics.
+  - Added `scan_files_async` for non-blocking asynchronous multi-file AST analysis.
+- `backend/app/api/v1/analysis/review.py`:
+  - Updated review endpoint static analysis resolver to prefer `review_modified_files_async` on `ext_reviewer`, executing coroutine functions directly without thread hopping.
+- `backend/tests/test_amortized_static_reviewer_f39.py`:
+  - Added 19 comprehensive unit and integration tests covering single/multi-target invocations, option injection defense, scanner grouping, async timeout reaping, scanner fault tolerance, and API reviewer resolution.
+- `backend/tests/test_static_reviewer.py`:
+  - Updated `test_review_modified_files_handles_multiple_files` to verify amortized single-invocation batch execution and added `test_review_modified_files_legacy_unbatched_mode`.
+- Documentation:
+  - Added **ADR-019: Amortized Batch Target Invocations & Concurrent Static Scanner Execution** to `Docs/engineering/13_architecture_decisions.md`.
+  - Created `Docs/code-review/AMORTIZED_STATIC_SCANNER_PERFORMANCE.md` and `Docs/engineering/32_amortized_static_scanner_parallel_analysis.md`.
+  - Updated `Docs/engineering/README.md` and `Docs/README.md`.
 
+**Impact:** Reduces multi-file static analysis latency by 85–90% (from ~22s down to ~1.6s for 10 files) while maintaining 100% schema backward compatibility and hardening against option injection.
 
+**Related Docs:** `Docs/engineering/32_amortized_static_scanner_parallel_analysis.md`, `Docs/code-review/AMORTIZED_STATIC_SCANNER_PERFORMANCE.md`, `Docs/engineering/13_architecture_decisions.md`
 
+---
 
+### [PW3-12] 2026-11-14 — Redis Thread/Coroutine-Safe Singleton & Bounded Connection Pooling (F40)
+**Type:** Feature / Reliability / Infrastructure  
+**Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
+**Changes:**
+- `backend/app/core/redis.py`:
+  - Implemented thread-safe double-checked locking using `threading.Lock` within `get_async_redis_client()` and `get_redis()`, preventing race conditions during application bootstrap and traffic bursts.
+  - Added coroutine-safe synchronization with running-loop-aware `asyncio.Lock` in `get_redis_async()`.
+  - Configured explicit connection pool limits using `redis.asyncio.ConnectionPool` and `redis.ConnectionPool` with `max_connections=settings.redis_max_connections` (default: 50).
+  - Implemented `run_with_redis_retry` and `is_redis_pool_exhausted_error` with exponential backoff and jitter for transient connection pool exhaustion, raising descriptive `RedisPoolExhaustedError` on persistent failure.
+  - Enhanced `close_redis_async()` and `close_redis()` to disconnect underlying connection pools alongside client handles for leak-free draining.
+  - Preserved backward compatibility with `get_redis.cache_clear()` alias and seamless synchronous/asynchronous calling conventions.
+- `backend/app/core/config.py`:
+  - Added Redis connection pooling and reliability settings: `redis_max_connections` (50), `redis_connection_timeout` (5.0s), `redis_socket_timeout` (10.0s), `redis_health_check_interval` (30s), and `redis_retry_on_timeout` (True).
+- `backend/tests/test_redis_reliability_f40.py`:
+  - Added 12 comprehensive unit and integration tests covering concurrent coroutine singleton creation (50 coroutines), multithreaded singleton access (32 worker threads), pool size bounding, custom settings overrides, clean lifecycle draining, transient exhaustion backoff, persistent exhaustion error handling, and zero breaking changes.
+- Documentation:
+  - Added **ADR-020: Thread/Coroutine-Safe Redis Singleton Initialization and Bounded Connection Pooling** to `Docs/engineering/13_architecture_decisions.md`.
+  - Created `Docs/engineering/33_redis_singleton_and_bounded_connection_pooling.md`.
+  - Updated `Docs/engineering/README.md`, `Docs/README.md`, and `Docs/engineering/10_development_tasks.md` (PW3-08).
 
+**Impact:** Eliminates Redis connection pool race conditions, prevents `ConnectionError: Too many connections` socket exhaustion on hosted Redis tiers, and ensures graceful degradation under peak load.
+
+**Related Docs:** `Docs/engineering/33_redis_singleton_and_bounded_connection_pooling.md`, `Docs/engineering/13_architecture_decisions.md`
+
+---
+
+### [PW3-13] 2026-11-14 — Stream Unified Git Diffs & Memory-Bound Patch Verification (F40/F41)
+**Type:** Feature / Performance / Sandbox Reliability  
+**Developer:** Meet (`MEET202401001`) & Dev (`DEV202401002`)  
+**Changes:**
+- `backend/sandbox/diff_verifier.py`:
+  - Implemented streaming line generator `iter_diff_lines` with bounded byte accounting (`DEFAULT_MAX_DIFF_BYTES = 10MB`) and truncation markers (`DIFF_TRUNCATION_MARKER`), eliminating $O(\text{diff\_size})$ contiguous heap allocations.
+  - Implemented streaming diff parser `iter_parse_unified_diff` state machine consuming lines iteratively with $O(1)$ buffer consumption, yielding `FileDiffSummary` as each file completes.
+  - Added early path guard checking on file headers (`diff --git`, `---`, `+++`), validating `validate_repo_relative_path` and workspace containment immediately, halting with `UnsafePathError` before consuming subsequent diff chunks.
+  - Added streaming primary secret scanning `iter_scan_secrets_lines` evaluating added lines line-by-line via generator pipelines.
+  - Enhanced `extract_diff` to stream from git (`_stream_git_diff_lines`) or filesystem (`_stream_fs_diff_lines`), safely terminating git subprocesses upon exceeding 10MB and setting truncation errors without memory explosion.
+  - Added streaming verification entrypoint `stream_validate_diff` for end-to-end evaluation with minimal peak memory.
+- `backend/sandbox/gitleaks_scanner.py`:
+  - Added `scan_diff_stream` and `iter_scan_rules` to evaluate canonical Gitleaks rules iteratively across streamed diff lines without full-diff text duplication.
+- `backend/app/services/repair_service.py`:
+  - Implemented `iter_modified_files_from_diff` and upgraded `extract_modified_files_from_diff` to accept both raw strings and streaming line iterables with optional early path guard checking.
+  - Updated `RepairPatchValidator.validate_patch` with early path guard checking support.
+- `backend/sandbox/__init__.py`:
+  - Exported `DEFAULT_MAX_DIFF_BYTES`, `DIFF_TRUNCATION_MARKER`, `iter_diff_lines`, and `iter_parse_unified_diff`.
+- `backend/tests/test_stream_diff_verifier_f40.py`:
+  - Added 19 comprehensive unit and integration tests verifying incremental line streaming, multi-file generator parsing, early path guard interception halting generators, byte threshold truncation marker enforcement, subprocess termination on limit, peak heap memory strictly bounded under 20MB (`tracemalloc` across 400-file, 30MB+ diff streams), streaming secret scanning, and 100% schema backward compatibility.
+- Documentation:
+  - Added **ADR-021: Streaming Unified Git Diffs and Memory-Bound Patch Verification for Large Refactors** to `Docs/engineering/13_architecture_decisions.md`.
+  - Created `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`.
+  - Updated `Docs/engineering/README.md`, `Docs/README.md`, and `Docs/engineering/10_development_tasks.md` (PW3-09).
+
+**Impact:** Eliminates Out-Of-Memory (OOM) risks during large refactor diff verification in memory-constrained Docker containers, guarantees peak heap memory < 20MB, intercepts path traversal attacks on header lines, and preserves complete backward compatibility.
+
+**Related Docs:** `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`, `Docs/engineering/13_architecture_decisions.md`
 
