@@ -74,6 +74,10 @@ from sandbox.exceptions import (
 )
 from sandbox.path_guard import WorkspacePathGuard
 from sandbox.resource_monitor import WorkspaceResourceMonitor
+from sandbox.test_reports import (
+    CoverageReportParser,
+    JUnitReportParser,
+)
 from sandbox.test_runner import (
     MAX_REPAIR_ATTEMPTS,
     WorkspaceTestRunner,
@@ -109,6 +113,7 @@ __all__ = [
     "CANONICAL_WORKSPACE_TOOLS",
     "CRITICAL_PROJECT_FILES",
     "ContainerBackend",
+    "CoverageReportParser",
     "DEFAULT_COMMAND_TIMEOUT_SECONDS",
     "DEFAULT_MAX_DISK_BYTES",
     "DEFAULT_MAX_FILES_MODIFIED",
@@ -119,6 +124,7 @@ __all__ = [
     "DEFAULT_WORKSPACE_SUBDIR",
     "DISALLOWED_COMMAND_TOKENS",
     "FORBIDDEN_FILE_PATTERNS",
+    "JUnitReportParser",
     "LocalSubprocessBackend",
     "MAX_COMMAND_OUTPUT_BYTES",
     "MAX_REPAIR_ATTEMPTS",
