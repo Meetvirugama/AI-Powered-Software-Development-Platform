@@ -1346,6 +1346,87 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/28_bounded_self_repair_loop.md`, `Docs/README.md`
 
+---
+
+### [Post-Week3-Batch12] 2026-11-13 — API Security, Role-Based Access Control (RBAC) & CI Pipeline (Issue #211 / F30)
+**Type:** Feature / Security / CI
+**Developer:** Om / Sukun
+**Changes:**
+- `.pre-commit-config.yaml`:
+  - Added Gitleaks hook (`v8.24.0`) targeting `.gitleaks.toml` for developer-side secret prevention.
+- `backend/app/models/user.py`:
+  - Implemented `UserRole` enum (`admin`, `developer`, `viewer`) and added indexed `role` column defaulting to `developer`.
+- `backend/app/schemas/auth.py` & `backend/app/core/security.py`:
+  - Added `role` and `permissions` claims to access tokens and JWT encoding payloads.
+- `backend/app/core/auth.py`:
+  - Decoded and populated `request.state.role` and `request.state.permissions` in `JWTMiddleware` and `_try_populate_user_state`.
+- `backend/app/api/v1/dependencies.py`:
+  - Implemented `ROLE_HIERARCHY`, `require_role`, `require_min_role`, and `require_permission` dependency guards.
+  - Enhanced `get_owned_repository` and `get_owned_task` to enforce tenant isolation and minimum RBAC role with 403 Forbidden on role deficits and 404 on cross-tenant attempts.
+- `backend/app/api/v1/repositories.py`:
+  - Guarded `POST /sync` and `DELETE /{repository_id}` with `min_role=UserRole.DEVELOPER`.
+- `backend/app/api/v1/tasks.py`:
+  - Enforced `min_role=UserRole.DEVELOPER` across task creation, planning, approval/rejection gates, execution, pause/resume/cancel, workspace tools, test execution, bounded repair, independent verification, git branch/commit/push, draft PR publication, checkpoints, and recovery.
+- `backend/app/api/v1/memories.py`:
+  - Guarded memory creation, updates, and deletion with `min_role=UserRole.DEVELOPER`.
+- `backend/migrations/versions/k8b9c0d1e2f3_add_user_role_for_rbac.py`:
+  - Added Alembic migration revising `j7a8b9c0d1e2` to add `role` column and index to `users` table.
+- `.github/workflows/security-ci.yml`:
+  - Built dedicated CI security workflow executing Gitleaks, Bandit, Ruff, pip-audit, `security_gate.py`, and security unit tests on PRs and pushes.
+- `backend/scripts/security_gate_allowlist.txt`:
+  - Added reviewed test/doc placeholder fingerprints to ensure clean PASS on `security_gate.py`.
+- `backend/tests/test_rbac_and_api_security.py`:
+  - Authored 12 comprehensive unit and integration tests verifying RBAC hierarchy, JWT claims, route guards, viewer blocks, developer access, and tenant isolation precedence.
+- `Docs/security/api_security_rbac_and_ci_report.md`:
+  - Published comprehensive F30 architecture, threat model, and verification report.
+
+**Impact:** Provides production-grade API security, role-based access control, and automated CI security gates while strictly preserving multi-tenant isolation and 100% backward compatibility.
+
+**Related Docs:** `Docs/security/api_security_rbac_and_ci_report.md`, `Docs/engineering/10_development_tasks.md`
+
+---
+
+### [Post-Week3-Batch13] 2026-11-14 — Independent Verification Multi-Engine & LLM-as-Judge (Issue #206 / F25)
+**Type:** Feature / Security / Verification  
+**Developer:** Om (`OM202401238`)  
+**Changes:**
+- `backend/sandbox/gitleaks_scanner.py`:
+  - Implemented `GitleaksDiffScanner` with native `gitleaks` CLI piping and fallback built-in canonical Gitleaks rules engine.
+  - Added detection for AWS access key IDs & secret keys, GitHub PATs & OAuth tokens, Slack webhooks, Private RSA/OpenSSH keys, OpenAI keys, Stripe secret keys, and generic high-entropy API tokens.
+  - Implemented `.gitleaks.toml` path/allowlist support and benign placeholder skipping (`[REDACTED]`, `<YOUR_KEY>`, doc examples).
+  - Ensured all leaked token previews are sanitized and redacted.
+  - Added `is_gitleaks_cli_available()` helper.
+- `backend/sandbox/diff_verifier.py`:
+  - Integrated secondary `GitleaksDiffScanner` inside `WorkspaceDiffVerifier.validate_diff`, checking diff hunks and raw diffs with finding deduplication.
+- `backend/app/schemas/verification.py`:
+  - Defined `DiffHunkCitation` model (`file_path`, `hunk_index`, `old_start`, `old_lines`, `new_start`, `new_lines`, `line_range`, `hunk_header`, `snippet`).
+  - Defined `CriterionJudgeEvidence` model (`criterion_id`, `requirement_id`, `verdict`, `confidence`, `reasoning`, `citations`, `judge_model`, `evaluated_at`).
+  - Added `requirement_evidence` fields to `VerificationContext` and `VerificationResult`.
+  - Added `"UNMET"` to `CriterionJudgeEvidence.verdict` Literal.
+- `backend/ai/services/requirement_verifier.py`:
+  - Implemented `extract_diff_hunks_from_diff` supporting `WorkspaceDiffResult`, `TaskDiffRanges`, `FileDiffRange`, and raw unified diff strings.
+  - Implemented `LLMRequirementJudge` evaluating each acceptance criterion with calibrated confidence and diff hunk citations.
+  - Integrated `LLMRequirementJudge` into `RequirementToCodeVerifier.verify_requirements_against_diff`, attaching `judge_evidence` and `citations` to `RequirementComplianceItem` and `RequirementVerificationResult`.
+  - Updated `_generate_pr_markdown_summary` to render the `### Acceptance Criteria Verification (LLM-as-Judge P-28)` table with diff hunk citations.
+- `backend/app/services/independent_verifier.py`:
+  - Enhanced `scan_diff_for_secrets` to run secondary Gitleaks scanning alongside primary regex patterns.
+  - Enhanced `_check_secret_scan` with dual-engine execution, populating check `details` with primary and secondary finding counts and triggered Gitleaks rules.
+  - Added `_check_llm_judge_acceptance` evaluating acceptance criteria and enforcing diff hunk citations.
+  - Updated `_generate_dev_pr_markdown_summary` to render the `### 📋 P-28 Acceptance Criteria Citations (LLM-as-Judge)` table.
+- `backend/app/services/task_execution_orchestrator.py`:
+  - Passed `criteria_evidence` through `run_independent_verification` and attached it to `VerificationResultSchema`.
+- `backend/tests/test_independent_verification_f25.py`:
+  - Authored comprehensive test suite covering `GitleaksDiffScanner`, diff hunk extraction, `LLMRequirementJudge`, `RequirementToCodeVerifier`, `IndependentVerifier`, and `WorkspaceDiffVerifier` (19/19 tests passing).
+- `Docs/security/independent_verification_f25_report.md`:
+  - Authored comprehensive architecture, sequence, and verification acceptance report.
+- `Docs/engineering/10_development_tasks.md`:
+  - Recorded PW3-06 under Om and updated master task board.
+
+**Impact:** Establishes defense-in-depth verification by adding a secondary Gitleaks secret engine and eliminating reward hacking/hallucinations via P-28 LLM-as-judge diff hunk citation evidence.
+
+**Related Docs:** `Docs/security/independent_verification_f25_report.md`, `Docs/engineering/10_development_tasks.md`
+
+
 
 
 

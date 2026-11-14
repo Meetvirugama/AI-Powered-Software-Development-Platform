@@ -21,8 +21,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import (
+    ROLE_HIERARCHY,
     get_owned_task,
+    get_request_user_role,
+    require_min_role,
 )
+from app.models.user import UserRole
 from ai.services.task_planner import TaskPlanner
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
@@ -522,12 +526,20 @@ def _serialize_task_summary(task: AgentTask) -> TaskSummaryResponse:
     response_model=TaskDetailResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new development task with segregated requirements, assumptions, and constraints",
+    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
 )
 def create_task(
     payload: TaskCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
 ) -> TaskDetailResponse:
+    user_role = get_request_user_role(request)
+    if ROLE_HIERARCHY.get(user_role, 0) < ROLE_HIERARCHY[UserRole.DEVELOPER.value]:
+        raise APIError(
+            403,
+            ErrorCode.FORBIDDEN,
+            f"Role '{user_role}' lacks required minimum role 'developer' to create tasks.",
+        )
     user_id = _request_user_id(request)
     repo = _owned_repository(payload.repository_id, user_id, db)
 
@@ -617,7 +629,7 @@ async def generate_task_plan(
     body: TaskPlanGenerateRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskPlanResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
     if body and body.custom_plan is not None:
@@ -688,7 +700,7 @@ def approve_task_plan(
     body: PlanApprovalRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskApprovalResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
     effective_comment = (body.comment or body.notes) if body else None
@@ -724,7 +736,7 @@ def reject_task_plan(
     body: PlanRejectionRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskApprovalResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
     approval = task_repo.reject_plan(
@@ -775,7 +787,7 @@ def request_tool_approval(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.tool_approval_gate import tool_approval_gate_service
     approval = tool_approval_gate_service.request_tool_approval(
         session=db,
@@ -835,7 +847,7 @@ def approve_tool_execution(
     body: ToolApprovalDecisionRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.tool_approval_gate import tool_approval_gate_service
     approval = tool_approval_gate_service.approve_tool(
         session=db,
@@ -872,7 +884,7 @@ def reject_tool_execution(
     body: ToolApprovalDecisionRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.tool_approval_gate import tool_approval_gate_service
     effective_reason = (body.reason or body.feedback) if body else None
     approval = tool_approval_gate_service.reject_tool(
@@ -910,7 +922,7 @@ def request_mcp_elicitation(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.mcp_elicitation_service import mcp_elicitation_service
     if body.elicitation_type == "form":
         schema_def = body.schema_definition or {}
@@ -986,7 +998,7 @@ def respond_mcp_elicitation(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.mcp_elicitation_service import mcp_elicitation_service
     elicitation = mcp_elicitation_service.submit_response(
         session=db,
@@ -1025,7 +1037,7 @@ def cancel_mcp_elicitation(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     from app.services.mcp_elicitation_service import mcp_elicitation_service
     elicitation = mcp_elicitation_service.cancel_elicitation(
         session=db,
@@ -1067,7 +1079,7 @@ def execute_approved_task(
     body: TaskExecuteRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskDetailResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1096,7 +1108,7 @@ def pause_task(
     body: TaskPauseRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskDetailResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
     orchestrator.pause_task_execution(
@@ -1119,7 +1131,7 @@ def resume_task(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TaskDetailResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
     orchestrator.resume_task_execution(
@@ -1141,7 +1153,7 @@ def cancel_task(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TaskDetailResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1286,7 +1298,7 @@ def invoke_task_tool(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1411,7 +1423,7 @@ def trigger_task_tests(
     body: TaskTestTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1481,7 +1493,7 @@ def trigger_task_repair(
     body: TaskRepairTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1521,7 +1533,7 @@ def trigger_task_verification(
     body: TaskVerifyTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1591,7 +1603,7 @@ def ensure_task_branch_endpoint(
     body: TaskBranchSetupRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1615,7 +1627,7 @@ def commit_task_changes_endpoint(
     body: TaskCommitTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1642,7 +1654,7 @@ def push_task_branch_endpoint(
     body: TaskPushTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1671,7 +1683,7 @@ def authorize_task_publication_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> PublicationAuthorizationResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     updated = task_repo.authorize_publication(
         task_id=task.id,
@@ -1702,7 +1714,7 @@ def create_task_draft_pr_endpoint(
     body: TaskDraftPRCreateRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskPullRequestResponse:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1811,7 +1823,7 @@ def save_task_checkpoint_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TaskCheckpointResponse:
-    task, _ = _owned_task(task_id, request, db)
+    task, _ = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1851,7 +1863,7 @@ def recover_task_endpoint(
     body: TaskRecoverTriggerRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
@@ -1893,7 +1905,7 @@ def run_autonomous_workflow_endpoint(
     body: TaskAutonomousWorkflowRequest | None = None,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    task, user_id = _owned_task(task_id, request, db)
+    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
     # Check if async durable workflow execution was requested
@@ -2097,6 +2109,7 @@ def list_repository_tasks(
     response_model=TaskDetailResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a task within a specific repository",
+    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
 )
 def create_repository_task(
     repository_id: UUID,

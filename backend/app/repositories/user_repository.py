@@ -11,12 +11,20 @@ class UserRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def create_user(self, github_id: str, login: str, email: Optional[str] = None, avatar_url: Optional[str] = None) -> User:
+    def create_user(
+        self,
+        github_id: str,
+        login: str,
+        email: Optional[str] = None,
+        avatar_url: Optional[str] = None,
+        role: str = "developer",
+    ) -> User:
         user = User(
             github_id=github_id,
             login=login,
             email=email,
-            avatar_url=avatar_url
+            avatar_url=avatar_url,
+            role=role,
         )
         self.session.add(user)
         self.session.commit()

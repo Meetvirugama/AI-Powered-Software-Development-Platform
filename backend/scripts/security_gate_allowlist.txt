@@ -102,7 +102,7 @@ bd474fcee8  # backend/tests/test_issues_intelligence_explanation_planning.py syn
 3c38a43977  # backend/app/observability/genai.py attribute constant name
 4be76d81db  # backend/app/observability/genai.py attribute constant name
 5817e3133a  # backend/app/observability/genai.py attribute constant name
-ed4dcf88da  # backend/tests/test_llm_gateway_f28.py synthetic test key
+ed4dcf88da  # backend/tests/test_llm_gateway_f28.py synthetic test token
 e612497353  # backend/tests/security/provenance/test_issue_intake_provenance.py synthetic test key
 864270ae94  # frontend/src/realtime/events.ts CHAT_TOKEN constant name ("chat.token")
 50e000716b  # backend/tests/test_mcp_server_contract_and_vcr.py synthetic f-string variable ({synth_gh})

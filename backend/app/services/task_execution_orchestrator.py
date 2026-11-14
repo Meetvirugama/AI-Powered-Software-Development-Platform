@@ -1376,6 +1376,7 @@ class TaskExecutionOrchestrator:
                     "alignment_score": req_ver.alignment_score,
                     "satisfied_requirements": req_ver.satisfied_requirements,
                     "unmet_requirements": req_ver.unmet_requirements,
+                    "criteria_evidence": [e.model_dump() for e in req_ver.criteria_evidence],
                 },
             )
         )
@@ -1413,6 +1414,7 @@ class TaskExecutionOrchestrator:
                 failed_test_count=db_runs[-1].tests_failed if db_runs else 0,
                 static_analysis_completed=True,
                 ai_review_completed=True,
+                requirement_evidence=req_ver.criteria_evidence,
             )
             dev_md = dev_verifier.generate_pr_markdown_summary(
                 context=dev_ctx,
@@ -1433,6 +1435,7 @@ class TaskExecutionOrchestrator:
             blocking_findings=blocking_findings,
             warnings=warnings,
             pr_summary=combined_pr_summary,
+            requirement_evidence=req_ver.criteria_evidence,
         )
 
         # Persist in PostgreSQL (TaskRepository.record_verification_result transitions task to READY_FOR_PUBLICATION or BLOCKED)

@@ -1,7 +1,7 @@
 """Database models package."""
 
 from app.models.base import TimestampedModel
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.repository_file import RepositoryFile
@@ -46,7 +46,7 @@ from app.models.task import (
 )
 
 __all__ = [
-    "TimestampedModel", "User", "GitHubInstallation", "Repository", "SyncStatus",
+    "TimestampedModel", "User", "UserRole", "GitHubInstallation", "Repository", "SyncStatus",
     "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus",
     "MemoryEntry", "MemoryType", "MemoryStatus", "PullRequest",
     "AnalysisRun", "AnalysisRunStatus", "AnalysisFeature", "AnalysisFinding",

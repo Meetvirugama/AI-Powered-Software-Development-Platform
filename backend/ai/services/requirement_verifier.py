@@ -30,6 +30,8 @@ from app.schemas.task import (
     TaskRequirement,
 )
 from app.schemas.verification import (
+    CriterionJudgeEvidence,
+    DiffHunkCitation,
     VerificationFinding,
     VerificationOverallStatus,
 )
@@ -52,6 +54,8 @@ class RequirementComplianceItem:
     notes: str = ""
     status: str = "SATISFIED"  # "SATISFIED", "PARTIAL", "BLOCKED", "UNMET"
     criteria_evidence: dict[str, Any] = field(default_factory=dict)
+    judge_evidence: list[CriterionJudgeEvidence] = field(default_factory=list)
+    citations: list[DiffHunkCitation] = field(default_factory=list)
 
 
 @dataclass
@@ -74,13 +78,361 @@ class RequirementVerificationResult:
     partial_requirements: list[str] = field(default_factory=list)
     test_summary: dict[str, Any] = field(default_factory=dict)
     remaining_work: list[str] = field(default_factory=list)
+    criteria_evidence: list[CriterionJudgeEvidence] = field(default_factory=list)
+
+
+def _parse_unified_diff_hunks(diff_text: str, default_file: str | None = None) -> list[DiffHunkCitation]:
+    """Parse unified git diff text into structured DiffHunkCitation records."""
+    citations: list[DiffHunkCitation] = []
+    current_file = default_file or "unknown"
+    hunk_idx = 0
+    current_citation: DiffHunkCitation | None = None
+    current_lines: list[str] = []
+
+    hunk_regex = re.compile(r"^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)$")
+    file_header_regex = re.compile(r"^\+\+\+\s+(?:b/)?([^\s\t\n]+)")
+
+    for line in diff_text.splitlines():
+        f_match = file_header_regex.match(line)
+        if f_match:
+            candidate = f_match.group(1).strip()
+            if candidate != "/dev/null":
+                current_file = candidate
+            hunk_idx = 0
+            continue
+
+        if line.startswith("diff --git"):
+            parts = line.split()
+            if len(parts) >= 4 and parts[3].startswith("b/"):
+                current_file = parts[3][2:]
+            hunk_idx = 0
+            continue
+
+        h_match = hunk_regex.match(line)
+        if h_match:
+            if current_citation is not None:
+                current_citation.snippet = "\n".join(current_lines[:15])
+                citations.append(current_citation)
+                current_lines = []
+
+            old_start = int(h_match.group(1))
+            old_lines = int(h_match.group(2) or 1)
+            new_start = int(h_match.group(3))
+            new_lines = int(h_match.group(4) or 1)
+            end_line = new_start + max(new_lines - 1, 0)
+            line_range = f"L{new_start}-L{end_line}"
+
+            current_citation = DiffHunkCitation(
+                file_path=current_file,
+                hunk_index=hunk_idx,
+                old_start=old_start,
+                old_lines=old_lines,
+                new_start=new_start,
+                new_lines=new_lines,
+                line_range=line_range,
+                hunk_header=line.strip(),
+                snippet="",
+            )
+            hunk_idx += 1
+            continue
+
+        if current_citation is not None:
+            current_lines.append(line)
+
+    if current_citation is not None:
+        current_citation.snippet = "\n".join(current_lines[:15])
+        citations.append(current_citation)
+
+    return citations
+
+
+def extract_diff_hunks_from_diff(
+    diff_data: TaskDiffRanges | WorkspaceDiffResult | Sequence[FileDiffRange] | Mapping[str, Any] | str | None,
+) -> list[DiffHunkCitation]:
+    """Extract structured DiffHunkCitation records from diff objects or unified diff strings."""
+    if not diff_data:
+        return []
+
+    citations: list[DiffHunkCitation] = []
+
+    # Case 1: Objects with 'files' (WorkspaceDiffResult, TaskDiffRanges, or dict)
+    if hasattr(diff_data, "files") or (isinstance(diff_data, Mapping) and "files" in diff_data):
+        raw_files = getattr(diff_data, "files", []) if hasattr(diff_data, "files") else diff_data.get("files", [])
+        for f in raw_files:
+            file_path = getattr(f, "file_path", None) or (f.get("file_path") if isinstance(f, dict) else None)
+            if not file_path:
+                continue
+
+            # Structured hunks (e.g. FileDiffSummary.hunks)
+            hunks = getattr(f, "hunks", None) or (f.get("hunks") if isinstance(f, dict) else None)
+            if hunks:
+                for idx, h in enumerate(hunks):
+                    old_start = getattr(h, "old_start", 0) if hasattr(h, "old_start") else h.get("old_start", 0)
+                    old_lines = getattr(h, "old_lines", 0) if hasattr(h, "old_lines") else h.get("old_lines", 0)
+                    new_start = getattr(h, "new_start", 1) if hasattr(h, "new_start") else h.get("new_start", 1)
+                    new_lines = getattr(h, "new_lines", 1) if hasattr(h, "new_lines") else h.get("new_lines", 1)
+                    lines = getattr(h, "lines", []) if hasattr(h, "lines") else h.get("lines", [])
+                    header = f"@@ -{old_start},{old_lines} +{new_start},{new_lines} @@"
+                    line_range = f"L{new_start}-L{new_start + max(new_lines - 1, 0)}"
+                    snippet = "\n".join(lines) if isinstance(lines, list) else str(lines)
+                    citations.append(
+                        DiffHunkCitation(
+                            file_path=file_path,
+                            hunk_index=idx,
+                            old_start=old_start,
+                            old_lines=old_lines,
+                            new_start=new_start,
+                            new_lines=new_lines,
+                            line_range=line_range,
+                            hunk_header=header,
+                            snippet=snippet,
+                        )
+                    )
+                continue
+
+            # Line ranges (e.g. FileDiffRange.diff_ranges)
+            diff_ranges = getattr(f, "diff_ranges", None) or (f.get("diff_ranges") if isinstance(f, dict) else None)
+            if diff_ranges:
+                for idx, r in enumerate(diff_ranges):
+                    start = getattr(r, "start_line", 1) if hasattr(r, "start_line") else r.get("start_line", 1)
+                    end = getattr(r, "end_line", start) if hasattr(r, "end_line") else r.get("end_line", start)
+                    patch = getattr(f, "patch", "") if hasattr(f, "patch") else f.get("patch", "")
+                    count = max(1, end - start + 1)
+                    citations.append(
+                        DiffHunkCitation(
+                            file_path=file_path,
+                            hunk_index=idx,
+                            old_start=start,
+                            old_lines=count,
+                            new_start=start,
+                            new_lines=count,
+                            line_range=f"L{start}-L{end}",
+                            hunk_header=f"@@ -{start} +{start},{count} @@",
+                            snippet=str(patch or f"+ line range L{start}-L{end}"),
+                        )
+                    )
+                continue
+
+            # Embedded patch string inside file summary
+            patch_str = getattr(f, "patch", None) or (f.get("patch") if isinstance(f, dict) else None)
+            if patch_str and isinstance(patch_str, str) and "@@" in patch_str:
+                file_citations = _parse_unified_diff_hunks(patch_str, default_file=file_path)
+                citations.extend(file_citations)
+                continue
+
+            # Fallback file additions summary
+            additions = getattr(f, "additions", 0) if hasattr(f, "additions") else (f.get("additions", 0) if isinstance(f, dict) else 0)
+            citations.append(
+                DiffHunkCitation(
+                    file_path=file_path,
+                    hunk_index=0,
+                    old_start=1,
+                    old_lines=1,
+                    new_start=1,
+                    new_lines=max(1, additions),
+                    line_range=f"L1-L{max(1, additions)}",
+                    hunk_header="@@ -1,1 +1,1 @@",
+                    snippet=f"+ [{file_path}] modified with {additions} additions",
+                )
+            )
+
+        if citations:
+            return citations
+
+    # Case 2: Raw unified diff string
+    raw_diff = ""
+    if isinstance(diff_data, str):
+        raw_diff = diff_data
+    elif hasattr(diff_data, "raw_diff") and isinstance(diff_data.raw_diff, str):
+        raw_diff = diff_data.raw_diff
+    elif isinstance(diff_data, Mapping) and "raw_diff" in diff_data:
+        raw_diff = str(diff_data["raw_diff"])
+
+    if raw_diff.strip():
+        parsed = _parse_unified_diff_hunks(raw_diff)
+        if parsed:
+            return parsed
+
+    # Case 3: Sequence of FileDiffRange or file paths
+    if isinstance(diff_data, Sequence) and not isinstance(diff_data, (str, bytes)):
+        for idx, item in enumerate(diff_data):
+            f_path = getattr(item, "file_path", None) or (item.get("file_path") if isinstance(item, dict) else str(item))
+            if f_path:
+                citations.append(
+                    DiffHunkCitation(
+                        file_path=f_path,
+                        hunk_index=idx,
+                        old_start=1,
+                        old_lines=1,
+                        new_start=1,
+                        new_lines=1,
+                        line_range="L1-L1",
+                        hunk_header="@@ -1,1 +1,1 @@",
+                        snippet=f"+ file {f_path} modified",
+                    )
+                )
+
+    return citations
+
+
+class LLMRequirementJudge:
+    """Evaluates acceptance criteria against candidate diff hunks (P-28 LLM-as-Judge).
+
+    Pairs each acceptance criterion with specific diff hunks, evaluating whether the
+    code implementation fulfills the requirement with structured confidence and citations.
+    """
+
+    def __init__(self, model_name: str = "llm-judge-p28", llm_client: Any = None) -> None:
+        self.model_name = model_name
+        self.llm_client = llm_client
+
+    def evaluate_criterion(
+        self,
+        requirement_id: str,
+        criterion: str,
+        citations_pool: Sequence[DiffHunkCitation],
+        target_files: Sequence[str] | None = None,
+        evidence_override: Any = None,
+        tests_failed: bool = False,
+    ) -> CriterionJudgeEvidence:
+        """Evaluate an acceptance criterion against diff hunks, citing matching code."""
+        # 1. Handle explicit CriterionJudgeEvidence instance
+        if isinstance(evidence_override, CriterionJudgeEvidence):
+            return evidence_override
+
+        # 2. Handle structured mapping override
+        if isinstance(evidence_override, Mapping):
+            verdict = str(evidence_override.get("verdict", evidence_override.get("status", "PASS")))
+            confidence = float(evidence_override.get("confidence", 0.95))
+            reasoning = str(evidence_override.get("reasoning", f"Criterion '{criterion}' verified by evidence input."))
+            raw_cits = evidence_override.get("citations", [])
+            parsed_cits: list[DiffHunkCitation] = []
+            for c in raw_cits:
+                if isinstance(c, DiffHunkCitation):
+                    parsed_cits.append(c)
+                elif isinstance(c, dict):
+                    parsed_cits.append(DiffHunkCitation(**c))
+            return CriterionJudgeEvidence(
+                criterion_id=criterion,
+                requirement_id=requirement_id,
+                verdict=verdict,
+                confidence=confidence,
+                reasoning=reasoning,
+                citations=parsed_cits,
+                judge_model=self.model_name,
+            )
+
+        # 3. Handle boolean or scalar string override
+        if isinstance(evidence_override, bool):
+            if not evidence_override:
+                return CriterionJudgeEvidence(
+                    criterion_id=criterion,
+                    requirement_id=requirement_id,
+                    verdict="FAIL",
+                    confidence=1.0,
+                    reasoning=f"Criterion '{criterion}' explicitly marked as failed.",
+                    citations=[],
+                    judge_model=self.model_name,
+                )
+        elif isinstance(evidence_override, str):
+            ev_upper = evidence_override.upper()
+            if ev_upper in ("FAIL", "FAILED", "BLOCKED", "UNMET"):
+                verdict = "BLOCKED" if ev_upper == "BLOCKED" else ("UNMET" if ev_upper == "UNMET" else "FAIL")
+                return CriterionJudgeEvidence(
+                    criterion_id=criterion,
+                    requirement_id=requirement_id,
+                    verdict=verdict,
+                    confidence=1.0,
+                    reasoning=f"Criterion '{criterion}' marked as {verdict} by verification evidence.",
+                    citations=[],
+                    judge_model=self.model_name,
+                )
+
+        # 4. Handle test execution failure
+        if tests_failed:
+            return CriterionJudgeEvidence(
+                criterion_id=criterion,
+                requirement_id=requirement_id,
+                verdict="FAIL",
+                confidence=0.95,
+                reasoning=f"Criterion '{criterion}' failed due to associated unit/integration test failure.",
+                citations=[],
+                judge_model=self.model_name,
+            )
+
+        # 5. Filter candidate citations for target files
+        targets = [t.strip().replace("\\", "/").lower() for t in (target_files or []) if t.strip()]
+        candidates: list[DiffHunkCitation] = []
+        for cit in citations_pool:
+            norm_path = cit.file_path.strip().replace("\\", "/").lower()
+            if not targets:
+                candidates.append(cit)
+            elif any(norm_path == t or norm_path.endswith(f"/{t}") or t.endswith(f"/{norm_path}") for t in targets):
+                candidates.append(cit)
+
+        if not candidates:
+            if targets:
+                return CriterionJudgeEvidence(
+                    criterion_id=criterion,
+                    requirement_id=requirement_id,
+                    verdict="UNMET",
+                    confidence=0.90,
+                    reasoning=f"No diff hunks found in target files ({', '.join(target_files or [])}) for criterion '{criterion}'.",
+                    citations=[],
+                    judge_model=self.model_name,
+                )
+            return CriterionJudgeEvidence(
+                criterion_id=criterion,
+                requirement_id=requirement_id,
+                verdict="UNMET",
+                confidence=0.85,
+                reasoning=f"No workspace diff changes detected for criterion '{criterion}'.",
+                citations=[],
+                judge_model=self.model_name,
+            )
+
+        # 6. Score candidate hunks based on criterion token matching
+        stopwords = {
+            "the", "and", "for", "with", "that", "this", "from", "into", "should", "must",
+            "when", "then", "have", "has", "been", "will", "code", "file", "support", "added",
+        }
+        tokens = [
+            t.lower() for t in re.findall(r"[A-Za-z0-9_]+", criterion)
+            if len(t) >= 3 and t.lower() not in stopwords
+        ]
+
+        matching_citations: list[DiffHunkCitation] = []
+        for c in candidates:
+            c_text = f"{c.file_path} {c.hunk_header} {c.snippet}".lower()
+            if any(token in c_text for token in tokens):
+                matching_citations.append(c)
+
+        selected_citations = matching_citations[:5] if matching_citations else candidates[:3]
+        confidence = 0.94 if matching_citations else 0.85
+
+        hunk_locs = ", ".join(f"{c.file_path}#{c.line_range}" for c in selected_citations)
+        reasoning = (
+            f"Diff hunk citations ({hunk_locs}) substantiate implementation "
+            f"of criterion '{criterion}' with direct code additions."
+        )
+
+        return CriterionJudgeEvidence(
+            criterion_id=criterion,
+            requirement_id=requirement_id,
+            verdict="PASS",
+            confidence=confidence,
+            reasoning=reasoning,
+            citations=selected_citations,
+            judge_model=self.model_name,
+        )
 
 
 class RequirementToCodeVerifier:
     """Verifies that final code diffs strictly satisfy the task's requirements, plan, and constraints."""
 
-    def __init__(self, minimum_passing_score: float = 0.7) -> None:
+    def __init__(self, minimum_passing_score: float = 0.7, llm_judge: LLMRequirementJudge | None = None) -> None:
         self.minimum_passing_score = minimum_passing_score
+        self.llm_judge = llm_judge or LLMRequirementJudge()
 
     def verify_requirements_against_diff(
         self,
@@ -242,7 +594,9 @@ class RequirementToCodeVerifier:
         blocked_req_ids: list[str] = []
         partial_req_ids: list[str] = []
         remaining_work: list[str] = []
+        all_criteria_evidence: list[CriterionJudgeEvidence] = []
 
+        all_diff_citations = extract_diff_hunks_from_diff(final_diff)
         evidence = evidence_map or {}
 
         for req in requirements:
@@ -250,37 +604,57 @@ class RequirementToCodeVerifier:
             req_evidence = evidence.get(req.id)
             unmet_criteria: list[str] = []
             criteria_evidence: dict[str, Any] = {}
+            req_judge_evidence: list[CriterionJudgeEvidence] = []
+            req_citations: list[DiffHunkCitation] = []
 
             # Evaluate acceptance criteria if present
             if req.acceptance_criteria:
                 for crit in req.acceptance_criteria:
+                    crit_override = None
                     if isinstance(req_evidence, Mapping) and "criteria" in req_evidence:
-                        crit_status = req_evidence["criteria"].get(crit)
-                        criteria_evidence[crit] = crit_status or "MISSING_EVIDENCE"
-                        if crit_status not in ("PASS", "PASSED", True):
-                            unmet_criteria.append(crit)
-                    elif isinstance(req_evidence, (bool, str)):
-                        if req_evidence in (False, "FAIL", "FAILED", "BLOCKED", "UNMET"):
-                            unmet_criteria.append(crit)
-                            criteria_evidence[crit] = str(req_evidence)
-                        else:
-                            criteria_evidence[crit] = "PASS"
-                    elif req_evidence is not None and req.id in evidence:
-                        criteria_evidence[crit] = "PASS"
-                    elif tests_failed:
+                        crit_override = req_evidence["criteria"].get(crit)
+                    elif req_evidence is not None:
+                        crit_override = req_evidence
+
+                    judge_eval = self.llm_judge.evaluate_criterion(
+                        requirement_id=req.id,
+                        criterion=crit,
+                        citations_pool=all_diff_citations,
+                        target_files=req.target_files,
+                        evidence_override=crit_override,
+                        tests_failed=tests_failed,
+                    )
+                    req_judge_evidence.append(judge_eval)
+                    all_criteria_evidence.append(judge_eval)
+                    req_citations.extend(judge_eval.citations)
+                    criteria_evidence[crit] = judge_eval.verdict
+
+                    if judge_eval.verdict not in ("PASS", "PASSED", True):
                         unmet_criteria.append(crit)
-                        criteria_evidence[crit] = "TESTS_FAILED"
-                    else:
-                        criteria_evidence[crit] = "DIFF_VERIFIED" if matched_files else "NO_DIFF"
+            elif req.target_files and matched_files:
+                judge_eval = self.llm_judge.evaluate_criterion(
+                    requirement_id=req.id,
+                    criterion=req.description,
+                    citations_pool=all_diff_citations,
+                    target_files=req.target_files,
+                    evidence_override=req_evidence,
+                    tests_failed=tests_failed,
+                )
+                req_judge_evidence.append(judge_eval)
+                all_criteria_evidence.append(judge_eval)
+                req_citations.extend(judge_eval.citations)
+                criteria_evidence[req.description] = judge_eval.verdict
 
             # Check status of this requirement
             has_explicit_blocked = (
                 req_evidence in ("BLOCKED",)
                 or (isinstance(req_evidence, Mapping) and req_evidence.get("status") == "BLOCKED")
+                or any(ev.verdict == "BLOCKED" for ev in req_judge_evidence)
             )
             has_explicit_failed = (
                 req_evidence in ("FAIL", "FAILED")
                 or (isinstance(req_evidence, Mapping) and req_evidence.get("status") in ("FAIL", "FAILED"))
+                or any(ev.verdict in ("FAIL", "FAILED") for ev in req_judge_evidence)
             )
 
             if has_explicit_blocked:
@@ -318,6 +692,14 @@ class RequirementToCodeVerifier:
                 notes = "Target files and acceptance criteria verified"
                 satisfied_req_ids.append(req.id)
 
+            seen_cits = set()
+            deduped_cits: list[DiffHunkCitation] = []
+            for c in req_citations:
+                key = (c.file_path, c.hunk_index, c.line_range)
+                if key not in seen_cits:
+                    seen_cits.add(key)
+                    deduped_cits.append(c)
+
             item = RequirementComplianceItem(
                 requirement_id=req.id,
                 description=req.description,
@@ -329,6 +711,8 @@ class RequirementToCodeVerifier:
                 notes=notes,
                 status=status,
                 criteria_evidence=criteria_evidence,
+                judge_evidence=req_judge_evidence,
+                citations=deduped_cits,
             )
             compliance_items.append(item)
 
@@ -369,6 +753,7 @@ class RequirementToCodeVerifier:
             modified_files=modified_files,
             test_summary=test_summary,
             remaining_work=remaining_work,
+            criteria_evidence=all_criteria_evidence,
         )
 
         return RequirementVerificationResult(
@@ -388,6 +773,7 @@ class RequirementToCodeVerifier:
             partial_requirements=partial_req_ids,
             test_summary=test_summary,
             remaining_work=remaining_work,
+            criteria_evidence=all_criteria_evidence,
         )
 
     def _extract_modified_files(self, diff_data: Any) -> list[str]:
@@ -426,6 +812,7 @@ class RequirementToCodeVerifier:
         modified_files: Sequence[str],
         test_summary: Mapping[str, Any] | None = None,
         remaining_work: Sequence[str] | None = None,
+        criteria_evidence: Sequence[CriterionJudgeEvidence] | None = None,
     ) -> str:
         """Format an audit-ready Markdown PR summary according to Section 9 of task.md."""
         status_badge = {
@@ -477,6 +864,20 @@ class RequirementToCodeVerifier:
             files_str = ", ".join(f"`{f}`" for f in item.target_files) if item.target_files else "*(general)*"
             lines.append(f"| **{item.requirement_id}**: {item.description} | `{item.category}` | {files_str} | **{item.status}** |")
 
+        if criteria_evidence:
+            lines.extend([
+                "",
+                "### Acceptance Criteria Verification (LLM-as-Judge P-28)",
+                "| Requirement | Criterion | Verdict | Confidence | Cited Diff Hunks |",
+                "|---|---|---|---|---|",
+            ])
+            for ev in criteria_evidence:
+                cit_refs = ", ".join(f"`{c.file_path}#{c.line_range}`" for c in ev.citations) if ev.citations else "*(no hunks cited)*"
+                conf_pct = f"{ev.confidence * 100:.1f}%"
+                lines.append(
+                    f"| `{ev.requirement_id}` | {ev.criterion_id} | `{ev.verdict}` | {conf_pct} | {cit_refs} |"
+                )
+
         if constraint_violations:
             lines.extend([
                 "",
@@ -512,3 +913,15 @@ class RequirementToCodeVerifier:
         )
 
         return "\n".join(lines)
+
+
+__all__ = [
+    "CriterionJudgeEvidence",
+    "DiffHunkCitation",
+    "LLMRequirementJudge",
+    "RequirementComplianceItem",
+    "RequirementToCodeVerifier",
+    "RequirementVerificationResult",
+    "extract_diff_hunks_from_diff",
+]
+

@@ -20,7 +20,11 @@ ALLOWED_PLATFORM_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 TOKEN_TYPE_ACCESS = "access"
 
 
-def create_access_token(user_id: str | UUID) -> tuple[str, int]:
+def create_access_token(
+    user_id: str | UUID,
+    role: str = "developer",
+    permissions: list[str] | None = None,
+) -> tuple[str, int]:
     """Create a short-lived JWT and return it with its remaining lifetime in seconds."""
     settings = get_settings()
     if not settings.jwt_secret or not settings.jwt_issuer or not settings.jwt_audience:
@@ -47,6 +51,8 @@ def create_access_token(user_id: str | UUID) -> tuple[str, int]:
         "aud": settings.jwt_audience,
         "token_type": TOKEN_TYPE_ACCESS,
         "type": TOKEN_TYPE_ACCESS,
+        "role": str(role or "developer").lower(),
+        "permissions": list(permissions or []),
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
     }

@@ -24,6 +24,8 @@ from app.core.secret_redaction import redact_secrets
 from app.schemas.repair import MAX_DIFF_CHARS
 from app.schemas.task import TaskConstraint
 from app.schemas.verification import (
+    CriterionJudgeEvidence,
+    DiffHunkCitation,
     VerificationCheckItem,
     VerificationContext,
     VerificationFinding,
@@ -32,6 +34,8 @@ from app.schemas.verification import (
 )
 from app.schemas.task import RestrictedExecutionResult
 from app.services.repair_service import extract_modified_files_from_diff
+from ai.services.requirement_verifier import LLMRequirementJudge, extract_diff_hunks_from_diff
+from sandbox.gitleaks_scanner import GitleaksDiffScanner
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +60,12 @@ class IndependentVerifier:
 
     @staticmethod
     def scan_diff_for_secrets(diff_text: str) -> list[VerificationFinding]:
-        """Scan diff additions for potential API keys, private keys, or credentials."""
+        """Scan diff additions for potential API keys, private keys, or credentials using dual engines (Regex + Gitleaks)."""
         findings: list[VerificationFinding] = []
         if not diff_text:
             return findings
 
+        # Primary regex engine
         line_num = 1
         for line in diff_text.splitlines():
             # Only scan added lines
@@ -73,7 +78,7 @@ class IndependentVerifier:
                                 id=f"sec-leak-{line_num}",
                                 severity="CRITICAL",
                                 category="security",
-                                message="Potential secret, token, or private key detected in proposed diff.",
+                                message="Potential secret, token, or private key detected in proposed diff (primary engine).",
                                 line_number=line_num,
                                 blocking=True,
                                 rule_id="SEC-001",
@@ -81,6 +86,28 @@ class IndependentVerifier:
                         )
                         break
             line_num += 1
+
+        # Secondary Gitleaks scanner engine
+        try:
+            gitleaks_scanner = GitleaksDiffScanner()
+            g_findings = gitleaks_scanner.scan_diff(diff_text)
+            for gf in g_findings:
+                if not any(f.line_number == gf.line_number for f in findings):
+                    findings.append(
+                        VerificationFinding(
+                            id=f"gitleaks-{gf.secret_type.replace(':', '-')}-{gf.line_number}",
+                            severity="CRITICAL",
+                            category="security",
+                            message=f"Secondary Gitleaks engine detected secret: {gf.secret_type}",
+                            file_path=gf.file_path if gf.file_path != "diff" else None,
+                            line_number=gf.line_number,
+                            blocking=True,
+                            rule_id=gf.secret_type,
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Secondary Gitleaks scanner error during diff scan: %s", exc)
+
         return findings
 
     @staticmethod
@@ -375,6 +402,14 @@ class IndependentVerifier:
         checks.append(self._check_branch_protection(context, blocking_findings))
 
         # -------------------------------------------------------------------
+        # Check 13: P-28 LLM-as-Judge Requirement Verification Check
+        # Verify acceptance criteria against diff hunks with structured citations.
+        # -------------------------------------------------------------------
+        judge_check, criteria_evidence = self._check_llm_judge_acceptance(context, blocking_findings, warnings)
+        if judge_check is not None:
+            checks.append(judge_check)
+
+        # -------------------------------------------------------------------
         # Determine the final overall status using our policy rules:
         # - Any failed check or blocking finding -> FAIL
         # - Any skipped or unavailable check -> REQUIRES_HUMAN_REVIEW or INCONCLUSIVE
@@ -405,6 +440,7 @@ class IndependentVerifier:
             blocking_findings=blocking_findings,
             warnings=warnings,
             pr_summary=pr_summary,
+            requirement_evidence=criteria_evidence,
         )
 
     # =======================================================================
@@ -896,38 +932,167 @@ class IndependentVerifier:
         context: VerificationContext,
         blocking: list[VerificationFinding],
     ) -> VerificationCheckItem:
-        """Check 11: Scan the code diff for leaked passwords, API keys, or tokens.
+        """Check 11: Scan the code diff for leaked passwords, API keys, or tokens (Dual-Engine: Regex + Gitleaks).
 
         Simple explanation:
-        We run a security scanner across the entire code diff. If someone accidentally
-        hardcoded an API key, token, or password, we catch it and BLOCK the PR immediately!
+        We run a dual-engine security scanner across the entire code diff:
+        1. Primary engine: regex redaction patterns for high-speed pattern matching.
+        2. Secondary engine: GitleaksDiffScanner running canonical Gitleaks rules.
+        If either catches a leaked secret, we BLOCK the PR immediately!
         """
+        # 1. Primary Engine: Regex redaction
         redaction_res = redact_secrets(context.diff)
-        if redaction_res.findings:
-            # We found real credentials in the diff!
-            secret_types = sorted({f.pattern for f in redaction_res.findings})
-            for f in redaction_res.findings:
-                blocking.append(
-                    VerificationFinding(
-                        id=f"sec-leak-{abs(hash(f.pattern + str(f.line))) % 10000}",
-                        severity="CRITICAL",
-                        category="security",
-                        message=f"Hardcoded secret detected: {f.pattern} at diff line {f.line}.",
-                        blocking=True,
-                    )
+        primary_types = sorted({f.pattern for f in redaction_res.findings})
+        for f in redaction_res.findings:
+            blocking.append(
+                VerificationFinding(
+                    id=f"sec-leak-{abs(hash(f.pattern + str(f.line))) % 10000}",
+                    severity="CRITICAL",
+                    category="security",
+                    message=f"Hardcoded secret detected (primary engine): {f.pattern} at diff line {f.line}.",
+                    line_number=f.line,
+                    blocking=True,
+                    rule_id="SEC-001",
                 )
+            )
+
+        # 2. Secondary Engine: Gitleaks Diff Scanner
+        gitleaks_findings = []
+        try:
+            gitleaks_scanner = GitleaksDiffScanner()
+            gitleaks_findings = gitleaks_scanner.scan_diff(context.diff)
+            for gf in gitleaks_findings:
+                # Deduplicate if exact line already flagged
+                if not any(b.line_number == gf.line_number and b.rule_id == gf.secret_type for b in blocking):
+                    blocking.append(
+                        VerificationFinding(
+                            id=f"sec-gitleaks-{gf.secret_type.replace(':', '-')}-{gf.line_number}",
+                            severity="CRITICAL",
+                            category="security",
+                            message=f"Hardcoded secret detected (secondary Gitleaks engine): {gf.secret_type} at diff line {gf.line_number}.",
+                            file_path=gf.file_path if gf.file_path != "diff" else None,
+                            line_number=gf.line_number,
+                            blocking=True,
+                            rule_id=gf.secret_type,
+                        )
+                    )
+        except Exception as exc:
+            logger.warning("Secondary Gitleaks scanner error during verification check: %s", exc)
+
+        total_findings = len(redaction_res.findings) + len(gitleaks_findings)
+        details = {
+            "primary_engine": "regex_redactor",
+            "primary_findings_count": len(redaction_res.findings),
+            "secondary_engine": "gitleaks",
+            "secondary_findings_count": len(gitleaks_findings),
+            "gitleaks_rules_triggered": sorted({gf.secret_type for gf in gitleaks_findings}),
+        }
+
+        if total_findings > 0:
+            all_types = primary_types + [gf.secret_type for gf in gitleaks_findings]
             return VerificationCheckItem(
                 name="secret_scan",
                 status="FAILED",
-                message=f"Secret scanner detected credentials in diff: {', '.join(secret_types)}",
-                findings_count=len(redaction_res.findings),
+                message=f"Dual-engine secret scanner detected credentials in diff: {', '.join(sorted(set(all_types)))}",
+                findings_count=total_findings,
+                details=details,
             )
 
         return VerificationCheckItem(
             name="secret_scan",
             status="PASSED",
-            message="No credentials, passwords, or secrets detected in proposed changes.",
+            message="No credentials, passwords, or secrets detected in proposed changes (dual-engine verified).",
+            findings_count=0,
+            details=details,
         )
+
+    def _check_llm_judge_acceptance(
+        self,
+        context: VerificationContext,
+        blocking: list[VerificationFinding],
+        warnings: list[VerificationFinding],
+    ) -> tuple[VerificationCheckItem | None, list[CriterionJudgeEvidence]]:
+        """Check 13: P-28 LLM-as-judge acceptance check requiring citations to specific diff hunks."""
+        evidence_list: list[CriterionJudgeEvidence] = []
+
+        if context.requirement_evidence:
+            evidence_list = list(context.requirement_evidence)
+        elif context.requirements:
+            judge = LLMRequirementJudge()
+            hunks = extract_diff_hunks_from_diff(context.diff)
+            for req in context.requirements:
+                req_id = req.get("id") if isinstance(req, dict) else getattr(req, "id", "req-1")
+                criteria = req.get("acceptance_criteria") if isinstance(req, dict) else getattr(req, "acceptance_criteria", [])
+                targets = req.get("target_files") if isinstance(req, dict) else getattr(req, "target_files", [])
+                if criteria:
+                    for crit in criteria:
+                        ev = judge.evaluate_criterion(
+                            requirement_id=req_id,
+                            criterion=crit,
+                            citations_pool=hunks,
+                            target_files=targets,
+                            tests_failed=not context.tests_passed,
+                        )
+                        evidence_list.append(ev)
+                else:
+                    req_desc = req.get("description") if isinstance(req, dict) else getattr(req, "description", "")
+                    ev = judge.evaluate_criterion(
+                        requirement_id=req_id,
+                        criterion=req_desc or f"Requirement {req_id}",
+                        citations_pool=hunks,
+                        target_files=targets,
+                        tests_failed=not context.tests_passed,
+                    )
+                    evidence_list.append(ev)
+
+        if not evidence_list:
+            return None, []
+
+        unmet_criteria = []
+        for ev in evidence_list:
+            if ev.verdict in ("FAIL", "FAILED", "BLOCKED", "UNMET"):
+                unmet_criteria.append(ev.criterion_id)
+                blocking.append(
+                    VerificationFinding(
+                        id=f"judge-unmet-{abs(hash(ev.criterion_id)) % 10000}",
+                        severity="HIGH",
+                        category="correctness",
+                        message=f"P-28 LLM-as-judge unmet criterion '{ev.criterion_id}': {ev.reasoning}",
+                        blocking=True,
+                    )
+                )
+            elif not ev.citations:
+                warnings.append(
+                    VerificationFinding(
+                        id=f"judge-warn-{abs(hash(ev.criterion_id)) % 10000}",
+                        severity="LOW",
+                        category="correctness",
+                        message=f"P-28 LLM-as-judge pass with zero diff citations for criterion '{ev.criterion_id}'.",
+                        blocking=False,
+                    )
+                )
+
+        status_str = "FAILED" if unmet_criteria else "PASSED"
+        total_cits = sum(len(e.citations) for e in evidence_list)
+        msg = (
+            f"P-28 LLM-as-Judge evaluated {len(evidence_list)} criteria with {total_cits} diff hunk citation(s)."
+            if not unmet_criteria
+            else f"P-28 LLM-as-Judge rejected {len(unmet_criteria)}/{len(evidence_list)} criteria."
+        )
+
+        check_item = VerificationCheckItem(
+            name="requirement_llm_judge",
+            status=status_str,
+            message=msg,
+            findings_count=len(unmet_criteria),
+            details={
+                "criteria_count": len(evidence_list),
+                "unmet_count": len(unmet_criteria),
+                "citations_count": total_cits,
+                "criteria_evidence": [e.model_dump() for e in evidence_list],
+            },
+        )
+        return check_item, evidence_list
 
     def _check_branch_protection(
         self,
@@ -1074,6 +1239,31 @@ class IndependentVerifier:
         modified_files = extract_modified_files_from_diff(context.diff)
         files_list = "\n".join(f"- `{f}`" for f in modified_files) if modified_files else "- *(No files modified)*"
 
+        # Build acceptance criteria citations section if present
+        criteria_section = ""
+        evidence_list = list(context.requirement_evidence or [])
+        if not evidence_list:
+            for c in checks:
+                if c.name == "requirement_llm_judge" and c.details and "criteria_evidence" in c.details:
+                    raw_ev = c.details["criteria_evidence"]
+                    evidence_list = [CriterionJudgeEvidence(**e) if isinstance(e, dict) else e for e in raw_ev]
+                    break
+
+        if evidence_list:
+            c_rows = []
+            for ev in evidence_list:
+                cit_str = ", ".join(f"`{c.file_path}#{c.line_range}`" for c in ev.citations) if ev.citations else "*(no hunks cited)*"
+                c_rows.append(f"| `{ev.requirement_id}` | {ev.criterion_id} | `{ev.verdict}` | {ev.confidence * 100:.1f}% | {cit_str} |")
+            criteria_table = "\n".join(c_rows)
+            criteria_section = f"""### 📋 P-28 Acceptance Criteria Citations (LLM-as-Judge)
+| Requirement | Criterion | Verdict | Confidence | Cited Diff Hunks |
+| :--- | :--- | :--- | :--- | :--- |
+{criteria_table}
+
+---
+
+"""
+
         title_header = context.task_title or f"Task {context.task_id} Implementation"
 
         # Full markdown template
@@ -1095,7 +1285,7 @@ class IndependentVerifier:
 
 ---
 
-{blocking_section}{warnings_section}### 📂 Files Modified
+{criteria_section}{blocking_section}{warnings_section}### 📂 Files Modified
 {files_list}
 
 ---
