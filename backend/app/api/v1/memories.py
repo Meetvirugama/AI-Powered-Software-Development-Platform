@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
+from app.api.v1.dependencies import get_owned_repository, get_request_user_id
+from app.models.user import UserRole
 from app.models.memory_entry import MemoryStatus, MemoryType
 from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.memory import (
@@ -47,21 +49,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/repositories/{repository_id}/memories", tags=["project-memory"])
 
 
-def _verify_owned_repository(repository_id: UUID, request: Request, db: Session) -> UUID:
-    """Enforce multi-tenant repository access boundaries."""
-    try:
-        user_id = UUID(str(request.state.user_id))
-    except (AttributeError, ValueError) as exc:
-        raise APIError(401, ErrorCode.UNAUTHORIZED, "Authentication is required.") from exc
-
-    repo = RepositoryRepository(db).get_for_user(repository_id, user_id)
-    if repo is None:
-        raise APIError(
-            404,
-            ErrorCode.REPOSITORY_NOT_FOUND,
-            "Repository does not exist or you do not have access.",
-        )
-    return user_id
+def _verify_owned_repository(
+    repository_id: UUID,
+    request: Request,
+    db: Session,
+    min_role: str | UserRole | None = None,
+) -> UUID:
+    """Enforce multi-tenant repository access boundaries and RBAC."""
+    get_owned_repository(repository_id, request, db, min_role=min_role)
+    return get_request_user_id(request)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +77,7 @@ def create_memory_entry(
     request: Request,
     db: Session = Depends(get_db),
 ) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     entry = service.create_memory(
         repository_id=repository_id,
@@ -146,7 +142,7 @@ def record_task_completion_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     entry = service.record_task_completion_memory(
         repository_id=repository_id,
@@ -172,7 +168,7 @@ def record_task_failure_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     entry = service.record_task_failure_memory(
         repository_id=repository_id,
@@ -196,7 +192,7 @@ def pin_architectural_rule_endpoint(
     request: Request,
     db: Session = Depends(get_db),
 ) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     entry = service.record_architectural_rule(
         repository_id=repository_id,
@@ -319,7 +315,7 @@ def update_memory_entry(
     request: Request,
     db: Session = Depends(get_db),
 ) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     entry = service.update_memory(
         entry_id=entry_id,
@@ -346,7 +342,7 @@ def delete_memory_entry(
     request: Request,
     db: Session = Depends(get_db),
 ) -> None:
-    _verify_owned_repository(repository_id, request, db)
+    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
     service = ProjectMemoryService(db)
     deleted = service.delete_memory(entry_id, repository_id=repository_id)
     if not deleted:

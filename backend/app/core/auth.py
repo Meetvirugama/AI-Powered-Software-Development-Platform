@@ -205,6 +205,8 @@ class JWTMiddleware(BaseHTTPMiddleware):
             request.state.user_id = str(claims["sub"])
             request.state.token_jti = jti
             request.state.token_exp = int(claims["exp"])
+            request.state.role = str(claims.get("role", "developer"))
+            request.state.permissions = list(claims.get("permissions", []))
         except APIError as exc:
             return error_response(exc.status_code, exc.code, exc.message, retryable=exc.retryable)
         except Exception:
@@ -225,6 +227,8 @@ async def _try_populate_user_state(request: Request) -> None:
             request.state.user_id = str(claims["sub"])
             request.state.token_jti = jti
             request.state.token_exp = int(claims["exp"])
+            request.state.role = str(claims.get("role", "developer"))
+            request.state.permissions = list(claims.get("permissions", []))
     except Exception:
         pass
 

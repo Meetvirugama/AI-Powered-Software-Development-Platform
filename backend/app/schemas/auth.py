@@ -11,6 +11,7 @@ class AuthenticatedUser(BaseModel):
     name: str | None = None
     email: str | None = None
     avatar_url: str | None = None
+    role: str = "developer"
 
 
 class TokenResponse(BaseModel):
