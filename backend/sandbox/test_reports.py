@@ -94,7 +94,14 @@ class JUnitReportParser:
         total_skipped = 0
         total_errors = 0
         total_time_s = 0.0
-        suite_name = root.attrib.get("name") or "test_suite"
+        suite_name = root.attrib.get("name")
+        if not suite_name and suites:
+            for s in suites:
+                s_name = s.attrib.get("name")
+                if s_name:
+                    suite_name = s_name
+                    break
+        suite_name = suite_name or "test_suite"
 
         for suite in suites:
             # Parse test cases in this suite

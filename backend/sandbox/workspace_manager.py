@@ -139,7 +139,7 @@ class WorkspaceManager:
         self._monitors: dict[str, WorkspaceResourceMonitor] = {}
         self._timeline: dict[str, list[WorkspaceExecutionEvent]] = {}
         self._command_runner = WorkspaceCommandRunner(backend=self._backend)
-        self._test_runner = WorkspaceTestRunner(command_runner=self._command_runner)
+        self._test_runner = WorkspaceTestRunner(command_runner=self._command_runner, backend=self._backend)
         self._test_history: dict[str, list[WorkspaceTestExecutionResult]] = {}
         self._diff_verifier = WorkspaceDiffVerifier()
         self._repo_roots: dict[str, Path] = {}

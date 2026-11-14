@@ -478,6 +478,7 @@ class TestFailureClassification(str, Enum):
 class TestCaseResult(BaseModel):
     """Structured result of an individual test case parsed from JUnit XML."""
 
+    __test__ = False
     model_config = ConfigDict(from_attributes=True)
 
     name: str = Field(..., description="Test function or method name.")
@@ -493,6 +494,7 @@ class TestCaseResult(BaseModel):
 class TestSuiteResult(BaseModel):
     """Structured test suite aggregation parsed from standard JUnit XML."""
 
+    __test__ = False
     model_config = ConfigDict(from_attributes=True)
 
     name: str = Field(default="default", description="Test suite name.")
@@ -537,6 +539,7 @@ class FileCoverageDetail(BaseModel):
 class TestCoverageSummary(BaseModel):
     """Aggregated test coverage metrics supporting line and branch analysis (F23/F13)."""
 
+    __test__ = False
     model_config = ConfigDict(from_attributes=True)
 
     lines: CoverageMetric = Field(default_factory=CoverageMetric)
