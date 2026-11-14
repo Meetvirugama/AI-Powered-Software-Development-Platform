@@ -588,6 +588,39 @@ The platform's multi-stage hybrid code retrieval engine (combining dense vector 
    - Retain full backward compatibility for deployments running without Redis (`RETRIEVAL_REDIS_CACHE_ENABLED=false`).
    - Preserve existing `RetrievalLatencyOptimizer` percentile tracking (P50, P90, P95, P99) and `AgentTokenBudgetManager` token ceilings with zero regressions.
 
+## ADR-019: Amortized Batch Target Invocations & Concurrent Static Scanner Execution
+
+| Field | Value |
+|---|---|
+| **Title** | Amortized Batch Target Invocations & Concurrent Static Scanner Execution |
+| **Date** | 2026-11-14 |
+| **Status** | Accepted |
+| **Owner** | Meet & Dev |
+
+**Context:**
+During code review and pull request analysis, static analysis tools (`ruff`, `bandit`, `eslint`, `biome`) verify code hygiene, lint rules, and security vulnerabilities. Previously:
+1. `StaticReviewer` executed static scanners via sequential loops per modified file ($O(M \times S)$ subprocess launches where $M$ is modified files and $S$ is scanners). For a pull request with 10 modified files across 4 scanners, this incurred 40 separate subprocess executions, resulting in 20–30s review latency.
+2. Synchronous `subprocess.run` calls blocked worker threads and FastAPI async workers during multi-file reviews.
+3. Node and Python runtimes repeated interpreter startup, configuration loading, and dependency initialization overhead on every single file invocation.
+4. An optimization was required to batch file targets without introducing command/option injection vulnerabilities or breaking finding normalization schemas.
+
+**Decision:**
+1. **Batch Target Amortization:**
+   - Partition modified files by applicable static scanners (`_group_files_by_scanner`) based on file extension and repository configuration.
+   - Pass all targets matching a scanner in a single CLI invocation after `--` (e.g. `ruff check --output-format json -- f1.py f2.py ...`), amortizing subprocess execution from $O(M \times S)$ down to $O(S)$ launches.
+2. **Asynchronous & Concurrent Execution:**
+   - Introduce `run_scanner_async` backed by `asyncio.create_subprocess_exec` with non-blocking pipe reads and enforced process timeouts with active subprocess kill guarantees.
+   - Implement `review_modified_files_async` executing independent scanner processes concurrently via `asyncio.gather`, reducing multi-scanner latency from $\sum \text{latency}(s)$ to $\max \text{latency}(s)$.
+   - Provide multi-threaded parallel execution (`ThreadPoolExecutor`) in synchronous `review_modified_files` and `StaticBugScanner.scan_files`.
+3. **Hardened Option Injection Defense:**
+   - Validate and sanitize all target paths via `_sanitize_target_paths`: strictly reject empty paths, option-like strings starting with `-`, and null bytes (`\x00`).
+   - Explicitly prepend `--` before target file paths across all scanner commands (`ruff`, `bandit`, `eslint`, `biome`) to guarantee CLI parsers treat arguments strictly as positional path targets.
+   - Maintain `--no-install` on `npx` invocations and enforce a minimal sanitized environment (`PATH`, `HOME`, `LANG`, `NODE_ENV`).
+4. **Schema & Finding Compatibility:**
+   - Preserve 100% backward compatibility for single-string `target_path` arguments.
+   - Retain exact `StaticFinding` dataclass structure, severity thresholds, redaction of sensitive metadata, and API return schema (`findings`, `static_findings_count`, `ai_findings_count`, `total_findings`).
+
+
 
 
 

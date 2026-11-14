@@ -154,7 +154,11 @@ async def review_code(
         with timer.measure("static_analysis"):
             ext_reviewer = getattr(request.app.state, "static_reviewer", None)
             if ext_reviewer is not None:
-                rev_fn = getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer))
+                rev_fn = getattr(
+                    ext_reviewer,
+                    "review_modified_files_async",
+                    getattr(ext_reviewer, "review_modified_files", getattr(ext_reviewer, "review", ext_reviewer)),
+                )
                 if callable(rev_fn):
                     try:
                         mod_paths = [mf.file_path for mf in resolved.modified_files]
