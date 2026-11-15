@@ -225,7 +225,13 @@ async def test_incremental_indexer_persists_code_symbols_before_code_chunks(tmp_
 
     class _FakeDB:
         async def execute(self, stmt, params=None):
-            executed_sql.append((str(stmt).strip(), dict(params or {})))
+            if isinstance(params, list) and params:
+                p_dict = dict(params[0])
+            elif isinstance(params, dict):
+                p_dict = dict(params)
+            else:
+                p_dict = dict(params or {})
+            executed_sql.append((str(stmt).strip(), p_dict))
             return _FakeResult()
 
         async def commit(self):

@@ -150,6 +150,10 @@ async def test_cache_max_payload_bytes_skipped() -> None:
 @pytest.mark.asyncio
 async def test_stampede_lock_acquire_and_release() -> None:
     mock_redis = AsyncMock()
+    # Make eval raise so the implementation falls through to the get/compare/delete path.
+    # (AsyncMock.eval otherwise returns a truthy mock that int() converts to 1,
+    # causing the Lua branch to report success without calling delete.)
+    mock_redis.eval.side_effect = Exception("eval not supported")
     cache = RetrievalResultCache(redis_client=mock_redis, enabled=True)
 
     # Acquire success
@@ -157,7 +161,7 @@ async def test_stampede_lock_acquire_and_release() -> None:
     token = await cache.acquire_stampede_lock("lock_key")
     assert token is not None
 
-    # Release with matching token
+    # Release with matching token — exercises get/compare/delete fallback path
     mock_redis.get.return_value = token
     released = await cache.release_stampede_lock("lock_key", token)
     assert released is True
