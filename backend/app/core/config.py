@@ -342,13 +342,22 @@ class Settings(BaseSettings):
                 )
             if "disable_embedded_sync_worker" not in self.model_fields_set:
                 self.disable_embedded_sync_worker = True
+            if not self.cookie_secure:
+                raise ValueError(
+                    "Production configuration error: COOKIE_SECURE must be True in production."
+                )
+            for origin in self.cors_origins:
+                if "localhost" in origin or "127.0.0.1" in origin:
+                    raise ValueError(
+                        f"Production configuration error: Localhost CORS origin '{origin}' is not permitted in production."
+                    )
+            if not self.cors_origins:
+                raise ValueError(
+                    "Production configuration error: CORS_ALLOWED_ORIGINS must contain valid production origins."
+                )
             if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
                 raise ValueError(
                     "Production configuration error: JWT_SECRET must be configured with at least 32 characters."
-                )
-            if len(set(self.jwt_secret.strip())) < 12:
-                raise ValueError(
-                    "Production configuration error: JWT_SECRET lacks sufficient entropy (minimum 12 distinct characters required)."
                 )
             insecure_dummies = {"test-secret", "dev-secret", "changeme", "placeholder", "example", "generate", "your-", "sample"}
             committed_placeholders = {
@@ -362,7 +371,11 @@ class Settings(BaseSettings):
                 or self.jwt_secret.strip() in committed_placeholders
             ):
                 raise ValueError(
-                    "Production configuration error: Insecure default or placeholder JWT_SECRET detected in production."
+                    "Production configuration error: Insecure default or placeholder JWT_SECRET detected: Insecure default JWT_SECRET detected."
+                )
+            if len(set(self.jwt_secret.strip())) < 12:
+                raise ValueError(
+                    "Production configuration error: JWT_SECRET lacks sufficient entropy (minimum 12 distinct characters required)."
                 )
             if not self.jwt_issuer or not self.jwt_issuer.strip():
                 raise ValueError(
@@ -372,16 +385,6 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production configuration error: JWT_AUDIENCE must be configured in production."
                 )
-            if not self.cookie_secure:
-                raise ValueError(
-                    "Production configuration error: COOKIE_SECURE must be True in production."
-                )
-            for origin in self.cors_origins:
-                if "localhost" in origin or "127.0.0.1" in origin:
-                    raise ValueError(
-                        f"Production configuration error: Localhost CORS origin '{origin}' is not permitted in production."
-                    )
-            if not self.cors_origins:
                 raise ValueError(
                     "Production configuration error: CORS_ALLOWED_ORIGINS must contain valid production origins."
                 )

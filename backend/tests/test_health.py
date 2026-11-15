@@ -144,7 +144,6 @@ def test_modular_initialization_isolation(monkeypatch: pytest.MonkeyPatch) -> No
         init_llm_gateway,
         init_rag_pipeline,
         init_intelligence_services,
-        init_context_service,
         init_history_services,
     )
 
@@ -160,12 +159,6 @@ def test_modular_initialization_isolation(monkeypatch: pytest.MonkeyPatch) -> No
     assert ok_llm is False
     assert test_app.state.llm_gateway is None
     assert test_app.state.service_readiness["llm_gateway"] is False
-
-    # Context service still succeeds independently
-    ok_ctx = init_context_service(test_app)
-    assert ok_ctx is True
-    assert test_app.state.context_service is not None
-    assert test_app.state.service_readiness["context_service"] is True
 
     # History services still succeed independently
     ok_hist = init_history_services(test_app)

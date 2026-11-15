@@ -13,11 +13,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import contextlib
-from dataclasses import dataclass, field
 import inspect
 import json
 import logging
-import math
 import re
 import time
 from typing import Any, Callable
@@ -30,7 +28,7 @@ from agent.tools.models import (
     ToolRequest,
     ToolResult,
 )
-from agent.tools.rate_limiter import RateLimitDecision, ToolRateLimiter
+from agent.tools.rate_limiter import ToolRateLimiter
 from agent.tools.registry import UnifiedToolRegistry
 from agent.tools.schema_validator import SchemaValidator
 from ai.security.taint_policy import TaintPolicyEngine

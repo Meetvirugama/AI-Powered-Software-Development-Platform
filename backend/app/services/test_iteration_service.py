@@ -25,14 +25,10 @@ from __future__ import annotations
 import ast
 import logging
 import re
-from typing import Any
 
 from app.schemas.analysis import (
-    IterationReport,
-    IterationRound,
     TestScenario,
 )
-from app.services.test_coverage_service import TargetCoverageData
 
 logger = logging.getLogger(__name__)
 

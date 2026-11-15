@@ -22,7 +22,6 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 from app.models.analysis_finding import AnalysisFinding
-from app.models.analysis_run import AnalysisRun
 
 logger = logging.getLogger(__name__)
 

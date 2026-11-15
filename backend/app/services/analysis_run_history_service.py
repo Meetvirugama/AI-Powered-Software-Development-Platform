@@ -311,7 +311,6 @@ class AnalysisRunHistoryService(BaseHistoryService):
         Formats runs, findings, and attached user feedback into standardized evaluation samples
         suitable for regression testing and evaluation pipelines (e.g. Langfuse datasets).
         """
-        import json
         from app.schemas.analysis import normalize_analysis_feature_type
 
         normalized_feature = None

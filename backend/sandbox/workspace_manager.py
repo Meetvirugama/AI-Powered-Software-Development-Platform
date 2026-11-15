@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -1044,7 +1045,7 @@ class WorkspaceManager:
         except Exception:
             # Retry with error handler on Windows if file was read-only
             def _remove_readonly(func: Any, path: str, _: Any) -> None:
-                os.chmod(path, 0o777)
+                os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
                 func(path)
 
             shutil.rmtree(resolved, onerror=_remove_readonly)

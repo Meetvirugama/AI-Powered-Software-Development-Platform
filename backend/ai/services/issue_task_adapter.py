@@ -21,7 +21,7 @@ from uuid import UUID
 
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
-from ai.security.provenance import TrustLevel, create_provenance
+from ai.security.provenance import TrustLevel
 from ai.security.taint_tracker import get_taint_tracker
 from app.schemas.task import (
     TaskAssumption,

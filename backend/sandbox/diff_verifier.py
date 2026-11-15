@@ -519,10 +519,15 @@ class WorkspaceDiffVerifier:
 
             # 3. Approved File Scope Verification
             if allowed_set is not None and file_path not in allowed_set:
-                unapproved_files.append(file_path)
-                blocking_findings.append(
-                    f"File '{file_path}' was modified but is outside the approved task plan scope."
-                )
+                # Ephemeral test execution and coverage artifacts generated inside workspace are ignored
+                if not any(
+                    fnmatch.fnmatch(file_path, p) or fnmatch.fnmatch(Path(file_path).name, p)
+                    for p in (".coverage*", "*.pyc", "*__pycache__*", "*.pytest_cache*", "*.test_reports*", "test-report.xml", "coverage.xml")
+                ):
+                    unapproved_files.append(file_path)
+                    blocking_findings.append(
+                        f"File '{file_path}' was modified but is outside the approved task plan scope."
+                    )
 
             # 4. Critical Manifest Deletion Guard
             if file_summary.change_type == FileChangeType.DELETED:

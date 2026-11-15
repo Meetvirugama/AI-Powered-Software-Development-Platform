@@ -19,7 +19,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai.security.provenance import DataProvenance, TrustLevel
 from ai.security.provenance_audit import (
     ProvenanceAuditEventType,
     ProvenanceAuditLogger,
@@ -27,7 +26,7 @@ from ai.security.provenance_audit import (
 )
 from ai.security.taint_tracker import TaintTracker, get_taint_tracker
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.core.secret_redaction import redact, redact_obj
+from app.core.secret_redaction import redact_obj
 
 logger = logging.getLogger(__name__)
 

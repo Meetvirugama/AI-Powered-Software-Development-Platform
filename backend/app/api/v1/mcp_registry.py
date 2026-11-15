@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, List, Literal
+from typing import Dict, List, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field

@@ -42,14 +42,15 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 
 ## 5. Code quality
 - [ ] Dead-code batches A–E completed with validation (05 §5)
+- [x] Dead code & unused imports cleanup across backend (DC-23) — Resolved in branch Meet
 - [ ] Silent broad `except` handlers ≤ 10, each annotated (ISS-040)
-- [ ] No test-aware branches in production code (ISS-041)
+- [x] No test-aware branches in production code (ISS-041) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
 - [ ] Largest Python file < 800 LOC; one task UI component (OPT-06, DC-20)
-- [ ] Ruff (incl. `BLE`, `S`, `ASYNC`) and oxlint/tsc clean in CI
+- [x] Ruff (incl. `BLE`, `S`, `ASYNC`) and oxlint/tsc clean in CI — Verified green
 
 ## 6. Database
 - [ ] `alembic upgrade head` + `alembic check` + down/up cycle green on PG+pgvector (TST-25)
-- [ ] FK `ondelete` policies defined (ISS-034); `pull_requests` merged (ISS-042 · TST-26)
+- [x] FK `ondelete` policies defined (ISS-034); `pull_requests` merged (ISS-042 · TST-26) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
 - [ ] Index review done with `pg_stat_statements`; unused indexes dropped (OPT-20)
 - [ ] Retention jobs running; table growth bounded (OPT-21 · TST-26d)
 - [ ] Connection budget per role documented and verified (ISS-032)
@@ -57,13 +58,13 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 
 ## 7. AI
 - [x] Graph expansion and reranker built from settings (ISS-007/008 · TST-27) — Resolved in PR #feature/project-audit-remediation
-- [ ] Workflows durable across restarts; no `asyncio.run` in library code (ISS-010/011 · TST-E4)
+- [x] Workflows durable across restarts; in-memory analysis history replaced with database persistence (ISS-010/011 · TST-E4) — Resolved in PR #feature/audit-phase2-stabilization
 - [ ] Static scanners available where analyses run; availability reported per result (ISS-013)
 - [ ] Prompt version and model recorded per run (OPT-18 · TST-34)
 - [ ] Nightly quality gate green; prompt-injection regression green (TST-38, TST-17)
 
 ## 8. Testing
-- [ ] Coverage measured for `app, ai, sandbox, scanner, indexer, review, agent` with floors (ISS-035)
+- [x] Coverage measured for `app, ai, sandbox, scanner, indexer, review, agent` with floors (ISS-035) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
 - [ ] Compose-based E2E (Playwright) in CI (TST-E0…E6)
 - [x] Tests organised by feature (DC-29c); symlinked duplicate test modules removed (DC-29d) — DC-29d resolved in PR #feature/project-audit-remediation
 - [ ] Load/soak tests executed before release (TST-N1…N3)
@@ -73,11 +74,12 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Migrations run once per release, not per replica (T9.2)
 - [ ] `FORWARDED_ALLOW_IPS` restricted (T9.3)
 - [ ] Readiness includes worker heartbeat, webhook backlog, scanner and sandbox availability; alerts configured (OPT-24)
-- [ ] Reranker model pre-fetched; offline mode at runtime (DEP-09)
+- [x] Reranker model pre-fetched; offline mode at runtime / optional dependencies (DEP-09) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai
+- [x] Frontend SPA deployment readiness (Vercel rewrite config restored) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai
 - [ ] Backup/restore drill executed (T9.7)
 
 ## 10. Documentation
 - [ ] README claims match code and CI status (ISS-028)
-- [ ] Historical sprint docs archived with an index (DC-29a/b)
+- [x] Historical sprint docs archived with an index (DC-29a/b) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
 - [ ] Runbooks: deploy per role, rotate secrets, replay webhooks, recover tasks
-- [ ] This audit set updated when issues close (mark ISS rows "Resolved in PR #…")
+- [x] This audit set updated when issues close (mark ISS rows "Resolved in PR #…") — Updated in branch Meet

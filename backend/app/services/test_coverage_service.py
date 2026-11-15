@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any
 
 from app.core.secret_redaction import redact

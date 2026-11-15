@@ -106,9 +106,11 @@ class TestHostSideGitPushExecution:
         manager, task_id, ws_path = temp_workspace_env
         fake_token = "ghs_MockInstallationToken1234567890Secret"
         captured_commands: list[list[str]] = []
+        captured_envs: list[dict] = []
 
         def mock_subprocess_run(cmd, *args, **kwargs):
             captured_commands.append(list(cmd))
+            captured_envs.append(dict(kwargs.get("env") or {}))
             proc = MagicMock()
             proc.returncode = 0
             proc.stdout = "abc1234\n"
@@ -128,15 +130,18 @@ class TestHostSideGitPushExecution:
         assert res.success is True
         assert res.branch == "agent/task-test-task-f26-001"
 
-        # Verify git push was executed with -c http.extraheader containing base64 token
+        # Verify git push was executed with credentials passed via GIT_CONFIG_* env, never in argv (ISS-019)
         push_invocations = [cmd for cmd in captured_commands if "push" in cmd]
         assert len(push_invocations) == 1
         push_cmd = push_invocations[0]
+        push_env = captured_envs[captured_commands.index(push_cmd)]
 
         expected_auth = base64.b64encode(f"x-access-token:{fake_token}".encode("utf-8")).decode("utf-8")
-        expected_header = f"http.extraheader=AUTHORIZATION: basic {expected_auth}"
-        assert "-c" in push_cmd
-        assert expected_header in push_cmd
+        expected_header = f"AUTHORIZATION: basic {expected_auth}"
+        assert fake_token not in " ".join(push_cmd)
+        assert push_env.get("GIT_CONFIG_COUNT") == "1"
+        assert push_env.get("GIT_CONFIG_KEY_0") == "http.extraheader"
+        assert push_env.get("GIT_CONFIG_VALUE_0") == expected_header
 
         # Verify credential was never persisted into .git/config on disk
         git_config = (ws_path / ".git" / "config").read_text(encoding="utf-8")

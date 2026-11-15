@@ -26,7 +26,6 @@ from typing import TYPE_CHECKING, Any
 from app.schemas.repair import (
     DiagnosedFailure,
     FailureCategory,
-    FailureClassification,
     PatchValidationResult,
     RepairPatchPayload,
     TestFrameworkName,

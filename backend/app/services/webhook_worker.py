@@ -16,7 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from app.core.database import SessionLocal
-from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
+from app.models.webhook_event import WebhookEventStatus
 from app.repositories.webhook_event_repository import WebhookEventRepository
 from app.services.webhook_handlers import (
     FatalWebhookError,

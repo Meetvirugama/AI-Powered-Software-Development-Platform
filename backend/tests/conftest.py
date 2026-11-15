@@ -59,7 +59,6 @@ if "DATABASE_URL" not in os.environ:
 # Disable background workers and startup reconciliation during tests so they
 # don't interfere with test isolation or trigger real network/DB calls.
 os.environ.setdefault("DISABLE_EMBEDDED_WEBHOOK_WORKER", "true")
-os.environ.setdefault("DISABLE_EMBEDDED_SYNC_WORKER", "true")
 os.environ.setdefault("RUN_STARTUP_RECONCILIATION", "false")
 
 from app.core.config import get_settings

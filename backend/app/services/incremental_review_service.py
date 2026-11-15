@@ -11,12 +11,9 @@ Handles PR 'synchronize' events when new commits are pushed:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import logging
 from typing import Any, Optional
-from uuid import UUID
 
-from app.schemas.analysis import CodeReviewRequest, ReviewFinding, ReviewReportResponse
 from app.services.review_lifecycle_service import ReviewLifecycleService
 from app.services.review_publication_service import ReviewPublicationResult, ReviewPublicationService
 

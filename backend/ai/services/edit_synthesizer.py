@@ -21,11 +21,8 @@ import fnmatch
 import hashlib
 import json
 import logging
-import re
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,9 +31,7 @@ from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.schemas.plan import PlanStep
 from app.schemas.workspace import WorkspaceExecutionEventType
-from sandbox.constants import CRITICAL_PROJECT_FILES, FORBIDDEN_FILE_PATTERNS
-from sandbox.exceptions import WorkspaceError
-from sandbox.path_guard import WorkspacePathGuard
+from sandbox.constants import FORBIDDEN_FILE_PATTERNS
 
 logger = logging.getLogger(__name__)
 

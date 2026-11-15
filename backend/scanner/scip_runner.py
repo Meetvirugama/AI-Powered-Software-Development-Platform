@@ -25,7 +25,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
-from uuid import UUID
 
 from .graph import DependencyGraphBuilder
 from .symbols import EDGE_TYPE_DEFAULT_WEIGHTS, Symbol, SymbolEdge

@@ -25,7 +25,6 @@ from app.models.analysis_finding import AnalysisFinding
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.repository_file import RepositoryFile
-from app.models.symbol_edge import SymbolEdge
 from app.schemas.plan import LocalizationTarget
 
 logger = logging.getLogger(__name__)

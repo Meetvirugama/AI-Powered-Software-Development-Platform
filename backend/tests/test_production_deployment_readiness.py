@@ -31,6 +31,8 @@ class TestDatabaseAndRedisProductionHardening:
         assert normalized.count("sslmode=") == 1
         assert "sslmode=verify-full" in normalized
 
+    VALID_PROD_JWT = "abcdefghijklmnopqrstuvwxyz012345"
+
     @pytest.mark.parametrize(
         "bad_redis_url",
         [
@@ -43,7 +45,7 @@ class TestDatabaseAndRedisProductionHardening:
             Settings(
                 _env_file=None,
                 app_env="production",
-                jwt_secret="a" * 32,
+                jwt_secret=self.VALID_PROD_JWT,
                 cookie_secure=True,
                 cors_allowed_origins="https://app.example.com",
                 redis_url=bad_redis_url,
@@ -53,7 +55,7 @@ class TestDatabaseAndRedisProductionHardening:
         prod_upstash = Settings(
             _env_file=None,
             app_env="production",
-            jwt_secret="a" * 32,
+            jwt_secret=self.VALID_PROD_JWT,
             cookie_secure=True,
             cors_allowed_origins="https://app.example.com",
             redis_url="rediss://default:token@my-cache.upstash.io:6379",
@@ -63,7 +65,7 @@ class TestDatabaseAndRedisProductionHardening:
         prod_compose = Settings(
             _env_file=None,
             app_env="production",
-            jwt_secret="a" * 32,
+            jwt_secret=self.VALID_PROD_JWT,
             cookie_secure=True,
             cors_allowed_origins="https://app.example.com",
             redis_url="redis://redis:6379/0",
@@ -75,7 +77,7 @@ class TestDatabaseAndRedisProductionHardening:
             Settings(
                 _env_file=None,
                 app_env="production",
-                jwt_secret="a" * 32,
+                jwt_secret=self.VALID_PROD_JWT,
                 cookie_secure=True,
                 cors_allowed_origins="https://app.example.com",
                 cors_origin_regex=".*",
@@ -119,7 +121,7 @@ class TestDeploymentConfigsAndStartupScript:
             "JWT_ISSUER=",
             "JWT_AUDIENCE=",
             "COOKIE_SECURE=true",
-            "COOKIE_SAMESITE=none",
+            "COOKIE_SAMESITE=",
             "TRUST_PROXY_HEADERS=true",
             "DISABLE_EMBEDDED_SYNC_WORKER=true",
             "RUN_MIGRATIONS_ON_STARTUP=true",

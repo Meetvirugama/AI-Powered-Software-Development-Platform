@@ -15,14 +15,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import asyncio
-import hashlib
 import logging
 import re
 from typing import Any, Optional
-from uuid import UUID
 
-from app.core.secret_redaction import redact, redact_obj
-from app.schemas.analysis import ReviewCategory, ReviewFinding
+from app.core.secret_redaction import redact
+from app.schemas.analysis import ReviewFinding
 
 logger = logging.getLogger(__name__)
 
@@ -390,7 +388,6 @@ class ReviewPublicationService:
         """Determine whether an error from create_pull_request_review is ambiguous (timeout/network/5xx)."""
         import httpx
         from app.integrations.github.client import GitHubAPIError
-        from app.integrations.github.exceptions import GitHubError
 
         if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, asyncio.TimeoutError)):
             return True

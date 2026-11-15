@@ -41,7 +41,6 @@ from sandbox.exceptions import (
 )
 
 from ai.services.execution_verifier import ExecutionVerifier, StepVerificationOutcome
-from ai.services.edit_synthesizer import EditSynthesizer
 from ai.security.taint_policy import TaintPolicyEngine, get_taint_policy_engine, PolicyDecision
 
 if TYPE_CHECKING:

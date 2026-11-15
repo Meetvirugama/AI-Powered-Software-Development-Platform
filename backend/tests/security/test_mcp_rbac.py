@@ -105,6 +105,9 @@ def test_mcp_toggle_server_rbac(client: TestClient) -> None:
     # Admin receives 200
     a_resp = client.patch(f"/api/v1/mcp/servers/{server_id}/toggle", headers=admin_headers)
     assert a_resp.status_code == 200
+    # Restore initial state for test isolation across the test suite
+    a_restore = client.patch(f"/api/v1/mcp/servers/{server_id}/toggle", headers=admin_headers)
+    assert a_restore.status_code == 200
 
 
 def test_mcp_tool_policy_rbac(client: TestClient) -> None:
