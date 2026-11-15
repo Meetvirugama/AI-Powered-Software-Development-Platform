@@ -39,14 +39,14 @@ export interface ListRepositoriesParams {
 export async function listRepositories(
   params: ListRepositoriesParams,
 ): Promise<PaginatedRepositoryResponse> {
-  const response = await apiClient.get<Repository[]>('/repositories');
+  const { page, pageSize } = params;
+  const response = await apiClient.get<Repository[]>('/repositories', {
+    params: { page, page_size: pageSize },
+  });
   const all = response.data;
 
-  // Client-side pagination shim — replace with server-side params once the
-  // backend supports ?page=&page_size= on this endpoint.
-  const { page, pageSize } = params;
-  const start = (page - 1) * pageSize;
-  const items = all.slice(start, start + pageSize);
+  // Server-side pagination support with graceful fallback (ISS-024)
+  const items = all.length > pageSize ? all.slice((page - 1) * pageSize, page * pageSize) : all;
 
   return {
     items,

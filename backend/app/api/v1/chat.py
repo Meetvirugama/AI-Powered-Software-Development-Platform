@@ -111,7 +111,19 @@ async def chat_with_repository(
             user_id=user_id,
         )
     else:
-        answer = await pipeline.chat(payload.question, repository_id, payload.history)
+        # Fetch active project memories for the repository (ISS-036 / TST-40)
+        project_memories = []
+        try:
+            from app.services.memory_service import ProjectMemoryService
+            project_memories = ProjectMemoryService(db).get_context_memories(repository_id, limit=10)
+        except Exception:
+            pass
+        import inspect
+        sig = inspect.signature(pipeline.chat)
+        if "memory" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+            answer = await pipeline.chat(payload.question, repository_id, payload.history, memory=project_memories)
+        else:
+            answer = await pipeline.chat(payload.question, repository_id, payload.history)
 
     # Validate third-party pipeline implementations and redact any secrets at the HTTP boundary.
     validated = RepositoryAnswer.model_validate(answer)

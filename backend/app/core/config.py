@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     jwt_secret: str | None = None
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 15
+    jwt_refresh_expire_days: int = 7
+    refresh_cookie_name: str = "refresh_token"
     jwt_issuer: str = "agent-platform"
     jwt_audience: str = "agent-platform-web"
     github_oauth_redirect_uri: str = "http://localhost:8000/api/v1/auth/github/callback"

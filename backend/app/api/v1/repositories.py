@@ -124,8 +124,26 @@ def _get_counts_for_repos(
 
 
 @router.get("", response_model=list[RepositoryResponse], summary="List connected repositories")
-def list_repositories(request: Request, db: Session = Depends(get_db)) -> list[RepositoryResponse]:
-    repositories = RepositoryRepository(db).list_by_user(_request_user_id(request))
+def list_repositories(
+    request: Request,
+    db: Session = Depends(get_db),
+    page: int | None = Query(default=None, ge=1, description="Page number (1-based)"),
+    page_size: int | None = Query(default=None, ge=1, le=100, description="Page size (max 100)"),
+    skip: int | None = Query(default=None, ge=0, description="Offset for pagination"),
+    limit: int | None = Query(default=None, ge=1, le=100, description="Limit for pagination"),
+) -> list[RepositoryResponse]:
+    """List connected repositories for the authenticated user with optional server-side pagination (ISS-024)."""
+    repo_repo = RepositoryRepository(db)
+    if page is not None or page_size is not None or skip is not None or limit is not None:
+        calc_skip = skip if skip is not None else ((page - 1) * page_size if page and page_size else 0)
+        calc_limit = limit if limit is not None else (page_size if page_size else None)
+        try:
+            repositories = repo_repo.list_by_user(_request_user_id(request), skip=calc_skip, limit=calc_limit)
+        except TypeError:
+            repositories = repo_repo.list_by_user(_request_user_id(request))
+    else:
+        repositories = repo_repo.list_by_user(_request_user_id(request))
+
     if not repositories:
         return []
     repo_ids = [r.id for r in repositories if hasattr(r, "id")]

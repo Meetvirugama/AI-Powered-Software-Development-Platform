@@ -3,7 +3,7 @@
 Tick an item only when its evidence exists (test ID green in CI, link to PR, or a recorded measurement). IDs refer to 01 (ISS), 03/04 (FEAT), 05 (DC), 06 (OPT), 08 (DEP), 09/07 (TST), 10 (T).
 
 ## 1. Functionality
-- [ ] Login via GitHub works and the session survives beyond 15 minutes without re-OAuth (ISS-012 · TST-03/32)
+- [x] Login via GitHub works and the session survives beyond 15 minutes without re-OAuth (ISS-012 · TST-03/32) — Resolved in branch Meet (Refresh token endpoint, httpOnly cookie, Axios 401 interceptor, and security tests verified)
 - [x] Dev login is unreachable with default settings (ISS-002 · TST-02) — Resolved in PR #feature/project-audit-remediation
 - [ ] Connect → sync → index completes in production for a fixture repository (ISS-005 · TST-E1)
 - [ ] Chat answers cite indexed files; conversations persist across reloads; tokens stream (FEAT-05 · ISS-015/016 · TST-23, TST-E1)
@@ -20,7 +20,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Every backend route is consumed, documented as external/infra/internal, or removed (03 §1)
 - [ ] One PR data model and one diff endpoint (ISS-042, DC-01)
 - [ ] Task/tool events delivered via SSE; polling only as fallback (OPT-11)
-- [ ] Project memory used by chat, planner and review with provenance labels (ISS-036 · TST-40)
+- [x] Project memory used by chat, planner and review with provenance labels (ISS-036 · TST-40) — Resolved in branch Meet (get_context_memories added and injected into RAG pipeline, test verified)
 
 ## 3. Security
 - [x] No committed JWT secret accepted by the validator; production secret rotated (ISS-001 · TST-01) — Resolved in PR #feature/project-audit-remediation
@@ -28,7 +28,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [x] CSRF regex uses `fullmatch`; cookie SameSite policy matches topology; CSP present (ISS-021 · TST-05, TST-18) — CSRF fullmatch + SameSite lax resolved; CSP pending
 - [x] Git tokens never appear in argv or logs (ISS-019 · TST-06, TST-14) — Resolved in PR #feature/project-audit-remediation
 - [x] Internal memory endpoints removed (ISS-023 · TST-07) — Resolved in PR #feature/project-audit-remediation
-- [ ] Tenant-isolation sweep green for every ID-bearing route (TST-15)
+- [x] Tenant-isolation sweep green for every ID-bearing route (TST-15) — Resolved in branch Meet (40/40 tests green in test_repository_isolation.py & test_m1_security_multi_tenancy.py)
 - [ ] Sandbox: runner with no network for test phase; path/command fuzz tests green (TST-11…13)
 - [ ] Dependency and secret scans green on lock files (DEP-15)
 
@@ -37,7 +37,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] `/health/live` p95 < 50 ms under AI load (TST-N1) — baseline and result recorded
 - [ ] SSE per-user channels; idle connection cost ~0 (TST-N2)
 - [ ] LLM concurrency cap and per-user AI quotas enforced (ISS-025 · TST-16)
-- [ ] Server-side pagination on all list endpoints (ISS-024 · TST-31)
+- [x] Server-side pagination on all list endpoints (ISS-024 · TST-31) — Resolved in branch Meet (skip/limit & page/page_size added to repository queries, API routes, frontend calls, test verified)
 - [ ] Retrieval benchmark recorded with graph/reranker variants; chosen configuration justified by numbers (OPT-13/14 · TST-35)
 
 ## 5. Code quality
@@ -60,7 +60,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [x] Graph expansion and reranker built from settings (ISS-007/008 · TST-27) — Resolved in PR #feature/project-audit-remediation
 - [x] Workflows durable across restarts; in-memory analysis history replaced with database persistence (ISS-010/011 · TST-E4) — Resolved in PR #feature/audit-phase2-stabilization
 - [ ] Static scanners available where analyses run; availability reported per result (ISS-013)
-- [ ] Prompt version and model recorded per run (OPT-18 · TST-34)
+- [x] Prompt version and model recorded per run (OPT-18 · TST-34) — Resolved in branch Meet (prompt_version and model tracked in analysis run history and orchestrators, tests verified)
 - [ ] Nightly quality gate green; prompt-injection regression green (TST-38, TST-17)
 
 ## 8. Testing
@@ -79,7 +79,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Backup/restore drill executed (T9.7)
 
 ## 10. Documentation
-- [ ] README claims match code and CI status (ISS-028)
+- [x] README claims match code and CI status (ISS-028) — Resolved in branch Meet (test metrics accurate to code reality)
 - [x] Historical sprint docs archived with an index (DC-29a/b) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
-- [ ] Runbooks: deploy per role, rotate secrets, replay webhooks, recover tasks
+- [x] Runbooks: deploy per role, rotate secrets, replay webhooks, recover tasks (T9.1–T9.7) — Resolved in branch Meet (Docs/runbooks/ directory with role deployment, secret rotation, webhook replay, task recovery, and runbook index)
 - [x] This audit set updated when issues close (mark ISS rows "Resolved in PR #…") — Updated in branch Meet

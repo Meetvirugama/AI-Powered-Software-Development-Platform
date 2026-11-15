@@ -21,7 +21,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode, error_response
 from app.core.redis import get_redis as _default_get_redis
-from app.core.security import create_access_token
+from app.core.security import create_access_token, create_refresh_token, decode_refresh_token
 from app.repositories.user_repository import UserRepository
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.schemas.auth import AuthenticatedUser, TokenResponse
@@ -326,6 +326,7 @@ async def github_callback(
     )
     user_role = getattr(user, "role", "developer") or "developer"
     token, expires_in = create_access_token(str(user.id), role=user_role)
+    refresh_tok, refresh_expires_in = create_refresh_token(str(user.id), role=user_role)
 
     final_destination = target_redirect or f"{frontend_base}/auth/callback"
     redirect = RedirectResponse(
@@ -341,6 +342,15 @@ async def github_callback(
         max_age=expires_in,
         path="/",
     )
+    redirect.set_cookie(
+        get_settings().refresh_cookie_name,
+        refresh_tok,
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite=get_settings().effective_cookie_samesite,
+        max_age=refresh_expires_in,
+        path="/api/v1/auth",
+    )
     _clear_state_cookie(redirect)
 
     accept_hdr = (request.headers.get("accept") or "").lower()
@@ -353,6 +363,15 @@ async def github_callback(
             samesite=get_settings().effective_cookie_samesite,
             max_age=expires_in,
             path="/",
+        )
+        response.set_cookie(
+            get_settings().refresh_cookie_name,
+            refresh_tok,
+            httponly=True,
+            secure=get_settings().cookie_secure,
+            samesite=get_settings().effective_cookie_samesite,
+            max_age=refresh_expires_in,
+            path="/api/v1/auth",
         )
         _clear_state_cookie(response)
         return TokenResponse(
@@ -399,6 +418,7 @@ def dev_login(
 
     user_role = getattr(user, "role", "developer") or "developer"
     token, expires_in = create_access_token(user.id, role=user_role)
+    refresh_tok, refresh_expires_in = create_refresh_token(user.id, role=user_role)
     response.set_cookie(
         settings.auth_cookie_name,
         token,
@@ -408,8 +428,68 @@ def dev_login(
         max_age=expires_in,
         path="/",
     )
+    response.set_cookie(
+        settings.refresh_cookie_name,
+        refresh_tok,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.effective_cookie_samesite,
+        max_age=refresh_expires_in,
+        path="/api/v1/auth",
+    )
     return TokenResponse(
         access_token=token,
+        expires_in=expires_in,
+        user=_user_response(user),
+    )
+
+
+@router.post("/refresh", response_model=TokenResponse, summary="Refresh access token using refresh token")
+def refresh_token(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> TokenResponse:
+    """ISS-012: Exchange a valid refresh token for a new access token and rotated refresh token."""
+    settings = get_settings()
+    refresh_tok = request.cookies.get(settings.refresh_cookie_name)
+    if not refresh_tok:
+        auth_header = request.headers.get("Authorization") or ""
+        if auth_header.startswith("Bearer "):
+            refresh_tok = auth_header[7:].strip()
+    if not refresh_tok:
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Missing refresh token.")
+
+    claims = decode_refresh_token(refresh_tok)
+    user_id_str = str(claims.get("sub", ""))
+    user = UserRepository(db).get_by_id(UUID(user_id_str))
+    if not user:
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "User account no longer exists.")
+
+    user_role = getattr(user, "role", "developer") or "developer"
+    new_access_token, expires_in = create_access_token(user.id, role=user_role)
+    new_refresh_tok, refresh_expires_in = create_refresh_token(user.id, role=user_role)
+
+    response.set_cookie(
+        settings.auth_cookie_name,
+        new_access_token,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.effective_cookie_samesite,
+        max_age=expires_in,
+        path="/",
+    )
+    response.set_cookie(
+        settings.refresh_cookie_name,
+        new_refresh_tok,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.effective_cookie_samesite,
+        max_age=refresh_expires_in,
+        path="/api/v1/auth",
+    )
+    return TokenResponse(
+        access_token=new_access_token,
         expires_in=expires_in,
         user=_user_response(user),
     )
@@ -443,6 +523,20 @@ def logout(request: Request) -> Response:
     settings = get_settings()
     response.delete_cookie(
         settings.auth_cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite=settings.effective_cookie_samesite,
+    )
+    response.delete_cookie(
+        settings.refresh_cookie_name,
+        path="/api/v1/auth",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite=settings.effective_cookie_samesite,
+    )
+    response.delete_cookie(
+        settings.refresh_cookie_name,
         path="/",
         secure=settings.cookie_secure,
         httponly=True,

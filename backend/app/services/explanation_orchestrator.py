@@ -838,6 +838,22 @@ def record_analysis_run(
             or getattr(target, "revision", None)
         )
 
+    # OPT-18: Ensure prompt_version and model are captured in result_payload
+    if isinstance(result_payload, dict):
+        if "prompt_version" not in result_payload:
+            try:
+                from ai.prompts import get_prompt_metadata
+                meta = get_prompt_metadata("explanation_system")
+                result_payload["prompt_version"] = meta.version if meta else "1.0.0"
+            except Exception:
+                result_payload["prompt_version"] = "1.0.0"
+        if "model" not in result_payload:
+            try:
+                from app.core.config import get_settings
+                result_payload["model"] = getattr(get_settings(), "groq_chat_model", "openai/gpt-oss-120b")
+            except Exception:
+                result_payload["model"] = "openai/gpt-oss-120b"
+
     record = {
         "id": str(run_id),
         "repository_id": str(repository_id),

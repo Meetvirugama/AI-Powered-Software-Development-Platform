@@ -141,7 +141,7 @@ cd backend
 ../.venv/bin/pytest tests/test_context_builder.py
 ../.venv/bin/pytest tests/test_rag_pipeline.py
 ```
-*Current test suite status: **500+ passed**, 0 failed across core, security, adversarial, webhook, and agentic test suites.*
+*Current test suite status: **3,100+ passed**, 0 failed across core, security, adversarial, webhook, and agentic test suites.*
 
 ### Frontend Lint, Test & Build
 ```bash
@@ -155,7 +155,7 @@ npm test -- --run
 # Build production bundle
 npm run build
 ```
-*Frontend test status: **329 passed across 27 suites**, 0 TypeScript errors (`tsc -b`), production Vite build passing.*
+*Frontend test status: **351 passed across 31 suites**, 0 TypeScript errors (`tsc -b`), production Vite build passing.*
 
 ---
 

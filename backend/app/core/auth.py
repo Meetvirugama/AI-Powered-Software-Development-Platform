@@ -48,6 +48,7 @@ PUBLIC_PATHS = {
     "/api/v1/events",
     "/api/v1/github/webhook",
     "/api/v1/github/installation/callback",
+    "/api/v1/auth/refresh",
 }
 
 
@@ -167,6 +168,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
             request.url.path in PUBLIC_PATHS
             or request.url.path.startswith("/api/v1/auth/github/")
             or request.url.path == "/api/v1/auth/dev-login"
+            or request.url.path == "/api/v1/auth/refresh"
         )
         if is_public:
             await _try_populate_user_state(request)
