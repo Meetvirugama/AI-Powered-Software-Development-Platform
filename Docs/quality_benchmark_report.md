@@ -1,6 +1,6 @@
 # Platform Quality & Retrieval Benchmark Report
 
-**Generated:** 2026-11-13 06:27:23 UTC  
+**Generated:** 2026-11-15 14:55:15 UTC  
 **Environment:** Python 3.14.7 | PostgreSQL 15 + pgvector | Redis 7  
 **Overall Quality Gate Status:** ✅ ALL GATES PASSED
 
@@ -18,7 +18,7 @@ Evaluates the `HybridRetriever` (Vector + Lexical + RRF Fusion $k=60$ + MiniLM R
 | **Precision@5** | **20.0%** | Informational | ℹ️ INFO |
 | **Recall@5** | **100.0%** | $\ge 80.0\%$ | ✅ PASS |
 | **P50 Retrieval Latency** | **0.33 ms** | < 100 ms | ✅ PASS |
-| **P95 Retrieval Latency** | **0.85 ms** | < 250 ms | ✅ PASS |
+| **P95 Retrieval Latency** | **0.92 ms** | < 250 ms | ✅ PASS |
 
 ---
 
