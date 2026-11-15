@@ -36,7 +36,7 @@ from backend.ai.llm.schemas import (
     Message,
     LLMUnavailableError,
 )
-from backend.app.core.telemetry import (
+from backend.app.core.stage_metrics import (
     StageExecutionTimer,
     get_token_pricing,
 )
