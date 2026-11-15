@@ -20,7 +20,6 @@ from app.core.errors import (
     validation_exception_handler,
 )
 from app.core.lifespan import (
-    init_context_service,
     init_github_service,
     init_history_services,
     init_intelligence_services,
@@ -88,7 +87,6 @@ __all__ = [
     "init_llm_gateway",
     "init_rag_pipeline",
     "init_intelligence_services",
-    "init_context_service",
     "init_history_services",
     "init_github_service",
 ]

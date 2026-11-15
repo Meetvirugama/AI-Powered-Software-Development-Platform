@@ -24,7 +24,7 @@ from app.api.v1.analysis.common import (
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
-from app.core.telemetry import StageExecutionTimer
+from app.core.stage_metrics import StageExecutionTimer
 from app.schemas.analysis import (
     AnalysisTarget,
     CodeReviewRequest,

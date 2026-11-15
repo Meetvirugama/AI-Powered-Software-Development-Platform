@@ -130,34 +130,10 @@ async def list_analysis_runs(
             total=total,
             items=[_coerce_run_summary(item, repository_id) for item in items],
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("analysis_runs_list_db_error", extra={"error": str(exc)})
+        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Analysis history temporarily unavailable.") from exc
 
-    history_store: dict[str, dict[str, Any]] = getattr(
-        request.app.state, "_analysis_run_history", {}
-    )
-    matching = [
-        r
-        for r in history_store.values()
-        if str(r.get("repository_id")) == str(repository_id)
-        and (
-            normalized_feature_type is None
-            or normalize_analysis_feature_type(r.get("feature_type")) == normalized_feature_type
-        )
-        and (status is None or r.get("status") == status)
-        and (target_path is None or r.get("target_path") == target_path)
-        and (source_revision is None or r.get("source_revision") == source_revision)
-        and (user_id is None or str(r.get("user_id")) == str(user_id))
-    ]
-    matching.sort(key=lambda r: r.get("created_at", datetime.min), reverse=True)
-    total = len(matching)
-    sliced = matching[offset : offset + page_size]
-    return PaginatedAnalysisRunResponse(
-        page=page,
-        page_size=page_size,
-        total=total,
-        items=[_coerce_run_summary(item, repository_id) for item in sliced],
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -190,46 +166,19 @@ async def get_analysis_runs_summary(
             summary = repo_layer.get_run_summary(repository_id)
             integrity = repo_layer.verify_integrity(repository_id=repository_id)
             retention = repo_layer.get_retention_metrics(repository_id=repository_id)
-            if int(summary.get("total_runs", 0)) > 0:
-                return AnalysisRunMetricsSummaryResponse(
-                    repository_id=str(repository_id),
-                    total_runs=int(summary.get("total_runs", 0)),
-                    by_feature=dict(summary.get("by_feature", {})),
-                    by_status=dict(summary.get("by_status", {})),
-                    total_findings=int(summary.get("total_findings", 0)),
-                    integrity_status=str(integrity.get("status", "CLEAN")),
-                    integrity_issues_count=int(integrity.get("issues_count", 0)),
-                    retention=redact_obj(retention),
-                )
+            return AnalysisRunMetricsSummaryResponse(
+                repository_id=str(repository_id),
+                total_runs=int(summary.get("total_runs", 0)),
+                by_feature=dict(summary.get("by_feature", {})),
+                by_status=dict(summary.get("by_status", {})),
+                total_findings=int(summary.get("total_findings", 0)),
+                integrity_status=str(integrity.get("status", "CLEAN")),
+                integrity_issues_count=int(integrity.get("issues_count", 0)),
+                retention=redact_obj(retention),
+            )
         except Exception as exc:
-            logger.debug("analysis_runs_summary_db_fallback", extra={"error": str(exc)})
-
-    history_store: dict[str, dict[str, Any]] = (
-        getattr(request.app.state, "_analysis_run_history", None) or {}
-    )
-    repo_runs = [
-        r for r in history_store.values() if str(r.get("repository_id")) == str(repository_id)
-    ]
-    if repo_runs:
-        by_feat: dict[str, int] = {}
-        by_stat: dict[str, int] = {}
-        findings_sum = 0
-        for r in repo_runs:
-            ft = str(r.get("feature_type", "unknown"))
-            st = str(r.get("status", "COMPLETED"))
-            by_feat[ft] = by_feat.get(ft, 0) + 1
-            by_stat[st] = by_stat.get(st, 0) + 1
-            findings_sum += int(r.get("findings_count", 0) or 0)
-        return AnalysisRunMetricsSummaryResponse(
-            repository_id=str(repository_id),
-            total_runs=len(repo_runs),
-            by_feature=by_feat,
-            by_status=by_stat,
-            total_findings=findings_sum,
-            integrity_status="CLEAN",
-            integrity_issues_count=0,
-            retention={"default_retention_days": 90},
-        )
+            logger.warning("analysis_runs_summary_db_error", extra={"error": str(exc)})
+            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Analysis summary temporarily unavailable.") from exc
 
     return AnalysisRunMetricsSummaryResponse(
         repository_id=str(repository_id),
@@ -296,54 +245,8 @@ async def export_analysis_runs_dataset(
             db=db,
         )
     except Exception as exc:
-        logger.warning(f"Error exporting evaluation dataset via run_service: {exc}")
-        # Fallback to in-memory history if present
-        import json
-        history_store: dict[str, dict[str, Any]] = getattr(
-            request.app.state, "_analysis_run_history", {}
-        )
-        records = []
-        for r in history_store.values():
-            if str(r.get("repository_id")) != str(repository_id):
-                continue
-            if normalized_feature_type and normalize_analysis_feature_type(r.get("feature_type")) != normalized_feature_type:
-                continue
-            if status and r.get("status") != status:
-                continue
-            findings = r.get("findings") or []
-            feedback_entries = [
-                f.get("metadata", {}).get("feedback")
-                for f in findings
-                if isinstance(f, dict) and isinstance(f.get("metadata"), dict) and f.get("metadata", {}).get("feedback")
-            ]
-            if include_feedback_only and not feedback_entries:
-                continue
-            records.append(redact_obj({
-                "id": str(r.get("id", "")),
-                "repository_id": str(repository_id),
-                "feature_type": r.get("feature_type"),
-                "status": r.get("status"),
-                "input": {"target_path": r.get("target_path")},
-                "output": {"findings_count": len(findings)},
-                "findings": findings,
-                "feedback_summary": {"has_feedback": len(feedback_entries) > 0, "total_feedback": len(feedback_entries)},
-                "metadata": {"created_at": str(r.get("created_at", ""))},
-            }))
-        if format == "jsonl":
-            content = "\n".join(json.dumps(rec, default=str) for rec in records)
-        elif format == "langfuse":
-            langfuse_items = [
-                {
-                    "id": rec["id"],
-                    "input": {"feature_type": rec["feature_type"], **rec["input"]},
-                    "expected_output": {"findings_count": rec["output"]["findings_count"], "findings": rec["findings"]},
-                    "metadata": {"repository_id": rec["repository_id"], "status": rec["status"], **rec["metadata"]},
-                }
-                for rec in records
-            ]
-            content = "\n".join(json.dumps(item, default=str) for item in langfuse_items)
-        else:
-            content = json.dumps(records, default=str, indent=2)
+        logger.warning("analysis_runs_export_error", extra={"error": str(exc)})
+        raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Analysis export temporarily unavailable.") from exc
 
     if format == "langfuse":
         media_type = "application/x-ndjson"
@@ -406,12 +309,6 @@ async def get_analysis_run(
             run_record = AnalysisRunRepository(db).get_by_id(run_id)
         except Exception:
             run_record = None
-
-    if run_record is None:
-        history_store: dict[str, dict[str, Any]] = getattr(
-            request.app.state, "_analysis_run_history", {}
-        )
-        run_record = history_store.get(str(run_id))
 
     if run_record is None:
         raise APIError(404, ErrorCode.ANALYSIS_RUN_NOT_FOUND, "Analysis run not found.")

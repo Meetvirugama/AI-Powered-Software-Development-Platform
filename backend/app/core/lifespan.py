@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -367,20 +366,6 @@ def init_intelligence_services(app: FastAPI) -> bool:
     return success
 
 
-def init_context_service(app: FastAPI) -> bool:
-    """Initialize shared repository context service."""
-    try:
-        from ai.context import shared_context_service
-        app.state.context_service = shared_context_service
-        app.state.service_readiness["context_service"] = True
-        logger.info("context_service_ready")
-        return True
-    except Exception as exc:
-        logger.error("context_service_init_failed", extra={"error": str(exc)})
-        app.state.context_service = None
-        app.state.service_readiness["context_service"] = False
-        return False
-
 
 def init_history_services(app: FastAPI) -> bool:
     """Initialize Week 2 Day 2–6 History Persistence Services."""
@@ -449,7 +434,6 @@ async def lifespan(app: FastAPI):
         "code_review_service": False,
         "task_planner": False,
         "task_execution_orchestrator": False,
-        "context_service": False,
         "history_services": False,
         "github_service": False,
     }
@@ -458,7 +442,6 @@ async def lifespan(app: FastAPI):
     init_llm_gateway(app)
     init_rag_pipeline(app)
     init_intelligence_services(app)
-    init_context_service(app)
     init_history_services(app)
     await init_github_service(app)
 
@@ -487,7 +470,7 @@ async def lifespan(app: FastAPI):
         logger.warning("observability_startup_warning", extra={"error": str(obs_exc)})
 
     # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks on Startup ──────
-    if "PYTEST_CURRENT_TEST" not in os.environ:
+    if settings.run_startup_reconciliation:
         try:
             from app.core.database import SessionLocal
             from app.repositories.task_repository import TaskRepository
@@ -517,7 +500,7 @@ async def lifespan(app: FastAPI):
 
     # ── Background Webhook Worker Task ───────────────────────────────────────
     webhook_worker_task = None
-    if "PYTEST_CURRENT_TEST" not in os.environ and not getattr(settings, "disable_embedded_webhook_worker", False):
+    if not settings.disable_embedded_webhook_worker:
         try:
             from app.services.webhook_worker import webhook_worker_loop
 
@@ -530,7 +513,7 @@ async def lifespan(app: FastAPI):
     sync_worker_task = None
     if getattr(settings, "disable_embedded_sync_worker", False):
         logger.info("embedded_sync_worker_disabled_by_config", extra={"is_production": settings.is_production})
-    elif "PYTEST_CURRENT_TEST" not in os.environ:
+    else:
         try:
             from app.services.sync_worker import sync_worker_loop
 

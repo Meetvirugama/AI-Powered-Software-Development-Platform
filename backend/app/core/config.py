@@ -241,6 +241,8 @@ class Settings(BaseSettings):
     # their IP to dodge the per-IP rate limit.
     trust_proxy_headers: bool = False
     disable_embedded_sync_worker: bool = False
+    disable_embedded_webhook_worker: bool = False
+    run_startup_reconciliation: bool = True
     run_migrations_on_startup: bool = True
     uvicorn_graceful_timeout: int = 15
     sync_worker_lease_ttl_seconds: int = 60
