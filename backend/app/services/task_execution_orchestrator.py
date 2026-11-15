@@ -570,10 +570,9 @@ class TaskExecutionOrchestrator:
         actor_id: UUID | None = None,
     ) -> ToolResult:
         """Route a tool invocation through ToolRouter & WorkspaceToolPolicyBridge and persist audit log."""
-        task_repo.verify_execution_approval_gate(task)
-
-        # Sukun W3 Day 3: extra API tool policy (blocks publication/admin tools,
-        # trusted-only arguments and commands outside the approved templates).
+        # ISS-034 / security ordering: Check API tool policy FIRST so blocked tools always
+        # return 403 COMMAND_NOT_ALLOWED / TOOL_BLOCKED regardless of task state.
+        # (verify_execution_approval_gate comes after, so state errors don't mask security decisions.)
         from app.core.tool_api_policy import api_tool_policy_violation
 
         violation = api_tool_policy_violation(
@@ -594,6 +593,9 @@ class TaskExecutionOrchestrator:
                 output_summary=f"Blocked by API tool policy: {reason}",
             )
             raise APIError(403, code, reason)
+
+        # State gate: lighter tool-invocation gate (allows FAILED tasks for diagnostics/repair).
+        task_repo.verify_tool_invocation_gate(task)
 
         # F19: Human approval gate for tools with risk tier >= write-external (or high/critical)
         tool_risk: str | None = None
@@ -722,7 +724,8 @@ class TaskExecutionOrchestrator:
             if arg_error:
                 raise APIError(403, ErrorCode.COMMAND_NOT_ALLOWED, redact(arg_error))
 
-        task_repo.verify_execution_approval_gate(task)
+        # Use lighter tool-invocation gate: running tests on FAILED tasks is allowed for repair.
+        task_repo.verify_tool_invocation_gate(task)
 
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
@@ -786,7 +789,8 @@ class TaskExecutionOrchestrator:
         target_files: list[str] | None = None,
     ) -> BoundedRepairOutcome:
         """Execute bounded self-repair (max 3 attempts) and synchronize DB RepairAttempt & Task state."""
-        task_repo.verify_execution_approval_gate(task)
+        # Use lighter tool-invocation gate: bounded repair runs on tasks in FAILED state.
+        task_repo.verify_tool_invocation_gate(task)
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(404, ErrorCode.NOT_FOUND, f"No workspace found for task '{task.id}'.")
