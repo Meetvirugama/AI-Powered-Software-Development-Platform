@@ -83,6 +83,33 @@ class TaskPublicationMixin:
         self.session.refresh(task)
         return task
 
+    def get_latest_publication_authorization(
+        self,
+        task_id: uuid.UUID | str,
+        repository_id: Optional[uuid.UUID | str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Fetch the latest persisted PUBLICATION_AUTHORIZED event for this task (ISS-004)."""
+        t_uuid = _ensure_uuid(task_id)
+        if t_uuid is None:
+            return None
+        from app.models.task import TaskEvent
+        stmt = (
+            select(TaskEvent)
+            .where(
+                TaskEvent.task_id == t_uuid,
+                TaskEvent.event_type == TaskEventType.PUBLICATION_AUTHORIZED.value,
+            )
+            .order_by(TaskEvent.created_at.desc())
+            .limit(1)
+        )
+        event = self.session.execute(stmt).scalar_one_or_none()
+        if not event:
+            return None
+        data = dict(event.event_data or {})
+        data["authorized_at"] = event.created_at
+        data["user_id"] = event.user_id or event.actor_id
+        return data
+
     def record_pull_request(
         self,
         task_id: uuid.UUID | str,

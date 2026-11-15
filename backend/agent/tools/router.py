@@ -12,6 +12,7 @@ Integrates:
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 from dataclasses import dataclass, field
 import inspect
 import json
@@ -513,11 +514,16 @@ class ToolRouter:
 
         try:
             from app.observability.agent import trace_tool_invocation
-            with trace_tool_invocation(
+            tracer_ctx = trace_tool_invocation(
                 tool_name=request.tool_name,
                 task_id=task_id,
                 metadata={"source": getattr(definition, "source", "unknown") if definition else "unknown"},
-            ):
+            )
+        except Exception:
+            tracer_ctx = contextlib.nullcontext()
+
+        try:
+            with tracer_ctx:
                 timeout_s = getattr(definition, "timeout_s", 60.0)
                 # Enforce execution timeout via ThreadPoolExecutor when configured
                 if timeout_s and timeout_s > 0:

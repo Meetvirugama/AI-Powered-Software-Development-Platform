@@ -24,10 +24,13 @@ export function Login() {
     window.location.href = loginUrl;
   }
 
+  const devLoginTarget = (import.meta.env.VITE_DEV_LOGIN as string) || '';
+
   async function handleDevLogin() {
+    if (!devLoginTarget) return;
     setIsRedirecting(true);
     try {
-      const user = await devLogin('Meetvirugama');
+      const user = await devLogin(devLoginTarget);
       useAuthStore.getState().setUser(user);
       const dest = redirectParam || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('auth_redirect') : null) || '/app/dashboard';
       window.location.href = dest;
@@ -88,7 +91,7 @@ export function Login() {
             {isRedirecting ? 'Connecting to GitHub…' : 'Continue with GitHub'}
           </button>
 
-          {import.meta.env.DEV && (
+          {import.meta.env.DEV && Boolean(devLoginTarget) && (
             <button
               onClick={handleDevLogin}
               disabled={isRedirecting}

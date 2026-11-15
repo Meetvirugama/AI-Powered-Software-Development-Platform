@@ -457,6 +457,16 @@ async def github_webhook(
     MAX_WEBHOOK_BODY_BYTES = 5 * 1024 * 1024  # 5 MB
 
     settings = get_settings()
+
+    # Precheck Content-Length header before reading body into memory (ISS-031 / TST-10)
+    content_length_header = request.headers.get("content-length")
+    if content_length_header:
+        try:
+            if int(content_length_header) > MAX_WEBHOOK_BODY_BYTES:
+                raise APIError(413, ErrorCode.BAD_REQUEST, "Webhook payload exceeds maximum allowed size.")
+        except ValueError:
+            pass
+
     body_bytes = await request.body()
 
     if len(body_bytes) > MAX_WEBHOOK_BODY_BYTES:

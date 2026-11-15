@@ -446,6 +446,13 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
     assert rever_resp.status_code == 200
     assert rever_resp.json()["status"] == "PASS"
 
+    auth_resp = client.post(
+        f"/api/v1/tasks/{task_id}/authorize-publication",
+        headers=headers,
+        json={"head_sha": rever_resp.json()["verified_revision"]},
+    )
+    assert auth_resp.status_code == 200
+
     pr_resp = client.post(
         f"/api/v1/tasks/{task_id}/create-pr",
         headers=headers,

@@ -267,39 +267,49 @@ def test_api_memory_endpoints(client, db_session: Session, memory_test_setup: di
     assert resp_patch.status_code == 200
     assert resp_patch.json()["status"] == "archived"
 
-    # 5. Automated task completion endpoint
+    # 5. Automated task completion/failure HTTP endpoints removed for security (ISS-023 / TST-07)
     task_id = str(uuid.uuid4())
     resp_comp = client.post(
         f"/api/v1/repositories/{repo1.id}/memories/automated/task-completion",
         headers=headers,
-        json={
-            "task_id": task_id,
-            "title": "Migrate authentication to Argon2",
-            "verification_summary": "All password hash tests passed.",
-            "repair_attempts_used": 0,
-            "files_changed": ["backend/auth.py"],
-        },
+        json={"task_id": task_id, "title": "Test"},
     )
-    assert resp_comp.status_code == 201
-    comp_data = resp_comp.json()
-    assert comp_data["type"] == "task_summary"
-    assert f"task:{task_id}" in comp_data["source"]
+    assert resp_comp.status_code == 404
 
-    # 6. Automated task failure endpoint
     fail_task_id = str(uuid.uuid4())
     resp_fail = client.post(
         f"/api/v1/repositories/{repo1.id}/memories/automated/task-failure",
         headers=headers,
-        json={
-            "task_id": fail_task_id,
-            "title": "Upgrade database driver",
-            "failure_reason": "Incompatible binary protocol on SQLite.",
-            "repair_attempts_used": 2,
-        },
+        json={"task_id": fail_task_id, "title": "Test"},
     )
-    assert resp_fail.status_code == 201
-    fail_data = resp_fail.json()
-    assert fail_data["type"] == "failure"
+    assert resp_fail.status_code == 404
+
+    # Assert OpenAPI schema does not expose any automated memory endpoints (TST-07)
+    from app.main import app
+    openapi_paths = app.openapi()["paths"]
+    assert not any("automated" in path for path in openapi_paths if "memories" in path)
+
+    # Direct Python service recording still functions for internal orchestrator usage:
+    service = ProjectMemoryService(db_session)
+    comp_entry = service.record_task_completion_memory(
+        repository_id=repo1.id,
+        task_id=task_id,
+        title="Migrate authentication to Argon2",
+        verification_summary="All password hash tests passed.",
+        repair_attempts_used=0,
+        files_changed=["backend/auth.py"],
+    )
+    assert comp_entry.type_.value == "task_summary"
+    assert f"task:{task_id}" in comp_entry.source
+
+    fail_entry = service.record_task_failure_memory(
+        repository_id=repo1.id,
+        task_id=fail_task_id,
+        title="Upgrade database driver",
+        failure_reason="Incompatible binary protocol on SQLite.",
+        repair_attempts_used=2,
+    )
+    assert fail_entry.type_.value == "failure"
 
     # 7. Pin rule endpoint
     resp_rule = client.post(

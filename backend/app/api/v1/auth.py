@@ -373,26 +373,29 @@ def dev_login(
 ) -> TokenResponse:
     """Authenticate immediately for local development without external GitHub OAuth.
 
-    Guarded: Only permitted when settings.app_env is development, dev, or local.
+    Guarded: Only permitted when ENABLE_DEV_LOGIN is True, environment is not production,
+    and request originates from a loopback address (ISS-002).
     """
     settings = get_settings()
-    if settings.app_env.strip().lower() not in {"development", "dev", "local"}:
-        raise APIError(403, ErrorCode.FORBIDDEN, "Dev login is only permitted in development environments.")
+    if (
+        not settings.enable_dev_login
+        or settings.is_production
+        or settings.app_env.strip().lower() not in {"development", "dev", "local"}
+    ):
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Dev login endpoint is disabled.")
 
+    client_host = request.client.host if request.client else None
+    if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise APIError(403, ErrorCode.FORBIDDEN, "Dev login is only permitted from loopback interfaces.")
+
+    if not login or not login.strip():
+        raise APIError(400, ErrorCode.BAD_REQUEST, "Parameter 'login' is required for dev login.")
+
+    target_login = login.strip()
     user_repo = UserRepository(db)
-    target_login = (login or "Meetvirugama").strip()
     user = user_repo.get_by_login(target_login)
     if not user:
-        from app.models.user import User
-        all_users = db.query(User).all()
-        if all_users:
-            user = all_users[0]
-        else:
-            user = user_repo.create_user(
-                github_id="dev-user-001",
-                login=target_login,
-                email=f"{target_login.lower()}@example.com",
-            )
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, f"User '{target_login}' not found.")
 
     user_role = getattr(user, "role", "developer") or "developer"
     token, expires_in = create_access_token(user.id, role=user_role)
