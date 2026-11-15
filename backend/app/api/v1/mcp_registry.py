@@ -6,11 +6,13 @@ import json
 import time
 from typing import Any, Dict, List, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from app.api.v1.dependencies import require_min_role, require_role
 from app.core.errors import APIError, ErrorCode
 from app.mcp.server import DEFAULT_MCP_TOOLS, get_platform_mcp_server
+from app.models.user import UserRole
 from app.services.mcp_elicitation_service import validate_mcp_url
 
 router = APIRouter(prefix="/mcp", tags=["mcp-registry"])
@@ -71,12 +73,17 @@ _REGISTRY_SERVERS: Dict[str, MCPServerSchema] = {
 
 
 @router.get("/servers", response_model=List[MCPServerSchema], summary="List registered MCP servers and tool schemas")
-async def list_mcp_servers() -> List[MCPServerSchema]:
+async def list_mcp_servers(
+    _user_role: str = Depends(require_min_role(UserRole.DEVELOPER)),
+) -> List[MCPServerSchema]:
     return list(_REGISTRY_SERVERS.values())
 
 
 @router.post("/servers", response_model=MCPServerSchema, status_code=201, summary="Register an MCP server")
-async def register_mcp_server(payload: RegisterMCPServerRequest) -> MCPServerSchema:
+async def register_mcp_server(
+    payload: RegisterMCPServerRequest,
+    _user_role: str = Depends(require_role(UserRole.ADMIN)),
+) -> MCPServerSchema:
     endpoint = payload.endpointOrCommand.strip()
     if payload.transport in ("sse", "streamable_http"):
         endpoint = validate_mcp_url(endpoint)
@@ -100,7 +107,10 @@ async def register_mcp_server(payload: RegisterMCPServerRequest) -> MCPServerSch
 
 
 @router.post("/servers/{server_id}/ping", response_model=MCPServerSchema, summary="Ping an MCP server")
-async def ping_mcp_server(server_id: str) -> MCPServerSchema:
+async def ping_mcp_server(
+    server_id: str,
+    _user_role: str = Depends(require_role(UserRole.ADMIN)),
+) -> MCPServerSchema:
     srv = _REGISTRY_SERVERS.get(server_id)
     if srv is None:
         raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, f"MCP server '{server_id}' not found")
@@ -116,7 +126,10 @@ async def ping_mcp_server(server_id: str) -> MCPServerSchema:
 
 
 @router.patch("/servers/{server_id}/toggle", response_model=MCPServerSchema, summary="Enable or disable an MCP server")
-async def toggle_mcp_server(server_id: str) -> MCPServerSchema:
+async def toggle_mcp_server(
+    server_id: str,
+    _user_role: str = Depends(require_role(UserRole.ADMIN)),
+) -> MCPServerSchema:
     srv = _REGISTRY_SERVERS.get(server_id)
     if srv is None:
         raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, f"MCP server '{server_id}' not found")
@@ -141,6 +154,7 @@ async def update_mcp_tool_policy(
     server_id: str,
     tool_name: str,
     payload: UpdateToolApprovalPolicyRequest,
+    _user_role: str = Depends(require_role(UserRole.ADMIN)),
 ) -> MCPServerSchema:
     srv = _REGISTRY_SERVERS.get(server_id)
     if srv is None:

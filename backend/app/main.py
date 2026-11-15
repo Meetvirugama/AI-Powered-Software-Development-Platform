@@ -79,7 +79,7 @@ app.add_exception_handler(APIError, cast(Any, api_error_handler))
 app.add_exception_handler(StarletteHTTPException, cast(Any, http_exception_handler))
 app.add_exception_handler(RequestValidationError, cast(Any, validation_exception_handler))
 app.add_exception_handler(Exception, cast(Any, unhandled_exception_handler))
-app.include_router(health_router)
+app.include_router(health_router, include_in_schema=False)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 __all__ = [

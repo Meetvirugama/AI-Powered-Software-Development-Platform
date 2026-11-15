@@ -2,9 +2,11 @@ import os
 import sys
 import uuid
 import hashlib
+from urllib.parse import urlparse
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from app.core.config import get_settings
 from app.models import User, GitHubInstallation, Repository, RepositoryFile, CodeChunk
 
 from sqlalchemy import create_engine
@@ -24,7 +26,20 @@ try:
 except ImportError:
     pass
 
-def seed():
+def seed(force: bool = False, i_understand: bool = False):
+    settings = get_settings()
+    db_url = settings.database_url
+    parsed = urlparse(db_url)
+    is_local = (parsed.hostname in ("localhost", "127.0.0.1", "::1", "postgres", None) or db_url.startswith("sqlite"))
+    
+    if settings.is_production or not is_local:
+        if not (force and i_understand):
+            print(
+                f"ERROR: Refusing to drop/seed non-local or production database ({parsed.hostname}) without --force and --i-understand flags.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # Use SQLite for local testing without Docker
     db_path = os.path.join(os.path.dirname(__file__), "..", "test.db")
     engine = create_engine(f"sqlite:///{db_path}")
@@ -132,4 +147,9 @@ def seed():
     print("Database seeding complete!")
 
 if __name__ == "__main__":
-    seed()
+    import argparse
+    parser = argparse.ArgumentParser(description="Seed database for local testing and benchmarking.")
+    parser.add_argument("--force", action="store_true", help="Force database seeding even if non-local")
+    parser.add_argument("--i-understand", action="store_true", help="Acknowledge destructive database wipe")
+    args = parser.parse_args()
+    seed(force=args.force, i_understand=args.i_understand)

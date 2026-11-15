@@ -41,6 +41,7 @@ from ai.services.execution_checkpoint_manager import ExecutionCheckpointManager
 from ai.services.execution_recovery import ExecutionRecoveryService
 from ai.services.requirement_verifier import RequirementToCodeVerifier
 from app.services.task_execution_report import TaskExecutionReportGenerator
+from app.core.config import get_settings
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.models.task import (
@@ -1138,12 +1139,16 @@ class TaskExecutionOrchestrator:
                         allowed_files_set.add(str(f).strip())
 
         diff_res = self.workspace_manager.get_workspace_diff(task_id_str)
-        # Allow test files and markdown docs alongside plan expected files
+        # Allow test files, test reports/coverage artifacts, and markdown docs alongside plan expected files
         effective_allowed: list[str] | None = None
         if strict_scope and allowed_files_set:
             effective_allowed = list(allowed_files_set)
             for df in diff_res.files:
-                if df.file_path.startswith(("tests/", "test/")) or df.file_path.endswith(".md"):
+                if (
+                    df.file_path.startswith(("tests/", "test/", ".test_reports/"))
+                    or df.file_path in (".coverage",)
+                    or df.file_path.endswith(".md")
+                ):
                     effective_allowed.append(df.file_path)
 
         diff_val = self.workspace_manager.validate_workspace_diff(
@@ -1266,6 +1271,8 @@ class TaskExecutionOrchestrator:
         for df in diff_res.files:
             change_str = df.change_type.value if hasattr(df.change_type, "value") else str(df.change_type)
             if change_str.lower() == "deleted":
+                continue
+            if not df.file_path.endswith((".py", ".js", ".ts", ".jsx", ".tsx")):
                 continue
             target_file = ws_root / df.file_path
             if not target_file.exists() or not target_file.is_file():
@@ -1853,9 +1860,12 @@ class TaskExecutionOrchestrator:
         try:
             push_res = self.workspace_manager.push_task_branch(push_req)
         except WorkspacePushError as exc:
-            if strict_remote or has_remote:
+            settings = get_settings()
+            # ISS-018: In production, failed git push must NEVER be treated as successful.
+            # Simulation is only allowed when not production AND settings.allow_mock_git_push is True AND not has_remote
+            if settings.is_production or not getattr(settings, "allow_mock_git_push", False) or strict_remote or has_remote:
                 raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, redact(str(exc))) from exc
-            # In local/sandbox environments without a configured remote 'origin', record simulated push telemetry
+            # In local/sandbox environments with allow_mock_git_push=True and no configured remote 'origin', record simulated push
             pushed_sha = meta.base_revision
             if (ws_path / ".git").exists():
                 proc = subprocess.run(
@@ -1873,6 +1883,7 @@ class TaskExecutionOrchestrator:
                 branch=target_branch,
                 pushed_sha=pushed_sha,
                 remote_name=remote_name,
+                simulated=True,
             )
 
         task_repo.record_event(
@@ -1971,7 +1982,27 @@ class TaskExecutionOrchestrator:
                         stale_res.message or "Base revision is stale relative to remote HEAD.",
                     )
 
-            # 4. Transition task READY_FOR_PUBLICATION -> PUBLISHING
+            # 4. Persisted publication authorization check (ISS-004)
+            auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
+            settings = get_settings()
+            if not auth_record and not getattr(settings, "allow_mock_git_push", False):
+                raise APIError(
+                    409,
+                    ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
+                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{{id}}/authorize-publication first).",
+                )
+
+            # Check that authorized revision matches the latest verified revision (ISS-004)
+            if auth_record:
+                auth_sha = auth_record.get("authorized_head_sha")
+                if auth_sha and ver.verified_revision and auth_sha != ver.verified_revision:
+                    raise APIError(
+                        409,
+                        ErrorCode.PLAN_VERSION_MISMATCH,
+                        f"Publication authorization mismatch: authorized revision '{auth_sha}' does not match current verified revision '{ver.verified_revision}'. Re-authorization is required.",
+                    )
+
+            # 5. Transition task READY_FOR_PUBLICATION -> PUBLISHING
             curr_status = TaskStatus(task.status)
             if curr_status == TaskStatus.VERIFYING:
                 task_repo.transition_status(task, TaskStatus.READY_FOR_PUBLICATION, actor_id=actor_id)
@@ -2402,9 +2433,16 @@ class TaskExecutionOrchestrator:
             state_data={"verified_revision": ver_schema.verified_revision, "verification_status": ver_schema.status},
         )
 
-        # 4. If verification passed and human authorized publication, create Draft PR
+        # 4. If verification passed and human authorized publication, record authorization and create Draft PR
         pr_dict: dict[str, Any] | None = None
         if ver_schema.is_eligible_for_publication and publication_authorized:
+            task_repo.authorize_publication(
+                task_id=task.id,
+                repository_id=task.repository_id,
+                head_sha=ver_schema.verified_revision,
+                user_id=actor_id,
+                notes="Authorized via autonomous workflow parameter",
+            )
             pr_rec = self.create_draft_pull_request(
                 task=task,
                 task_repo=task_repo,

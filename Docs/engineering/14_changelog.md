@@ -1,5 +1,5 @@
 # 14. Changelog
-> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-08
+> **Version:** 4.0 | **Created:** 2026-09-24 | **Last Updated:** 2026-11-15
 
 ---
 
@@ -1558,3 +1558,85 @@ ecover_interrupted_tasks.
 
 **Related Docs:** `Docs/engineering/34_stream_unified_git_diffs_and_memory_bound_patch_verification.md`, `Docs/engineering/13_architecture_decisions.md`
 
+
+---
+
+### [AUDIT-P1] 2026-11-15 — Phase 1 Security & Stabilization Remediation from Project Audit
+**Type:** Security / Fix / Reliability  
+**Developer:** Yug (`YUG202401003`), Meet (`MEET202401001`)  
+**Branch:** `feature/project-audit-remediation`
+
+#### Summary
+Full Phase 1 implementation of the security, reliability, and code-quality remediations identified in `project_audit_documentation/`. Covers ISS-001, ISS-002, ISS-003, ISS-004, ISS-007, ISS-008, ISS-018, ISS-019, ISS-021, ISS-023, ISS-027, ISS-029, ISS-030, ISS-031, ISS-037, and DC-29d.
+
+#### Changes
+
+**ISS-001 / ISS-027 — Mandatory JWT secret; remove hardcoded fallbacks (`docker-compose.yml`)**
+- Replaced optional `${JWT_SECRET:-"changeme"}` fallback with mandatory `${JWT_SECRET:?JWT_SECRET is required}` for both `api` and `sync_worker` services; Docker Compose now fails at startup rather than silently using a known-weak key.
+- Removed unused `ASYNC_DATABASE_URL` from compose environment.
+
+**ISS-001 / ISS-002 / ISS-018 / ISS-021 — Production security hardening (`backend/app/core/config.py`)**
+- Added settings fields: `enable_dev_login: bool = False`, `disable_embedded_webhook_worker: bool = False`, `allow_mock_git_push: bool = False`.
+- In `validate_production_security`: enforced >= 12 distinct characters on `jwt_secret`, rejected 14 known dummy/commit secrets, enforced anchored `cors_origin_regex` (`^...$`), rejected `enable_dev_login=True` in production, defaulted cookie SameSite to `"lax"`.
+- Updated `.env.example` and `.env.production.example`: sanitized all secrets, set `ENABLE_DEV_LOGIN=false`, `COOKIE_SAMESITE=lax`, added anchored CORS regex examples.
+
+**ISS-002 / ISS-037 — Dev-login route secured (`backend/app/api/v1/auth.py`, `frontend/src/pages/Login.tsx`)**
+- `/api/v1/auth/dev-login` returns 404 when `enable_dev_login` is False; enforces non-production environment (403) and loopback IP check (403); requires explicit `?login=` query param (400); rejects non-existent user without fallback (404).
+- Frontend `Login.tsx`: removed hard-coded `'Meetvirugama'` username; dev login button only rendered when `VITE_DEV_LOGIN` env var is explicitly set.
+
+**ISS-002 / ISS-021 — CSRF and JWT middleware fixes (`backend/app/core/auth.py`)**
+- Changed CSRF Origin regex check from `re.match` to `re.fullmatch` to prevent bypass via path prefix.
+- Restored `app_settings = get_settings()` scope in `JWTMiddleware.dispatch`.
+
+**ISS-003 — MCP registry RBAC (`backend/app/api/v1/mcp_registry.py`)**
+- Protected all mutation routes (`register`, `ping`, `toggle`, `update_policy`) with `require_role(UserRole.ADMIN)`.
+- Protected `list_mcp_servers` with `require_min_role(UserRole.DEVELOPER)`.
+
+**ISS-004 / ISS-018 — Publication authorization gate (`backend/app/repositories/task/publication.py`, `backend/app/services/task_execution_orchestrator.py`, `backend/app/schemas/workspace.py`)**
+- Added `get_latest_publication_authorization` on `TaskPublicationMixin`.
+- Added `simulated: bool = False` to `WorkspacePushResult`; `allow_mock_git_push` check blocks simulated push in production.
+- In `create_draft_pull_request`: strict gate order enforced: (1) idempotency, (2) verification & diff immutability, (3) stale base revision, (4) persisted SHA-bound publication authorization.
+
+**ISS-007 / ISS-008 — RAG pipeline wiring (`backend/app/core/lifespan.py`)**
+- Wired `create_reranker()` from `ai.retrieval.reranker_factory` and `SymbolGraphExpander` from `ai.retrieval.graph_expansion` into the application lifespan initializer.
+
+**ISS-019 — Git token credential isolation (`backend/sandbox/workspace_manager.py`)**
+- In `push_task_branch`, GitHub installation token is now passed strictly via process environment using `GIT_CONFIG_COUNT=1` / `GIT_CONFIG_KEY_0=http.extraheader` / `GIT_CONFIG_VALUE_0=AUTHORIZATION: basic ...`; token never appears in subprocess argv.
+
+**ISS-023 — Remove unauthenticated memory automation endpoints (`backend/app/api/v1/memories.py`)**
+- Removed `POST /automated/task-completion` and `POST /automated/task-failure` HTTP routes; recording now only via internal orchestrator methods.
+
+**ISS-029 — Seed database production guard (`backend/scripts/seed_database.py`)**
+- `seed()` now detects non-local database URLs and refuses to drop/seed without `--force` and `--i-understand` flags.
+
+**ISS-030 — Deduplicated health router (`backend/app/main.py`)**
+- Root-level `health_router` mounted with `include_in_schema=False` to eliminate duplicate `/health/*` paths in OpenAPI.
+
+**ISS-031 — Webhook size guard (`backend/app/api/v1/github.py`)**
+- Added `Content-Length` pre-check; returns HTTP 413 if `Content-Length > 5 MB`.
+
+**ISS-037 — Agent execution loop & taint policy fixes**
+- Added `add_test`, `create_test`, `write_test` to recognized file-modification action types in `agent_execution_loop.py`.
+- In `taint_policy.py`: permitted blank `cmd` for `test`/`verify` action types.
+- In `requirement_verifier.py`: permitted `.test_reports/` and `.coverage` artifacts.
+
+**DC-29d — Remove duplicate test symlinks**
+- Deleted 7 dangling symlink test files from `backend/tests/`.
+
+#### New Security Test Suites
+| Test File | Tests |
+|-----------|-------|
+| `backend/tests/security/test_settings_validation.py` (TST-01, TST-05, TST-28) | 7/7 |
+| `backend/tests/security/test_dev_login.py` (TST-02) | 5/5 |
+| `backend/tests/security/test_mcp_rbac.py` (TST-04) | 5/5 |
+| `backend/tests/security/test_publication_authorization.py` (TST-20) | 4/4 |
+| `backend/tests/security/test_workspace_git_push_argv.py` (TST-06) | 1/1 |
+| `backend/tests/security/test_seed_database_guard.py` (TST-08) | 3/3 |
+| `backend/tests/security/test_webhook_size_guard.py` (TST-10) | 2/2 |
+| `backend/tests/security/test_rag_pipeline_wiring.py` (TST-27) | 2/2 |
+
+Total: 66/66 security suite tests passed; 5/5 acceptance tests passed.
+
+**Impact:** Eliminates all Phase 1 security vulnerabilities. Production secrets mandatory and validated at startup. Dev-login fully gated. MCP mutations admin-only. Git tokens process-environment-isolated. Unauthenticated automation endpoints removed. Publication requires persisted SHA-bound authorization. Oversized webhook payloads rejected before memory allocation.
+
+**Related Docs:** `project_audit_documentation/07_SECURITY_AND_RELIABILITY_AUDIT.md`, `project_audit_documentation/12_FINAL_PROJECT_CHECKLIST.md`

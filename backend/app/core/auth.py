@@ -46,7 +46,6 @@ PUBLIC_PATHS = {
     "/api/v1/health/live",
     "/api/v1/health/ready",
     "/api/v1/events",
-    "/api/v1/auth/dev-login",
     "/api/v1/github/webhook",
     "/api/v1/github/installation/callback",
 }
@@ -163,7 +162,13 @@ class JWTMiddleware(BaseHTTPMiddleware):
     """Populate request state from a Bearer token or the HTTP-only auth cookie."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/api/v1/auth/github/"):
+        app_settings = get_settings()
+        is_public = (
+            request.url.path in PUBLIC_PATHS
+            or request.url.path.startswith("/api/v1/auth/github/")
+            or request.url.path == "/api/v1/auth/dev-login"
+        )
+        if is_public:
             await _try_populate_user_state(request)
             return await call_next(request)
 
@@ -174,7 +179,6 @@ class JWTMiddleware(BaseHTTPMiddleware):
         # CSRF Protection: For state-changing requests authenticated by cookies, validate Origin
         if auth_source == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
             origin = request.headers.get("origin")
-            app_settings = get_settings()
             trusted_origins = {o.rstrip("/") for o in app_settings.cors_origins}
             effective_regex = getattr(app_settings, "effective_cors_origin_regex", app_settings.cors_origin_regex)
             if origin:
@@ -182,7 +186,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
                 is_trusted = origin_clean in trusted_origins
                 if not is_trusted and effective_regex:
                     import re
-                    is_trusted = bool(re.match(effective_regex, origin_clean))
+                    is_trusted = bool(re.fullmatch(effective_regex, origin_clean))
                 if not is_trusted:
                     logger.warning("untrusted_origin_rejected", extra={"origin": origin, "path": request.url.path})
                     return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")

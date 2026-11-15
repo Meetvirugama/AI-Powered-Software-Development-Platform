@@ -38,10 +38,9 @@ services:
       APP_ENV: production
       DISABLE_EMBEDDED_SYNC_WORKER: "true"
       DATABASE_URL: postgresql://platform:platform@postgres:5432/agent_platform
-      ASYNC_DATABASE_URL: postgresql+asyncpg://platform:platform@postgres:5432/agent_platform
       REDIS_URL: redis://redis:6379/0
       PORT: 8000
-      JWT_SECRET: ${JWT_SECRET:-production-deployment-minimum-32-chars-secret-key-ok}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
       JWT_ISSUER: ${JWT_ISSUER:-agent-platform}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-agent-platform-web}
       COOKIE_SECURE: "true"
@@ -61,9 +60,8 @@ services:
       SERVICE_ROLE: sync_worker
       APP_ENV: production
       DATABASE_URL: postgresql://platform:platform@postgres:5432/agent_platform
-      ASYNC_DATABASE_URL: postgresql+asyncpg://platform:platform@postgres:5432/agent_platform
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: ${JWT_SECRET:-production-deployment-minimum-32-chars-secret-key-ok}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
       JWT_ISSUER: ${JWT_ISSUER:-agent-platform}
       JWT_AUDIENCE: ${JWT_AUDIENCE:-agent-platform-web}
       COOKIE_SECURE: "true"
