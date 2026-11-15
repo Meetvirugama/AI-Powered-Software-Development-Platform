@@ -127,7 +127,7 @@ def resolve_target_and_build_context(
     missing_context: list[str] = []
     deep_mode = is_explain_at_depth_enabled(payload)
 
-    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):  # ISS-041: test-aware branch; pending DI refactor
         # Unit-test mode with mock DB session (`object()`)
         snippet = TargetSnippet(
             file_path=safe_path,

@@ -19,8 +19,8 @@ class SyncStatus(str, enum.Enum):
 class Repository(TimestampedModel, Base):
     __tablename__ = "repositories"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
-    installation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("github_installations.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    installation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("github_installations.id", ondelete="CASCADE"), index=True)
     github_repo_id: Mapped[str] = mapped_column(String, index=True)
     owner: Mapped[str] = mapped_column(String)
     name: Mapped[str] = mapped_column(String)

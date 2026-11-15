@@ -155,7 +155,7 @@ def _validate_and_normalize_code_target(
     safe_path = require_safe_repo_path(target.path)
     target.path = safe_path
 
-    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):  # ISS-041: test-aware branch; pending DI refactor
         return None
 
     try:

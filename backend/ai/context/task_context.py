@@ -121,7 +121,7 @@ class TaskContextBuilder:
                     excluded_files.append(str(tf))
 
         # 3. Query Repository and Symbols if DB is provided
-        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True:
+        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True:  # ISS-041: test-aware branch; pending DI refactor
             try:
                 if repository_id:
                     repo = db.get(Repository, repository_id)

@@ -205,7 +205,7 @@ async def resolve_review_target_and_build_context(
         target.path = require_safe_repo_path(target.path)
 
     # Lightweight unit-test mode when `db` is a mock without `.query`
-    if (getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query")) and getattr(app_state, "github_source_service", None) is None:
+    if (getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query")) and getattr(app_state, "github_source_service", None) is None:  # ISS-041: test-aware branch; pending DI refactor
         mod_files: list[ModifiedFile] = []
         if target.type == "file" and target.path:
             mod_files.append(ModifiedFile(file_path=target.path, change_type="modified", content=""))
@@ -242,7 +242,7 @@ async def resolve_review_target_and_build_context(
 
     # Load indexed repository files from DB when available
     all_repo_files: list[RepositoryFile] = []
-    if hasattr(db, "query") and not (getattr(db, "_is_mock_db", None) is True):
+    if hasattr(db, "query") and not (getattr(db, "_is_mock_db", None) is True):  # ISS-041: test-aware branch; pending DI refactor
         try:
             all_repo_files = (
                 db.query(RepositoryFile)

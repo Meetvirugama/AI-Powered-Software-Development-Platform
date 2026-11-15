@@ -712,15 +712,17 @@ class TaskExecutionOrchestrator:
         timeout_seconds: int = 60,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
-        task_repo.verify_execution_approval_gate(task)
-        # Sukun W3 Day 4: extra test-runner arguments come from API callers. Refuse paths
-        # outside the workspace (other tasks' folders, absolute paths) and unsafe pytest flags.
+        # Sukun W3 Day 4 / ISS-034: extra test-runner arguments come from API callers.
+        # Validate arguments FIRST (before state gate) so unsafe args always get 403,
+        # regardless of task state — prevents state-ordering bypass of security check.
         if arguments:
             from app.core.tool_api_policy import argv_safety_error
 
             arg_error = argv_safety_error([str(item) for item in arguments])
             if arg_error:
                 raise APIError(403, ErrorCode.COMMAND_NOT_ALLOWED, redact(arg_error))
+
+        task_repo.verify_execution_approval_gate(task)
 
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:

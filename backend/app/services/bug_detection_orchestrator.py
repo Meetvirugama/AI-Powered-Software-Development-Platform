@@ -166,7 +166,7 @@ def resolve_bug_target_and_build_context(
     revision = target.revision or getattr(repo, "default_branch", None) or "main"
     missing_context: list[str] = []
 
-    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query"):  # ISS-041: test-aware branch; pending DI refactor
         snippet = TargetSnippet(
             file_path=safe_path,
             content="",

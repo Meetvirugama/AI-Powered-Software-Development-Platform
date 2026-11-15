@@ -87,7 +87,7 @@ def _get_counts_for_repos(
     db: Session,
     request: Request | None = None,
 ) -> tuple[dict[UUID, int], dict[UUID, int], dict[UUID, int]]:
-    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query") or not repo_ids:
+    if getattr(db, "_is_mock_db", None) is True or not hasattr(db, "query") or not repo_ids:  # ISS-041: test-aware branch; pending DI refactor
         return {}, {}, {}
     try:
         file_counts = dict(

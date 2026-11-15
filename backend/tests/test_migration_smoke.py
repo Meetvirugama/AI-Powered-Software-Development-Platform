@@ -78,6 +78,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "h5e6f7a8b9c0",  # extend task_approvals for tool and MCP (Issue #199)
     "i6f7a8b9c0d1",  # add memory_entries embedding and hnsw (Issue #217)
     "j7a8b9c0d1e2",  # modernize code_symbols and symbol_edges for provenance, resolution status, and ranking
+    "k8b9c0d1e2f3",  # add user_role for RBAC
+    "l9c0d1e2f3a4",  # add FK ondelete CASCADE policies (ISS-034)
 )
 
 
