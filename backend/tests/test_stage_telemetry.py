@@ -4,7 +4,7 @@ import time
 from uuid import UUID, uuid4
 
 import pytest
-from app.core.telemetry import StageExecutionTimer, StageMetrics
+from app.core.stage_metrics import StageExecutionTimer, StageMetrics
 from app.schemas.analysis import (
     AnalysisTarget,
     BugDetectionResponse,

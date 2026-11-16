@@ -243,6 +243,7 @@ class Settings(BaseSettings):
     trust_proxy_headers: bool = False
     disable_embedded_sync_worker: bool = False
     disable_embedded_webhook_worker: bool = False
+    run_startup_reconciliation: bool = True
     allow_mock_git_push: bool = False
     run_migrations_on_startup: bool = True
     uvicorn_graceful_timeout: int = 15

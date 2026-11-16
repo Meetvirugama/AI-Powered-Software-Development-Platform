@@ -28,7 +28,7 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
-from app.core.telemetry import StageExecutionTimer
+from app.core.stage_metrics import StageExecutionTimer
 from app.schemas.analysis import (
     CodeExplanation,
     CodeExplanationResponse,
