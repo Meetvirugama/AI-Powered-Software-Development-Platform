@@ -11,11 +11,11 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Review publishes to GitHub once per click; bug → issue works (TST-E2)
 - [x] Task lifecycle reaches `DRAFT_PR_CREATED` only after persisted, SHA-bound authorization (ISS-004 · TST-E3) — Resolved in PR #feature/project-audit-remediation
 - [x] Failed pushes are never reported as successful in production (ISS-018) — Resolved in PR #feature/project-audit-remediation
-- [ ] Tools & MCP page shows real, persisted data — or the feature is removed (ISS-033/003 · FEAT-14)
+- [x] Tools & MCP page shows real, persisted data — or the feature is removed (ISS-033/003 · FEAT-14) — Resolved in branch Meet (wired ToolsIntegrationsAdminPage to /api/v1/mcp/servers via frontend/src/services/mcp.ts)
 - [ ] Webhook console, automation settings, code search, symbols and PR picker available (FEAT-15/16/17 · T4.4–T4.6)
 
 ## 2. Integration
-- [ ] 0 frontend calls to non-existent endpoints (contract test TST-30 green)
+- [x] 0 frontend calls to non-existent endpoints (contract test TST-30 green) — Resolved in branch Meet (test_tst30_api_contract.py verifies 100% of frontend apiClient calls map to registered OpenAPI endpoints)
 - [ ] Frontend types generated from OpenAPI; no hand-written response interfaces (OPT-03)
 - [ ] Every backend route is consumed, documented as external/infra/internal, or removed (03 §1)
 - [ ] One PR data model and one diff endpoint (ISS-042, DC-01)
