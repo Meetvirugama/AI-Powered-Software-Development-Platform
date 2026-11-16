@@ -153,12 +153,18 @@ def resolve_target_and_build_context(
             call_graph_depth_expanded=deep_mode,
         )
 
+    # -------------------------------------------------------------------------
+    # Performance Optimization (Issue F-41 / #258):
+    # Instead of querying ALL repository files into memory (full table scan),
+    # we first check repository file existence in O(1) time and then perform an
+    # indexed point lookup for the exact target file using (repository_id, path).
+    # -------------------------------------------------------------------------
     try:
-        all_repo_files: list[RepositoryFile] = (
-            db.query(RepositoryFile)
+        repo_has_files = (
+            db.query(RepositoryFile.id)
             .filter(RepositoryFile.repository_id == repository_id)
-            .order_by(RepositoryFile.path)
-            .all()
+            .first()
+            is not None
         )
     except Exception as exc:
         logger.error(
@@ -172,7 +178,7 @@ def resolve_target_and_build_context(
             retryable=True,
         ) from exc
 
-    if not all_repo_files:
+    if not repo_has_files:
         sync_status = getattr(repo, "sync_status", None)
         if sync_status in ("NOT_SYNCED", "SYNCING"):
             raise APIError(
@@ -186,8 +192,28 @@ def resolve_target_and_build_context(
             f"Target file '{safe_path}' was not found in the indexed repository.",
         )
 
-    indexed_paths = {f.path: (f.line_count or 0) for f in all_repo_files}
-    file_record = next((f for f in all_repo_files if f.path == safe_path), None)
+    # Point lookup for the specific target file using composite index
+    try:
+        file_record = (
+            db.query(RepositoryFile)
+            .filter(
+                RepositoryFile.repository_id == repository_id,
+                RepositoryFile.path == safe_path,
+            )
+            .first()
+        )
+    except Exception as exc:
+        logger.error(
+            "resolve_target_db_error",
+            extra={"repository_id": str(repository_id), "path": safe_path, "error": str(exc)},
+        )
+        raise APIError(
+            503,
+            ErrorCode.SERVICE_UNAVAILABLE,
+            "Database service is temporarily unavailable during target resolution.",
+            retryable=True,
+        ) from exc
+
     if file_record is None:
         raise APIError(
             404,
@@ -201,6 +227,20 @@ def resolve_target_and_build_context(
             ErrorCode.PAYLOAD_TOO_LARGE,
             "Target file exceeds the maximum analyzable size limit (1 MB).",
         )
+
+    # -------------------------------------------------------------------------
+    # Lightweight column projection for citation grounding:
+    # We only select (path, line_count) tuples instead of full ORM models.
+    # -------------------------------------------------------------------------
+    try:
+        path_rows = (
+            db.query(RepositoryFile.path, RepositoryFile.line_count)
+            .filter(RepositoryFile.repository_id == repository_id)
+            .all()
+        )
+        indexed_paths = {r.path: (r.line_count or 0) for r in path_rows}
+    except Exception:
+        indexed_paths = {safe_path: (file_record.line_count or 0)}
 
     # Fetch all symbols for this file
     try:
@@ -408,7 +448,19 @@ def resolve_target_and_build_context(
                             neighbor_syms.append(nc)
                             existing_nids.add(nc.id)
 
-                file_id_to_path = {f.id: f.path for f in all_repo_files}
+                # Resolve file paths for neighbor symbols using targeted ID lookup
+                neighbor_file_ids = {ns.file_id for ns in neighbor_syms if getattr(ns, "file_id", None)}
+                file_id_to_path: dict[Any, str] = {}
+                if neighbor_file_ids:
+                    try:
+                        file_id_rows = (
+                            db.query(RepositoryFile.id, RepositoryFile.path)
+                            .filter(RepositoryFile.id.in_(neighbor_file_ids))
+                            .all()
+                        )
+                        file_id_to_path = {r.id: r.path for r in file_id_rows}
+                    except Exception:
+                        pass
                 # Sort neighbors by importance_score descending
                 neighbor_syms.sort(
                     key=lambda s: float(getattr(s, "importance_score", 0.0) or 0.0),
@@ -488,7 +540,12 @@ def resolve_target_and_build_context(
     for sel_path in user_selected_files:
         try:
             clean_sel = validate_repo_relative_path(sel_path)
-            sel_file = next((f for f in all_repo_files if f.path == clean_sel), None)
+            # Direct indexed point lookup for user-selected file
+            sel_file = (
+                db.query(RepositoryFile)
+                .filter(RepositoryFile.repository_id == repository_id, RepositoryFile.path == clean_sel)
+                .first()
+            )
             if sel_file:
                 sel_chunks: list[CodeChunk] = (
                     db.query(CodeChunk)
@@ -586,6 +643,22 @@ def resolve_target_and_build_context(
         except Exception as exc:
             logger.debug("Failed querying project memories for explanation: %s", exc)
 
+    # -------------------------------------------------------------------------
+    # Bounded query for context assembly:
+    # Instead of slicing all repo files, fetch at most 50 files with LIMIT 50.
+    # -------------------------------------------------------------------------
+    sample_repo_files: list[RepositoryFile] = []
+    try:
+        sample_repo_files = (
+            db.query(RepositoryFile)
+            .filter(RepositoryFile.repository_id == repository_id)
+            .order_by(RepositoryFile.path)
+            .limit(50)
+            .all()
+        )
+    except Exception:
+        sample_repo_files = [file_record] if file_record else []
+
     context_repo_files = [
         ContextRepoFile(
             id=str(f.id),
@@ -595,7 +668,7 @@ def resolve_target_and_build_context(
             line_count=f.line_count or 0,
             content_hash=f.content_hash or "",
         )
-        for f in all_repo_files[:50]
+        for f in sample_repo_files
     ]
 
     target_snippet = TargetSnippet(
@@ -629,7 +702,7 @@ def resolve_target_and_build_context(
         intelligence_context=intelligence_ctx,
         missing_context=missing_context,
         indexed_paths=indexed_paths,
-        repo_files=all_repo_files,
+        repo_files=sample_repo_files,
         related_files=resolved_related_files,
         execution_flow=execution_flow,
         has_redacted_content=has_redacted,
