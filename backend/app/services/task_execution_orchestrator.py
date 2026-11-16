@@ -85,7 +85,7 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionResult,
 )
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
-from app.services.git_branch import GitBranchService, format_agent_branch_name
+from app.services.git_branch import format_agent_branch_name
 from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
     WorkspaceCommitError,

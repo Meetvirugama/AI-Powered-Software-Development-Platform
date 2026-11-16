@@ -41,7 +41,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Retrieval benchmark recorded with graph/reranker variants; chosen configuration justified by numbers (OPT-13/14 · TST-35)
 
 ## 5. Code quality
-- [ ] Dead-code batches A–E completed with validation (05 §5)
+- [x] Dead-code batches A–E completed with validation (05 §5) — Resolved in branch Meet (unused imports cleaned via ruff, dead plugin adapter removed, duplicate GET /search and repo_tasks_router removed, classifyAnalysisError wired into ErrorMessage, 351 Vitest and 70 security tests green)
 - [x] Dead code & unused imports cleanup across backend (DC-23) — Resolved in branch Meet
 - [ ] Silent broad `except` handlers ≤ 10, each annotated (ISS-040)
 - [x] No test-aware branches in production code (ISS-041) — Resolved in branch Meet / PR #feature/audit-phase3-hardening

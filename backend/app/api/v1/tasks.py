@@ -86,7 +86,6 @@ from app.services.task_execution_orchestrator import get_task_execution_orchestr
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
-repo_tasks_router = APIRouter(prefix="/repositories", tags=["tasks"])
 
 
 # ---------------------------------------------------------------------------
@@ -2078,47 +2077,4 @@ def get_task_events(
     return [_serialize_event_record(e) for e in events]
 
 
-# ---------------------------------------------------------------------------
-# 8. Repository-Scoped Task Endpoints (Docs/week3.md §6 F31 & §7)
-# ---------------------------------------------------------------------------
 
-@repo_tasks_router.get(
-    "/{repository_id}/tasks",
-    response_model=PaginatedTaskListResponse,
-    summary="List tasks for a specific repository",
-)
-def list_repository_tasks(
-    repository_id: UUID,
-    request: Request,
-    status_filter: str | None = Query(default=None, alias="status", description="Optional status filter"),
-    search: str | None = Query(default=None, description="Optional search query"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-) -> PaginatedTaskListResponse:
-    return list_tasks(
-        request=request,
-        repository_id=repository_id,
-        status_filter=status_filter,
-        search=search,
-        page=page,
-        page_size=page_size,
-        db=db,
-    )
-
-
-@repo_tasks_router.post(
-    "/{repository_id}/tasks",
-    response_model=TaskDetailResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a task within a specific repository",
-    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
-)
-def create_repository_task(
-    repository_id: UUID,
-    payload: TaskCreateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> TaskDetailResponse:
-    payload.repository_id = repository_id
-    return create_task(payload=payload, request=request, db=db)

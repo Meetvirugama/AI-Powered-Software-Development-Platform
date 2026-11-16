@@ -1,4 +1,5 @@
 import { cn } from '../../lib/utils';
+import { classifyAnalysisError } from '../../lib/classifyAnalysisError';
 import type { ApiError } from '../../types/api';
 
 interface ErrorMessageProps {
@@ -20,6 +21,7 @@ interface ErrorMessageProps {
  */
 export function ErrorMessage({ message, error, className }: ErrorMessageProps) {
   const displayMessage = error?.message ?? message ?? 'An unexpected error occurred.';
+  const classification = error?.code ? classifyAnalysisError(error.code, error.message) : null;
 
   return (
     <div
@@ -29,10 +31,17 @@ export function ErrorMessage({ message, error, className }: ErrorMessageProps) {
         className
       )}
     >
-      {error?.code && (
-        <span className="mr-2 font-mono text-xs opacity-70">[{error.code}]</span>
-      )}
-      {displayMessage}
+      <div className="flex items-start gap-2">
+        {error?.code && (
+          <span className="font-mono text-xs opacity-70">[{error.code}]</span>
+        )}
+        <div className="flex-1 space-y-1">
+          <p>{displayMessage}</p>
+          {classification?.userGuidance && classification.userGuidance !== displayMessage && (
+            <p className="text-xs opacity-80 font-normal">{classification.userGuidance}</p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
