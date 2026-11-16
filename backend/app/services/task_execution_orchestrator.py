@@ -228,6 +228,16 @@ class TaskExecutionOrchestrator:
         task_id_str = str(task.id)
         meta = self.workspace_manager.get_workspace(task_id_str)
         if meta is not None:
+            if not meta.verification_diff_hash and meta.workspace_path:
+                ws_path = Path(meta.workspace_path)
+                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
+                if m_path.exists():
+                    try:
+                        m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                        if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
+                            meta.verification_diff_hash = m_data["verification_diff_hash"]
+                    except Exception:
+                        pass
             return meta
         if task_repo is None:
             return None
@@ -571,10 +581,9 @@ class TaskExecutionOrchestrator:
         actor_id: UUID | None = None,
     ) -> ToolResult:
         """Route a tool invocation through ToolRouter & WorkspaceToolPolicyBridge and persist audit log."""
-        task_repo.verify_execution_approval_gate(task)
-
-        # Sukun W3 Day 3: extra API tool policy (blocks publication/admin tools,
-        # trusted-only arguments and commands outside the approved templates).
+        # ISS-034 / security ordering: Check API tool policy FIRST so blocked tools always
+        # return 403 COMMAND_NOT_ALLOWED / TOOL_BLOCKED regardless of task state.
+        # (verify_execution_approval_gate comes after, so state errors don't mask security decisions.)
         from app.core.tool_api_policy import api_tool_policy_violation
 
         violation = api_tool_policy_violation(
@@ -595,6 +604,9 @@ class TaskExecutionOrchestrator:
                 output_summary=f"Blocked by API tool policy: {reason}",
             )
             raise APIError(403, code, reason)
+
+        # State gate: lighter tool-invocation gate (allows FAILED tasks for diagnostics/repair).
+        task_repo.verify_tool_invocation_gate(task)
 
         # F19: Human approval gate for tools with risk tier >= write-external (or high/critical)
         tool_risk: str | None = None
@@ -716,15 +728,18 @@ class TaskExecutionOrchestrator:
         sandbox_backend: str | None = None,
     ) -> WorkspaceTestExecutionResult:
         """Run restricted test suite inside the task workspace and persist TestRun in DB."""
-        task_repo.verify_execution_approval_gate(task)
-        # Sukun W3 Day 4: extra test-runner arguments come from API callers. Refuse paths
-        # outside the workspace (other tasks' folders, absolute paths) and unsafe pytest flags.
+        # Sukun W3 Day 4 / ISS-034: extra test-runner arguments come from API callers.
+        # Validate arguments FIRST (before state gate) so unsafe args always get 403,
+        # regardless of task state — prevents state-ordering bypass of security check.
         if arguments:
             from app.core.tool_api_policy import argv_safety_error
 
             arg_error = argv_safety_error([str(item) for item in arguments])
             if arg_error:
                 raise APIError(403, ErrorCode.COMMAND_NOT_ALLOWED, redact(arg_error))
+
+        # Use lighter tool-invocation gate: running tests on FAILED tasks is allowed for repair.
+        task_repo.verify_tool_invocation_gate(task)
 
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
@@ -791,7 +806,8 @@ class TaskExecutionOrchestrator:
         target_files: list[str] | None = None,
     ) -> BoundedRepairOutcome:
         """Execute bounded self-repair (max 3 attempts) and synchronize DB RepairAttempt & Task state."""
-        task_repo.verify_execution_approval_gate(task)
+        # Use lighter tool-invocation gate: bounded repair runs on tasks in FAILED state.
+        task_repo.verify_tool_invocation_gate(task)
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(404, ErrorCode.NOT_FOUND, f"No workspace found for task '{task.id}'.")
@@ -1729,7 +1745,20 @@ class TaskExecutionOrchestrator:
         # Post-verification diff immutability check (Docs/week3.md §9 & §10)
         expected_hash = meta.verification_diff_hash
         if not expected_hash:
-            # Attempt to resolve from latest verification event payload if present
+            # 1. Attempt to resolve from workspace metadata.json on disk
+            try:
+                ws_path = Path(meta.workspace_path)
+                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
+                if m_path.exists():
+                    m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                    if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
+                        expected_hash = m_data["verification_diff_hash"]
+                        meta.verification_diff_hash = expected_hash
+            except Exception:
+                pass
+
+        if not expected_hash:
+            # 2. Attempt to resolve from latest verification event payload if present
             events = task_repo.list_events(task.id)
             for evt in events:
                 if evt.event_type in ("VERIFICATION_PASSED", "VERIFICATION_RECORDED", TaskEventType.VERIFICATION_COMPLETED.value):
@@ -1989,7 +2018,7 @@ class TaskExecutionOrchestrator:
                 raise APIError(
                     409,
                     ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
-                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{{id}}/authorize-publication first).",
+                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{task.id}/authorize-publication first).",
                 )
 
             # Check that authorized revision matches the latest verified revision (ISS-004)

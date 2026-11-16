@@ -13,8 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.secret_redaction import redact
@@ -33,7 +31,6 @@ from sandbox.backend import SandboxBackend
 from sandbox.container_backend import ContainerBackend
 from sandbox.exceptions import (
     SandboxSecurityError,
-    WorkspaceCommandError,
     WorkspaceError,
     WorkspacePathEscapeError,
     WorkspacePolicyViolationError,

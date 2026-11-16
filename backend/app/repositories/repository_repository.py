@@ -51,8 +51,17 @@ class RepositoryRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
-    def list_by_user(self, user_id: uuid.UUID) -> List[Repository]:
-        stmt = select(Repository).where(Repository.user_id == user_id)
+    def list_by_user(
+        self,
+        user_id: uuid.UUID,
+        skip: int = 0,
+        limit: Optional[int] = None,
+    ) -> List[Repository]:
+        stmt = select(Repository).where(Repository.user_id == user_id).order_by(Repository.created_at.desc())
+        if skip:
+            stmt = stmt.offset(skip)
+        if limit is not None:
+            stmt = stmt.limit(limit)
         return list(self.session.scalars(stmt).all())
 
     def update_sync_status(self, repo_id: uuid.UUID, status: SyncStatus) -> Optional[Repository]:

@@ -26,7 +26,7 @@ import ast
 from dataclasses import dataclass, field
 import logging
 import time
-from typing import Any, Callable
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 

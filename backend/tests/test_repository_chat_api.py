@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -136,7 +136,7 @@ async def test_concurrent_chat_ownership_checks(monkeypatch) -> None:
     """F-03: Concurrent repository chat requests safely manage their own session lifecycle."""
     import asyncio
     import httpx
-    from uuid import uuid4
+    from uuid import UUID, uuid4
 
     token = _configure_auth(monkeypatch)
     owned_repo_id = uuid4()

@@ -21,20 +21,17 @@ Responsibilities:
 
 from __future__ import annotations
 
-import ast
 import difflib
 import json
 import logging
 from pathlib import Path
-import re
 import time
 from collections.abc import Sequence
-from typing import Any, Mapping
+from typing import Any
 
 from ai.prompts import load_prompt
 from ai.services.edit_synthesizer import EditBlock, EditSynthesizer
 from app.core.secret_redaction import redact
-from app.schemas.plan import PlanStep
 from app.schemas.repair import (
     DiagnosedFailure,
     FailureClassification,
@@ -44,7 +41,6 @@ from app.schemas.repair import (
 from app.schemas.workspace import RepairAttemptRecord
 from app.services.repair_service import (
     classify_diagnosis,
-    classify_failure,
     compute_normalized_patch_hash,
     extract_application_frames_from_traceback,
     is_test_file,

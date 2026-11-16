@@ -8,7 +8,6 @@ GenAI semantic conventions (v1.28+) with versioned fallback compatibility.
 from __future__ import annotations
 
 from typing import Any
-from pydantic import BaseModel
 
 # Standard GenAI Semantic Attribute Keys (OTel Semantic Conventions)
 GEN_AI_SYSTEM = "gen_ai.system"

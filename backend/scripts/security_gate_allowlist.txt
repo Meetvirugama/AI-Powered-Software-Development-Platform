@@ -106,3 +106,8 @@ ed4dcf88da  # backend/tests/test_llm_gateway_f28.py synthetic test token
 e612497353  # backend/tests/security/provenance/test_issue_intake_provenance.py synthetic test key
 864270ae94  # frontend/src/realtime/events.ts CHAT_TOKEN constant name ("chat.token")
 50e000716b  # backend/tests/test_mcp_server_contract_and_vcr.py synthetic f-string variable ({synth_gh})
+653bb1245e  # backend/tests/test_production_config.py & test_reliable_worker_architecture.py synthetic test secret
+8af1191a8f  # backend/tests/security/test_settings_validation.py synthetic test secret
+61999a6f21  # backend/tests/security/test_settings_validation.py synthetic test secret
+f8113d787c  # backend/tests/security/test_workspace_git_push_argv.py synthetic test secret
+

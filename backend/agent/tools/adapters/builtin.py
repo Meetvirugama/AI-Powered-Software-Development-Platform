@@ -12,7 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable
 
 from agent.tools.adapters.base import BaseToolAdapter
-from agent.tools.models import ToolDefinition, ToolRequest, ToolResult
+from agent.tools.models import ToolDefinition, ToolRequest
 
 if TYPE_CHECKING:
     from sandbox.tool_policy_bridge import WorkspaceToolPolicyBridge

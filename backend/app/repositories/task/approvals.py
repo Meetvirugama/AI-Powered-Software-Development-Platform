@@ -280,6 +280,32 @@ class TaskApprovalMixin:
         self.session.refresh(target_task)
         return approval
 
+
+    def verify_tool_invocation_gate(self, task: Task) -> None:
+        """Lightweight gate for workspace tool invocations (read_file, write_file, execute_command, etc.).
+
+        Less strict than verify_execution_approval_gate: allows FAILED tasks to use tools
+        (workspace is still accessible for diagnostics and repair). Only blocks tasks that
+        never had an approved plan or were explicitly cancelled/rejected before execution.
+        """
+        from app.schemas.task import TaskStatus
+        curr_status = TaskStatus(task.status)
+        # Tasks that never reached approved state cannot invoke tools
+        if curr_status in (TaskStatus.CREATED, TaskStatus.PLANNING, TaskStatus.PENDING_APPROVAL):
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                "The task plan must be approved before invoking workspace tools.",
+            )
+        if curr_status in (TaskStatus.REJECTED, TaskStatus.CANCELLED):
+            raise APIError(
+                403,
+                ErrorCode.APPROVAL_REQUIRED,
+                f"Task in '{curr_status.value}' state cannot invoke workspace tools.",
+            )
+        # FAILED, BLOCKED, EXECUTING, TESTING, REPAIRING, WORKSPACE_SETUP, APPROVED — all allowed
+        # (workspace exists and tools support diagnostics / bounded repair)
+
     def verify_execution_approval_gate(self, task: Task) -> TaskPlan:
         """Server-enforced approval gate (Sukun W3 Day 2 — Docs/week3.md §6 F32 & §7.2).
 

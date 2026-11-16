@@ -43,7 +43,25 @@ class AnalysisRunHistoryService(BaseHistoryService):
         record: dict[str, Any],
         db: Optional[Session] = None,
     ) -> AnalysisRun:
-        """Persist an analysis run record from orchestrator dispatch (Week 2 — Day 6)."""
+        """Persist an analysis run record from orchestrator dispatch (Week 2 — Day 6, OPT-18)."""
+        # OPT-18: Ensure prompt_version and model are recorded in result_payload
+        payload = record.get("result_payload")
+        if isinstance(payload, dict):
+            if "prompt_version" not in payload:
+                try:
+                    from ai.prompts import get_prompt_metadata
+                    feature = record.get("feature_type", "").lower()
+                    meta = get_prompt_metadata(f"{feature}_system") if feature else None
+                    payload["prompt_version"] = meta.version if meta else "1.0.0"
+                except Exception:
+                    payload["prompt_version"] = "1.0.0"
+            if "model" not in payload:
+                try:
+                    from app.core.config import get_settings
+                    payload["model"] = getattr(get_settings(), "groq_chat_model", "openai/gpt-oss-120b")
+                except Exception:
+                    payload["model"] = "openai/gpt-oss-120b"
+
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)
             return repo.create_run(**record)
@@ -311,7 +329,6 @@ class AnalysisRunHistoryService(BaseHistoryService):
         Formats runs, findings, and attached user feedback into standardized evaluation samples
         suitable for regression testing and evaluation pipelines (e.g. Langfuse datasets).
         """
-        import json
         from app.schemas.analysis import normalize_analysis_feature_type
 
         normalized_feature = None

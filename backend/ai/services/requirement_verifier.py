@@ -661,7 +661,19 @@ class RequirementToCodeVerifier:
                 or any(ev.verdict in ("FAIL", "FAILED") for ev in req_judge_evidence)
             )
 
-            if has_explicit_blocked:
+            is_partial = bool(
+                req.acceptance_criteria and unmet_criteria and len(unmet_criteria) < len(req.acceptance_criteria)
+            )
+            if is_partial:
+                is_satisfied = False
+                status = "PARTIAL"
+                partial_req_ids.append(req.id)
+                unmet_req_ids.append(req.id)
+                if has_explicit_blocked:
+                    blocked_req_ids.append(req.id)
+                notes = f"Unsatisfied criteria: {', '.join(unmet_criteria)}"
+                remaining_work.append(f"Complete criteria for `{req.id}`: {', '.join(unmet_criteria)}")
+            elif has_explicit_blocked:
                 is_satisfied = False
                 status = "BLOCKED"
                 notes = "Blocked by dependency or policy check"

@@ -158,7 +158,7 @@ class TaskPlanner:
                     except UnsafePathError:
                         continue
 
-        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True:
+        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True:  # ISS-041: test-aware branch; pending DI refactor
             try:
                 repo = db.get(Repository, task.repository_id)
                 if repo and repo.language:

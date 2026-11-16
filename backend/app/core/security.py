@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Explicit algorithm allowlist for platform symmetric tokens
 ALLOWED_PLATFORM_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
 TOKEN_TYPE_ACCESS = "access"
+TOKEN_TYPE_REFRESH = "refresh"
 
 
 def create_access_token(
@@ -133,5 +134,95 @@ def decode_access_token(token: str) -> dict[str, object]:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid access token.")
     if exp <= iat:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid access token.")
+
+    return claims
+
+
+def create_refresh_token(
+    user_id: str | UUID,
+    role: str = "developer",
+) -> tuple[str, int]:
+    """Create a long-lived refresh JWT and return it with its remaining lifetime in seconds (ISS-012)."""
+    settings = get_settings()
+    if not settings.jwt_secret or not settings.jwt_issuer or not settings.jwt_audience:
+        raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "JWT signing is not properly configured.")
+
+    sub_str = str(user_id).strip()
+    if not sub_str:
+        raise APIError(400, ErrorCode.BAD_REQUEST, "Invalid user identifier for token generation.")
+
+    algorithm = settings.jwt_algorithm
+    if algorithm not in ALLOWED_PLATFORM_ALGORITHMS:
+        raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, f"Unsupported JWT algorithm: {algorithm}")
+
+    now = datetime.now(timezone.utc)
+    refresh_days = getattr(settings, "jwt_refresh_expire_days", 7)
+    expires_at = now + timedelta(days=refresh_days)
+
+    payload: dict[str, Any] = {
+        "sub": sub_str,
+        "jti": str(uuid4()),
+        "iss": settings.jwt_issuer,
+        "aud": settings.jwt_audience,
+        "token_type": TOKEN_TYPE_REFRESH,
+        "type": TOKEN_TYPE_REFRESH,
+        "role": str(role or "developer").lower(),
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+
+    token = jwt.encode(
+        payload,
+        settings.jwt_secret,
+        algorithm=algorithm,
+    )
+    token_str = token.decode("utf-8") if isinstance(token, bytes) else str(token)
+    return token_str, int(timedelta(days=refresh_days).total_seconds())
+
+
+def decode_refresh_token(token: str) -> dict[str, object]:
+    """Verify algorithm allowlist, signature, issuer, audience, and mandatory claims for refresh tokens (ISS-012)."""
+    settings = get_settings()
+    if not settings.jwt_secret or not settings.jwt_issuer or not settings.jwt_audience:
+        raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, "JWT signing is not properly configured.")
+
+    if not token or not isinstance(token, str) or not token.strip():
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid refresh token.")
+
+    algorithm = settings.jwt_algorithm
+    if algorithm not in ALLOWED_PLATFORM_ALGORITHMS:
+        raise APIError(500, ErrorCode.OAUTH_CONFIGURATION_ERROR, f"Unsupported JWT algorithm: {algorithm}")
+
+    try:
+        claims = jwt.decode(
+            token.strip(),
+            settings.jwt_secret,
+            algorithms=[algorithm],
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+            options={
+                "require": ["sub", "jti", "exp", "iat", "iss", "aud"],
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+                "verify_signature": True,
+            },
+        )
+    except ExpiredSignatureError as exc:
+        logger.info("refresh_token_expired", extra={"error": str(exc)})
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Expired refresh token.") from exc
+    except Exception as exc:
+        logger.info("refresh_token_invalid", extra={"error": str(exc)})
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid refresh token.") from exc
+
+    token_type = claims.get("token_type") or claims.get("type")
+    if token_type != TOKEN_TYPE_REFRESH:
+        logger.info("refresh_token_type_mismatch", extra={"token_type": str(token_type)})
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid token type for refresh.")
+
+    sub = claims.get("sub")
+    if isinstance(sub, bool) or not isinstance(sub, str) or not sub.strip():
+        raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid refresh token.")
 
     return claims

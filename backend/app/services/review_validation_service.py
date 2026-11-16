@@ -12,13 +12,12 @@ Enforces:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
 from typing import Any, Optional
-from uuid import UUID
 
 from app.core.input_security import validate_repo_relative_path, UnsafePathError
-from app.schemas.analysis import ReviewCategory, ReviewFinding
+from app.schemas.analysis import ReviewFinding
 
 logger = logging.getLogger(__name__)
 

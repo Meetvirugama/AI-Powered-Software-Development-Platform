@@ -19,7 +19,6 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai.security.provenance import DataProvenance, TrustLevel
 from ai.security.provenance_audit import (
     ProvenanceAuditEventType,
     ProvenanceAuditLogger,
@@ -27,7 +26,7 @@ from ai.security.provenance_audit import (
 )
 from ai.security.taint_tracker import TaintTracker, get_taint_tracker
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
-from app.core.secret_redaction import redact, redact_obj
+from app.core.secret_redaction import redact_obj
 
 logger = logging.getLogger(__name__)
 
@@ -377,14 +376,16 @@ class TaintPolicyEngine:
         if clean_action in ("command", "execute_command", "run_command", "bash", "sh", "exec", "test", "verify"):
             cmd = str(args.get("command", "") or args.get("cmd", "")).strip()
 
-            if not cmd and clean_action in ("test", "verify"):
-                res = PolicyEvaluationResult(
-                    decision=PolicyDecision.ALLOW,
-                    reason="Safe verification/test step without arbitrary shell execution permitted.",
-                    action_risk=ActionRiskLevel.LOW,
-                )
-                self._record_audit(task_id, None, clean_action, prov_ids, res, files, args)
-                return res
+            # Test preparation or file verification step without an active shell command
+            if not cmd and clean_action in ("test", "verify", "validate"):
+                if "content" in args or (files and not args.get("run_command")):
+                    res = PolicyEvaluationResult(
+                        decision=PolicyDecision.ALLOW,
+                        reason="Test/verification file operation permitted within workspace bounds.",
+                        action_risk=ActionRiskLevel.LOW,
+                    )
+                    self._record_audit(task_id, None, clean_action, prov_ids, res, files, args)
+                    return res
 
             # Check for network exfiltration commands
             cmd_tokens = [tok.lower() for tok in cmd.split()]

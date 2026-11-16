@@ -13,12 +13,10 @@ Integrates DBOS durable workflows and multi-step recovery for autonomous task ex
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import json
 import logging
 import threading
-import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -26,12 +24,9 @@ from uuid import UUID
 
 from app.core.database import SessionLocal
 from app.core.redis import get_redis
-from app.core.secret_redaction import redact, redact_obj
-from app.models.task import AgentTask, TaskStatus
+from app.core.secret_redaction import redact
 from app.repositories.task_repository import TaskRepository
-from app.schemas.workspace import WorkspaceExecutionEventType
 from app.services.task_execution_orchestrator import (
-    TaskExecutionOrchestrator,
     get_task_execution_orchestrator,
 )
 from sandbox.diff_verifier import WorkspaceDiffVerifier

@@ -25,7 +25,6 @@ from app.models.analysis_finding import AnalysisFinding
 from app.models.code_chunk import CodeChunk
 from app.models.code_symbol import CodeSymbol
 from app.models.repository_file import RepositoryFile
-from app.models.symbol_edge import SymbolEdge
 from app.schemas.plan import LocalizationTarget
 
 logger = logging.getLogger(__name__)
@@ -158,7 +157,7 @@ class HierarchicalLocalizer:
         origin_finding: AnalysisFinding | None = None
         repo_id = getattr(task, "repository_id", None)
 
-        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True and repo_id is not None:
+        if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True and repo_id is not None:  # ISS-041: test-aware branch; pending DI refactor
             try:
                 f_rows: list[RepositoryFile] = (
                     db.query(RepositoryFile)

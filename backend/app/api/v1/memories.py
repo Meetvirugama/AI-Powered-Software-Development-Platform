@@ -25,7 +25,6 @@ from app.core.errors import APIError, ErrorCode
 from app.api.v1.dependencies import get_owned_repository, get_request_user_id
 from app.models.user import UserRole
 from app.models.memory_entry import MemoryStatus, MemoryType
-from app.repositories.repository_repository import RepositoryRepository
 from app.schemas.memory import (
     MCPMemoryResource,
     MCPMemoryResourcesListResponse,

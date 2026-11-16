@@ -62,7 +62,7 @@ def test_production_config_defaults_disable_embedded_sync_worker():
     prod = Settings(
         _env_file=None,
         app_env="production",
-        jwt_secret="a" * 32,
+        jwt_secret="abcdefghijklmnopqrstuvwxyz012345",
         cookie_secure=True,
         cors_allowed_origins="https://app.example.com",
     )
@@ -101,7 +101,7 @@ async def test_lifespan_suppresses_embedded_sync_worker_when_disabled(monkeypatc
     custom_settings = Settings(
         _env_file=None,
         app_env="production",
-        jwt_secret="a" * 32,
+        jwt_secret="abcdefghijklmnopqrstuvwxyz012345",
         cookie_secure=True,
         cors_allowed_origins="https://app.example.com",
         disable_embedded_sync_worker=True,

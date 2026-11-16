@@ -128,7 +128,7 @@ def test_is_production_property_and_worker_setting() -> None:
     prod1 = Settings(
         _env_file=None,
         app_env="production",
-        jwt_secret="a" * 32,
+        jwt_secret="abcdefghijklmnopqrstuvwxyz012345",
         cookie_secure=True,
         cors_allowed_origins="https://app.example.com",
     )

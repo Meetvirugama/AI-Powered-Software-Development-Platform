@@ -79,6 +79,35 @@ apiClient.interceptors.response.use(
 
     const normalised = normaliseError(error);
 
+    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting
+    const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    if (
+      error.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes('/auth/refresh') &&
+      !originalRequest.url?.includes('/auth/login') &&
+      !originalRequest.url?.includes('/auth/github') &&
+      !originalRequest.url?.includes('/auth/dev-login')
+    ) {
+      originalRequest._retry = true;
+      return axios
+        .post('/api/v1/auth/refresh', {}, { withCredentials: true })
+        .then(() => apiClient(originalRequest))
+        .catch(() => {
+          if (
+            typeof window !== 'undefined' &&
+            !window.location.pathname.startsWith('/login') &&
+            !window.location.pathname.startsWith('/auth')
+          ) {
+            const currentPath = window.location.pathname + window.location.search;
+            const redirectQuery = currentPath && currentPath !== '/' ? `?redirect=${encodeURIComponent(currentPath)}` : '';
+            window.location.href = `/login${redirectQuery}`;
+          }
+          return Promise.reject(normalised);
+        });
+    }
+
     // F-10: Preserve intended return route on 401 redirect
     if (
       error.response?.status === 401 &&

@@ -12,7 +12,6 @@ import hashlib
 import json
 import logging
 from typing import Any
-import uuid
 from uuid import UUID
 
 from sqlalchemy import desc, select

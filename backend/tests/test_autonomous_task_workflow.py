@@ -168,7 +168,7 @@ def test_api_run_workflow_returns_202_accepted(client, db_session, test_user, au
     db_session.commit()
 
     # Mock task ownership, approved plan, and prevent background DBOS execution from trying live DB
-    monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db: (task, test_user.id))
+    monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db, min_role=None: (task, test_user.id))
     monkeypatch.setattr("app.repositories.task_repository.TaskRepository.get_approved_plan", lambda self, tid: MagicMock(plan_version=1))
     monkeypatch.setattr("ai.workflows.autonomous_task_workflow.run_autonomous_task_workflow", lambda *a, **kw: None)
 
@@ -201,7 +201,7 @@ def test_api_workflow_status_endpoint(client, db_session, test_user, auth_header
     db_session.add(task)
     db_session.commit()
 
-    monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db: (task, test_user.id))
+    monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db, min_role=None: (task, test_user.id))
 
     resp = client.get(
         f"/api/v1/tasks/{task_id}/workflow-status",

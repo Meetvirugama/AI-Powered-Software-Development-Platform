@@ -12,7 +12,6 @@ Execution in production (APP_ENV=production) is hard-blocked and fails closed.
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import subprocess
 from collections.abc import Mapping, Sequence
@@ -26,7 +25,6 @@ from sandbox.backend import SandboxBackend
 from sandbox.command_runner import WorkspaceCommandRunner
 from sandbox.constants import DEFAULT_WORKSPACE_SUBDIR
 from sandbox.exceptions import (
-    SandboxConfigurationError,
     SandboxSecurityError,
     WorkspaceError,
 )

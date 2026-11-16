@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -237,6 +237,19 @@ class ProjectMemoryService:
             limit=limit,
             min_similarity=min_similarity,
         )
+
+    def get_context_memories(
+        self,
+        repository_id: uuid.UUID,
+        limit: int = 10,
+    ) -> List[MemoryEntry]:
+        """Fetch active project memories for AI prompt context injection (ISS-036, TST-40)."""
+        entries, _ = self.search_project_memory(
+            repository_id=repository_id,
+            status=MemoryStatus.active,
+            limit=limit,
+        )
+        return entries
 
     # -----------------------------------------------------------------------
     # Model Context Protocol (MCP) Resource Exposure (F36 / Issue #217)

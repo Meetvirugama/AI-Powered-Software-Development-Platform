@@ -6,10 +6,8 @@ Reference: Docs/security/sandbox/03-target-architecture.md, 05-container-isolati
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import threading
@@ -30,8 +28,6 @@ from sandbox.constants import (
     MAX_TIMEOUT_SECONDS,
 )
 from sandbox.exceptions import (
-    SandboxConfigurationError,
-    SandboxResourceLimitError,
     SandboxSecurityError,
     WorkspaceCommandError,
     WorkspaceError,

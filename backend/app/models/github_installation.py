@@ -11,7 +11,7 @@ from app.models.base import TimestampedModel
 class GitHubInstallation(TimestampedModel, Base):
     __tablename__ = "github_installations"
 
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     installation_id: Mapped[str] = mapped_column(String, unique=True, index=True)
     account_login: Mapped[str] = mapped_column(String)
     permissions: Mapped[dict] = mapped_column(JSON, default=dict)

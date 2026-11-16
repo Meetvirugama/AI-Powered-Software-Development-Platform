@@ -25,7 +25,6 @@ from app.schemas.repair import MAX_DIFF_CHARS
 from app.schemas.task import TaskConstraint
 from app.schemas.verification import (
     CriterionJudgeEvidence,
-    DiffHunkCitation,
     VerificationCheckItem,
     VerificationContext,
     VerificationFinding,
