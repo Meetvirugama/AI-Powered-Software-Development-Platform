@@ -81,6 +81,8 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Readiness includes worker heartbeat, webhook backlog, scanner and sandbox availability; alerts configured (OPT-24)
 - [x] Reranker model pre-fetched; offline mode at runtime / optional dependencies (DEP-09) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai
 - [x] Frontend SPA deployment readiness (Vercel rewrite config restored) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai
+- [x] Dependency inventory aligned between requirements.txt and pyproject.toml, unused gunicorn removed, bounds tightened (DEP-01, DEP-02, ISS-026) — Resolved in branch Meet
+- [x] Fail-closed Docker Compose JWT and unused ASYNC_DATABASE_URL removed (DEP-11, ISS-027) — Resolved in branch Meet
 - [ ] Backup/restore drill executed (T9.7)
 
 ## 10. Documentation
