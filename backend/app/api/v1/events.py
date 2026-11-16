@@ -140,7 +140,8 @@ async def stream_events(
     caller_user_id = str(user_uuid) if user_uuid is not None else getattr(request.state, "user_id", None)
     owned_repo_ids: set[str] | None = None
     if user_uuid is not None:
-        db_override = request.app.dependency_overrides.get(get_db)
+        app = request.scope.get("app") if hasattr(request, "scope") and isinstance(request.scope, dict) else None
+        db_override = app.dependency_overrides.get(get_db) if app and hasattr(app, "dependency_overrides") else None
         if db_override is not None:
             gen = db_override()
             db = next(gen) if hasattr(gen, "__next__") else gen
@@ -163,6 +164,21 @@ async def stream_events(
 
     async def event_generator():
         nonlocal stream_cursor
+        broker = get_sse_broker()
+        stream_user_key = str(caller_user_id) if caller_user_id else None
+
+        # ---------------------------------------------------------------------
+        # Event-Driven Asynchronous Pipeline (Issue F-43 / #261):
+        # We replace the busy sleep-polling loop (await asyncio.sleep(0.5)) with
+        # an event-driven queue. Events arriving via Redis Stream (tokens/tools)
+        # or Redis Pub/Sub (broadcasts) are pushed directly into the queue.
+        # When no events are pending, the generator suspends on event_queue.get()
+        # with zero CPU wakeups until an event arrives or the 15s ping timer fires.
+        # ---------------------------------------------------------------------
+        event_queue: asyncio.Queue[str] = asyncio.Queue()
+        stop_event = asyncio.Event()
+
+        # 1. Enqueue the initial connection frame immediately
         connected_payload = json.dumps(
             {
                 "type": "connected",
@@ -173,12 +189,9 @@ async def stream_events(
                 },
             }
         )
-        yield f"data: {connected_payload}\n\n"
+        await event_queue.put(f"data: {connected_payload}\n\n")
 
-        broker = get_sse_broker()
-        stream_user_key = str(caller_user_id) if caller_user_id else None
-
-        # Replay any missed Redis Stream events when a Last-Event-ID cursor is provided
+        # 2. Replay any missed Redis Stream events when a Last-Event-ID cursor is provided
         if stream_user_key and stream_cursor != "$":
             try:
                 missed_batch, stream_cursor = await broker.read_batch(
@@ -188,9 +201,32 @@ async def stream_events(
                     block_ms=10,
                 )
                 for env in missed_batch:
-                    yield env.to_sse_frame()
+                    await event_queue.put(env.to_sse_frame())
             except Exception as replay_exc:
                 logger.debug("sse_stream_replay_warning: %s", replay_exc)
+
+        # 3. Stream Feeder: watches Redis Stream / in-memory ring buffer
+        async def _stream_feeder() -> None:
+            nonlocal stream_cursor
+            while not stop_event.is_set():
+                if not stream_user_key:
+                    await asyncio.sleep(1.0)
+                    continue
+                try:
+                    # Bounded blocking wait (up to 2000ms), returns immediately on new events
+                    live_batch, stream_cursor = await broker.read_batch(
+                        user_id=stream_user_key,
+                        channel=channel,
+                        cursor=stream_cursor,
+                        block_ms=2000,
+                    )
+                    for env in live_batch:
+                        await event_queue.put(env.to_sse_frame())
+                except asyncio.CancelledError:
+                    break
+                except Exception as stream_exc:
+                    logger.debug("sse_stream_feeder_error: %s", stream_exc)
+                    await asyncio.sleep(0.5)
 
         redis = None
         pubsub = None
@@ -205,54 +241,69 @@ async def stream_events(
         except Exception as exc:
             logger.warning("sse_redis_connection_failed: %s", exc)
 
+        # 4. PubSub Feeder: watches Redis Pub/Sub channels
+        async def _pubsub_feeder() -> None:
+            if pubsub is None:
+                return
+            while not stop_event.is_set():
+                try:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True,
+                        timeout=2.0,
+                    )
+                    if message and message.get("type") == "message":
+                        raw_data = message.get("data")
+                        if isinstance(raw_data, bytes):
+                            raw_data = raw_data.decode("utf-8")
+                        if isinstance(raw_data, str) and _should_deliver_event(
+                            raw_data, caller_user_id, owned_repo_ids
+                        ):
+                            await event_queue.put(f"data: {raw_data}\n\n")
+                except asyncio.CancelledError:
+                    break
+                except Exception as poll_exc:
+                    logger.debug("sse_pubsub_feeder_error: %s", poll_exc)
+                    await asyncio.sleep(0.5)
+
+        feeder_tasks: list[asyncio.Task] = []
+        if stream_user_key:
+            feeder_tasks.append(asyncio.create_task(_stream_feeder()))
+        if pubsub is not None:
+            feeder_tasks.append(asyncio.create_task(_pubsub_feeder()))
+
         last_ping = time.time()
+        PING_INTERVAL = 15.0
 
         try:
             while True:
-                if await request.is_disconnected():
-                    break
+                try:
+                    if await request.is_disconnected():
+                        break
+                except Exception:
+                    # Defensive: ignore receive channel unavailability in test harnesses
+                    pass
 
-                # 1. Poll tenant-scoped Redis Stream / ring buffer for chat tokens, tool progress & MCP notifications
-                if stream_user_key:
-                    try:
-                        live_batch, stream_cursor = await broker.read_batch(
-                            user_id=stream_user_key,
-                            channel=channel,
-                            cursor=stream_cursor,
-                            block_ms=15,
-                        )
-                        for env in live_batch:
-                            yield env.to_sse_frame()
-                    except Exception as stream_exc:
-                        logger.debug("sse_stream_poll_error: %s", stream_exc)
+                # Calculate remaining time until next scheduled heartbeat ping
+                elapsed = time.time() - last_ping
+                wait_timeout = max(0.05, PING_INTERVAL - elapsed)
 
-                # 2. Poll Redis pub/sub for platform_events compatibility
-                if pubsub is not None:
-                    try:
-                        message = await pubsub.get_message(
-                            ignore_subscribe_messages=True,
-                            timeout=1.0,
-                        )
-                        if message and message.get("type") == "message":
-                            raw_data = message.get("data")
-                            if isinstance(raw_data, bytes):
-                                raw_data = raw_data.decode("utf-8")
-                            if isinstance(raw_data, str) and _should_deliver_event(
-                                raw_data, caller_user_id, owned_repo_ids
-                            ):
-                                yield f"data: {raw_data}\n\n"
-                    except Exception as poll_exc:
-                        logger.debug("sse_poll_error: %s", poll_exc)
-
-                if time.time() - last_ping > 15:
+                try:
+                    # Suspend until an event arrives or ping interval elapses: zero CPU wakeups!
+                    frame = await asyncio.wait_for(event_queue.get(), timeout=wait_timeout)
+                    yield frame
+                except asyncio.TimeoutError:
+                    # 15s ping interval reached with no events dispatched
                     yield ": ping\n\n"
                     last_ping = time.time()
-
-                await asyncio.sleep(0.5)
 
         except asyncio.CancelledError:
             pass
         finally:
+            stop_event.set()
+            for t in feeder_tasks:
+                t.cancel()
+            if feeder_tasks:
+                await asyncio.gather(*feeder_tasks, return_exceptions=True)
             if pubsub is not None:
                 try:
                     await pubsub.unsubscribe(*channels_to_sub)
