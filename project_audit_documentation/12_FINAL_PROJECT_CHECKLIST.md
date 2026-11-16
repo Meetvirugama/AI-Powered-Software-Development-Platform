@@ -25,7 +25,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 ## 3. Security
 - [x] No committed JWT secret accepted by the validator; production secret rotated (ISS-001 · TST-01) — Resolved in PR #feature/project-audit-remediation
 - [x] MCP and all admin routes require admin (ISS-003 · TST-04) — Resolved in PR #feature/project-audit-remediation
-- [x] CSRF regex uses `fullmatch`; cookie SameSite policy matches topology; CSP present (ISS-021 · TST-05, TST-18) — CSRF fullmatch + SameSite lax resolved; CSP pending
+- [x] CSRF regex uses `fullmatch`; cookie SameSite policy matches topology; CSP present (ISS-021 · TST-05, TST-18) — Resolved in branch Meet (CSRF fullmatch, SameSite lax, and CSP header verified in SecurityHeadersMiddleware)
 - [x] Git tokens never appear in argv or logs (ISS-019 · TST-06, TST-14) — Resolved in PR #feature/project-audit-remediation
 - [x] Internal memory endpoints removed (ISS-023 · TST-07) — Resolved in PR #feature/project-audit-remediation
 - [x] Tenant-isolation sweep green for every ID-bearing route (TST-15) — Resolved in branch Meet (40/40 tests green in test_repository_isolation.py & test_m1_security_multi_tenancy.py)
@@ -38,6 +38,8 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] SSE per-user channels; idle connection cost ~0 (TST-N2)
 - [ ] LLM concurrency cap and per-user AI quotas enforced (ISS-025 · TST-16)
 - [x] Server-side pagination on all list endpoints (ISS-024 · TST-31) — Resolved in branch Meet (skip/limit & page/page_size added to repository queries, API routes, frontend calls, test verified)
+- [x] Dedicated timeout policy for AI mutations vs cheap GET requests (OPT-02) — Resolved in branch Meet (only POST/PUT/PATCH get 180s, GET keeps 30s)
+- [x] Eliminate inline API calls in components (OPT-04) — Resolved in branch Meet (linkGitHubInstallation centralized in repositoryDiscovery.ts)
 - [ ] Retrieval benchmark recorded with graph/reranker variants; chosen configuration justified by numbers (OPT-13/14 · TST-35)
 
 ## 5. Code quality
