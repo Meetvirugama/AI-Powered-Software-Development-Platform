@@ -1718,11 +1718,28 @@ def create_task_draft_pr_endpoint(
     task_repo = TaskRepository(db)
     orchestrator = get_task_execution_orchestrator(request.app.state)
 
+    is_auth = body.is_authorized if body else False
+    if is_auth:
+        existing_auth = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
+        if not existing_auth:
+            latest_ver = task_repo.get_latest_verification_result(task.id, task.repository_id)
+            if latest_ver and latest_ver.verified_revision:
+                try:
+                    task_repo.authorize_publication(
+                        task_id=task.id,
+                        repository_id=task.repository_id,
+                        head_sha=latest_ver.verified_revision,
+                        user_id=user_id,
+                        notes="Authorized via Create Draft PR submission",
+                    )
+                except Exception:
+                    pass
+
     pr_record = orchestrator.create_draft_pull_request(
         task=task,
         task_repo=task_repo,
         actor_id=user_id,
-        publication_authorized=body.is_authorized if body else False,
+        publication_authorized=is_auth,
         title=body.title if body else None,
         body=body.body if body else None,
         base_branch=body.base_branch if body else None,

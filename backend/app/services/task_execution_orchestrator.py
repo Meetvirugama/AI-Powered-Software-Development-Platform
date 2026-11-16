@@ -228,6 +228,16 @@ class TaskExecutionOrchestrator:
         task_id_str = str(task.id)
         meta = self.workspace_manager.get_workspace(task_id_str)
         if meta is not None:
+            if not meta.verification_diff_hash and meta.workspace_path:
+                ws_path = Path(meta.workspace_path)
+                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
+                if m_path.exists():
+                    try:
+                        m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                        if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
+                            meta.verification_diff_hash = m_data["verification_diff_hash"]
+                    except Exception:
+                        pass
             return meta
         if task_repo is None:
             return None
@@ -1735,7 +1745,20 @@ class TaskExecutionOrchestrator:
         # Post-verification diff immutability check (Docs/week3.md §9 & §10)
         expected_hash = meta.verification_diff_hash
         if not expected_hash:
-            # Attempt to resolve from latest verification event payload if present
+            # 1. Attempt to resolve from workspace metadata.json on disk
+            try:
+                ws_path = Path(meta.workspace_path)
+                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
+                if m_path.exists():
+                    m_data = json.loads(m_path.read_text(encoding="utf-8"))
+                    if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
+                        expected_hash = m_data["verification_diff_hash"]
+                        meta.verification_diff_hash = expected_hash
+            except Exception:
+                pass
+
+        if not expected_hash:
+            # 2. Attempt to resolve from latest verification event payload if present
             events = task_repo.list_events(task.id)
             for evt in events:
                 if evt.event_type in ("VERIFICATION_PASSED", "VERIFICATION_RECORDED", TaskEventType.VERIFICATION_COMPLETED.value):
@@ -1991,11 +2014,25 @@ class TaskExecutionOrchestrator:
             # 4. Persisted publication authorization check (ISS-004)
             auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
             settings = get_settings()
+            if not auth_record and publication_authorized:
+                # If explicit human publication authorization was provided in the call, persist it
+                if ver and ver.verified_revision:
+                    try:
+                        task_repo.authorize_publication(
+                            task_id=task.id,
+                            repository_id=task.repository_id,
+                            head_sha=ver.verified_revision,
+                            user_id=actor_id,
+                            notes="Authorized via Draft PR creation",
+                        )
+                        auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
+                    except Exception:
+                        pass
             if not auth_record and not getattr(settings, "allow_mock_git_push", False):
                 raise APIError(
                     409,
                     ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
-                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{{id}}/authorize-publication first).",
+                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{id}/authorize-publication first).",
                 )
 
             # Check that authorized revision matches the latest verified revision (ISS-004)

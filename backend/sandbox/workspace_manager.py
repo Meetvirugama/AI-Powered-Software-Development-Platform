@@ -385,7 +385,28 @@ class WorkspaceManager:
 
     def get_workspace(self, task_id: str) -> WorkspaceMetadata | None:
         """Retrieve workspace metadata by task ID."""
-        return self._workspaces.get(task_id)
+        meta = self._workspaces.get(task_id)
+        if meta is not None:
+            return meta
+
+        # If not present in memory, search base_directory for task's metadata.json
+        if self._base_dir.exists():
+            for item in self._base_dir.iterdir():
+                if not item.is_dir() or not item.name.startswith("task-"):
+                    continue
+                meta_file = item / "metadata.json"
+                if not meta_file.exists():
+                    meta_file = item / "workspace_metadata.json"
+                if meta_file.exists():
+                    try:
+                        data = json.loads(meta_file.read_text(encoding="utf-8"))
+                        candidate = WorkspaceMetadata(**data)
+                        if candidate.task_id == task_id or item.name == task_id or item.name == f"task-{task_id}":
+                            self._workspaces[task_id] = candidate
+                            return candidate
+                    except Exception:
+                        continue
+        return None
 
     def get_workspace_path(self, task_id: str) -> Path:
         """Resolve the verified workspace root Path for a task."""
