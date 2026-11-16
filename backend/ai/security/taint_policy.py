@@ -377,6 +377,15 @@ class TaintPolicyEngine:
         if clean_action in ("command", "execute_command", "run_command", "bash", "sh", "exec", "test", "verify"):
             cmd = str(args.get("command", "") or args.get("cmd", "")).strip()
 
+            if not cmd and clean_action in ("test", "verify"):
+                res = PolicyEvaluationResult(
+                    decision=PolicyDecision.ALLOW,
+                    reason="Safe verification/test step without arbitrary shell execution permitted.",
+                    action_risk=ActionRiskLevel.LOW,
+                )
+                self._record_audit(task_id, None, clean_action, prov_ids, res, files, args)
+                return res
+
             # Check for network exfiltration commands
             cmd_tokens = [tok.lower() for tok in cmd.split()]
             if any(net_cmd in cmd_tokens for net_cmd in _NETWORK_EXFIL_COMMANDS):

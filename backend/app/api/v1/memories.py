@@ -6,8 +6,6 @@ Endpoints:
 - GET    /api/v1/repositories/{repository_id}/memories/{entry_id}
 - PATCH  /api/v1/repositories/{repository_id}/memories/{entry_id}
 - DELETE /api/v1/repositories/{repository_id}/memories/{entry_id}
-- POST   /api/v1/repositories/{repository_id}/memories/automated/task-completion
-- POST   /api/v1/repositories/{repository_id}/memories/automated/task-failure
 - POST   /api/v1/repositories/{repository_id}/memories/rules
 - POST   /api/v1/repositories/{repository_id}/memories/semantic-search
 - GET    /api/v1/repositories/{repository_id}/memories/mcp-resources
@@ -39,8 +37,6 @@ from app.schemas.memory import (
     SemanticSearchRequest,
     SemanticSearchResponse,
     SemanticSearchResultItem,
-    TaskCompletionMemoryRequest,
-    TaskFailureMemoryRequest,
 )
 from app.services.memory_service import ProjectMemoryService
 
@@ -126,59 +122,8 @@ def list_memory_entries(
 
 
 # ---------------------------------------------------------------------------
-# Automated Memory Writers (Issue #217)
+# Pinned Architectural Rules
 # ---------------------------------------------------------------------------
-
-@router.post(
-    "/automated/task-completion",
-    response_model=MemoryEntryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Record task completion memory",
-    description="Reflexion-style automated memory recorder for successful task executions.",
-)
-def record_task_completion_endpoint(
-    repository_id: UUID,
-    payload: TaskCompletionMemoryRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
-    service = ProjectMemoryService(db)
-    entry = service.record_task_completion_memory(
-        repository_id=repository_id,
-        task_id=payload.task_id,
-        title=payload.title,
-        verification_summary=payload.verification_summary,
-        repair_attempts_used=payload.repair_attempts_used,
-        files_changed=payload.files_changed,
-    )
-    return MemoryEntryResponse.from_orm_model(entry)
-
-
-@router.post(
-    "/automated/task-failure",
-    response_model=MemoryEntryResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Record task failure memory",
-    description="Automated memory recorder for failed task executions to preserve negative feedback.",
-)
-def record_task_failure_endpoint(
-    repository_id: UUID,
-    payload: TaskFailureMemoryRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> MemoryEntryResponse:
-    _verify_owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
-    service = ProjectMemoryService(db)
-    entry = service.record_task_failure_memory(
-        repository_id=repository_id,
-        task_id=payload.task_id,
-        title=payload.title,
-        failure_reason=payload.failure_reason,
-        repair_attempts_used=payload.repair_attempts_used,
-    )
-    return MemoryEntryResponse.from_orm_model(entry)
-
 
 @router.post(
     "/rules",

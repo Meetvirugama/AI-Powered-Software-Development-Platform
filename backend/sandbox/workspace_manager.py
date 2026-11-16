@@ -1304,18 +1304,21 @@ class WorkspaceManager:
             payload={"branch": branch, "remote": request.remote_name},
         )
 
-        # 3. Execute git push host-side (F26: credentials never enter sandbox containers or disk config)
+        # 3. Execute git push host-side (F26 / ISS-019: credentials passed via environment, never in argv or disk config)
         remote_target = request.remote_url or request.remote_name
-        cmd = ["git", "-C", str(workspace_path)]
+        cmd = ["git", "-C", str(workspace_path), "push", "--no-verify", remote_target, "--", branch]
+        push_env = os.environ.copy()
         if getattr(request, "installation_token", None):
             import base64
             token_val = str(request.installation_token).strip()
             auth_token = base64.b64encode(f"x-access-token:{token_val}".encode("utf-8")).decode("utf-8")
-            cmd.extend(["-c", f"http.extraheader=AUTHORIZATION: basic {auth_token}"])
-        cmd.extend(["push", "--no-verify", remote_target, "--", branch])
+            push_env["GIT_CONFIG_COUNT"] = "1"
+            push_env["GIT_CONFIG_KEY_0"] = "http.extraheader"
+            push_env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {auth_token}"
         try:
             push_proc = subprocess.run(
                 cmd,
+                env=push_env,
                 capture_output=True,
                 text=True,
                 check=False,

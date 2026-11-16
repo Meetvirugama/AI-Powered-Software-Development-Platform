@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     auth_cookie_name: str = "access_token"
     cookie_secure: bool = False
     cookie_samesite: str | None = None
+    enable_dev_login: bool = False
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
@@ -241,6 +242,8 @@ class Settings(BaseSettings):
     # their IP to dodge the per-IP rate limit.
     trust_proxy_headers: bool = False
     disable_embedded_sync_worker: bool = False
+    disable_embedded_webhook_worker: bool = False
+    allow_mock_git_push: bool = False
     run_migrations_on_startup: bool = True
     uvicorn_graceful_timeout: int = 15
     sync_worker_lease_ttl_seconds: int = 60
@@ -299,7 +302,7 @@ class Settings(BaseSettings):
     def effective_cookie_samesite(self) -> str:
         if self.cookie_samesite:
             return self.cookie_samesite.lower()
-        return "none" if self.cookie_secure else "lax"
+        return "lax"
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
@@ -332,16 +335,33 @@ class Settings(BaseSettings):
 
         is_prod = self.app_env.lower() in ("production", "prod")
         if is_prod:
+            if self.enable_dev_login:
+                raise ValueError(
+                    "Production configuration error: ENABLE_DEV_LOGIN cannot be enabled in production."
+                )
             if "disable_embedded_sync_worker" not in self.model_fields_set:
                 self.disable_embedded_sync_worker = True
             if not self.jwt_secret or len(self.jwt_secret.strip()) < 32:
                 raise ValueError(
                     "Production configuration error: JWT_SECRET must be configured with at least 32 characters."
                 )
-            insecure_dummies = {"test-secret", "dev-secret", "changeme", "placeholder"}
-            if any(dummy in self.jwt_secret.lower() for dummy in insecure_dummies) or self.jwt_secret.lower().strip() == "secret":
+            if len(set(self.jwt_secret.strip())) < 12:
                 raise ValueError(
-                    "Production configuration error: Insecure default JWT_SECRET detected in production."
+                    "Production configuration error: JWT_SECRET lacks sufficient entropy (minimum 12 distinct characters required)."
+                )
+            insecure_dummies = {"test-secret", "dev-secret", "changeme", "placeholder", "example", "generate", "your-", "sample"}
+            committed_placeholders = {
+                "production-deployment-minimum-32-chars-secret-key-ok",
+                "generate-a-strong-32-character-secret-key-here-for-production",
+            }
+            jwt_lower = self.jwt_secret.lower().strip()
+            if (
+                any(dummy in jwt_lower for dummy in insecure_dummies)
+                or jwt_lower == "secret"
+                or self.jwt_secret.strip() in committed_placeholders
+            ):
+                raise ValueError(
+                    "Production configuration error: Insecure default or placeholder JWT_SECRET detected in production."
                 )
             if not self.jwt_issuer or not self.jwt_issuer.strip():
                 raise ValueError(
@@ -364,10 +384,16 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "Production configuration error: CORS_ALLOWED_ORIGINS must contain valid production origins."
                 )
-            if self.cors_origin_regex and self.cors_origin_regex.strip() in {"*", ".*", "^.*$", "https://.*", "http://.*"}:
-                raise ValueError(
-                    "Production configuration error: Overly permissive wildcard CORS_ORIGIN_REGEX is not permitted in production."
-                )
+            if self.cors_origin_regex:
+                clean_regex = self.cors_origin_regex.strip()
+                if clean_regex in {"*", ".*", "^.*$", "https://.*", "http://.*"}:
+                    raise ValueError(
+                        "Production configuration error: Overly permissive wildcard CORS_ORIGIN_REGEX is not permitted in production."
+                    )
+                if not (clean_regex.startswith("^") and clean_regex.endswith("$")):
+                    raise ValueError(
+                        "Production configuration error: CORS_ORIGIN_REGEX must be strictly anchored with ^ and $."
+                    )
             if self.jwt_expire_minutes > 1440:
                 raise ValueError(
                     "Production configuration error: JWT_EXPIRE_MINUTES must not exceed 1440 minutes in production."

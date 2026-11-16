@@ -570,10 +570,14 @@ class RequirementToCodeVerifier:
 
         out_of_scope_files: list[str] = []
         for mod_file in modified_files:
-            # Allow new test files or documentation files
+            # Allow new test files, test reports/coverage artifacts, or documentation files
             if (
                 mod_file not in all_allowed_targets
-                and not (mod_file.startswith(("tests/", "test/")) or mod_file.endswith(".md"))
+                and not (
+                    mod_file.startswith(("tests/", "test/", ".test_reports/"))
+                    or mod_file in (".coverage",)
+                    or mod_file.endswith(".md")
+                )
             ):
                 out_of_scope_files.append(mod_file)
                 findings.append(
