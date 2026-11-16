@@ -242,8 +242,8 @@ class TestCoverageService:
                 report_file.unlink()
             if data_file.exists():
                 data_file.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed unlinking coverage data file: %s", exc)
 
         return parsed
 

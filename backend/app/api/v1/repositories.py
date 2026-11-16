@@ -215,8 +215,8 @@ def delete_repository(repository_id: UUID, request: Request, db: Session = Depen
     redis_client = None
     try:
         redis_client = get_redis()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis client unavailable during repository deletion: %s", exc)
     RepositoryRepository(db).delete(repo.id, redis_client=redis_client)
     try:
         if redis_client is not None:
@@ -241,30 +241,6 @@ def delete_repository(repository_id: UUID, request: Request, db: Session = Depen
                 "error": str(pub_exc),
             },
         )
-
-
-@router.get("/{repository_id}/search", response_model=RepositorySearchResponse, summary="Hybrid code search (GET)")
-async def search_repository_get(
-    repository_id: UUID,
-    request: Request,
-    q: str | None = Query(default=None, min_length=1, max_length=1_000, description="Search query"),
-    query: str | None = Query(default=None, min_length=1, max_length=1_000, description="Search query alias"),
-    limit: int | None = Query(default=None, ge=1, le=30, description="Max results"),
-    top_k: int = Query(default=8, ge=1, le=30, description="Max results"),
-    db: Session = Depends(get_db),
-) -> RepositorySearchResponse:
-    """GET alias for hybrid code search supporting ?q=...&limit=... query parameters (GAP-19)."""
-    effective_query = (q if q is not None else query) or ""
-    if not effective_query.strip():
-        raise APIError(422, ErrorCode.INVALID_REQUEST, "Search query parameter 'q' or 'query' is required.")
-    effective_top_k = limit if limit is not None else top_k
-    payload = RepositorySearchRequest(query=effective_query, top_k=effective_top_k)
-    return await search_repository(
-        repository_id=repository_id,
-        payload=payload,
-        request=request,
-        db=db,
-    )
 
 
 @router.post("/{repository_id}/search", response_model=RepositorySearchResponse, summary="Hybrid code search")

@@ -36,22 +36,24 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const reqConfig = config as RequestConfigWithMetadata;
   reqConfig.metadata = { startTime: Date.now() };
 
-  // F-04: Apply dedicated long-running timeout for AI analysis endpoints if not explicitly overridden
+  // F-04 / OPT-02: Apply dedicated long-running timeout for AI mutation endpoints (POST/PUT/PATCH)
+  // GET endpoints (e.g. status, plans, tests, settings) retain the default 30s timeout
+  const method = (reqConfig.method || 'GET').toUpperCase();
   const url = reqConfig.url || '';
-  const isAiEndpoint =
-    url.includes('/explain') ||
-    url.includes('/detect-bugs') ||
-    url.includes('/generate-tests') ||
-    url.includes('/review') ||
-    url.includes('/plan') ||
-    url.includes('/chat') ||
-    url.includes('/execute') ||
-    url.includes('/repair') ||
-    url.includes('/verify') ||
-    url.includes('/tests') ||
-    url.includes('/run-workflow');
+  const isAiMutation =
+    method !== 'GET' &&
+    (url.includes('/explain') ||
+      url.includes('/detect-bugs') ||
+      url.includes('/generate-tests') ||
+      url.includes('/review') ||
+      url.includes('/plan') ||
+      url.includes('/chat') ||
+      url.includes('/execute') ||
+      url.includes('/repair') ||
+      url.includes('/verify') ||
+      url.includes('/run-workflow'));
 
-  if (isAiEndpoint && (reqConfig.timeout === undefined || reqConfig.timeout === DEFAULT_TIMEOUT_MS)) {
+  if (isAiMutation && (reqConfig.timeout === undefined || reqConfig.timeout === DEFAULT_TIMEOUT_MS)) {
     reqConfig.timeout = AI_ANALYSIS_TIMEOUT_MS;
   }
 

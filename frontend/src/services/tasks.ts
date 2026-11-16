@@ -516,6 +516,28 @@ export async function commitTaskChanges(
 }
 
 /**
+ * Authorize task branch publication.
+ * POST /api/v1/tasks/:taskId/authorize-publication
+ */
+export async function authorizeTaskPublication(
+  taskId: string,
+  payload?: {
+    head_sha?: string;
+    notes?: string;
+  }
+): Promise<{
+  task_id: string;
+  status: string;
+  head_sha?: string;
+  authorized: boolean;
+  user_id?: string;
+  authorized_at?: string;
+}> {
+  const response = await apiClient.post(`/tasks/${taskId}/authorize-publication`, payload || {});
+  return response.data;
+}
+
+/**
  * Create a reviewable GitHub Draft Pull Request (is_draft=True, zero auto-merge).
  * POST /api/v1/tasks/:taskId/create-pr
  */

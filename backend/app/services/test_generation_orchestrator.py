@@ -701,8 +701,8 @@ def propose_test_file_path(
                     else:
                         pat = "<module>.test"
                     return safe_mapped, pat
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed resolving test mapping via file_test_mapper: %s", exc)
 
     parts = clean_target.split("/")
     filename = parts[-1]

@@ -15,6 +15,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from ai.services.task_planner import TaskPlanner
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,8 +27,6 @@ from app.api.v1.dependencies import (
     get_request_user_role,
     require_min_role,
 )
-from app.models.user import UserRole
-from ai.services.task_planner import TaskPlanner
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
@@ -39,8 +38,11 @@ from app.models.task import (
     TaskEventRecord,
     TaskPlanRecord,
     TaskPullRequest,
+)
+from app.models.task import (
     WorkspaceStatus as DBWorkspaceStatus,
 )
+from app.models.user import UserRole
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.task_repository import PlanNotFoundError, TaskRepository
 from app.schemas.plan import (
@@ -86,7 +88,6 @@ from app.services.task_execution_orchestrator import get_task_execution_orchestr
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
-repo_tasks_router = APIRouter(prefix="/repositories", tags=["tasks"])
 
 
 # ---------------------------------------------------------------------------
@@ -217,6 +218,7 @@ class TaskDraftPRCreateRequest(BaseModel):
     head_branch: str | None = Field(default=None, max_length=256, description="Source feature branch (defaults to agent/task-<id>).")
     current_remote_head_sha: str | None = Field(default=None, max_length=128)
     authorization_notes: str | None = Field(default=None, max_length=2000)
+    target_repository: str | None = Field(default=None, max_length=256)
 
     @property
     def is_authorized(self) -> bool:
@@ -439,6 +441,8 @@ def _serialize_pull_request_record(pr: TaskPullRequest) -> TaskPullRequestRespon
         "title": redact(pr.title),
         "body": redact(pr.body or "") if pr.body else None,
         "created_at": pr.created_at.isoformat() if pr.created_at else "",
+        "success": True,
+        "summary": redact(pr.body or "") if pr.body else "",
     }
     return TaskPullRequestResponse.model_validate(payload)
 
@@ -1161,8 +1165,8 @@ def cancel_task(
     if meta is not None and meta.status in (WorkspaceStatus.IN_USE, WorkspaceStatus.READY):
         try:
             orchestrator.workspace_manager.stop_execution(str(task.id), reason="Task cancelled by user")
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Task stop execution notice: %s", exc)
 
     db_ws = task_repo.get_workspace_record(task.id)
     if db_ws is not None and db_ws.status in (DBWorkspaceStatus.IN_USE.value, DBWorkspaceStatus.READY.value):
@@ -1257,7 +1261,13 @@ def get_task_diff(
                 "additions": f.insertions,
                 "deletions": f.deletions,
                 "patch": redact(getattr(f, "patch", None) or getattr(f, "diff_text", "") or ""),
-                "diff_ranges": [],
+                "diff_ranges": [
+                    {
+                        "start_line": max(1, hunk.new_start),
+                        "end_line": max(1, hunk.new_start + max(0, hunk.new_lines - 1)),
+                    }
+                    for hunk in getattr(f, "hunks", [])
+                ],
             }
             for f in diff_res.files
         ]
@@ -1274,7 +1284,8 @@ def get_task_diff(
                 "raw_diff": redact(diff_res.raw_diff or ""),
             }
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Error computing workspace diff: %s", exc)
         return {
             "task_id": str(task.id),
             "repository_id": str(task.repository_id),
@@ -2075,47 +2086,4 @@ def get_task_events(
     return [_serialize_event_record(e) for e in events]
 
 
-# ---------------------------------------------------------------------------
-# 8. Repository-Scoped Task Endpoints (Docs/week3.md §6 F31 & §7)
-# ---------------------------------------------------------------------------
 
-@repo_tasks_router.get(
-    "/{repository_id}/tasks",
-    response_model=PaginatedTaskListResponse,
-    summary="List tasks for a specific repository",
-)
-def list_repository_tasks(
-    repository_id: UUID,
-    request: Request,
-    status_filter: str | None = Query(default=None, alias="status", description="Optional status filter"),
-    search: str | None = Query(default=None, description="Optional search query"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-) -> PaginatedTaskListResponse:
-    return list_tasks(
-        request=request,
-        repository_id=repository_id,
-        status_filter=status_filter,
-        search=search,
-        page=page,
-        page_size=page_size,
-        db=db,
-    )
-
-
-@repo_tasks_router.post(
-    "/{repository_id}/tasks",
-    response_model=TaskDetailResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a task within a specific repository",
-    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
-)
-def create_repository_task(
-    repository_id: UUID,
-    payload: TaskCreateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-) -> TaskDetailResponse:
-    payload.repository_id = repository_id
-    return create_task(payload=payload, request=request, db=db)

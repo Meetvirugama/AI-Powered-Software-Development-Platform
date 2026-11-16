@@ -74,8 +74,8 @@ def _to_repo_relative_path(
                     norm = raw_resolved[len(ws_norm) + 1 :]
                 elif norm.startswith(ws_path_str.replace("\\", "/").rstrip("/") + "/"):
                     norm = norm[len(ws_path_str.replace("\\", "/").rstrip("/")) + 1 :]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Path normalization error in llm_repair_synthesizer: %s", exc)
 
     # If still absolute (e.g. /tmp/ws/src/app.py), anchor at known repository roots or strip leading slash
     if norm.startswith("/"):
@@ -222,8 +222,8 @@ class LLMRepairSynthesizer:
                             res = workspace_manager.read_file(task_id, cand)
                             if getattr(res, "success", False):
                                 return cand, failure.line_number
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed checking candidate file read: %s", exc)
 
                 return candidates[0], failure.line_number
 

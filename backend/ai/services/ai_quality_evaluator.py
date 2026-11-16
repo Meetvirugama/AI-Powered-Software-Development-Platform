@@ -284,7 +284,8 @@ class AIQualityEvaluator:
                     valid_count += 1
             except (json.JSONDecodeError, ValidationError):
                 continue
-            except Exception:  # noqa: BLE001, S112
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Schema validation error in evaluate_json_validity: %s", exc)
                 continue
 
         return valid_count / len(raw_outputs)

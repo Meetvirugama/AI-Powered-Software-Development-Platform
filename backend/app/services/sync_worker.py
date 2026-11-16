@@ -549,8 +549,8 @@ async def process_sync_job(
                             await redis.delete(lock_key)
                     elif hasattr(redis, "delete"):
                         await redis.delete(lock_key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed unlocking sync_lock in finally: %s", exc)
 
         if clone_dir and clone_dir.exists():
             shutil.rmtree(clone_dir, ignore_errors=True)

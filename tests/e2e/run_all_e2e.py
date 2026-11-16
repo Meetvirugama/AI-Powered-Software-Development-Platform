@@ -60,11 +60,14 @@ def run_tier(tier_id: int, tier_meta: dict, repo_root: Path, verbose: bool = Fal
             "exit_code": 1,
         }
 
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    py_exec = str(venv_python) if venv_python.exists() else sys.executable
     cmd = [
-        sys.executable,
+        py_exec,
         "-m",
         "pytest",
         str(test_file),
+        "--no-cov",
         "-o",
         "addopts=",
     ]

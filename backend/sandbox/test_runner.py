@@ -190,8 +190,8 @@ class WorkspaceTestRunner:
                         content = pkg_json.read_text(encoding="utf-8")
                         if "vitest" in content:
                             return "vitest", "npm", ["test", "--", "--run"], "CONFIRMED"
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed reading package.json in test_runner: %s", exc)
                     return "jest", "npm", ["test", "--"], "CONFIRMED"
                 return "none", "", [], "NO_CONFIG_FOUND"
 
@@ -540,8 +540,8 @@ class WorkspaceTestRunner:
         reports_dir = workspace_root / ".test_reports"
         try:
             reports_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed creating reports directory %s: %s", reports_dir, exc)
 
         # Configure container backend if explicitly requested
         if request.sandbox_backend:

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.api.v1.analysis.common import (
     ANALYSIS_ERROR_RESPONSES,
     _coerce_run_summary,
-    _owned_repository_async,
+    _owned_repository,
     _request_user_id,
 )
 from app.core.database import get_db
@@ -53,7 +53,7 @@ router = APIRouter(tags=["analysis"])
         "(including aliases `bugs` and `tests`), `status`, `target_path`, `source_revision`, and `user_id`."
     ),
 )
-async def list_analysis_runs(
+def list_analysis_runs(
     repository_id: UUID,
     request: Request,
     feature_type: AnalysisFeatureType | None = Query(default=None),
@@ -66,7 +66,7 @@ async def list_analysis_runs(
     db: Session = Depends(get_db),
 ) -> PaginatedAnalysisRunResponse:
     """Return paginated analysis runs scoped to a repository owned by the caller."""
-    await _owned_repository_async(repository_id, request, db)
+    _owned_repository(repository_id, request, db)
     offset = (page - 1) * page_size
 
     normalized_feature_type = normalize_analysis_feature_type(feature_type)
@@ -101,7 +101,8 @@ async def list_analysis_runs(
                 )
 
         if inspect.isawaitable(res):
-            res = await res
+            import asyncio
+            res = asyncio.run(res)
         items, total = res
         return PaginatedAnalysisRunResponse(
             page=page,
@@ -150,13 +151,13 @@ async def list_analysis_runs(
         "and retention metrics for an authorized repository (Week 2 Day 7)."
     ),
 )
-async def get_analysis_runs_summary(
+def get_analysis_runs_summary(
     repository_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
 ) -> AnalysisRunMetricsSummaryResponse:
     """Return aggregate run metrics, integrity status, and retention metrics for an owned repository."""
-    await _owned_repository_async(repository_id, request, db)
+    _owned_repository(repository_id, request, db)
 
     if hasattr(db, "execute") or hasattr(db, "query"):
         try:
@@ -215,7 +216,7 @@ async def get_analysis_runs_summary(
         "and feedback presence."
     ),
 )
-async def export_analysis_runs_dataset(
+def export_analysis_runs_dataset(
     repository_id: UUID,
     request: Request,
     format: str = Query(default="jsonl", pattern="^(jsonl|json|langfuse)$", description="Export format: 'jsonl' (default), 'json', or 'langfuse'"),
@@ -226,7 +227,7 @@ async def export_analysis_runs_dataset(
     db: Session = Depends(get_db),
 ) -> Response:
     """Export analysis runs and feedback as evaluation dataset for the authorized repository."""
-    await _owned_repository_async(repository_id, request, db)
+    _owned_repository(repository_id, request, db)
     normalized_feature_type = normalize_analysis_feature_type(feature_type)
 
     run_service = getattr(request.app.state, "analysis_run_service", None)
@@ -282,7 +283,7 @@ async def export_analysis_runs_dataset(
         "by UUID after verifying that the authenticated user owns the associated repository."
     ),
 )
-async def get_analysis_run(
+def get_analysis_run(
     run_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
@@ -298,7 +299,8 @@ async def get_analysis_run(
         except TypeError:
             res = run_service.get_run(run_id)
         if inspect.isawaitable(res):
-            res = await res
+            import asyncio
+            res = asyncio.run(res)
         run_record = res
     else:
         try:
@@ -323,7 +325,7 @@ async def get_analysis_run(
     except (TypeError, ValueError) as exc:
         raise APIError(404, ErrorCode.ANALYSIS_RUN_NOT_FOUND, "Analysis run not found.") from exc
 
-    await _owned_repository_async(repo_uuid, request, db)
+    _owned_repository(repo_uuid, request, db)
 
     if isinstance(run_record, AnalysisRunDetailResponse):
         return AnalysisRunDetailResponse.model_validate(redact_obj(run_record.model_dump(mode="json")))

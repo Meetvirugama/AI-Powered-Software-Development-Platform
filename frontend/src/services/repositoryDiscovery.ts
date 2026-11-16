@@ -198,3 +198,17 @@ export async function connectRepository(
     job_id: raw.job_id,
   };
 }
+
+/**
+ * Manually link a GitHub App installation ID to the current authenticated user.
+ * POST /api/v1/github/installations/link
+ */
+export async function linkGitHubInstallation(
+  installationId: string,
+): Promise<{ status: string; installation_id: string }> {
+  const response = await apiClient.post<{ status: string; installation_id: string }>(
+    '/github/installations/link',
+    { installation_id: installationId.trim() },
+  );
+  return response.data;
+}

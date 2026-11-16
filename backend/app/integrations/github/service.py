@@ -575,8 +575,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             if askpass_path and askpass_path.exists():
                 try:
                     askpass_path.unlink()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed unlinking askpass script %s: %s", askpass_path, exc)
 
         logger.info("Successfully cloned %s/%s to %s", owner, repo, target)
         return str(target)
@@ -689,8 +689,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             except asyncio.TimeoutError as exc:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as kill_exc:
+                    logger.debug("Failed killing timed out git push process: %s", kill_exc)
                 raise APIError(
                     502,
                     ErrorCode.SERVICE_UNAVAILABLE,
@@ -1047,8 +1047,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             if self._token_manager is not None and isinstance(installation_id, int):
                 try:
                     return await self._token_manager.get_token(installation_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed getting token from token_manager for installation %s: %s", installation_id, exc)
             inst = (
                 self._db.get(DBGitHubInstallation, installation_id)
                 if (isinstance(installation_id, UUID) and self._db)

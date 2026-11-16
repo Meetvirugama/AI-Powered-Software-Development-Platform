@@ -5,7 +5,7 @@ import { useConnectRepository } from '../hooks/useConnectRepository';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { GitHubInstallButton } from '../components/shared/GitHubInstallButton';
-import { apiClient } from '../services/api';
+import { linkGitHubInstallation } from '../services/repositoryDiscovery';
 import type { AvailableRepository, ApiError } from '../types/api';
 import {
   Search,
@@ -420,9 +420,7 @@ function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
     setIsLinking(true);
     setLinkError(null);
     try {
-      await apiClient.post('/github/installations/link', {
-        installation_id: manualId.trim(),
-      });
+      await linkGitHubInstallation(manualId);
       setManualId('');
       onRefresh?.();
     } catch (err: unknown) {

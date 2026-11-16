@@ -750,6 +750,6 @@ class FrameworkDetector:
             full_path.relative_to(root)
             if full_path.is_file():
                 return full_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed reading file %s in framework_detector: %s", rel_path, exc)
         return ""

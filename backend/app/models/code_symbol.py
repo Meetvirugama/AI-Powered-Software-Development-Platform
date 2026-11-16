@@ -23,4 +23,5 @@ class CodeSymbol(TimestampedModel, Base):
     __table_args__ = (
         Index("ix_code_symbols_file_id_start_line", "file_id", "start_line"),
         Index("ix_code_symbols_repository_importance", "repository_id", "importance_score"),
+        Index("ix_code_symbols_repository_id_name", "repository_id", "name"),
     )

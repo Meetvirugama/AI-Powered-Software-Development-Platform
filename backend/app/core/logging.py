@@ -46,6 +46,7 @@ class JsonFormatter(logging.Formatter):
                     payload["trace_id"] = format(ctx.trace_id, "032x")
                     payload["span_id"] = format(ctx.span_id, "016x")
         except Exception:
+            # Annotated (ISS-040): Suppress OpenTelemetry span inspection failures inside logging formatter to prevent recursive logging loops
             pass
         if record.exc_info:
             if not record.exc_text:

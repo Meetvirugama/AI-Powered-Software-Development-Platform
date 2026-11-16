@@ -13,9 +13,12 @@ Responsibilities:
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.workspace import WorkspaceStatus
 from pydantic import BaseModel, Field
@@ -137,8 +140,8 @@ class WorkspaceBaseValidator:
                         framework = "unittest"
                     elif "jest" in fw_val:
                         framework = "jest"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed framework detection in workspace preflight: %s", exc)
 
         is_valid = len(errors) == 0
 

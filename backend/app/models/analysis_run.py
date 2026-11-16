@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -91,5 +91,6 @@ class AnalysisRun(TimestampedModel, Base):
         Index("ix_analysis_runs_repo_feature_status", "repository_id", "feature_type", "status"),
         Index("ix_analysis_runs_repo_revision", "repository_id", "source_revision"),
         Index("ix_analysis_runs_repo_target_path", "repository_id", "target_path"),
+        Index("ix_analysis_runs_repo_feature_created", "repository_id", "feature_type", text("created_at DESC")),
     )
 

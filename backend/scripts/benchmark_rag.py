@@ -15,16 +15,13 @@ import argparse
 import asyncio
 import os
 import sys
-from uuid import uuid4
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from ai.retrieval.evaluation import (
     RETRIEVAL_BENCHMARK_DATASET,
-    evaluate_retriever,
 )
 from scripts.benchmark_quality_suite import (
-    RAG_BENCHMARK_DATASET,
     run_rag_retrieval_benchmark,
 )
 

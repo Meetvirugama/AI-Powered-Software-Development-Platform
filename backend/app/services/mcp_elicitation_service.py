@@ -7,9 +7,10 @@ with schema validation, SSRF protection, session isolation, and non-bypass guara
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import ipaddress
 import logging
+import socket
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 from uuid import UUID
@@ -35,8 +36,8 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 ALLOWED_FIELD_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
@@ -69,7 +70,7 @@ def validate_mcp_url(url: str) -> str:
 
     try:
         parsed = urlparse(stripped)
-    except Exception as exc:
+    except (ValueError, TypeError, AttributeError) as exc:
         raise APIError(400, ErrorCode.MCP_SECURITY_VIOLATION, f"Malformed URL: {exc}")
 
     if not parsed.scheme or not parsed.netloc:
@@ -100,38 +101,51 @@ def validate_mcp_url(url: str) -> str:
                 f"Forbidden scheme '{scheme}'. Only https is allowed for external URLs.",
             )
 
-    if hostname in BLOCKED_HOSTS or hostname.endswith(".internal") or hostname.endswith(".local"):
+    if hostname in BLOCKED_HOSTS or hostname.endswith((".internal", ".local")):
         raise APIError(
             403,
             ErrorCode.MCP_SECURITY_VIOLATION,
             f"Access to restricted cloud metadata or internal endpoint '{hostname}' is strictly forbidden.",
         )
 
+    resolved_ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
     try:
-        ip = ipaddress.ip_address(hostname)
-        mapped = getattr(ip, "ipv4_mapped", None)
-        check_ips = [ip, mapped] if mapped is not None else [ip]
-        for candidate_ip in check_ips:
-            if str(candidate_ip) in BLOCKED_HOSTS or candidate_ip.is_link_local:
+        resolved_ips.append(ipaddress.ip_address(hostname))
+    except ValueError:
+        try:
+            addr_info = socket.getaddrinfo(hostname, None)
+            for item in addr_info:
+                sockaddr = item[4]
+                ip_str = sockaddr[0]
+                try:
+                    resolved_ips.append(ipaddress.ip_address(ip_str))
+                except ValueError:
+                    continue
+        except (socket.gaierror, OSError):
+            pass
+
+    for candidate_ip in resolved_ips:
+        mapped = getattr(candidate_ip, "ipv4_mapped", None)
+        check_ips = [candidate_ip, mapped] if mapped is not None else [candidate_ip]
+        for cip in check_ips:
+            if str(cip) in BLOCKED_HOSTS or cip.is_link_local:
                 raise APIError(
                     403,
                     ErrorCode.MCP_SECURITY_VIOLATION,
                     f"Link-local or cloud metadata IP address '{hostname}' is blocked.",
                 )
             if not is_dev_loopback and (
-                candidate_ip.is_private
-                or candidate_ip.is_loopback
-                or candidate_ip.is_unspecified
-                or candidate_ip.is_reserved
-                or candidate_ip.is_multicast
+                cip.is_private
+                or cip.is_loopback
+                or cip.is_unspecified
+                or cip.is_reserved
+                or cip.is_multicast
             ):
                 raise APIError(
                     403,
                     ErrorCode.MCP_SECURITY_VIOLATION,
                     f"Private, loopback, or reserved IP address '{hostname}' is blocked.",
                 )
-    except ValueError:
-        pass
 
     return stripped
 
@@ -175,7 +189,7 @@ def validate_mcp_form_response(schema: dict[str, Any], data: dict[str, Any]) -> 
             return
         except jsonschema.ValidationError as exc:
             raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Form validation failed: {exc.message}")
-        except Exception as exc:
+        except (jsonschema.SchemaError, TypeError, ValueError, AttributeError) as exc:
             raise APIError(400, ErrorCode.MCP_ELICITATION_ERROR, f"Schema validation error: {exc}")
 
     err = default_schema_validator.validate_arguments(data, schema)
@@ -206,7 +220,7 @@ class MCPElicitationService:
             raise APIError(400, ErrorCode.BAD_REQUEST, "prompt is required")
 
         validate_mcp_form_schema(schema)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ttl = expires_in_seconds or self.default_ttl_seconds
 
         elicitation = TaskApproval(
@@ -234,7 +248,10 @@ class MCPElicitationService:
             session_id,
         )
         try:
-            from app.services.sse_redis_streams import emit_sse_event_nonblocking, publish_mcp_notification
+            from app.services.sse_redis_streams import (
+                emit_sse_event_nonblocking,
+                publish_mcp_notification,
+            )
             emit_sse_event_nonblocking(
                 publish_mcp_notification(
                     user_id=str(user_id or getattr(task, "user_id", None) or "system"),
@@ -245,8 +262,8 @@ class MCPElicitationService:
                     kind="elicitation",
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Non-blocking SSE notification failed: %s", exc)
         return elicitation
 
     def request_url_elicitation(
@@ -266,7 +283,7 @@ class MCPElicitationService:
             raise APIError(400, ErrorCode.BAD_REQUEST, "purpose is required")
 
         validated_url = validate_mcp_url(url)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ttl = expires_in_seconds or self.default_ttl_seconds
 
         elicitation = TaskApproval(
@@ -335,7 +352,7 @@ class MCPElicitationService:
                 f"Elicitation cannot accept response in state '{elicitation.status}'",
             )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         exp = _as_utc(elicitation.expires_at)
         if exp and exp < now:
             elicitation.status = "expired"

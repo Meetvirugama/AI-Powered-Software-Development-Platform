@@ -663,8 +663,8 @@ class WorkspaceDiffVerifier:
                 curr = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
                 if "metadata.json" not in curr:
                     exclude_file.write_text(curr + "\nmetadata.json\nworkspace_metadata.json\n", encoding="utf-8")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed updating .git/info/exclude in workspace: %s", exc)
 
         # Include untracked files in diff via intent-to-add
         try:
@@ -674,8 +674,8 @@ class WorkspaceDiffVerifier:
                 check=False,
                 timeout=10,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed git add -N in workspace: %s", exc)
 
         excludes = [
             "--",
@@ -750,8 +750,8 @@ class WorkspaceDiffVerifier:
                         except Exception:
                             try:
                                 proc.kill()
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.debug("Process kill error in stream_git_diff_lines: %s", exc)
                     if proc.stdout:
                         proc.stdout.close()
                     if proc.stderr:
@@ -786,7 +786,8 @@ class WorkspaceDiffVerifier:
             try:
                 with file.open("r", encoding="utf-8", errors="replace") as f:
                     file_lines = f.readlines()
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed reading file %s in stream_fs_diff_lines: %s", rel_path, exc)
                 continue
 
             headers = [

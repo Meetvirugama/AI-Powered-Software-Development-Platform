@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from app.models.analysis_finding import AnalysisFinding
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus
@@ -61,8 +64,8 @@ class AnalysisCoreMixin(AnalysisRepositoryBase):
             try:
                 if self.session.get(User, user_uuid) is None:
                     user_uuid = None
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("User lookup failed in create_run: %s", exc)
         created_dt = _ensure_datetime(created_at) or datetime.now(timezone.utc)
         completed_dt = _ensure_datetime(completed_at)
 

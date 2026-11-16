@@ -38,7 +38,7 @@ from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.hybrid import HybridRetriever
 from ai.retrieval.reranker import CrossEncoderReranker
 from ai.context.review_context import ModifiedFile
-from ai.evaluation.quality_gate import QualityGate, QualityGateConfig
+from ai.evaluation.quality_gate import QualityGate
 from app.schemas.analysis import AnalysisSourceReference, ReviewFinding, ReviewTarget
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
 from app.services.code_review_orchestrator import (
@@ -54,8 +54,6 @@ from scanner.ast_rules import ASTBugAnalyzer
 from scanner.gitleaks_runner import GitleaksFinding, GitleaksRunner
 from scanner.multilang_security_scanner import MultiLangSecurityScanner
 from scanner.osv_runner import OSVFinding, OSVScannerRunner
-from scanner.semgrep_runner import SemgrepRunner
-from scanner.taint_analyzer import TaintAnalyzer
 
 logger = logging.getLogger(__name__)
 

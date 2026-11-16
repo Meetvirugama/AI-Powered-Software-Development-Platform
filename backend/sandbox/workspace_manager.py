@@ -110,7 +110,7 @@ def _validate_ref_or_option(val: str | None, name: str = "ref") -> None:
     if not val or not isinstance(val, str):
         return
     s = val.strip()
-    if s.startswith("-") or s.startswith("+") or "\x00" in s or ".." in s.replace("\\", "/").split("/") or any(c in s for c in " ~^:?*[\t\n\r"):
+    if s.startswith(("-", "+")) or "\x00" in s or ".." in s.replace("\\", "/").split("/") or any(c in s for c in " ~^:?*[\t\n\r"):
         raise WorkspacePolicyViolationError(
             f"Invalid {name} '{val}': cannot start with '-' or '+' and must not contain traversal, colon, or whitespace."
         )
@@ -312,7 +312,7 @@ class WorkspaceManager:
                     "git_worktree_failed_falling_back",
                     extra={"stderr": proc.stderr, "task_path": str(workspace_path)},
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "git_worktree_exception_falling_back",
                     extra={"error": str(e)},
@@ -334,8 +334,8 @@ class WorkspaceManager:
                             symlinks=False,
                             ignore=shutil.ignore_patterns("worktrees", "*.lock"),
                         )
-                    except Exception:
-                        pass
+                    except (shutil.Error, OSError) as exc:
+                        logger.debug("Worktrees copy notice: %s", exc)
                     continue
                 if item.is_symlink():
                     continue
@@ -343,15 +343,15 @@ class WorkspaceManager:
                 if item.is_dir():
                     resolved_repo_root = repo_root.resolve()
 
-                    def _ignore_unsafe_entries(src_dir: str, names: list[str]) -> set[str]:
+                    def _ignore_unsafe_entries(src_dir: str, names: list[str], root: Path = resolved_repo_root) -> set[str]:
                         ignored = set(shutil.ignore_patterns(".git*", "__pycache__")(src_dir, names))
                         for name in names:
                             candidate = Path(src_dir) / name
                             if candidate.is_symlink():
                                 try:
                                     target = candidate.resolve()
-                                    target.relative_to(resolved_repo_root)
-                                except Exception:
+                                    target.relative_to(root)
+                                except (ValueError, OSError):
                                     ignored.add(name)
                         return ignored
 
@@ -368,8 +368,8 @@ class WorkspaceManager:
                     capture_output=True,
                     check=False,
                 )
-            except Exception:
-                pass
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.debug("Git branch checkout notice: %s", exc)
         else:
             try:
                 subprocess.run(["git", "init"], cwd=workspace_path, capture_output=True, check=False)
@@ -378,8 +378,8 @@ class WorkspaceManager:
                 subprocess.run(["git", "add", "."], cwd=workspace_path, capture_output=True, check=False)
                 subprocess.run(["git", "commit", "--allow-empty", "-m", "Initial baseline"], cwd=workspace_path, capture_output=True, check=False)
                 subprocess.run(["git", "checkout", "-B", branch_name], cwd=workspace_path, capture_output=True, check=False)
-            except Exception:
-                pass
+            except (subprocess.SubprocessError, OSError) as exc:
+                logger.debug("Git init baseline notice: %s", exc)
 
         return "directory_copy"
 
@@ -404,7 +404,8 @@ class WorkspaceManager:
                         if candidate.task_id == task_id or item.name == task_id or item.name == f"task-{task_id}":
                             self._workspaces[task_id] = candidate
                             return candidate
-                    except Exception:
+                    except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+                        logger.debug("Failed reading workspace metadata %s: %s", meta_file, exc)
                         continue
         return None
 
@@ -839,7 +840,7 @@ class WorkspaceManager:
             )
         except WorkspaceError as exc:
             return WorkspaceFileReadResult(success=False, file_path=file_path, error=redact(str(exc)))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return WorkspaceFileReadResult(success=False, file_path=file_path, error=f"Read error: {redact(str(exc))}")
 
     def write_file(
@@ -881,7 +882,7 @@ class WorkspaceManager:
             )
         except WorkspaceError as exc:
             return WorkspaceFileWriteResult(success=False, file_path=file_path, error=redact(str(exc)))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return WorkspaceFileWriteResult(success=False, file_path=file_path, error=f"Write error: {redact(str(exc))}")
 
     def patch_file(
@@ -1023,7 +1024,7 @@ class WorkspaceManager:
                             check=False,
                             timeout=30,
                         )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.warning("git_worktree_remove_failed", extra={"error": str(e)})
 
             # Safe physical directory removal
@@ -1063,7 +1064,7 @@ class WorkspaceManager:
 
         try:
             shutil.rmtree(resolved, ignore_errors=False)
-        except Exception:
+        except (OSError, shutil.Error):
             # Retry with error handler on Windows if file was read-only
             def _remove_readonly(func: Any, path: str, _: Any) -> None:
                 os.chmod(path, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
@@ -1179,7 +1180,7 @@ class WorkspaceManager:
             if request.files:
                 for f in request.files:
                     f_str = str(f).strip()
-                    if f_str.startswith("-") or f_str.startswith("+") or "\x00" in f_str or ".." in f_str.replace("\\", "/").split("/"):
+                    if f_str.startswith(("-", "+")) or "\x00" in f_str or ".." in f_str.replace("\\", "/").split("/"):
                         raise WorkspacePolicyViolationError(
                             f"File path '{f}' contains invalid path traversal or option characters."
                         )
@@ -1333,7 +1334,7 @@ class WorkspaceManager:
         if getattr(request, "installation_token", None):
             import base64
             token_val = str(request.installation_token).strip()
-            auth_token = base64.b64encode(f"x-access-token:{token_val}".encode("utf-8")).decode("utf-8")
+            auth_token = base64.b64encode(f"x-access-token:{token_val}".encode()).decode("utf-8")
             push_env["GIT_CONFIG_COUNT"] = "1"
             push_env["GIT_CONFIG_KEY_0"] = "http.extraheader"
             push_env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {auth_token}"
@@ -1541,7 +1542,7 @@ class WorkspaceManager:
                     metadata.model_dump_json(indent=2),
                     encoding="utf-8",
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to save workspace metadata.json: %s", exc)
 
     def get_task_lock(self, task_id: str) -> threading.Lock:
@@ -1632,7 +1633,7 @@ class WorkspaceManager:
                                     age = (datetime.now(UTC) - dt).total_seconds()
                                     if age >= stale_timeout_seconds:
                                         is_stale = True
-                                except Exception:
+                                except (ValueError, TypeError):
                                     is_stale = True
                             else:
                                 is_stale = True
@@ -1666,7 +1667,7 @@ class WorkspaceManager:
                         details=details,
                     )
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 failed_count += 1
                 logger.warning("Failed to recover workspace from '%s': %s", item, exc)
 
@@ -1698,7 +1699,8 @@ class WorkspaceManager:
                             if candidate.task_id == task_id or item.name == task_id or item.name == f"task-{task_id}":
                                 found_meta = candidate
                                 break
-                        except Exception:
+                        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+                            logger.debug("Metadata parse error: %s", exc)
                             continue
             if found_meta:
                 meta = found_meta
@@ -1764,7 +1766,7 @@ class WorkspaceManager:
                 )
                 if res_parse.exit_code == 0 and res_parse.stdout.strip():
                     remote_sha = res_parse.stdout.strip().lower()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to fetch remote branch: %s", exc)
 
         if not remote_sha:
@@ -1781,7 +1783,7 @@ class WorkspaceManager:
                     commits_behind = int(res_count.stdout.strip())
                 else:
                     commits_behind = 1
-            except Exception:
+            except (subprocess.SubprocessError, OSError, ValueError):
                 commits_behind = 1
         else:
             commits_behind = 0
@@ -1948,7 +1950,7 @@ class WorkspaceManager:
                         if Path(w.workspace_path).resolve() == item.resolve():
                             meta = w
                             break
-                    except Exception:
+                    except (OSError, RuntimeError):
                         pass
                 if not meta:
                     meta = self._workspaces.get(task_id) or self._workspaces.get(raw_name)
@@ -1963,8 +1965,8 @@ class WorkspaceManager:
                             m_data = json.loads(meta_file.read_text(encoding="utf-8"))
                             m_obj = WorkspaceMetadata(**m_data)
                             meta = self._workspaces.get(m_obj.task_id) or m_obj
-                        except Exception:
-                            pass
+                        except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+                            logger.debug("Error reading metadata on cleanup: %s", exc)
 
                 is_active = meta and meta.status in (
                     WorkspaceStatus.CREATING,
@@ -1992,7 +1994,7 @@ class WorkspaceManager:
                             self._safe_remove_dir(item)
                         cleaned_count += 1
                         cleaned_ids.append(task_id)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 failed_count += 1
                 logger.warning("Failed to sweep orphaned workspace '%s': %s", item, exc)
 
@@ -2041,9 +2043,8 @@ class WorkspaceManager:
         if meta.status in (WorkspaceStatus.READY, WorkspaceStatus.IN_USE):
             if not ws_path.exists() or not ws_path.is_dir():
                 violations.append(f"Workspace in status '{meta.status}' but directory missing on disk: '{ws_path}'.")
-        elif meta.status == WorkspaceStatus.CLEANED:
-            if ws_path.exists():
-                violations.append(f"Workspace in status 'CLEANED' but directory still exists: '{ws_path}'.")
+        elif meta.status == WorkspaceStatus.CLEANED and ws_path.exists():
+            violations.append(f"Workspace in status 'CLEANED' but directory still exists: '{ws_path}'.")
 
         # 3. Base revision format invariant
         if meta.base_revision:

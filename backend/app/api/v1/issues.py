@@ -78,8 +78,8 @@ def _resolve_installation_number(db: Session, repository: Repository) -> int | N
         inst = db.get(GitHubInstallation, repository.installation_id)
         if inst and str(inst.installation_id).isdigit():
             return int(inst.installation_id)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed resolving numeric installation_id for repository: %s", exc)
     return None
 
 

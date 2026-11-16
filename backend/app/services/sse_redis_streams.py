@@ -502,7 +502,7 @@ def emit_sse_event_nonblocking(coro: Any) -> None:
     except RuntimeError:
         try:
             asyncio.run(coro)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception as exc:
+            logger.debug("Failed running coroutine in asyncio.run: %s", exc)
+    except Exception as exc:
+        logger.debug("Failed scheduling coroutine on running loop: %s", exc)

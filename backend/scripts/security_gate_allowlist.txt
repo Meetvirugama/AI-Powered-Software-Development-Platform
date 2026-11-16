@@ -110,4 +110,6 @@ e612497353  # backend/tests/security/provenance/test_issue_intake_provenance.py 
 8af1191a8f  # backend/tests/security/test_settings_validation.py synthetic test secret
 61999a6f21  # backend/tests/security/test_settings_validation.py synthetic test secret
 f8113d787c  # backend/tests/security/test_workspace_git_push_argv.py synthetic test secret
+5f0e4ba268  # backend/tests/security/test_log_redaction.py synthetic test key
+dbf9bea3aa  # backend/tests/security/test_log_redaction.py synthetic test token
 

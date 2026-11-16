@@ -135,7 +135,8 @@ class LocalSubprocessBackend(SandboxBackend):
                                 target_resolved,
                             )
                             continue
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Failed checking symlink resolution on %s: %s", item, exc)
                         continue
                 dest = ws_path / item.name
                 if item.is_dir():

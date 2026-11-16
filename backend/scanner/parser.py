@@ -766,8 +766,8 @@ class Parser:
                     if parser is not None:
                         self._parser_cache[cache_key] = (parser, "tree_sitter_language_pack")
                         return parser, "tree_sitter_language_pack"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("tree_sitter_language_pack.get_parser failed for %s: %s", cache_key, exc)
             try:
                 if hasattr(tree_sitter_language_pack, "get_language"):
                     lang_obj = tree_sitter_language_pack.get_language(cache_key)
@@ -779,8 +779,8 @@ class Parser:
                             parser.set_language(lang_obj)
                         self._parser_cache[cache_key] = (parser, "tree_sitter_language_pack")
                         return parser, "tree_sitter_language_pack"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("tree_sitter_language_pack.get_language failed for %s: %s", cache_key, exc)
 
         # 2. Secondary: Individual maintained tree_sitter_<lang> binding packages
         mod_spec = _LANGUAGE_BINDING_MODULES.get(cache_key)
@@ -806,8 +806,8 @@ class Parser:
                         parser.set_language(language)
                     self._parser_cache[cache_key] = (parser, mod_name)
                     return parser, mod_name
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Individual tree-sitter binding failed for %s (%s): %s", mod_name, cache_key, exc)
 
         return None, None
 

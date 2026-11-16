@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "DEFAULT_VERSIONS",
@@ -116,8 +119,8 @@ async def get_repository_index_version_async(
             val = await redis_client.get(f"retrieval:index_version:{repo_str}")
             if val:
                 return _decode_redis_str(val)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis error reading index version async for %s: %s", repo_str, exc)
     return _LOCAL_REPO_INDEX_VERSIONS.get(repo_str, "0")
 
 
@@ -132,8 +135,8 @@ def get_repository_index_version(
             val = redis_client.get(f"retrieval:index_version:{repo_str}")
             if val:
                 return _decode_redis_str(val)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis error reading index version sync for %s: %s", repo_str, exc)
     return _LOCAL_REPO_INDEX_VERSIONS.get(repo_str, "0")
 
 
@@ -149,8 +152,8 @@ async def set_repository_index_version_async(
     if redis_client is not None:
         try:
             await redis_client.set(f"retrieval:index_version:{repo_str}", v_str, ex=2592000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis error setting index version async for %s: %s", repo_str, exc)
     return v_str
 
 
@@ -166,8 +169,8 @@ def set_repository_index_version(
     if redis_client is not None and hasattr(redis_client, "set"):
         try:
             redis_client.set(f"retrieval:index_version:{repo_str}", v_str, ex=2592000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Redis error setting index version sync for %s: %s", repo_str, exc)
     return v_str
 
 

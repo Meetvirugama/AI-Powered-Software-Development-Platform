@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
+
+logger = logging.getLogger(__name__)
 
 from app.models.analysis_run import AnalysisFeature, AnalysisRun, AnalysisRunStatus
 from app.repositories.analysis.base import (
@@ -132,8 +135,8 @@ class ReviewRunMixin:
             try:
                 if self.session.get(User, user_uuid) is None:
                     user_uuid = None
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("User lookup failed in save_review_run: %s", exc)
 
         status_val = status.value if hasattr(status, "value") else str(status).upper()
         run_uuid = _ensure_uuid(run_id) or uuid.uuid4()

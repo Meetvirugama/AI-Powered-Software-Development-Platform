@@ -13,10 +13,13 @@ Responsibilities:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from app.schemas.planner_context import (
     AffectedSymbol,
@@ -71,8 +74,8 @@ class TaskTestPlanner:
                         return "unittest"
                     if "pytest" in fw_name:
                         return "pytest"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Framework detector failed on workspace_root: %s", exc)
 
         # Try FrameworkDetector with file_list if available
         if file_paths:
@@ -87,8 +90,8 @@ class TaskTestPlanner:
                         return "unittest"
                     if "pytest" in fw_name:
                         return "pytest"
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Framework detector failed on file_paths: %s", exc)
 
         return "pytest"
 
@@ -197,8 +200,8 @@ class TaskTestPlanner:
                 try:
                     mapped = file_test_mapper.find_tests_for_file(sym.file_path)
                     has_file_test = bool(mapped)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("File test mapper failed on %s: %s", sym.file_path, exc)
 
             # Evidence 3: Heuristic name matching
             has_name_match = bool(sym_clean) and any(sym_clean in tc for tc in existing_cases_lower)

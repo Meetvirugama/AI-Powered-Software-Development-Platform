@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Protocol
 from uuid import UUID
 
 from ai.schemas.output import RepositoryAnswer
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.api.v1.dependencies import (
     get_owned_repository,
@@ -116,11 +119,13 @@ async def chat_with_repository(
         try:
             from app.services.memory_service import ProjectMemoryService
             project_memories = ProjectMemoryService(db).get_context_memories(repository_id, limit=10)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed querying project memories for chat: %s", exc)
         import inspect
         sig = inspect.signature(pipeline.chat)
-        if "memory" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        if project_memories and ("memory" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())):
+            answer = await pipeline.chat(payload.question, repository_id, payload.history, memory=project_memories)
+        elif "memory" in sig.parameters:
             answer = await pipeline.chat(payload.question, repository_id, payload.history, memory=project_memories)
         else:
             answer = await pipeline.chat(payload.question, repository_id, payload.history)
@@ -144,7 +149,7 @@ async def chat_with_repository(
                 index=0,
                 done=True,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed publishing chat token over SSE: %s", exc)
 
     return sanitized

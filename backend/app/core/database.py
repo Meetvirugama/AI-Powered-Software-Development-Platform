@@ -6,6 +6,7 @@ shared application infrastructure they will use.
 
 from collections.abc import AsyncGenerator, Generator
 import logging
+import os
 import re
 from typing import Any
 
@@ -47,15 +48,33 @@ def normalize_sync_database_url(url: str) -> str:
     return clean
 
 
+def _get_role_pool_size() -> tuple[int, int]:
+    """Calculate connection budget per service role (ISS-032).
+
+    Sizing:
+    - api: settings.db_pool_size (default 20), overflow 10
+    - sync_worker / webhook_worker / runner: pool 5, overflow 2
+    - migrate: pool 1, overflow 0
+    Ensures total cluster connections stay <= 80% of managed Postgres limits (max 100).
+    """
+    role = os.getenv("SERVICE_ROLE", "api").strip().lower()
+    if role in ("sync_worker", "webhook_worker", "runner"):
+        return min(settings.db_pool_size, 5), min(settings.db_max_overflow, 2)
+    if role == "migrate":
+        return 1, 0
+    return settings.db_pool_size, settings.db_max_overflow
+
+
 def _build_db_kwargs(url: str) -> dict[str, Any]:
     """Construct engine kwargs tailored for local, Supabase, Azure, or SQLite databases."""
     kwargs: dict[str, Any] = {"pool_pre_ping": True}
     is_memory_sqlite = url.startswith("sqlite") and (":memory:" in url or url in ("sqlite://", "sqlite:///"))
     if not is_memory_sqlite:
+        pool_sz, max_ovf = _get_role_pool_size()
         kwargs.update(
             {
-                "pool_size": settings.db_pool_size,
-                "max_overflow": settings.db_max_overflow,
+                "pool_size": pool_sz,
+                "max_overflow": max_ovf,
                 "pool_timeout": settings.db_pool_timeout,
                 "pool_recycle": settings.db_pool_recycle,
             }

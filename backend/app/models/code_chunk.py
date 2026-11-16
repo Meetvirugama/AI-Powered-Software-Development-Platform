@@ -73,4 +73,5 @@ class CodeChunk(TimestampedModel, Base):
             postgresql_using="gin"
         ),
         Index("ix_code_chunks_repo_hash", "repository_id", "content_hash"),
+        Index("ix_code_chunks_file_id_start_line", "file_id", "start_line"),
     )

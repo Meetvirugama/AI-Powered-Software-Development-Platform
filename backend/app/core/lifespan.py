@@ -130,8 +130,8 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                 redis_client = None
                 try:
                     redis_client = get_async_redis_client()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Async Redis client unavailable for CachedEmbeddingService: %s", exc)
                 embedding_service = CachedEmbeddingService(
                     provider=embedding_provider,
                     redis_client=redis_client,
@@ -172,8 +172,8 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     db=AsyncSessionLocal,
                     max_seeds=getattr(settings, "retrieval_graph_max_seeds", 5),
                     max_hops=getattr(settings, "retrieval_graph_max_hops", 1),
-                    max_related_per_seed=getattr(settings, "retrieval_graph_max_related", 10),
-                    max_expanded_chunks=getattr(settings, "retrieval_graph_max_chunks", 30),
+                    max_related_per_seed=getattr(settings, "retrieval_graph_max_neighbors_per_seed", 10),
+                    max_expanded_chunks=getattr(settings, "retrieval_graph_max_candidates", 30),
                     enabled=True,
                 )
             except Exception as g_exc:  # noqa: BLE001
@@ -477,8 +477,8 @@ async def lifespan(app: FastAPI):
             instrument_sqlalchemy(engine)
             try:
                 instrument_redis()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Redis instrumentation skipped: %s", exc)
         get_langfuse_adapter(settings)
     except Exception as obs_exc:
         logger.warning("observability_startup_warning", extra={"error": str(obs_exc)})

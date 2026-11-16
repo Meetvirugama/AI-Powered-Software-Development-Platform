@@ -334,7 +334,8 @@ class GitleaksRunner:
                 try:
                     if not p.resolve().is_relative_to(resolved_ws):
                         continue
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Failed checking path resolution for %s: %s", p, exc)
                     continue
                 rel_path = str(p.relative_to(workspace)).replace("\\", "/")
                 if self.is_excluded(rel_path):
@@ -345,7 +346,8 @@ class GitleaksRunner:
                     if p.stat().st_size > 2 * 1024 * 1024:
                         continue
                     text = p.read_text(encoding="utf-8", errors="replace")
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Failed reading file %s for gitleaks: %s", p, exc)
                     continue
 
                 files_scanned += 1
@@ -414,8 +416,8 @@ class GitleaksRunner:
             if os.path.exists(tmp_report):
                 try:
                     os.unlink(tmp_report)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed unlinking tmp gitleaks report %s: %s", tmp_report, exc)
 
     def _parse_cli_report(self, report_json: str, workspace: Path) -> list[GitleaksFinding]:
         """Parse Gitleaks JSON report, guaranteeing that raw secret matches are redacted."""

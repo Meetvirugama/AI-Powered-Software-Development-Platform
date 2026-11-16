@@ -25,7 +25,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -385,6 +385,7 @@ class Task(TimestampedModel, Base):
         Index("ix_tasks_repo_status", "repository_id", "status"),
         Index("ix_tasks_repo_created", "repository_id", "created_at"),
         Index("ix_tasks_repo_source", "repository_id", "source_type", "source_id"),
+        Index("ix_tasks_repo_status_created_at", "repository_id", "status", text("created_at DESC")),
     )
 
     def to_dict(self) -> dict[str, Any]:

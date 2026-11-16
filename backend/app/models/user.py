@@ -26,4 +26,5 @@ class User(TimestampedModel, Base):
         default=UserRole.DEVELOPER.value,
         server_default=UserRole.DEVELOPER.value,
         nullable=False,
+        index=True,
     )

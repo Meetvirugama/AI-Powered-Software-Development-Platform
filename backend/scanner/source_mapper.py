@@ -351,8 +351,8 @@ class ReviewSourceMapper:
             detected = self.detector.detect(file_info)
             if detected and detected != "unknown":
                 return detected
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed detecting language in source_mapper: %s", exc)
 
         ext = Path(file_path).suffix.lower()
         mapping = {

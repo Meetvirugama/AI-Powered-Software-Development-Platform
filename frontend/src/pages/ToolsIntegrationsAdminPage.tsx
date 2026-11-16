@@ -1,26 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  listMCPServers,
+  registerMCPServer,
+  pingMCPServer,
+  toggleMCPServer,
+  updateMCPToolPolicy,
+} from '../services/mcp';
+import type {
+  MCPServerRegistration,
+  MCPToolSchemaItem,
+  ToolRiskTier,
+} from '../services/mcp';
 
-export type ToolRiskTier = 'low' | 'medium' | 'high' | 'critical';
-
-export interface MCPToolSchemaItem {
-  name: string;
-  description: string;
-  riskTier: ToolRiskTier;
-  requiresApproval: boolean;
-  inputSchemaJson: string;
-}
-
-export interface MCPServerRegistration {
-  id: string;
-  name: string;
-  transport: 'stdio' | 'sse' | 'streamable_http';
-  endpointOrCommand: string;
-  enabled: boolean;
-  status: 'connected' | 'degraded' | 'offline';
-  protocolVersion: string;
-  lastLatencyMs: number | null;
-  tools: MCPToolSchemaItem[];
-}
+export type { ToolRiskTier, MCPToolSchemaItem, MCPServerRegistration };
 
 const INITIAL_SERVERS: MCPServerRegistration[] = [
   {
@@ -93,6 +85,22 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
   const [newServerEndpoint, setNewServerEndpoint] = useState('');
   const [newServerTransport, setNewServerTransport] = useState<'stdio' | 'sse' | 'streamable_http'>('stdio');
 
+  useEffect(() => {
+    let mounted = true;
+    listMCPServers()
+      .then((data) => {
+        if (mounted && data && data.length > 0) {
+          setServers(data);
+        }
+      })
+      .catch(() => {
+        // Fall back gracefully to initial demo servers if API offline
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const filteredServers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return servers;
@@ -116,6 +124,7 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
           : srv,
       ),
     );
+    toggleMCPServer(id).catch(() => {});
   };
 
   const pingServer = (id: string) => {
@@ -126,31 +135,39 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
           : srv,
       ),
     );
+    pingMCPServer(id).catch(() => {});
   };
 
   const toggleToolApprovalPolicy = (serverId: string, toolName: string) => {
+    const target = servers.find((s) => s.id === serverId);
+    const tool = target?.tools.find((t) => t.name === toolName);
+    const nextVal = tool ? !tool.requiresApproval : true;
     setServers((prev) =>
       prev.map((srv) =>
         srv.id !== serverId
           ? srv
           : {
               ...srv,
-              tools: srv.tools.map((tool) =>
-                tool.name === toolName ? { ...tool, requiresApproval: !tool.requiresApproval } : tool,
+              tools: srv.tools.map((t) =>
+                t.name === toolName ? { ...t, requiresApproval: !t.requiresApproval } : t,
               ),
             },
       ),
     );
+    updateMCPToolPolicy(serverId, toolName, nextVal).catch(() => {});
   };
 
   const handleRegisterServer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newServerName.trim() || !newServerEndpoint.trim()) return;
+    const name = newServerName.trim();
+    const endpoint = newServerEndpoint.trim();
+    const transport = newServerTransport;
     const created: MCPServerRegistration = {
       id: `mcp-${Date.now()}`,
-      name: newServerName.trim(),
-      transport: newServerTransport,
-      endpointOrCommand: newServerEndpoint.trim(),
+      name,
+      transport,
+      endpointOrCommand: endpoint,
       enabled: true,
       status: 'connected',
       protocolVersion: '2024-11-05',
@@ -160,6 +177,12 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
     setServers((prev) => [...prev, created]);
     setNewServerName('');
     setNewServerEndpoint('');
+
+    registerMCPServer({
+      name,
+      transport,
+      endpointOrCommand: endpoint,
+    }).catch(() => {});
   };
 
   return (

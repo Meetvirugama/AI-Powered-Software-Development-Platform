@@ -85,7 +85,7 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionResult,
 )
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
-from app.services.git_branch import GitBranchService, format_agent_branch_name
+from app.services.git_branch import format_agent_branch_name
 from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
     WorkspaceCommitError,
@@ -236,8 +236,8 @@ class TaskExecutionOrchestrator:
                         m_data = json.loads(m_path.read_text(encoding="utf-8"))
                         if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
                             meta.verification_diff_hash = m_data["verification_diff_hash"]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to parse workspace metadata verification_diff_hash: %s", exc)
             return meta
         if task_repo is None:
             return None
@@ -941,8 +941,8 @@ class TaskExecutionOrchestrator:
                 head_sha = proc.stdout.strip()
                 if _HEX_SHA_RE.match(head_sha):
                     return head_sha
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve git HEAD rev-parse in workspace: %s", exc)
         if meta.base_revision and _HEX_SHA_RE.match(meta.base_revision.strip()):
             return meta.base_revision.strip()
         return diff_hash[:40]
@@ -1295,7 +1295,8 @@ class TaskExecutionOrchestrator:
                 continue
             try:
                 content = target_file.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed to read file %s for static scan: %s", target_file, exc)
                 continue
 
             bug_items, _ = self.static_scanner.scan(
@@ -1412,6 +1413,11 @@ class TaskExecutionOrchestrator:
 
         # Compute cryptographic diff fingerprint and bind verification result to revision
         diff_hash = self.workspace_manager.compute_verification_diff_hash(task_id_str)
+        meta.verification_diff_hash = diff_hash
+        try:
+            self.workspace_manager.save_workspace_metadata(meta)
+        except Exception as exc:
+            logger.debug("Failed to persist workspace metadata: %s", exc)
         verified_rev_sha = self._resolve_verified_revision_sha(task_id_str, meta, diff_hash)
 
         overall_status: VerificationOverallStatus = VerificationResultSchema.evaluate_status(
@@ -1486,6 +1492,7 @@ class TaskExecutionOrchestrator:
             blocking_findings=[f.model_dump(mode="json") for f in blocking_findings],
             warnings=[w.model_dump(mode="json") for w in warnings],
             summary=ver_schema.pr_summary,
+            diff_hash=diff_hash,
         )
 
         db_ws = task_repo.get_workspace_record(task.id)
@@ -1754,8 +1761,8 @@ class TaskExecutionOrchestrator:
                     if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
                         expected_hash = m_data["verification_diff_hash"]
                         meta.verification_diff_hash = expected_hash
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read metadata file %s for verification hash: %s", m_path, exc)
 
         if not expected_hash:
             # 2. Attempt to resolve from latest verification event payload if present
@@ -2100,18 +2107,50 @@ class TaskExecutionOrchestrator:
             )
             pr_res = self.workspace_manager.create_draft_pr(pr_req)
 
+            final_pr_number = pr_res.pr_number
+            final_pr_url = pr_res.pr_url
+            try:
+                from app.services.git_branch import GitBranchService
+                import asyncio
+                import concurrent.futures
+
+                def _resolve_real_gh():
+                    async def _coro():
+                        svc = GitBranchService(task_repo.session)
+                        gh_cl = await svc._get_client_for_repo(repo_obj)
+                        if gh_cl and repo_owner != "local":
+                            gh_prs = await gh_cl.list_pull_requests(repo_owner, repo_name, state="all")
+                            for p in gh_prs:
+                                hr = p.get("head", {}).get("ref")
+                                if hr in (effective_head, f"refs/heads/{effective_head}"):
+                                    return p.get("number"), p.get("html_url")
+                        return None, None
+
+                    try:
+                        return asyncio.run(_coro())
+                    except Exception:
+                        return None, None
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    real_num, real_url = pool.submit(_resolve_real_gh).result(timeout=5)
+                    if real_num and real_url:
+                        final_pr_number = real_num
+                        final_pr_url = real_url
+            except Exception as exc:
+                logger.debug("Failed to resolve live GitHub PR URL/number: %s", exc)
+
             # 7. Persist TaskPullRequest in PostgreSQL & advance task to DRAFT_PR_CREATED
             task_pr = task_repo.record_pull_request(
                 task_id=task.id,
                 repository_id=task.repository_id,
-                pr_url=pr_res.pr_url,
+                pr_url=final_pr_url,
                 base_branch=pr_res.base_branch,
                 head_branch=pr_res.head_branch,
                 head_sha=head_sha,
                 title=commit_title,
                 body=pr_res.summary,
-                pr_number=pr_res.pr_number,
-                github_pr_id=pr_res.pr_number,
+                pr_number=final_pr_number,
+                github_pr_id=final_pr_number,
                 is_draft=True,
             )
 
@@ -2520,6 +2559,6 @@ def get_task_execution_orchestrator(app_state: Any = None) -> TaskExecutionOrche
     if app_state is not None:
         try:
             app_state.task_execution_orchestrator = _default_orchestrator
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to cache task execution orchestrator on app.state: %s", exc)
     return _default_orchestrator

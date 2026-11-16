@@ -97,8 +97,8 @@ async def run_worker() -> None:
     try:
         close_redis()
         await close_redis_async()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed closing Redis connections during worker stop: %s", exc)
 
     logger.info("Standalone webhook worker process stopped.")
 

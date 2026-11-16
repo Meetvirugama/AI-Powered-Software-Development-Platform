@@ -70,8 +70,8 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
         if existing_fut is not None and not existing_fut.done():
             try:
                 return await asyncio.shield(existing_fut)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("in_flight_blocklist_check_failed", extra={"error": str(exc)})
 
     loop = asyncio.get_running_loop()
     fut = loop.create_future() if is_live_environment else None
@@ -132,8 +132,8 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 sync_client = sync_get_redis()
                 if sync_client is not None:
                     return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=2.0))
-            except Exception:
-                pass
+            except Exception as sync_exc:
+                logger.debug("auth_blocklist_sync_check_failed", extra={"error": str(sync_exc)})
         logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
     except APIError:
@@ -149,8 +149,8 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 sync_client = sync_get_redis()
                 if sync_client is not None:
                     return bool(await asyncio.to_thread(sync_client.exists, key))
-            except Exception:
-                pass
+            except Exception as sync_err:
+                logger.debug("auth_blocklist_sync_fallback_failed", extra={"error": str(sync_err)})
 
         if "timeout" in err_msg or "timed out" in err_msg:
             logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
@@ -235,8 +235,8 @@ async def _try_populate_user_state(request: Request) -> None:
             request.state.token_exp = int(claims["exp"])
             request.state.role = str(claims.get("role", "developer"))
             request.state.permissions = list(claims.get("permissions", []))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed validating token in auth middleware: %s", exc)
 
 
 def _get_token_and_source(request: Request) -> tuple[str | None, str]:

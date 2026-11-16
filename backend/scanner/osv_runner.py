@@ -153,8 +153,8 @@ def is_version_vulnerable(ecosystem: str, package: str, version_str: str, adviso
         try:
             fixed_ver = packaging.version.parse(advisory["fixed_version"].lstrip("v"))
             return parsed < fixed_ver
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed parsing fixed_version in osv_runner: %s", exc)
 
     regex = advisory.get("vulnerable_version_regex")
     return bool(regex and re.match(regex, version_str))
@@ -290,7 +290,8 @@ class OSVScannerRunner:
                     try:
                         if candidate.resolve().is_relative_to(resolved_root):
                             lockfiles.append(candidate)
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Failed checking lockfile path resolution: %s", exc)
                         continue
         return lockfiles
 

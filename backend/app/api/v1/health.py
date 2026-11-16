@@ -1,14 +1,17 @@
 """Health and readiness check endpoints used by local tooling, Docker, Kubernetes, and CI."""
 
 import asyncio
+import json
 import logging
+import shutil
+import time
 from fastapi import APIRouter, Request, Response, status
 from sqlalchemy import text
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core.redis import get_redis
-from app.schemas.health import ComponentHealth, HealthResponse, ReadinessResponse
+from app.schemas.health import ComponentHealth, HealthResponse, OperationalReadinessMetrics, ReadinessResponse
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +126,47 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         for k, v in readiness_map.items()
     }
 
+    # 5. Operational metrics (OPT-24)
+    sync_worker_heartbeat_age_s: float | None = None
+    webhook_backlog: int = 0
+    if redis_health.status == "healthy":
+        try:
+            r = get_redis()
+            keys = r.keys("worker:heartbeat:*")
+            if keys:
+                latest_hb = 0.0
+                for k in keys:
+                    raw_val = r.get(k)
+                    if raw_val:
+                        try:
+                            hb_data = json.loads(raw_val)
+                            hb_time = float(hb_data.get("last_heartbeat", 0))
+                            if hb_time > latest_hb:
+                                latest_hb = hb_time
+                        except Exception as exc:
+                            logger.debug("Failed parsing worker heartbeat JSON: %s", exc)
+                if latest_hb > 0:
+                    sync_worker_heartbeat_age_s = max(0.0, time.time() - latest_hb)
+
+            webhook_backlog = int(r.llen("webhook_events:queue") or 0)
+        except Exception as exc:
+            logger.debug("operational_metrics_redis_error", extra={"error": str(exc)})
+
+    scanner_availability = {
+        "ruff": shutil.which("ruff") is not None,
+        "bandit": shutil.which("bandit") is not None,
+        "semgrep": shutil.which("semgrep") is not None,
+        "gitleaks": shutil.which("gitleaks") is not None,
+    }
+    sandbox_backend_ok = settings.sandbox_backend in ("local", "container", "runner")
+
+    operations = OperationalReadinessMetrics(
+        sync_worker_heartbeat_age_s=sync_worker_heartbeat_age_s,
+        webhook_backlog=webhook_backlog,
+        scanner_availability=scanner_availability,
+        sandbox_backend_ok=sandbox_backend_ok,
+    )
+
     # Determine overall status
     if db_health.status == "unhealthy":
         overall_status = "not_ready"
@@ -144,4 +188,5 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         llm_gateway=llm_health,
         rag_pipeline=rag_health,
         services=services_summary,
+        operations=operations,
     )

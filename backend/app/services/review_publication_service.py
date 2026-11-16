@@ -458,8 +458,8 @@ class ReviewPublicationService:
                                 if rev_dt < (attempt_started_at - timedelta(seconds=5)):
                                     # Past review submitted prior to current attempt
                                     continue
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logger.debug("Failed parsing submitted_at datetime for existing review: %s", exc)
 
                         logger.info("reconciled_existing_review_found", extra={"review_id": rev.get("id")})
                         return ReviewPublicationResult(

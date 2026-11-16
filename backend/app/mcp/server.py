@@ -7,6 +7,7 @@ sandboxed patch verification with mandatory secret redaction and SSE notificatio
 
 from __future__ import annotations
 
+import logging
 import pathlib
 import re
 import time
@@ -14,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from app.core.secret_redaction import redact, redact_obj
 from app.services.sse_redis_streams import emit_sse_event_nonblocking, publish_mcp_notification
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_MCP_TOOLS: List[Dict[str, Any]] = [
     {
@@ -91,8 +94,8 @@ class PlatformMCPServer:
                     kind=kind,
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed emitting MCP SSE notification: %s", exc)
 
     def handle_jsonrpc(self, raw_request: Any) -> Optional[Dict[str, Any]]:
         """Process a single JSON-RPC 2.0 request or notification."""
