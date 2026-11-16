@@ -25,7 +25,10 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 ## 3. Security
 - [x] No committed JWT secret accepted by the validator; production secret rotated (ISS-001 · TST-01) — Resolved in PR #feature/project-audit-remediation
 - [x] MCP and all admin routes require admin (ISS-003 · TST-04) — Resolved in PR #feature/project-audit-remediation
-- [x] CSRF regex uses `fullmatch`; cookie SameSite policy matches topology; CSP present (ISS-021 · TST-05, TST-18) — Resolved in branch Meet (CSRF fullmatch, SameSite lax, and CSP header verified in SecurityHeadersMiddleware)
+- [x] CSRF regex uses `fullmatch`; cookie SameSite policy matches topology; CSP present (ISS-021 · TST-05, TST-18) — Resolved in branch Meet (CSRF fullmatch, SameSite lax, and CSP header verified in SecurityHeadersMiddleware and vercel.json)
+- [x] SSRF protection with DNS resolution and private/metadata IP blocking (ISS-022 · TST-09) — Resolved in branch Meet (validate_mcp_url DNS checking, verified by test_ssrf_validator.py)
+- [x] Secret redaction filter attached at logging handler level (ISS-019 · TST-14) — Resolved in branch Meet (SecretRedactingFilter verified by test_log_redaction.py)
+- [x] Large webhook body protection before HMAC (ISS-031 · TST-10) — Resolved in branch Meet (verified by test_webhook_size_guard.py)
 - [x] Git tokens never appear in argv or logs (ISS-019 · TST-06, TST-14) — Resolved in PR #feature/project-audit-remediation
 - [x] Internal memory endpoints removed (ISS-023 · TST-07) — Resolved in PR #feature/project-audit-remediation
 - [x] Tenant-isolation sweep green for every ID-bearing route (TST-15) — Resolved in branch Meet (40/40 tests green in test_repository_isolation.py & test_m1_security_multi_tenancy.py)
