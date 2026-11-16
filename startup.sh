@@ -14,7 +14,18 @@ fi
 
 echo "Starting AI-Powered Software Development Platform..."
 
+# Locate alembic.ini (check backend/alembic.ini first, then ./alembic.ini)
+ALEMBIC_CONFIG="backend/alembic.ini"
+if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then
+    ALEMBIC_CONFIG="alembic.ini"
+fi
+
 ROLE="${SERVICE_ROLE:-${1:-api}}"
+
+if [ "$ROLE" = "migrate" ]; then
+    echo "Running release database migrations once per release using $ALEMBIC_CONFIG (T9.2)..."
+    exec $PY_BIN -m alembic -c "$ALEMBIC_CONFIG" upgrade head
+fi
 
 if [ "$ROLE" = "worker" ] || [ "$ROLE" = "sync_worker" ]; then
     echo "Starting standalone background sync worker process..."
@@ -26,10 +37,9 @@ if [ "$ROLE" = "webhook_worker" ]; then
     exec $PY_BIN -m app.workers.webhook_worker
 fi
 
-# Locate alembic.ini (check backend/alembic.ini first, then ./alembic.ini)
-ALEMBIC_CONFIG="backend/alembic.ini"
-if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then
-    ALEMBIC_CONFIG="alembic.ini"
+if [ "$ROLE" = "runner" ]; then
+    echo "Starting isolated sandbox runner daemon..."
+    exec $PY_BIN -m runner.main
 fi
 
 # Run alembic migrations if database is configured (Supabase / Azure Postgres / local Postgres)
@@ -51,8 +61,14 @@ KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-5}"
 PROXY_ARGS=()
 TRUST_PROXY_LOWER=$(echo "${TRUST_PROXY_HEADERS:-false}" | tr '[:upper:]' '[:lower:]')
 if [ "$TRUST_PROXY_LOWER" = "true" ] || [ "$TRUST_PROXY_LOWER" = "1" ] || [ "$TRUST_PROXY_LOWER" = "yes" ]; then
-    PROXY_ARGS=(--proxy-headers --forwarded-allow-ips="${FORWARDED_ALLOW_IPS:-*}")
-    echo "Starting Uvicorn server on port $PORT_TO_USE (trusted proxy headers enabled)..."
+    DEFAULT_IPS="*"
+    ENV_LOWER=$(echo "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')
+    if [ "$ENV_LOWER" = "production" ] || [ "$ENV_LOWER" = "prod" ]; then
+        DEFAULT_IPS="127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    fi
+    FORWARDED_IPS="${FORWARDED_ALLOW_IPS:-$DEFAULT_IPS}"
+    PROXY_ARGS=(--proxy-headers --forwarded-allow-ips="$FORWARDED_IPS")
+    echo "Starting Uvicorn server on port $PORT_TO_USE (trusted proxy headers enabled: $FORWARDED_IPS)..."
 else
     echo "Starting Uvicorn server on port $PORT_TO_USE..."
 fi

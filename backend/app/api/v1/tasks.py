@@ -15,6 +15,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
+from ai.services.task_planner import TaskPlanner
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -26,8 +27,6 @@ from app.api.v1.dependencies import (
     get_request_user_role,
     require_min_role,
 )
-from app.models.user import UserRole
-from ai.services.task_planner import TaskPlanner
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
@@ -39,8 +38,11 @@ from app.models.task import (
     TaskEventRecord,
     TaskPlanRecord,
     TaskPullRequest,
+)
+from app.models.task import (
     WorkspaceStatus as DBWorkspaceStatus,
 )
+from app.models.user import UserRole
 from app.repositories.repository_repository import RepositoryRepository
 from app.repositories.task_repository import PlanNotFoundError, TaskRepository
 from app.schemas.plan import (
@@ -1163,8 +1165,8 @@ def cancel_task(
     if meta is not None and meta.status in (WorkspaceStatus.IN_USE, WorkspaceStatus.READY):
         try:
             orchestrator.workspace_manager.stop_execution(str(task.id), reason="Task cancelled by user")
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Task stop execution notice: %s", exc)
 
     db_ws = task_repo.get_workspace_record(task.id)
     if db_ws is not None and db_ws.status in (DBWorkspaceStatus.IN_USE.value, DBWorkspaceStatus.READY.value):
@@ -1259,7 +1261,13 @@ def get_task_diff(
                 "additions": f.insertions,
                 "deletions": f.deletions,
                 "patch": redact(getattr(f, "patch", None) or getattr(f, "diff_text", "") or ""),
-                "diff_ranges": [],
+                "diff_ranges": [
+                    {
+                        "start_line": max(1, hunk.new_start),
+                        "end_line": max(1, hunk.new_start + max(0, hunk.new_lines - 1)),
+                    }
+                    for hunk in getattr(f, "hunks", [])
+                ],
             }
             for f in diff_res.files
         ]
@@ -1276,7 +1284,8 @@ def get_task_diff(
                 "raw_diff": redact(diff_res.raw_diff or ""),
             }
         )
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Error computing workspace diff: %s", exc)
         return {
             "task_id": str(task.id),
             "repository_id": str(task.repository_id),

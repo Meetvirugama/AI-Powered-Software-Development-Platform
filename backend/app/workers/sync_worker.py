@@ -26,12 +26,13 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "RepositoryBusyError",
-    "process_sync_job",
-    "sync_worker_loop",
-    "run_worker",
-    "main",
-    "generate_worker_id",
     "_worker_heartbeat_loop",
+    "_worker_retention_maintenance_loop",
+    "generate_worker_id",
+    "main",
+    "process_sync_job",
+    "run_worker",
+    "sync_worker_loop",
 ]
 
 
@@ -69,7 +70,7 @@ async def _worker_heartbeat_loop(
             )
             if hasattr(redis, "set"):
                 await redis.set(key, payload, ex=ttl)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "worker_heartbeat_error",
                 extra={"worker_id": worker_id, "error": str(exc)},
@@ -78,15 +79,55 @@ async def _worker_heartbeat_loop(
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval)
             break
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
     # Cleanup heartbeat key on clean exit
     try:
         if hasattr(redis, "delete"):
             await redis.delete(key)
-    except Exception:
-        pass
+    except (OSError, RuntimeError) as exc:
+        logger.debug("Heartbeat key deletion notice: %s", exc)
+
+
+async def _worker_retention_maintenance_loop(
+    stop_event: asyncio.Event,
+    interval_seconds: float = 3600.0,
+    retention_days: int = 30,
+) -> None:
+    """Periodic maintenance loop running retention purging on bounded schedule (OPT-21 · TST-26d)."""
+    from app.services.analysis_run_history_service import AnalysisRunHistoryService
+
+    history_service = AnalysisRunHistoryService()
+    logger.info(
+        "retention_maintenance_loop_started",
+        extra={"interval_seconds": interval_seconds, "retention_days": retention_days},
+    )
+
+    while not stop_event.is_set():
+        try:
+            # 1. Purge analysis runs older than retention_days
+            purged = await asyncio.to_thread(
+                history_service.purge_expired_runs, retention_days=retention_days
+            )
+            if purged > 0:
+                logger.info("retention_maintenance_purged_runs", extra={"purged_count": purged})
+
+            # 2. Prune stuck/uncompleted pending runs older than 24h
+            pruned = await asyncio.to_thread(
+                history_service.prune_uncompleted_stale_runs, older_than_hours=24
+            )
+            if pruned > 0:
+                logger.info(
+                    "retention_maintenance_pruned_stale_runs", extra={"pruned_count": pruned}
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("retention_maintenance_notice: %s", exc)
+
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+        except TimeoutError:
+            continue
 
 
 async def run_worker(worker_id: str | None = None) -> None:
@@ -102,7 +143,7 @@ async def run_worker(worker_id: str | None = None) -> None:
     try:
         github_service = GitHubService(redis=redis, settings=settings)
         logger.info("github_service_ready for sync worker", extra={"worker_id": worker_id})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning(
             "sync_worker_github_service_init_failed",
             extra={"worker_id": worker_id, "error": str(exc)},
@@ -132,6 +173,15 @@ async def run_worker(worker_id: str | None = None) -> None:
         )
     )
 
+    # Start periodic retention maintenance loop (OPT-21 · TST-26d)
+    retention_task = asyncio.create_task(
+        _worker_retention_maintenance_loop(
+            stop_event=stop_event,
+            interval_seconds=float(getattr(settings, "retention_purge_interval_seconds", 3600.0)),
+            retention_days=int(getattr(settings, "retention_days", 30)),
+        )
+    )
+
     worker_task = asyncio.create_task(
         sync_worker_loop(
             app_or_service=github_service,
@@ -141,7 +191,7 @@ async def run_worker(worker_id: str | None = None) -> None:
     )
 
     stop_wait_task = asyncio.create_task(stop_event.wait())
-    done, pending = await asyncio.wait(
+    _done, pending = await asyncio.wait(
         [worker_task, stop_wait_task],
         return_when=asyncio.FIRST_COMPLETED,
     )
@@ -152,7 +202,7 @@ async def run_worker(worker_id: str | None = None) -> None:
         task.cancel()
         try:
             await task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, OSError, RuntimeError):
             pass
 
     if not worker_task.done():
@@ -160,21 +210,28 @@ async def run_worker(worker_id: str | None = None) -> None:
         worker_task.cancel()
         try:
             await worker_task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, OSError, RuntimeError):
+            pass
+
+    if not retention_task.done():
+        retention_task.cancel()
+        try:
+            await retention_task
+        except (asyncio.CancelledError, OSError, RuntimeError):
             pass
 
     if not heartbeat_task.done():
         heartbeat_task.cancel()
         try:
             await heartbeat_task
-        except (asyncio.CancelledError, Exception):
+        except (asyncio.CancelledError, OSError, RuntimeError):
             pass
 
     try:
         close_redis()
         await close_redis_async()
-    except Exception:
-        pass
+    except (OSError, RuntimeError) as exc:
+        logger.debug("Redis close notice: %s", exc)
 
     logger.info("standalone_sync_worker_stopped", extra={"worker_id": worker_id})
 
@@ -184,8 +241,8 @@ def main():
         asyncio.run(run_worker())
     except KeyboardInterrupt:
         pass
-    except Exception as exc:
-        logger.exception("sync_worker_fatal_error: %s", exc)
+    except Exception:
+        logger.exception("sync_worker_fatal_error")
         sys.exit(1)
 
 

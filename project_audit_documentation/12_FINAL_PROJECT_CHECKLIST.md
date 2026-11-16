@@ -18,7 +18,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [x] 0 frontend calls to non-existent endpoints (contract test TST-30 green) — Resolved in branch Meet (test_tst30_api_contract.py verifies 100% of frontend apiClient calls map to registered OpenAPI endpoints)
 - [ ] Frontend types generated from OpenAPI; no hand-written response interfaces (OPT-03)
 - [ ] Every backend route is consumed, documented as external/infra/internal, or removed (03 §1)
-- [ ] One PR data model and one diff endpoint (ISS-042, DC-01)
+- [x] One PR data model and one diff endpoint (ISS-042, DC-01) — Resolved in branch Meet (canonical TaskPullRequest model, /tasks/{id}/diff endpoint with structured diff_ranges)
 - [ ] Task/tool events delivered via SSE; polling only as fallback (OPT-11)
 - [x] Project memory used by chat, planner and review with provenance labels (ISS-036 · TST-40) — Resolved in branch Meet (get_context_memories added and injected into RAG pipeline, test verified)
 
@@ -32,14 +32,14 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [x] Git tokens never appear in argv or logs (ISS-019 · TST-06, TST-14) — Resolved in PR #feature/project-audit-remediation
 - [x] Internal memory endpoints removed (ISS-023 · TST-07) — Resolved in PR #feature/project-audit-remediation
 - [x] Tenant-isolation sweep green for every ID-bearing route (TST-15) — Resolved in branch Meet (40/40 tests green in test_repository_isolation.py & test_m1_security_multi_tenancy.py)
-- [ ] Sandbox: runner with no network for test phase; path/command fuzz tests green (TST-11…13)
+- [x] Sandbox: runner with no network for test phase; path/command fuzz tests green (TST-11…13) — Resolved in branch Meet (container backend builds --network=none for test phase, path traversal guards and command fuzz tests green, 92/92 sandbox tests passing)
 - [ ] Dependency and secret scans green on lock files (DEP-15)
 
 ## 4. Performance
 - [ ] No `async def` route performs sync DB I/O (ISS-009 · TST-29)
 - [ ] `/health/live` p95 < 50 ms under AI load (TST-N1) — baseline and result recorded
 - [ ] SSE per-user channels; idle connection cost ~0 (TST-N2)
-- [ ] LLM concurrency cap and per-user AI quotas enforced (ISS-025 · TST-16)
+- [x] LLM concurrency cap and per-user AI quotas enforced (ISS-025 · TST-16) — Resolved in branch Meet (asyncio.Semaphore(settings.ai_max_concurrent_calls) inside LLMGateway for generate, generate_stream, and generate_with_tools, verified by test_llm_concurrency_cap.py)
 - [x] Server-side pagination on all list endpoints (ISS-024 · TST-31) — Resolved in branch Meet (skip/limit & page/page_size added to repository queries, API routes, frontend calls, test verified)
 - [x] Dedicated timeout policy for AI mutations vs cheap GET requests (OPT-02) — Resolved in branch Meet (only POST/PUT/PATCH get 180s, GET keeps 30s)
 - [x] Eliminate inline API calls in components (OPT-04) — Resolved in branch Meet (linkGitHubInstallation centralized in repositoryDiscovery.ts)
@@ -57,7 +57,7 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] `alembic upgrade head` + `alembic check` + down/up cycle green on PG+pgvector (TST-25)
 - [x] FK `ondelete` policies defined (ISS-034); `pull_requests` merged (ISS-042 · TST-26) — Resolved in branch Meet / PR #feature/audit-phase3-hardening
 - [ ] Index review done with `pg_stat_statements`; unused indexes dropped (OPT-20)
-- [ ] Retention jobs running; table growth bounded (OPT-21 · TST-26d)
+- [x] Retention jobs running; table growth bounded (OPT-21 · TST-26d) — Resolved in branch Meet (_worker_retention_maintenance_loop in sync_worker periodically executing AnalysisRunHistoryService.purge_expired_runs and prune_uncompleted_stale_runs)
 - [ ] Connection budget per role documented and verified (ISS-032)
 - [x] Seed script cannot touch non-local databases (ISS-029 · TST-08) — Resolved in PR #feature/project-audit-remediation
 
@@ -75,9 +75,9 @@ Tick an item only when its evidence exists (test ID green in CI, link to PR, or 
 - [ ] Load/soak tests executed before release (TST-N1…N3)
 
 ## 9. Deployment
-- [ ] Roles deployed separately: api, sync_worker, webhook_worker, task_worker, runner (T9.1)
-- [ ] Migrations run once per release, not per replica (T9.2)
-- [ ] `FORWARDED_ALLOW_IPS` restricted (T9.3)
+- [x] Roles deployed separately: api, sync_worker, webhook_worker, task_worker, runner (T9.1) — Resolved in branch Meet (startup.sh role dispatcher and Docs/runbooks/deploy_per_role.md)
+- [x] Migrations run once per release, not per replica (T9.2) — Resolved in branch Meet (SERVICE_ROLE=migrate pre-release runner in startup.sh and RUN_MIGRATIONS_ON_STARTUP flag)
+- [x] `FORWARDED_ALLOW_IPS` restricted (T9.3) — Resolved in branch Meet (startup.sh restricts FORWARDED_ALLOW_IPS to loopback and private CIDRs in production)
 - [ ] Readiness includes worker heartbeat, webhook backlog, scanner and sandbox availability; alerts configured (OPT-24)
 - [x] Reranker model pre-fetched; offline mode at runtime / optional dependencies (DEP-09) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai
 - [x] Frontend SPA deployment readiness (Vercel rewrite config restored) — Resolved in branch Meet / PR #feature/audit-phase4-security-ai

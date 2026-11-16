@@ -14,13 +14,13 @@ Architecture & System Contracts (team_rules.md):
   * Resource safety on aclose() (both providers cleaned up reliably).
 """
 
-from collections.abc import AsyncIterator
-from typing import Any
 import asyncio
 import logging
 import time
 import uuid
-from typing import Self
+from collections.abc import AsyncIterator
+from datetime import UTC
+from typing import Any, Self
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
@@ -90,6 +90,7 @@ class LLMGateway:
         fallback_on_auth_error: bool = False,
         model_map: dict[tuple[str, str], str] | None = None,
         vcr_cassette: Any | None = None,
+        max_concurrent_calls: int | None = None,
     ) -> None:
         effective_provider = provider or primary
         if effective_provider is None:
@@ -99,10 +100,26 @@ class LLMGateway:
         self._fallback_on_auth_error = fallback_on_auth_error
         self._model_map = model_map or {}
         self._vcr_cassette = vcr_cassette
+        self._max_concurrent_calls = max_concurrent_calls
+        self._semaphore: asyncio.Semaphore | None = None
 
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def semaphore(self) -> asyncio.Semaphore:
+        """Concurrency semaphore bounding simultaneous provider calls across this gateway instance (ISS-025)."""
+        if self._semaphore is None:
+            limit = self._max_concurrent_calls
+            if limit is None:
+                try:
+                    from app.core.config import get_settings
+                    limit = get_settings().ai_max_concurrent_calls
+                except Exception:  # noqa: BLE001
+                    limit = 10
+            self._semaphore = asyncio.Semaphore(max(1, limit))
+        return self._semaphore
 
     @property
     def provider(self) -> LLMProvider:
@@ -179,7 +196,7 @@ class LLMGateway:
                     provider=self._provider.provider_name,
                     model=request.model,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 estimated_tokens = None
 
         tracer = trace.get_tracer("ai.llm")
@@ -197,81 +214,82 @@ class LLMGateway:
             },
         ) as span:
             try:
-                try:
-                    if self._vcr_cassette is not None:
-                        msg_dicts = [m.to_dict() if hasattr(m, "to_dict") else dict(m) for m in request.messages]
-                        schema_dict = (
-                            request.response_schema.model_json_schema()
-                            if getattr(request, "response_schema", None) is not None
-                            and hasattr(request.response_schema, "model_json_schema")
-                            else None
-                        )
-                        async def _live_gen() -> dict[str, Any]:
-                            live_resp = await self._provider.generate(request)
-                            return live_resp.model_dump() if hasattr(live_resp, "model_dump") else live_resp.dict()
-
-                        recorded_dict = await self._vcr_cassette.execute_or_replay(
-                            provider=self._provider.provider_name,
-                            model=request.model,
-                            messages=msg_dicts,
-                            temperature=request.temperature,
-                            response_schema=schema_dict,
-                            live_callable=_live_gen,
-                        )
-                        response = LLMResponse(
-                            content=str(recorded_dict.get("content", "")),
-                            model=str(recorded_dict.get("model", request.model)),
-                            input_tokens=int(recorded_dict.get("input_tokens", 0)),
-                            output_tokens=int(recorded_dict.get("output_tokens", 0)),
-                            latency_ms=float(recorded_dict.get("latency_ms", 0.5)),
-                            finish_reason=recorded_dict.get("finish_reason", "stop"),
-                            provider=str(recorded_dict.get("provider", self._provider.provider_name)),
-                        )
-                    else:
-                        response = await self._provider.generate(request)
-                except (
-                    LLMUnavailableError,
-                    LLMTimeoutError,
-                    LLMRateLimitError,
-                    LLMAuthenticationError,
-                ) as exc:
-                    # Do not fallback on auth errors by default (P0.1)
-                    if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
-                        raise
-
-                    if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
-                        fallback_occurred = True
-                        span.set_attribute("gen_ai.fallback.attempted", True)
-                        span.set_attribute("gen_ai.fallback.initial_provider", initial_provider_name)
-                        span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
-                        span.set_attribute("gen_ai.fallback.reason", type(exc).__name__)
-                        logger.warning(
-                            "llm_gateway_primary_failed_trying_fallback",
-                            extra={
-                                "request_id": request_id,
-                                "primary": self._provider.provider_name,
-                                "fallback": self._fallback_provider.provider_name,
-                                "error_type": type(exc).__name__,
-                            },
-                        )
-                        effective_provider = self._fallback_provider
-                        fallback_request = self._build_fallback_request(request)
-                        effective_model = fallback_request.model
-                        # Recompute estimated_tokens for the effective fallback provider and model;
-                        # do not reuse the primary-provider estimate or request.estimated_tokens
-                        try:
-                            from ai.context.token_budget import estimate_messages_tokens
-                            estimated_tokens = await asyncio.to_thread(
-                                estimate_messages_tokens,
-                                fallback_request.messages,
-                                provider=self._fallback_provider.provider_name,
-                                model=fallback_request.model,
+                async with self.semaphore:
+                    try:
+                        if self._vcr_cassette is not None:
+                            msg_dicts = [m.to_dict() if hasattr(m, "to_dict") else dict(m) for m in request.messages]
+                            schema_dict = (
+                                request.response_schema.model_json_schema()
+                                if getattr(request, "response_schema", None) is not None
+                                and hasattr(request.response_schema, "model_json_schema")
+                                else None
                             )
-                        except Exception:
-                            estimated_tokens = None
-                        response = await self._fallback_provider.generate(fallback_request)
-                    else:
-                        raise
+                            async def _live_gen() -> dict[str, Any]:
+                                live_resp = await self._provider.generate(request)
+                                return live_resp.model_dump() if hasattr(live_resp, "model_dump") else live_resp.dict()
+
+                            recorded_dict = await self._vcr_cassette.execute_or_replay(
+                                provider=self._provider.provider_name,
+                                model=request.model,
+                                messages=msg_dicts,
+                                temperature=request.temperature,
+                                response_schema=schema_dict,
+                                live_callable=_live_gen,
+                            )
+                            response = LLMResponse(
+                                content=str(recorded_dict.get("content", "")),
+                                model=str(recorded_dict.get("model", request.model)),
+                                input_tokens=int(recorded_dict.get("input_tokens", 0)),
+                                output_tokens=int(recorded_dict.get("output_tokens", 0)),
+                                latency_ms=float(recorded_dict.get("latency_ms", 0.5)),
+                                finish_reason=recorded_dict.get("finish_reason", "stop"),
+                                provider=str(recorded_dict.get("provider", self._provider.provider_name)),
+                            )
+                        else:
+                            response = await self._provider.generate(request)
+                    except (
+                        LLMUnavailableError,
+                        LLMTimeoutError,
+                        LLMRateLimitError,
+                        LLMAuthenticationError,
+                    ) as exc:
+                        # Do not fallback on auth errors by default (P0.1)
+                        if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
+                            raise
+
+                        if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
+                            fallback_occurred = True
+                            span.set_attribute("gen_ai.fallback.attempted", True)
+                            span.set_attribute("gen_ai.fallback.initial_provider", initial_provider_name)
+                            span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
+                            span.set_attribute("gen_ai.fallback.reason", type(exc).__name__)
+                            logger.warning(
+                                "llm_gateway_primary_failed_trying_fallback",
+                                extra={
+                                    "request_id": request_id,
+                                    "primary": self._provider.provider_name,
+                                    "fallback": self._fallback_provider.provider_name,
+                                    "error_type": type(exc).__name__,
+                                },
+                            )
+                            effective_provider = self._fallback_provider
+                            fallback_request = self._build_fallback_request(request)
+                            effective_model = fallback_request.model
+                            # Recompute estimated_tokens for the effective fallback provider and model;
+                            # do not reuse the primary-provider estimate or request.estimated_tokens
+                            try:
+                                from ai.context.token_budget import estimate_messages_tokens
+                                estimated_tokens = await asyncio.to_thread(
+                                    estimate_messages_tokens,
+                                    fallback_request.messages,
+                                    provider=self._fallback_provider.provider_name,
+                                    model=fallback_request.model,
+                                )
+                            except Exception:  # noqa: BLE001
+                                estimated_tokens = None
+                            response = await self._fallback_provider.generate(fallback_request)
+                        else:
+                            raise
 
                 if not isinstance(response, LLMResponse):
                     raise TypeError(
@@ -317,8 +335,8 @@ class LLMGateway:
                         fallback_occurred=fallback_occurred,
                         initial_provider=initial_provider_name if fallback_occurred else None,
                     )
-                except Exception:
-                    pass
+                except Exception as metrics_exc:  # noqa: BLE001
+                    logger.debug("Observability metrics record error: %s", metrics_exc)
 
                 # Record Langfuse Generation
                 try:
@@ -345,16 +363,17 @@ class LLMGateway:
                             completion=response.content if response else None,
                             error=error_type,
                         )
-                except Exception:
-                    pass
+                except Exception as lf_exc:  # noqa: BLE001
+                    logger.debug("Langfuse generation record error: %s", lf_exc)
 
-                from datetime import datetime, timezone
+                from datetime import datetime
+
                 from ai.context.token_budget import (
                     calculate_calibration_ratio,
                     get_calibration_tracker,
                 )
 
-                iso_ts = datetime.now(timezone.utc).isoformat()
+                iso_ts = datetime.now(UTC).isoformat()
                 actual_input_tokens = response.input_tokens if response else None
                 ratio = calculate_calibration_ratio(estimated_tokens, actual_input_tokens)
                 feature_cat = getattr(request, "feature", None)
@@ -369,7 +388,7 @@ class LLMGateway:
                         feature=feature_cat,
                         timestamp=iso_ts,
                     )
-                except Exception as calib_exc:
+                except Exception as calib_exc:  # noqa: BLE001
                     logger.warning("token_calibration_recording_failed", extra={"error": str(calib_exc)})
 
                 logger.info(
@@ -422,32 +441,33 @@ class LLMGateway:
                 "request_id": request_id,
             },
         ) as span:
-            try:
-                async for chunk in self._provider.generate_stream(req_with_id):
-                    yield chunk
-                span.set_status(Status(StatusCode.OK))
-            except Exception as exc:
-                if not self._should_attempt_fallback(exc) or not self._fallback_provider:
-                    span.record_exception(exc)
-                    span.set_status(Status(StatusCode.ERROR, description=str(exc)))
-                    raise
-                fallback_request = self._build_fallback_request(req_with_id)
-                span.set_attribute("gen_ai.fallback.attempted", True)
-                span.set_attribute("gen_ai.fallback.initial_provider", self._provider.provider_name)
-                span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
-                span.set_attribute("gen_ai.fallback.reason", str(exc))
-                logger.warning(
-                    "llm_stream_primary_failed_attempting_fallback",
-                    extra={
-                        "error": str(exc),
-                        "fallback_provider": self._fallback_provider.provider_name,
-                        "fallback_model": fallback_request.model,
-                        "request_id": request_id,
-                    },
-                )
-                async for chunk in self._fallback_provider.generate_stream(fallback_request):
-                    yield chunk
-                span.set_status(Status(StatusCode.OK))
+            async with self.semaphore:
+                try:
+                    async for chunk in self._provider.generate_stream(req_with_id):
+                        yield chunk
+                    span.set_status(Status(StatusCode.OK))
+                except Exception as exc:
+                    if not self._should_attempt_fallback(exc) or not self._fallback_provider:
+                        span.record_exception(exc)
+                        span.set_status(Status(StatusCode.ERROR, description=str(exc)))
+                        raise
+                    fallback_request = self._build_fallback_request(req_with_id)
+                    span.set_attribute("gen_ai.fallback.attempted", True)
+                    span.set_attribute("gen_ai.fallback.initial_provider", self._provider.provider_name)
+                    span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
+                    span.set_attribute("gen_ai.fallback.reason", str(exc))
+                    logger.warning(
+                        "llm_stream_primary_failed_attempting_fallback",
+                        extra={
+                            "error": str(exc),
+                            "fallback_provider": self._fallback_provider.provider_name,
+                            "fallback_model": fallback_request.model,
+                            "request_id": request_id,
+                        },
+                    )
+                    async for chunk in self._fallback_provider.generate_stream(fallback_request):
+                        yield chunk
+                    span.set_status(Status(StatusCode.OK))
 
     def _should_attempt_fallback(self, exc: Exception) -> bool:
         """Determine whether an exception qualifies for fallback execution."""
@@ -493,7 +513,7 @@ class LLMGateway:
                     provider=self._provider.provider_name,
                     model=request.model,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 estimated_tokens = None
 
         tracer = trace.get_tracer("ai.llm")
@@ -511,48 +531,49 @@ class LLMGateway:
             },
         ) as span:
             try:
-                try:
-                    response = await self._provider.generate_with_tools(request)
-                except (
-                    LLMUnavailableError,
-                    LLMTimeoutError,
-                    LLMRateLimitError,
-                    LLMAuthenticationError,
-                ) as exc:
-                    if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
-                        raise
+                async with self.semaphore:
+                    try:
+                        response = await self._provider.generate_with_tools(request)
+                    except (
+                        LLMUnavailableError,
+                        LLMTimeoutError,
+                        LLMRateLimitError,
+                        LLMAuthenticationError,
+                    ) as exc:
+                        if isinstance(exc, LLMAuthenticationError) and not self._fallback_on_auth_error:
+                            raise
 
-                    if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
-                        fallback_occurred = True
-                        span.set_attribute("gen_ai.fallback.attempted", True)
-                        span.set_attribute("gen_ai.fallback.initial_provider", initial_provider_name)
-                        span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
-                        span.set_attribute("gen_ai.fallback.reason", type(exc).__name__)
-                        logger.warning(
-                            "llm_gateway_primary_tool_failed_trying_fallback",
-                            extra={
-                                "request_id": request_id,
-                                "primary": self._provider.provider_name,
-                                "fallback": self._fallback_provider.provider_name,
-                                "error_type": type(exc).__name__,
-                            },
-                        )
-                        effective_provider = self._fallback_provider
-                        fallback_request = self._build_fallback_tool_request(request)
-                        effective_model = fallback_request.model
-                        try:
-                            from ai.context.token_budget import estimate_messages_tokens
-                            estimated_tokens = await asyncio.to_thread(
-                                estimate_messages_tokens,
-                                fallback_request.messages,
-                                provider=self._fallback_provider.provider_name,
-                                model=fallback_request.model,
+                        if getattr(request, "allow_fallback", True) and self._fallback_provider is not None:
+                            fallback_occurred = True
+                            span.set_attribute("gen_ai.fallback.attempted", True)
+                            span.set_attribute("gen_ai.fallback.initial_provider", initial_provider_name)
+                            span.set_attribute("gen_ai.fallback.target_provider", self._fallback_provider.provider_name)
+                            span.set_attribute("gen_ai.fallback.reason", type(exc).__name__)
+                            logger.warning(
+                                "llm_gateway_primary_tool_failed_trying_fallback",
+                                extra={
+                                    "request_id": request_id,
+                                    "primary": self._provider.provider_name,
+                                    "fallback": self._fallback_provider.provider_name,
+                                    "error_type": type(exc).__name__,
+                                },
                             )
-                        except Exception:
-                            estimated_tokens = None
-                        response = await self._fallback_provider.generate_with_tools(fallback_request)
-                    else:
-                        raise
+                            effective_provider = self._fallback_provider
+                            fallback_request = self._build_fallback_tool_request(request)
+                            effective_model = fallback_request.model
+                            try:
+                                from ai.context.token_budget import estimate_messages_tokens
+                                estimated_tokens = await asyncio.to_thread(
+                                    estimate_messages_tokens,
+                                    fallback_request.messages,
+                                    provider=self._fallback_provider.provider_name,
+                                    model=fallback_request.model,
+                                )
+                            except Exception:  # noqa: BLE001
+                                estimated_tokens = None
+                            response = await self._fallback_provider.generate_with_tools(fallback_request)
+                        else:
+                            raise
 
                 if not isinstance(response, LLMToolResponse):
                     raise TypeError(
@@ -596,8 +617,8 @@ class LLMGateway:
                         fallback_occurred=fallback_occurred,
                         initial_provider=initial_provider_name if fallback_occurred else None,
                     )
-                except Exception:
-                    pass
+                except Exception as metrics_exc:  # noqa: BLE001
+                    logger.debug("Observability metrics tool record error: %s", metrics_exc)
 
                 try:
                     from app.observability.langfuse_adapter import get_langfuse_adapter
@@ -623,16 +644,17 @@ class LLMGateway:
                             completion=response.content if response else None,
                             error=error_type,
                         )
-                except Exception:
-                    pass
+                except Exception as lf_exc:  # noqa: BLE001
+                    logger.debug("Langfuse tool generation record error: %s", lf_exc)
 
-                from datetime import datetime, timezone
+                from datetime import datetime
+
                 from ai.context.token_budget import (
                     calculate_calibration_ratio,
                     get_calibration_tracker,
                 )
 
-                iso_ts = datetime.now(timezone.utc).isoformat()
+                iso_ts = datetime.now(UTC).isoformat()
                 actual_input_tokens = response.input_tokens if response else None
                 ratio = calculate_calibration_ratio(estimated_tokens, actual_input_tokens)
                 feature_cat = getattr(request, "feature", None)
@@ -647,7 +669,7 @@ class LLMGateway:
                         feature=feature_cat,
                         timestamp=iso_ts,
                     )
-                except Exception as calib_exc:
+                except Exception as calib_exc:  # noqa: BLE001
                     logger.warning("token_calibration_recording_failed", extra={"error": str(calib_exc)})
 
                 logger.info(

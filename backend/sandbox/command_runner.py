@@ -77,7 +77,7 @@ def kill_process_tree(pid: int, sig: int = getattr(signal, "SIGKILL", getattr(si
                 check=False,
                 timeout=5,
             )
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             pass
         return
 
@@ -127,12 +127,12 @@ def _drain_and_capture_stream(
                     truncated = True
             else:
                 truncated = True
-    except Exception:
+    except (OSError, ValueError):
         pass
     finally:
         try:
             pipe.close()
-        except Exception:
+        except (OSError, ValueError):
             pass
     result_holder["data"] = bytes(buffer)
     result_holder["truncated"] = truncated
@@ -317,8 +317,8 @@ class WorkspaceCommandRunner:
                 # Remote runner client: ensure workspace is initialized on runner
                 try:
                     backend.create_workspace(task_id)
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001  # noqa: BLE001
+                    logger.debug("Runner create_workspace notice: %s", exc)
             return backend.execute(
                 task_id=task_id,
                 command=command,
@@ -393,7 +393,7 @@ class WorkspaceCommandRunner:
                         proc.kill()
                 try:
                     proc.wait(timeout=1.0)
-                except Exception:
+                except (subprocess.TimeoutExpired, OSError):
                     pass
                 raise
             finally:
@@ -450,7 +450,7 @@ class WorkspaceCommandRunner:
                 error=f"Timeout expired: exceeded {timeout}s budget.",
             )
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             if "proc" in locals() and proc is not None:
                 pid = getattr(proc, "pid", None)
                 if pid:

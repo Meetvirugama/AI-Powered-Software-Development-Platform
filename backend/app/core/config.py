@@ -255,6 +255,8 @@ class Settings(BaseSettings):
     sync_worker_max_retries: int = 3
     sync_worker_retry_base_delay_seconds: float = 2.0
     sync_worker_repo_lock_ttl_seconds: int = 120
+    retention_purge_interval_seconds: float = 3600.0
+    retention_days: int = 30
     embedding_max_requests_per_minute: int = 120
     embedding_max_concurrency: int = 5
 
