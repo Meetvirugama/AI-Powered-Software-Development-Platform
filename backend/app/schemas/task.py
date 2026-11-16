@@ -768,6 +768,8 @@ class TaskPullRequestResponse(BaseModel):
     title: str
     body: Optional[str] = None
     created_at: Optional[str] = None
+    success: bool = True
+    summary: Optional[str] = None
 
 
 class WorkspaceResponse(BaseModel):

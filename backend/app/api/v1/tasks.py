@@ -217,6 +217,7 @@ class TaskDraftPRCreateRequest(BaseModel):
     head_branch: str | None = Field(default=None, max_length=256, description="Source feature branch (defaults to agent/task-<id>).")
     current_remote_head_sha: str | None = Field(default=None, max_length=128)
     authorization_notes: str | None = Field(default=None, max_length=2000)
+    target_repository: str | None = Field(default=None, max_length=256)
 
     @property
     def is_authorized(self) -> bool:
@@ -439,6 +440,8 @@ def _serialize_pull_request_record(pr: TaskPullRequest) -> TaskPullRequestRespon
         "title": redact(pr.title),
         "body": redact(pr.body or "") if pr.body else None,
         "created_at": pr.created_at.isoformat() if pr.created_at else "",
+        "success": True,
+        "summary": redact(pr.body or "") if pr.body else "",
     }
     return TaskPullRequestResponse.model_validate(payload)
 
