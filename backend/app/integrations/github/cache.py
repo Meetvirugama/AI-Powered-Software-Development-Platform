@@ -18,8 +18,10 @@ Key mechanisms:
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
+import threading
 import time
 from typing import Any, Optional
 from uuid import UUID
@@ -32,6 +34,12 @@ class SourceRevisionCache:
 
     Ensures that content from commit A is never returned when commit B is
     requested, even if the file path is identical.
+
+    Thread-safety: all in-memory mutations are guarded by an RLock so the cache
+    can be safely accessed from multiple threads (e.g. via asyncio.to_thread).
+
+    Eviction policy: true LRU via OrderedDict.move_to_end() on every cache hit,
+    with proactive TTL expiration during eviction cycles.
     """
 
     def __init__(
@@ -40,11 +48,14 @@ class SourceRevisionCache:
         default_ttl_seconds: int = 3600,
         max_memory_entries: int = 1000,
     ) -> None:
-        self._memory_cache: dict[str, dict[str, Any]] = {}
+        # OrderedDict gives us O(1) move_to_end for LRU and O(1) popitem for eviction
+        self._memory_cache: collections.OrderedDict[str, dict[str, Any]] = collections.OrderedDict()
         self._memory_expires: dict[str, float] = {}
         self._redis = redis_client
         self._default_ttl = default_ttl_seconds
         self._max_memory_entries = max_memory_entries
+        # Reentrant lock: safe for nested calls (e.g. get() calling invalidate())
+        self._lock = threading.RLock()
 
     @staticmethod
     def build_key(repository_id: UUID | str, revision: str, path: str) -> str:
@@ -56,6 +67,41 @@ class SourceRevisionCache:
         clean_rev = revision.strip()
         clean_path = path.strip().lstrip("/")
         return f"gh_src:{clean_repo}:{clean_rev}:{clean_path}"
+
+    def _purge_expired(self) -> None:
+        """Proactively remove all expired entries from the in-memory cache.
+
+        Called during eviction cycles so that stale entries free up capacity
+        before evicting a live LRU entry. Caller must hold self._lock.
+        """
+        now = time.monotonic()
+        # Collect expired keys in one pass, then remove them
+        expired_keys = [k for k, exp in self._memory_expires.items() if now > exp]
+        for k in expired_keys:
+            self._memory_cache.pop(k, None)
+            self._memory_expires.pop(k, None)
+
+    def _evict_if_needed(self, incoming_key: str) -> None:
+        """Make room for a new entry if the cache is at capacity.
+
+        Strategy:
+        1. If the key already exists, no eviction needed (it will be overwritten).
+        2. Purge all TTL-expired entries first — they waste capacity.
+        3. If still at capacity, pop the least-recently-used entry (front of OrderedDict).
+
+        Caller must hold self._lock.
+        """
+        if incoming_key in self._memory_cache:
+            return  # overwrite path — no eviction needed
+
+        if len(self._memory_cache) >= self._max_memory_entries:
+            # Step 1: sweep expired entries to free capacity without sacrificing live data
+            self._purge_expired()
+
+        if len(self._memory_cache) >= self._max_memory_entries:
+            # Step 2: still full — evict the true LRU entry (front of OrderedDict)
+            oldest_key, _ = self._memory_cache.popitem(last=False)
+            self._memory_expires.pop(oldest_key, None)
 
     def get(
         self,
@@ -86,13 +132,18 @@ class SourceRevisionCache:
 
         # 1. Try Memory Cache with TTL validation
         now = time.monotonic()
-        exp = self._memory_expires.get(key)
-        if exp is not None and now > exp:
-            self._memory_cache.pop(key, None)
-            self._memory_expires.pop(key, None)
-            entry = None
-        else:
-            entry = self._memory_cache.get(key)
+        with self._lock:
+            exp = self._memory_expires.get(key)
+            if exp is not None and now > exp:
+                # Entry has expired — remove it immediately
+                self._memory_cache.pop(key, None)
+                self._memory_expires.pop(key, None)
+                entry = None
+            else:
+                entry = self._memory_cache.get(key)
+                if entry is not None:
+                    # LRU promotion: move this key to the end (most recently used)
+                    self._memory_cache.move_to_end(key)
 
         # 2. Try Redis if not found in memory
         if entry is None and self._redis is not None:
@@ -107,17 +158,17 @@ class SourceRevisionCache:
                         raw = zlib.decompress(base64.b64decode(raw[5:])).decode("utf-8")
                     entry = json.loads(raw)
                     # Populate memory cache with TTL
-                    if len(self._memory_cache) >= self._max_memory_entries and key not in self._memory_cache:
-                        oldest = next(iter(self._memory_cache))
-                        self._memory_cache.pop(oldest, None)
-                        self._memory_expires.pop(oldest, None)
-                    self._memory_cache[key] = entry
                     clean_rev = revision.strip()
                     if len(clean_rev) == 40 and all(c in "0123456789abcdefABCDEF" for c in clean_rev):
                         mem_ttl = 7 * 86400
                     else:
                         mem_ttl = 300
-                    self._memory_expires[key] = now + mem_ttl
+                    with self._lock:
+                        self._evict_if_needed(key)
+                        self._memory_cache[key] = entry
+                        # Move to end (most recently used) after insert
+                        self._memory_cache.move_to_end(key)
+                        self._memory_expires[key] = now + mem_ttl
             except Exception as exc:
                 logger.warning("Redis cache read failed for key %s: %s", key, exc)
 
@@ -183,14 +234,13 @@ class SourceRevisionCache:
             entry["commit_sha"] = commit_sha
         entry["cached_at_revision"] = revision
 
-        # 1. Store in memory with capacity bounds
-        if len(self._memory_cache) >= self._max_memory_entries and key not in self._memory_cache:
-            oldest = next(iter(self._memory_cache))
-            self._memory_cache.pop(oldest, None)
-            self._memory_expires.pop(oldest, None)
-
-        self._memory_cache[key] = entry
-        self._memory_expires[key] = now + ttl
+        # 1. Store in memory with capacity bounds and LRU ordering
+        with self._lock:
+            self._evict_if_needed(key)
+            self._memory_cache[key] = entry
+            # Place at end (most recently used)
+            self._memory_cache.move_to_end(key)
+            self._memory_expires[key] = now + ttl
 
         # 2. Store in Redis
         if self._redis is not None:
@@ -214,12 +264,11 @@ class SourceRevisionCache:
             immutable_entry = dict(entry)
             immutable_entry["revision"] = commit_sha
             immutable_ttl = 7 * 86400
-            if len(self._memory_cache) >= self._max_memory_entries and immutable_key not in self._memory_cache:
-                oldest = next(iter(self._memory_cache))
-                self._memory_cache.pop(oldest, None)
-                self._memory_expires.pop(oldest, None)
-            self._memory_cache[immutable_key] = immutable_entry
-            self._memory_expires[immutable_key] = now + immutable_ttl
+            with self._lock:
+                self._evict_if_needed(immutable_key)
+                self._memory_cache[immutable_key] = immutable_entry
+                self._memory_cache.move_to_end(immutable_key)
+                self._memory_expires[immutable_key] = now + immutable_ttl
             if self._redis is not None:
                 try:
                     ser = json.dumps(immutable_entry)
@@ -242,8 +291,9 @@ class SourceRevisionCache:
     ) -> None:
         """Invalidate a specific cached file at a specific revision."""
         key = self.build_key(repository_id, revision, path)
-        self._memory_cache.pop(key, None)
-        self._memory_expires.pop(key, None)
+        with self._lock:
+            self._memory_cache.pop(key, None)
+            self._memory_expires.pop(key, None)
         if self._redis is not None:
             try:
                 self._redis.delete(key)
@@ -253,9 +303,11 @@ class SourceRevisionCache:
     def invalidate_revision(self, repository_id: UUID | str, revision: str) -> int:
         """Invalidate all cached files for a repository at a given revision."""
         prefix = f"gh_src:{str(repository_id).strip()}:{revision.strip()}:"
-        matching_keys = [k for k in self._memory_cache if k.startswith(prefix)]
-        for k in matching_keys:
-            self._memory_cache.pop(k, None)
+        with self._lock:
+            matching_keys = [k for k in self._memory_cache if k.startswith(prefix)]
+            for k in matching_keys:
+                self._memory_cache.pop(k, None)
+                self._memory_expires.pop(k, None)
 
         if self._redis is not None:
             try:
@@ -274,9 +326,11 @@ class SourceRevisionCache:
     def invalidate_repository(self, repository_id: UUID | str) -> int:
         """Invalidate all cached revisions for a repository."""
         prefix = f"gh_src:{str(repository_id).strip()}:"
-        matching_keys = [k for k in self._memory_cache if k.startswith(prefix)]
-        for k in matching_keys:
-            self._memory_cache.pop(k, None)
+        with self._lock:
+            matching_keys = [k for k in self._memory_cache if k.startswith(prefix)]
+            for k in matching_keys:
+                self._memory_cache.pop(k, None)
+                self._memory_expires.pop(k, None)
 
         if self._redis is not None:
             try:
@@ -294,4 +348,6 @@ class SourceRevisionCache:
 
     def clear(self) -> None:
         """Clear the in-memory cache entirely."""
-        self._memory_cache.clear()
+        with self._lock:
+            self._memory_cache.clear()
+            self._memory_expires.clear()
