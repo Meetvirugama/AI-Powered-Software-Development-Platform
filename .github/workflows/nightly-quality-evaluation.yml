@@ -71,7 +71,7 @@ jobs:
             --fixtures-only \
             --fail-on-threshold \
             --output-json reports/quality-metrics.json \
-            --output-md Docs/quality_benchmark_report.md
+            --output-md reports/quality_benchmark_report.md
 
       - name: Run Gate Evaluator Unit Tests
         run: |
@@ -83,5 +83,5 @@ jobs:
         with:
           name: quality-evaluation-report
           path: |
-            Docs/quality_benchmark_report.md
+            reports/quality_benchmark_report.md
             reports/quality-metrics.json

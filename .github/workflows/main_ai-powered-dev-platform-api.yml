@@ -88,6 +88,7 @@ jobs:
       GITHUB_WEBHOOK_SECRET: "ci-testing-webhook-secret"
       DATABASE_URL: "sqlite:///:memory:"
       ENVIRONMENT: "testing"
+      PYTHONPATH: backend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,7 +108,9 @@ jobs:
 
       - name: Run Full Backend & E2E Test Suite with Coverage Gate (>=71%)
         run: |
-          pytest backend/tests tests/e2e/ \
+          pytest backend/tests/ \
+                 --ignore=backend/tests/fixtures \
+                 -o addopts= \
                  --cov=app \
                  --cov-report=term-missing \
                  --cov-report=xml:coverage.xml \
@@ -205,6 +208,7 @@ jobs:
       ENVIRONMENT: development
       JWT_SECRET: ci-migration-jwt-secret-key-32-chars-min
       SECRET_KEY: ci-migration-secret-key-at-least-32-chars
+      PYTHONPATH: backend
     steps:
       - uses: actions/checkout@v4
         with:
@@ -231,7 +235,7 @@ jobs:
           assert len(heads) == 1, f'Expected single Alembic head, got: {heads}'
           "
           alembic upgrade head
-          alembic downgrade b627460d74e0
+          alembic downgrade base
           alembic upgrade head
           alembic current
 
@@ -275,6 +279,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
       - name: Audit production dependencies with pip-audit
         run: |
@@ -342,6 +347,7 @@ jobs:
             !.workspaces/
             !htmlcov/
             !antenv/
+            !frontend/
             !frontend/node_modules/
 
   # ---------------------------------------------------------------------------

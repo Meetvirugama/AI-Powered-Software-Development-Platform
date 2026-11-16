@@ -32,8 +32,19 @@ node_modules/
 # Tests, fixtures & documentation (excluded from production container)
 backend/tests/
 tests/
-Docs/
 *.md
+azure-deployment-checklist.md
+PR_DESCRIPTION.md
 Dockerfile
 docker-compose.yml
 Makefile
+
+# Dev-only directories (not needed in container)
+PRIVATE_PROJECT_KNOWLEDGE/
+documentation/
+loadtests/
+scripts/
+
+# Binary/patch artifacts
+*.patch
+*.zip
