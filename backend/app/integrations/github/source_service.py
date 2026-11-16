@@ -193,8 +193,8 @@ class GitHubSourceService:
                     sha = commit.get("sha")
                     if isinstance(sha, str) and sha:
                         return sha
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed resolving branch ref from get_branch: %s", exc)
 
         try:
             ref_data = await client.get_ref(repository.owner, repository.name, f"heads/{clean_ref}")
@@ -204,8 +204,8 @@ class GitHubSourceService:
                     sha = obj.get("sha")
                     if isinstance(sha, str) and sha:
                         return sha
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed resolving branch ref from get_ref: %s", exc)
 
         return None
 

@@ -367,7 +367,7 @@ class LinkInstallationRequest(BaseModel):
 
 
 @router.post("/installations/link", summary="Link a GitHub App installation to the authenticated user")
-async def link_github_installation(
+def link_github_installation(
     body: LinkInstallationRequest,
     request: Request,
     db: Session = Depends(get_db),
@@ -399,7 +399,7 @@ async def link_github_installation(
 
 
 @router.get("/installation/callback", summary="GitHub App installation redirect callback")
-async def github_installation_callback(
+def github_installation_callback(
     request: Request,
     installation_id: str = Query(...),
     setup_action: str = Query(default="install"),
@@ -605,7 +605,7 @@ async def github_webhook(
 
 
 @router.get("/events", summary="List durably persisted GitHub webhook events")
-async def list_webhook_events(
+def list_webhook_events(
     request: Request,
     status: str | None = Query(default=None),
     event_type: str | None = Query(default=None),
@@ -684,7 +684,7 @@ async def list_webhook_events(
 
 
 @router.get("/events/{event_id}", summary="Get detailed status of a webhook event")
-async def get_webhook_event(
+def get_webhook_event(
     event_id: str,
     request: Request,
     db: Session = Depends(get_db),
@@ -753,8 +753,8 @@ async def replay_webhook_event(
             p_res = r_async.rpush("webhook_events:queue", str(replayed.id))
             if inspect.isawaitable(p_res):
                 await p_res
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed enqueueing replayed webhook event to Redis: %s", exc)
 
     return {
         "status": "replayed",
@@ -768,7 +768,7 @@ async def replay_webhook_event(
     response_model=RepositoryAutomationSettingsResponse,
     summary="Get repository automation settings",
 )
-async def get_repository_automation(
+def get_repository_automation(
     github_repo_id: str,
     request: Request,
     db: Session = Depends(get_db),
@@ -793,7 +793,7 @@ async def get_repository_automation(
     response_model=RepositoryAutomationSettingsResponse,
     summary="Update repository automation settings",
 )
-async def update_repository_automation(
+def update_repository_automation(
     github_repo_id: str,
     body: UpdateRepositoryAutomationSettingsRequest,
     request: Request,

@@ -63,8 +63,8 @@ async def _resolve_optional_user_id(request: Request) -> UUID | None:
                     exists_res = await asyncio.to_thread(get_redis().exists, f"auth:blocklist:{jti}")
                     if exists_res:
                         return None
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed checking token blocklist for SSE connection: %s", exc)
         return UUID(str(claims["sub"]))
     except Exception:
         return None
@@ -194,10 +194,14 @@ async def stream_events(
 
         redis = None
         pubsub = None
+        user_channel = f"events:user:{caller_user_id}" if caller_user_id else None
+        channels_to_sub = ["platform_events"]
+        if user_channel:
+            channels_to_sub.append(user_channel)
         try:
             redis = await get_redis_async()
             pubsub = redis.pubsub()
-            await pubsub.subscribe("platform_events")
+            await pubsub.subscribe(*channels_to_sub)
         except Exception as exc:
             logger.warning("sse_redis_connection_failed: %s", exc)
 
@@ -251,10 +255,10 @@ async def stream_events(
         finally:
             if pubsub is not None:
                 try:
-                    await pubsub.unsubscribe("platform_events")
+                    await pubsub.unsubscribe(*channels_to_sub)
                     await pubsub.close()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed closing pubsub in SSE generator: %s", exc)
 
     return StreamingResponse(
         event_generator(),

@@ -507,8 +507,8 @@ class ToolRouter:
                     progress_pct=0.0,
                 )
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed publishing tool started SSE event: %s", exc)
 
         try:
             from app.observability.agent import trace_tool_invocation
@@ -563,8 +563,8 @@ class ToolRouter:
                             message=final_res.error,
                         )
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed publishing tool completed/failed SSE event: %s", exc)
                 return final_res
 
         except Exception as exc:

@@ -64,7 +64,7 @@ class LanguageDetector:
                         return 'Python'
                     elif 'node' in first_line:
                         return 'JavaScript'
-        except Exception:
+        except (OSError, UnicodeDecodeError, ValueError):
             pass
 
         return 'unknown'

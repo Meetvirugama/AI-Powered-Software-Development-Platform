@@ -231,7 +231,7 @@ class MemoryRepository:
             if isinstance(emb, str):
                 try:
                     emb = json.loads(emb)
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     continue
             if emb and hasattr(emb, "__len__") and len(emb) == len(query_vector):
                 sim = _cosine_similarity(query_vector, emb)

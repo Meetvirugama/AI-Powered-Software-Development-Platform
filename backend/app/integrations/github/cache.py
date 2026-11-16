@@ -231,8 +231,8 @@ class SourceRevisionCache:
                     else:
                         im_payload = ser
                     self._redis.setex(immutable_key, immutable_ttl, im_payload)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed saving compressed payload to Redis cache: %s", exc)
 
     def invalidate(
         self,

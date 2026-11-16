@@ -238,8 +238,8 @@ def cleanup_repository_filesystem_resources(
     try:
         from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
         RepositoryIntelligenceSnapshotManager._cache.clear()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to clear snapshot cache: %s", exc)
 
     # 2. Clean temporary clone directories in temp folders
     for temp_base in [
@@ -261,8 +261,8 @@ def cleanup_repository_filesystem_resources(
                 if p.is_relative_to(ws_root) and p != ws_root and p.exists():
                     shutil.rmtree(p, ignore_errors=True)
                     removed["task_workspaces"] += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to remove task workspace %s: %s", ws_p, exc)
 
     return removed
 
@@ -315,8 +315,8 @@ def cleanup_repository_redis_resources(
     try:
         if hasattr(redis_client, "delete"):
             redis_client.delete(f"sync_lock:repo:{repo_id}")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to clear sync_lock for repo %s: %s", repo_id, exc)
 
     # 4. Drain pending sync jobs for this repository from sync_jobs Redis list
     try:

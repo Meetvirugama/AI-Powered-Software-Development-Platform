@@ -100,8 +100,8 @@ class TelemetryManager:
                 trace._TRACER_PROVIDER = None
                 if hasattr(trace, "_TRACER_PROVIDER_SET_ONCE"):
                     trace._TRACER_PROVIDER_SET_ONCE._done = False
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to reset OpenTelemetry tracer provider internals: %s", exc)
             trace.set_tracer_provider(self.tracer_provider)
 
             # Configure Meter Provider if metrics are enabled
@@ -112,8 +112,8 @@ class TelemetryManager:
                     mi._METER_PROVIDER = None
                     if hasattr(mi, "_METER_PROVIDER_SET_ONCE"):
                         mi._METER_PROVIDER_SET_ONCE._done = False
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed to reset OpenTelemetry meter provider internals: %s", exc)
                 metrics.set_meter_provider(self.meter_provider)
                 logger.info("telemetry_meter_provider_initialized")
 
@@ -193,12 +193,12 @@ def shutdown_telemetry() -> None:
         trace._TRACER_PROVIDER = None
         if hasattr(trace, "_TRACER_PROVIDER_SET_ONCE"):
             trace._TRACER_PROVIDER_SET_ONCE._done = False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to reset OpenTelemetry tracer provider internals in reset_telemetry: %s", exc)
     try:
         import opentelemetry.metrics._internal as mi
         mi._METER_PROVIDER = None
         if hasattr(mi, "_METER_PROVIDER_SET_ONCE"):
             mi._METER_PROVIDER_SET_ONCE._done = False
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to reset OpenTelemetry meter provider internals in reset_telemetry: %s", exc)

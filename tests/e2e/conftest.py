@@ -37,6 +37,8 @@ if str(PROJECT_ROOT) not in sys.path:
 # Ensure test JWT and webhook secrets are always configured when running pytest tests/e2e/ directly
 os.environ.setdefault("JWT_SECRET", "e2e-test-jwt-secret-key-at-least-32-chars-long")
 os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
+os.environ["DISABLE_EMBEDDED_SYNC_WORKER"] = "true"
+os.environ["DISABLE_EMBEDDED_WEBHOOK_WORKER"] = "true"
 
 from app.core.config import get_settings
 get_settings.cache_clear()

@@ -458,8 +458,8 @@ def resolve_target_and_build_context(
                                     if c_red:
                                         has_redacted = True
                                         redacted_count += c_cnt
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("Failed checking redacted source metadata: %s", exc)
 
                     related_symbol_contexts.append(
                         SymbolContext(
@@ -583,8 +583,8 @@ def resolve_target_and_build_context(
                 .all()
             )
             project_rules = [m.content for m in memories if getattr(m, "content", None)]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed querying project memories for explanation: %s", exc)
 
     context_repo_files = [
         ContextRepoFile(
@@ -885,8 +885,8 @@ def record_analysis_run(
             if hasattr(db, "rollback"):
                 try:
                     db.rollback()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Rollback failed in record_analysis_run: %s", exc)
             logger.warning("analysis_run_repository_create_run_failed", extra={"error": str(exc)})
 
     if not persisted_direct:
@@ -894,8 +894,8 @@ def record_analysis_run(
         if run_service is not None and hasattr(run_service, "record_run"):
             try:
                 run_service.record_run(record)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("analysis_run_service.record_run failed: %s", exc)
 
     history_store: dict[str, dict[str, Any]] | None = getattr(
         app_state, "_analysis_run_history", None

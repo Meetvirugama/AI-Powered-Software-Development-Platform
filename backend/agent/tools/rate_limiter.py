@@ -239,5 +239,5 @@ class ToolRateLimiter:
                 keys = redis_client.keys(pattern)
                 if keys:
                     redis_client.delete(*keys)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed resetting rate limit keys in Redis: %s", exc)

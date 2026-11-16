@@ -18,6 +18,7 @@ from app.api.v1.analysis.common import (
     ANALYSIS_ERROR_RESPONSES,
     _get_service,
     _invoke_service_method,
+    _owned_repository,
     _owned_repository_async,
     _request_user_id,
 )
@@ -444,7 +445,7 @@ async def publish_review_to_github(
     response_model=ReviewFeedbackResponse,
     summary="Submit developer feedback on an AI code review finding",
 )
-async def submit_finding_feedback(
+def submit_finding_feedback(
     run_id: str,
     finding_id: str,
     payload: ReviewFeedbackRequest,
@@ -473,7 +474,7 @@ async def submit_finding_feedback(
     if not finding:
         raise APIError(404, ErrorCode.NOT_FOUND, "Finding not found")
 
-    await _owned_repository_async(finding.repository_id, request, db)
+    _owned_repository(finding.repository_id, request, db)
 
     feedback_svc = ReviewFeedbackService()
     feedback_entry = feedback_svc.record_feedback(
@@ -501,7 +502,7 @@ async def submit_finding_feedback(
     response_model=ReviewSettingsResponse,
     summary="Get repository code review settings",
 )
-async def get_repository_review_settings(
+def get_repository_review_settings(
     repository_id: UUID,
     request: Request,
     db: Session = Depends(get_db),
@@ -509,7 +510,7 @@ async def get_repository_review_settings(
     """Retrieve repository code review and PR publication settings."""
     from app.services.review_settings_service import get_repo_review_settings
 
-    repo = await _owned_repository_async(repository_id, request, db)
+    repo = _owned_repository(repository_id, request, db)
     settings = get_repo_review_settings(repository_id)
     return ReviewSettingsResponse(
         repository_id=str(repository_id),
@@ -526,7 +527,7 @@ async def get_repository_review_settings(
     response_model=ReviewSettingsResponse,
     summary="Update repository code review settings",
 )
-async def update_repository_review_settings(
+def update_repository_review_settings(
     repository_id: UUID,
     payload: UpdateReviewSettingsRequest,
     request: Request,
@@ -535,7 +536,7 @@ async def update_repository_review_settings(
     """Update repository code review and PR publication settings."""
     from app.services.review_settings_service import set_repo_review_settings
 
-    repo = await _owned_repository_async(repository_id, request, db)
+    repo = _owned_repository(repository_id, request, db)
     if payload.pr_review_enabled is not None:
         repo.pr_review_enabled = payload.pr_review_enabled
     if payload.pr_review_drafts is not None:

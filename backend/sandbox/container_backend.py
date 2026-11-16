@@ -85,8 +85,8 @@ class ContainerBackend(SandboxBackend):
             )
             if proc.returncode == 0 and "runsc" in (proc.stdout or ""):
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("docker info runsc check failed: %s", exc)
         return shutil.which("runsc") is not None
 
     def _resolve_task_root(self, task_id: str) -> Path:
@@ -148,7 +148,8 @@ class ContainerBackend(SandboxBackend):
                                 target_resolved,
                             )
                             continue
-                    except Exception:
+                    except Exception as exc:
+                        logger.debug("Symlink resolution check failed on %s: %s", item, exc)
                         continue
                 dest = ws_path / item.name
                 if item.is_dir():
@@ -362,13 +363,13 @@ class ContainerBackend(SandboxBackend):
                             break
                         if len(target) < max_bytes:
                             target.extend(chunk[: max_bytes - len(target)])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Pipe reading encountered error: %s", exc)
                 finally:
                     try:
                         pipe.close()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Pipe closing encountered error: %s", exc)
 
             t_out = threading.Thread(target=drain_pipe, args=(proc.stdout, stdout_data), daemon=True)
             t_err = threading.Thread(target=drain_pipe, args=(proc.stderr, stderr_data), daemon=True)
@@ -384,8 +385,8 @@ class ContainerBackend(SandboxBackend):
                 try:
                     proc.kill()
                     proc.wait(timeout=2.0)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Container process kill/wait error: %s", exc)
 
             t_out.join(timeout=1.0)
             t_err.join(timeout=1.0)

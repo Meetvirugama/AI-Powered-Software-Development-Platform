@@ -236,8 +236,8 @@ class TaskExecutionOrchestrator:
                         m_data = json.loads(m_path.read_text(encoding="utf-8"))
                         if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
                             meta.verification_diff_hash = m_data["verification_diff_hash"]
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed to parse workspace metadata verification_diff_hash: %s", exc)
             return meta
         if task_repo is None:
             return None
@@ -941,8 +941,8 @@ class TaskExecutionOrchestrator:
                 head_sha = proc.stdout.strip()
                 if _HEX_SHA_RE.match(head_sha):
                     return head_sha
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve git HEAD rev-parse in workspace: %s", exc)
         if meta.base_revision and _HEX_SHA_RE.match(meta.base_revision.strip()):
             return meta.base_revision.strip()
         return diff_hash[:40]
@@ -1295,7 +1295,8 @@ class TaskExecutionOrchestrator:
                 continue
             try:
                 content = target_file.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            except Exception as exc:
+                logger.debug("Failed to read file %s for static scan: %s", target_file, exc)
                 continue
 
             bug_items, _ = self.static_scanner.scan(
@@ -1415,8 +1416,8 @@ class TaskExecutionOrchestrator:
         meta.verification_diff_hash = diff_hash
         try:
             self.workspace_manager.save_workspace_metadata(meta)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to persist workspace metadata: %s", exc)
         verified_rev_sha = self._resolve_verified_revision_sha(task_id_str, meta, diff_hash)
 
         overall_status: VerificationOverallStatus = VerificationResultSchema.evaluate_status(
@@ -1760,8 +1761,8 @@ class TaskExecutionOrchestrator:
                     if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
                         expected_hash = m_data["verification_diff_hash"]
                         meta.verification_diff_hash = expected_hash
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read metadata file %s for verification hash: %s", m_path, exc)
 
         if not expected_hash:
             # 2. Attempt to resolve from latest verification event payload if present
@@ -2135,8 +2136,8 @@ class TaskExecutionOrchestrator:
                     if real_num and real_url:
                         final_pr_number = real_num
                         final_pr_url = real_url
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to resolve live GitHub PR URL/number: %s", exc)
 
             # 7. Persist TaskPullRequest in PostgreSQL & advance task to DRAFT_PR_CREATED
             task_pr = task_repo.record_pull_request(
@@ -2558,6 +2559,6 @@ def get_task_execution_orchestrator(app_state: Any = None) -> TaskExecutionOrche
     if app_state is not None:
         try:
             app_state.task_execution_orchestrator = _default_orchestrator
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to cache task execution orchestrator on app.state: %s", exc)
     return _default_orchestrator

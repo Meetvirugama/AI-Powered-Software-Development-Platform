@@ -72,8 +72,8 @@ def extract_repository_dependencies(repository_id: UUID, db: Session) -> list[Re
                         dependencies.append(RepositoryDependencyResponse(name=name, version=str(ver), ecosystem="npm"))
                     for name, ver in dev_deps.items():
                         dependencies.append(RepositoryDependencyResponse(name=name, version=str(ver), ecosystem="npm"))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed parsing package.json dependencies: %s", exc)
             elif file.path.endswith("requirements.txt"):
                 for line in content.splitlines():
                     line = line.strip()
@@ -148,8 +148,8 @@ def extract_repository_dependencies(repository_id: UUID, db: Session) -> list[Re
                                     ecosystem="pip",
                                 )
                             )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed parsing setup.cfg / pyproject.toml dependencies: %s", exc)
             elif file.path.endswith("Pipfile"):
                 section = ""
                 for raw_ln in content.splitlines():

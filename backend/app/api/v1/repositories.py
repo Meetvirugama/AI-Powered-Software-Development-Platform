@@ -215,8 +215,8 @@ def delete_repository(repository_id: UUID, request: Request, db: Session = Depen
     redis_client = None
     try:
         redis_client = get_redis()
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Redis client unavailable during repository deletion: %s", exc)
     RepositoryRepository(db).delete(repo.id, redis_client=redis_client)
     try:
         if redis_client is not None:

@@ -318,8 +318,8 @@ class RetrievalResultCache(RetrievalCache):
                 try:
                     res = await client.eval(_RELEASE_STAMPEDE_LOCK_LUA, 1, lock_key, lock_token)
                     return bool(int(res or 0) == 1)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed evaluating stampede lock release lua: %s", exc)
             current_val = await client.get(lock_key)
             if isinstance(current_val, bytes):
                 current_val = current_val.decode("utf-8", errors="replace")
@@ -438,8 +438,8 @@ class TwoLevelRetrievalCache(RetrievalCache):
         if self.l2 is not None and self.l2.enabled:
             try:
                 await self.l2.delete(key)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed deleting key from l2 cache: %s", exc)
         return True
 
     async def invalidate_repository(

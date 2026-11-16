@@ -272,8 +272,8 @@ class HierarchicalLocalizer:
                         .limit(10)
                         .all()
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Failed querying CodeSymbol for file: %s", exc)
 
             if localized_syms:
                 for sym, sym_score, sym_reason in localized_syms[: self.max_symbols_per_file]:

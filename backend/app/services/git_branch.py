@@ -1291,8 +1291,8 @@ class GitBranchService:
         )
         try:
             self._db.commit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed committing PullRequest record: %s", exc)
 
         return PullRequestInfo(
             number=pr_number,

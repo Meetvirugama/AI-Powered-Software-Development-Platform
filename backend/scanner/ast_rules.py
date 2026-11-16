@@ -720,8 +720,8 @@ class IdenticalBranchesRule(BaseASTRule):
                                     confidence=self.default_confidence,
                                 )
                             )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed evaluating DeadCodeRule AST finding: %s", exc)
 
                 # 2. Check duplicate conditions in if-elif chain
                 conditions: list[tuple[str, int, int]] = []
@@ -730,8 +730,8 @@ class IdenticalBranchesRule(BaseASTRule):
                     try:
                         cond_str = ast.unparse(current.test)
                         conditions.append((cond_str, current.test.lineno, getattr(current.test, "end_lineno", current.test.lineno)))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Failed unparsing if-elif test condition: %s", exc)
                     if len(current.orelse) == 1 and isinstance(current.orelse[0], ast.If):
                         current = current.orelse[0]
                     else:

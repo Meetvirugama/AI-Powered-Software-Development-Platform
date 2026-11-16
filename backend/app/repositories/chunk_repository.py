@@ -80,13 +80,13 @@ class ChunkRepository:
             if "metadata" in row and isinstance(row["metadata"], str):
                 try:
                     row["metadata"] = json.loads(row["metadata"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     pass
             # If embedding was passed as JSON string, parse into list for Vector type
             if "embedding" in row and isinstance(row["embedding"], str):
                 try:
                     row["embedding"] = json.loads(row["embedding"])
-                except Exception:
+                except (json.JSONDecodeError, TypeError, ValueError):
                     pass
             cleaned.append(row)
 

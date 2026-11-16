@@ -235,8 +235,8 @@ async def github_callback(
                                 account_login=acc_login,
                                 permissions=permissions,
                             )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed upserting installation mapping during OAuth callback: %s", exc)
         target_dest = _resolve_trusted_frontend_url(redirect_url) if redirect_url else f"{frontend_base}/app/repositories"
         return RedirectResponse(
             url=target_dest,
@@ -515,8 +515,8 @@ def logout(request: Request) -> Response:
         try:
             from app.core.auth import revoke_token_in_cache
             revoke_token_in_cache(request.state.token_jti)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed revoking token in cache during logout: %s", exc)
     except Exception as exc:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Logout service is unavailable.", retryable=True) from exc
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

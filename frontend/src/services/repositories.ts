@@ -206,4 +206,38 @@ export async function getRemoteSourceIssue(
   return response.data;
 }
 
+/**
+ * Hybrid code search within indexed repository files (FEAT-16).
+ *
+ * POST /api/v1/repositories/:repositoryId/search
+ */
+export async function searchRepository(
+  repositoryId: string,
+  query: string,
+  topK = 10,
+): Promise<{ query: string; total: number; results: Array<{ file_path: string; start_line: number; end_line: number; content: string; score: number }> }> {
+  const response = await apiClient.post(
+    `/repositories/${repositoryId}/search`,
+    { query, top_k: topK },
+  );
+  return response.data;
+}
+
+/**
+ * List code symbols indexed for a repository (FEAT-16).
+ *
+ * GET /api/v1/repositories/:repositoryId/symbols
+ */
+export async function listRepositorySymbols(
+  repositoryId: string,
+  params?: { query?: string; kind?: string },
+): Promise<Array<{ id: string; name: string; kind: string; file_path: string; start_line: number; end_line: number }>> {
+  const response = await apiClient.get(
+    `/repositories/${repositoryId}/symbols`,
+    { params },
+  );
+  return response.data;
+}
+
+
 

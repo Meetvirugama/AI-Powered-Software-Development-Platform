@@ -166,6 +166,7 @@ async def test_concurrent_chat_ownership_checks(monkeypatch) -> None:
 
     app.dependency_overrides[get_db] = mock_get_db
     monkeypatch.setattr("app.api.v1.chat.RepositoryRepository", ConcurrencySafeRepoRepository)
+    monkeypatch.setattr(get_settings(), "rate_limit_enabled", False)
 
     answer = RepositoryAnswer(answer="Concurrency safe answer", sources=[], confidence="high")
     pipeline = SimpleNamespace(chat=AsyncMock(return_value=answer))

@@ -600,8 +600,8 @@ async def resolve_review_target_and_build_context(
                 .all()
             )
             project_rules = [m.content for m in memories if getattr(m, "content", None)]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed querying project memories for code review: %s", exc)
 
     context_repo_files = [
         ContextRepoFile(

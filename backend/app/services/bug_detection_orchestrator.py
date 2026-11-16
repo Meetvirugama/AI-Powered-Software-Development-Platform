@@ -422,8 +422,8 @@ def resolve_bug_target_and_build_context(
             for d in discovered:
                 if d.path not in related_file_paths and d.path != safe_path:
                     related_file_paths.append(d.path)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed discovering related files for bug detection: %s", exc)
 
     context_repo_files = [
         ContextRepoFile(
