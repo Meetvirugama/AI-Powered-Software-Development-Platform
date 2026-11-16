@@ -1,14 +1,18 @@
 import React, { memo } from 'react';
 import {
+  AlertCircle,
   CheckCircle2,
+  Clock,
   ExternalLink,
   FileCode,
   FlaskConical,
   GitBranch,
   GitCommit,
   GitPullRequest,
+  Loader2,
   Pause,
   Play,
+  RotateCcw,
   ShieldCheck,
   Terminal,
   Wrench,
@@ -574,6 +578,8 @@ export interface RepositoryTaskWorkspaceTabProps {
   handleResumeTask: () => void;
   handleCommitChanges: () => void;
   handleExecuteTask: (runSteps?: boolean) => void;
+  taskStatus?: string;
+  handleRecoverTask?: () => void;
 }
 
 export const RepositoryTaskWorkspaceTab: React.FC<RepositoryTaskWorkspaceTabProps> = memo(
@@ -586,115 +592,195 @@ export const RepositoryTaskWorkspaceTab: React.FC<RepositoryTaskWorkspaceTabProp
     handleResumeTask,
     handleCommitChanges,
     handleExecuteTask,
-  }) => (
-    <div className="space-y-4 animate-in fade-in duration-150">
-      {hasWorkspace && workspaceMeta ? (
-        <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4.5 space-y-4">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
+    taskStatus,
+    handleRecoverTask,
+  }) => {
+    const isFailedOrRecover = taskStatus === 'FAILED' || taskStatus === 'RECOVERY_REQUIRED';
+
+    return (
+      <div className="space-y-4 animate-in fade-in duration-150">
+        {isFailedOrRecover && (
+          <div className="flex items-center justify-between p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs">
             <div className="flex items-center gap-2">
-              <Terminal className="h-4 w-4 text-indigo-400" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
-                Isolated Sandbox Status
-              </h3>
-              <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
-                {workspaceMeta.status}
+              <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>
+                Task execution interrupted. Click <strong>Recover Task</strong> to reconcile state and resume safely.
               </span>
             </div>
-
-            <div className="flex items-center gap-2">
-              {workspaceMeta.status === 'IN_USE' && (
-                <button
-                  type="button"
-                  disabled={actionBusy !== null}
-                  onClick={handlePauseTask}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-medium hover:bg-amber-500/20 cursor-pointer"
-                >
-                  <Pause className="h-3 w-3" />
-                  <span>Pause</span>
-                </button>
-              )}
-              {workspaceMeta.status === 'STOPPED' && (
-                <button
-                  type="button"
-                  disabled={actionBusy !== null}
-                  onClick={handleResumeTask}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs font-medium hover:bg-emerald-500/20 cursor-pointer"
-                >
-                  <Play className="h-3 w-3" />
-                  <span>Resume</span>
-                </button>
-              )}
+            {handleRecoverTask && (
               <button
                 type="button"
                 disabled={actionBusy !== null}
-                onClick={handleCommitChanges}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background text-foreground text-xs font-medium hover:bg-accent cursor-pointer"
+                onClick={handleRecoverTask}
+                className="inline-flex items-center gap-1 px-3 py-1 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs shrink-0 cursor-pointer"
               >
-                <GitCommit className="h-3 w-3" />
-                <span>Commit</span>
+                <RotateCcw className="h-3 w-3" />
+                <span>Recover Task</span>
               </button>
-            </div>
+            )}
           </div>
+        )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
-              <span className="text-[10px] font-mono text-muted-foreground uppercase">Isolated Branch</span>
-              <div className="font-mono text-xs text-foreground font-semibold flex items-center gap-1.5">
-                <GitBranch className="h-3.5 w-3.5 text-primary" />
-                <span>{workspaceMeta.branch_name}</span>
+        {hasWorkspace && workspaceMeta ? (
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4.5 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Terminal className="h-4 w-4 text-indigo-400" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                  Isolated Sandbox Status
+                </h3>
+                <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px]">
+                  {workspaceMeta.status}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {isFailedOrRecover ? (
+                  handleRecoverTask && (
+                    <button
+                      type="button"
+                      disabled={actionBusy !== null}
+                      onClick={handleRecoverTask}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 text-orange-300 text-xs font-semibold hover:bg-orange-500/20 cursor-pointer"
+                    >
+                      <RotateCcw className="h-3 w-3" />
+                      <span>Recover</span>
+                    </button>
+                  )
+                ) : (
+                  <>
+                    {workspaceMeta.status === 'IN_USE' && (
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handlePauseTask}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-300 text-xs font-medium hover:bg-amber-500/20 cursor-pointer"
+                      >
+                        <Pause className="h-3 w-3" />
+                        <span>Pause</span>
+                      </button>
+                    )}
+                    {workspaceMeta.status === 'STOPPED' && (
+                      <button
+                        type="button"
+                        disabled={actionBusy !== null}
+                        onClick={handleResumeTask}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 text-xs font-medium hover:bg-emerald-500/20 cursor-pointer"
+                      >
+                        <Play className="h-3 w-3" />
+                        <span>Resume</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={actionBusy !== null}
+                      onClick={handleCommitChanges}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border bg-background text-foreground text-xs font-medium hover:bg-accent cursor-pointer"
+                    >
+                      <GitCommit className="h-3 w-3" />
+                      <span>Commit</span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
-              <span className="text-[10px] font-mono text-muted-foreground uppercase">Sandbox Location</span>
-              <div
-                className="font-mono text-[11px] text-muted-foreground truncate"
-                title={workspaceMeta.workspace_path}
-              >
-                {workspaceMeta.workspace_path}
-              </div>
-            </div>
-          </div>
-
-          <div className="p-3 rounded-lg bg-background/70 border border-border/60 space-y-2">
-            <div className="text-[10px] font-mono uppercase text-muted-foreground font-bold">
-              Step Execution Progress
-            </div>
-            <div className="space-y-1.5">
-              {latestPlan?.steps?.map((s: PlanStep, i: number) => (
-                <div
-                  key={s.step_id || i}
-                  className="flex items-center justify-between text-xs py-1 px-2 rounded bg-muted/20"
-                >
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                    <span className="font-semibold text-foreground">
-                      Step {i + 1}: {s.description}
-                    </span>
-                  </div>
-                  <span className="font-mono text-[10px] text-emerald-400 font-bold uppercase">
-                    COMPLETED
-                  </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
+                <span className="text-[10px] font-mono text-muted-foreground uppercase">Isolated Branch</span>
+                <div className="font-mono text-xs text-foreground font-semibold flex items-center gap-1.5">
+                  <GitBranch className="h-3.5 w-3.5 text-primary" />
+                  <span>{workspaceMeta.branch_name}</span>
                 </div>
-              ))}
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-background/60 border border-border/60 space-y-1">
+                <span className="text-[10px] font-mono text-muted-foreground uppercase">Sandbox Location</span>
+                <div
+                  className="font-mono text-[11px] text-muted-foreground truncate"
+                  title={workspaceMeta.workspace_path}
+                >
+                  {workspaceMeta.workspace_path}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-lg bg-background/70 border border-border/60 space-y-2">
+              <div className="text-[10px] font-mono uppercase text-muted-foreground font-bold">
+                Step Execution Progress
+              </div>
+              <div className="space-y-1.5">
+                {latestPlan?.steps?.map((s: PlanStep, i: number) => {
+                  let stepStatus: 'COMPLETED' | 'IN_PROGRESS' | 'FAILED' | 'PENDING' = 'PENDING';
+                  if (
+                    ['READY_FOR_PUBLICATION', 'DRAFT_PR_CREATED', 'COMPLETED', 'VERIFYING', 'TESTING'].includes(
+                      taskStatus || ''
+                    )
+                  ) {
+                    stepStatus = 'COMPLETED';
+                  } else if (taskStatus === 'EXECUTING') {
+                    stepStatus = i === 0 ? 'IN_PROGRESS' : 'PENDING';
+                  } else if (isFailedOrRecover) {
+                    stepStatus = i === 0 ? 'FAILED' : 'PENDING';
+                  }
+
+                  return (
+                    <div
+                      key={s.step_id || i}
+                      className="flex items-center justify-between text-xs py-1 px-2 rounded bg-muted/20"
+                    >
+                      <div className="flex items-center gap-2">
+                        {stepStatus === 'COMPLETED' && (
+                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                        )}
+                        {stepStatus === 'IN_PROGRESS' && (
+                          <Loader2 className="h-3.5 w-3.5 text-cyan-400 animate-spin shrink-0" />
+                        )}
+                        {stepStatus === 'FAILED' && (
+                          <AlertCircle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                        )}
+                        {stepStatus === 'PENDING' && (
+                          <Clock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        )}
+                        <span className="font-semibold text-foreground">
+                          Step {i + 1}: {s.description}
+                        </span>
+                      </div>
+                      <span
+                        className={`font-mono text-[10px] font-bold uppercase ${
+                          stepStatus === 'COMPLETED'
+                            ? 'text-emerald-400'
+                            : stepStatus === 'FAILED'
+                            ? 'text-rose-400'
+                            : stepStatus === 'IN_PROGRESS'
+                            ? 'text-cyan-400'
+                            : 'text-muted-foreground'
+                        }`}
+                      >
+                        {stepStatus}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </div>
-      ) : (
-        <div className="p-8 text-center text-xs text-muted-foreground space-y-3 border border-border rounded-xl bg-card">
-          <Terminal className="h-8 w-8 text-muted-foreground/40 mx-auto" />
-          <p>Workspace has not been provisioned yet.</p>
-          <button
-            type="button"
-            onClick={() => handleExecuteTask(true)}
-            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
-          >
-            Start Workspace Execution
-          </button>
-        </div>
-      )}
-    </div>
-  )
+        ) : (
+          <div className="p-8 text-center text-xs text-muted-foreground space-y-3 border border-border rounded-xl bg-card">
+            <Terminal className="h-8 w-8 text-muted-foreground/40 mx-auto" />
+            <p>Workspace has not been provisioned yet.</p>
+            <button
+              type="button"
+              onClick={() => handleExecuteTask(true)}
+              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
+            >
+              Start Workspace Execution
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 );
 RepositoryTaskWorkspaceTab.displayName = 'RepositoryTaskWorkspaceTab';
 

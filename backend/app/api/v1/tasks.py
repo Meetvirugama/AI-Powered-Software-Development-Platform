@@ -120,7 +120,7 @@ class TaskTestTriggerRequest(BaseModel):
     """Request payload for POST /api/v1/tasks/{task_id}/tests."""
 
     test_path: str | None = Field(default=None, max_length=512)
-    framework: str | None = Field(default="pytest", max_length=64)
+    framework: str | None = Field(default=None, max_length=64)
     arguments: list[str] = Field(default_factory=list)
     timeout_seconds: int = Field(default=60, ge=1, le=600)
 
@@ -1443,7 +1443,7 @@ def trigger_task_tests(
         task_repo=task_repo,
         actor_id=user_id,
         test_path=body.test_path if body else None,
-        framework=body.framework if body else "pytest",
+        framework=body.framework if (body and body.framework) else None,
         arguments=body.arguments if body else None,
         timeout_seconds=body.timeout_seconds if body else 60,
     )
@@ -1512,7 +1512,7 @@ def trigger_task_repair(
         task=task,
         task_repo=task_repo,
         actor_id=user_id,
-        framework=body.framework if body else "pytest",
+        framework=body.framework if (body and body.framework) else None,
         test_path=body.test_path if body else None,
         patch_diff=body.patch_diff if body else None,
         patch_explanation=body.patch_explanation if body else None,

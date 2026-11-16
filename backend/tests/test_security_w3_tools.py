@@ -325,6 +325,11 @@ def test_tool_router_redacts_secrets_and_truncates_output():
         ("execute_command", {"command": "pytest", "arguments": "tests -q"}),
         ("run_tests", {"arguments": ["-o", "addopts=-p evil"]}),
         ("run_tests", {"arguments": ["/etc"]}),
+        ("check_stale_revision", {"base_branch": "--upload-pack=touch /tmp/pwned"}),
+        ("commit_task_changes", {"message": "x", "branch_name": "--receive-pack=x"}),
+        ("commit_task_changes", {"message": "x", "files": ["--chmod=+x"]}),
+        ("commit_task_changes", {"message": "x", "files": ["../../etc/passwd"]}),
+        ("inspect_git_diff", {"base_branch": "a;id"}),
     ],
 )
 def test_api_tool_policy_refuses_dangerous_calls(tool, args):
@@ -343,6 +348,8 @@ def test_api_tool_policy_refuses_dangerous_calls(tool, args):
         ("execute_command", {"command": "git", "arguments": ["status"]}),
         ("execute_command", {"command": "git", "arguments": ["diff", "--stat"]}),
         ("run_tests", {"test_path": "tests/test_app.py", "arguments": ["-q"]}),
+        ("check_stale_revision", {"base_branch": "main"}),
+        ("commit_task_changes", {"message": "feat: x", "branch_name": "agent/task-1", "files": ["src/a.py"]}),
     ],
 )
 def test_api_tool_policy_allows_normal_work(tool, args):

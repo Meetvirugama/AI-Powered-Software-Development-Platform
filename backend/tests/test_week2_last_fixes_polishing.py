@@ -359,41 +359,8 @@ async def test_grounding_validator_suffix_match_requires_path_boundary(db_sessio
 
 # ---------------------------------------------------------------------------
 # 7. Line-Accurate File Reconstruction (No Duplicated Overlapping Chunks)
+# Note: Covered canonically by test_indexer.py::test_reconstruct_file_from_chunks_deduplication
 # ---------------------------------------------------------------------------
-
-def test_reconstruct_file_from_chunks_deduplicates_class_and_method_chunks() -> None:
-    repo_id = uuid4()
-    file_id = uuid4()
-    source = "\n".join(
-        [
-            "import os",
-            "",
-            "class Greeter:",
-            "    def hello(self):",
-            "        return 'hi'",
-            "",
-            "    def bye(self):",
-            "        return 'bye'",
-        ]
-    )
-    symbols = [
-        Symbol(id=uuid4(), name="import os", kind="import", file_id=file_id, start_line=1, end_line=1, signature="import os"),
-        Symbol(id=uuid4(), name="Greeter", kind="class", file_id=file_id, start_line=3, end_line=8, signature="class Greeter:"),
-        Symbol(id=uuid4(), name="hello", kind="method", file_id=file_id, start_line=4, end_line=5, signature="def hello(self):"),
-        Symbol(id=uuid4(), name="bye", kind="method", file_id=file_id, start_line=7, end_line=8, signature="def bye(self):"),
-    ]
-    chunks = SymbolChunker().chunk_symbols(
-        repository_id=repo_id,
-        file_id=file_id,
-        symbols=symbols,
-        content=source,
-        language="Python",
-    )
-    assert len(chunks) >= 3
-    reconstructed = reconstruct_file_from_chunks(chunks)
-    assert reconstructed.count("def hello(self):") == 1
-    assert reconstructed.count("def bye(self):") == 1
-    assert reconstructed.splitlines() == source.splitlines()
 
 
 # ---------------------------------------------------------------------------

@@ -117,11 +117,30 @@ class WorkspacePathGuard:
         # Check for forbidden files (e.g. .git, .env, SSH private keys)
         if not allow_git_dir:
             parts = PurePosixPath(clean_rel).parts
-            if any(p.lower() == ".git" or p.lower().startswith(".git") for p in parts):
+            allowed_git_files = {".gitignore", ".gitattributes", ".gitmodules", ".gitkeep"}
+            if any(
+                p.lower() == ".git"
+                or (
+                    p.lower().startswith(".git")
+                    and p.lower() not in allowed_git_files
+                    and not p.lower().startswith(".github")
+                    and not p.lower().startswith(".gitlab")
+                )
+                for p in parts
+            ):
                 raise WorkspacePathEscapeError(
                     f"Direct access to .git metadata or hooks is forbidden: '{relative_path}'"
                 )
-            if any(p.lower() == ".env" or p.lower().startswith(".env.") for p in parts):
+            safe_env_templates = {".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default"}
+            if any(
+                p.lower() == ".env"
+                or (
+                    p.lower().startswith(".env.")
+                    and p.lower() not in safe_env_templates
+                    and not any(p.lower().endswith(s) for s in (".example", ".sample", ".template", ".dist", ".default"))
+                )
+                for p in parts
+            ):
                 raise WorkspacePathEscapeError(
                     f"Direct access to environment secrets is forbidden: '{relative_path}'"
                 )

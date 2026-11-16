@@ -511,11 +511,15 @@ class WorkspaceDiffVerifier:
                 continue
 
             # 2. Forbidden & Sensitive File Patterns
-            for pattern in self._forbidden_patterns:
-                if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(Path(file_path).name, pattern):
-                    blocking_findings.append(
-                        f"Diff modifies prohibited or sensitive file '{file_path}' (matched pattern: '{pattern}')."
-                    )
+            base_file_name = Path(file_path).name.lower()
+            safe_templates = {".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default"}
+            is_safe_template = base_file_name in safe_templates or any(base_file_name.endswith(s) for s in (".example", ".sample", ".template", ".dist", ".default"))
+            if not is_safe_template:
+                for pattern in self._forbidden_patterns:
+                    if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(Path(file_path).name, pattern):
+                        blocking_findings.append(
+                            f"Diff modifies prohibited or sensitive file '{file_path}' (matched pattern: '{pattern}')."
+                        )
 
             # 3. Approved File Scope Verification
             if allowed_set is not None and file_path not in allowed_set:

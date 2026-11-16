@@ -117,7 +117,10 @@ class ExecutionVerifier:
                         )
 
         # 3. Check Action-Specific Evidence
-        if action_type in ("test", "command", "verify", "validate"):
+        if (
+            action_type in ("test", "command", "verify", "validate", "run_test", "run_tests")
+            or any(action_type.startswith(p) for p in ("test", "command", "run", "exec", "verify", "validate"))
+        ):
             if isinstance(step_output, dict):
                 exit_code = step_output.get("exit_code")
                 if exit_code is not None and exit_code != 0:
@@ -138,7 +141,16 @@ class ExecutionVerifier:
                 )
             )
 
-        elif action_type in ("edit", "create", "write", "modify", "patch"):
+        elif (
+            action_type in (
+                "edit", "create", "write", "modify", "patch", "refactor",
+                "add_test", "create_test", "write_test", "modify_file",
+                "edit_file", "update_file", "add_file", "create_file",
+                "new_file", "implement", "update", "setup", "patch_file",
+                "code", "write_file",
+            )
+            or any(action_type.startswith(p) for p in ("edit", "create", "write", "modify", "add", "update", "patch", "implement", "refactor", "code"))
+        ):
             # Ensure modifications actually occurred
             if not modified_files and not getattr(step, "expected_files", []):
                 reason = f"Modification step '{step_id}' produced no modified files."

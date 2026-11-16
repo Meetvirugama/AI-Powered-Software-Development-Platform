@@ -47,3 +47,6 @@ Thumbs.db
 # ── Agent Workspaces & Subagent Scratch ───────────────────────────────────────
 .workspaces/
 .agents/
+
+# ── Private Project Knowledge Base ────────────────────────────────────────────
+PRIVATE_PROJECT_KNOWLEDGE/

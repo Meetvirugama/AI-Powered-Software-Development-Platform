@@ -32,12 +32,20 @@ logger = logging.getLogger(__name__)
 
 # Patterns matching sensitive secret files
 _PROTECTED_FILE_PATTERNS = (
-    re.compile(r"^\.env(\.[a-zA-Z0-9_-]+)?$", re.IGNORECASE),
+    re.compile(r"^\.env(\.(?!example|sample|template|dist|default)[a-zA-Z0-9_-]+)?$", re.IGNORECASE),
     re.compile(r"^.*id_rsa(\.pub)?$", re.IGNORECASE),
     re.compile(r"^.*credentials(\.json|\.yml|\.yaml)?$", re.IGNORECASE),
     re.compile(r"^\.github/workflows/.*deploy.*\.ya?ml$", re.IGNORECASE),
     re.compile(r"^.*master\.key$", re.IGNORECASE),
 )
+
+_SAFE_ENV_TEMPLATES = frozenset({
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.dist",
+    ".env.default",
+})
 
 _PROTECTED_LITERAL_FILES = frozenset({
     ".env",
@@ -252,10 +260,13 @@ class TaintPolicyEngine:
         norm = file_path.strip()
         while norm.startswith("./"):
             norm = norm[2:]
+        base = norm.split("/")[-1].lower()
+        if base in _SAFE_ENV_TEMPLATES or base.endswith((".example", ".sample", ".template", ".dist", ".default")):
+            return False
         if norm in self._protected_files:
             return True
         for pat in _PROTECTED_FILE_PATTERNS:
-            if pat.match(norm) or pat.match(norm.split("/")[-1]):
+            if pat.match(norm) or pat.match(base):
                 return True
         return False
 
@@ -373,19 +384,24 @@ class TaintPolicyEngine:
             return res
 
         # 5. Shell Command Operations
-        if clean_action in ("command", "execute_command", "run_command", "bash", "sh", "exec", "test", "verify"):
+        if (
+            clean_action in ("command", "execute_command", "run_command", "bash", "sh", "exec", "test", "verify", "run_test", "run_tests", "validate")
+            or any(clean_action.startswith(p) for p in ("test", "verify", "validate", "run_test"))
+        ):
             cmd = str(args.get("command", "") or args.get("cmd", "")).strip()
 
-            # Test preparation or file verification step without an active shell command
-            if not cmd and clean_action in ("test", "verify", "validate"):
-                if "content" in args or (files and not args.get("run_command")):
-                    res = PolicyEvaluationResult(
-                        decision=PolicyDecision.ALLOW,
-                        reason="Test/verification file operation permitted within workspace bounds.",
-                        action_risk=ActionRiskLevel.LOW,
-                    )
-                    self._record_audit(task_id, None, clean_action, prov_ids, res, files, args)
-                    return res
+            # Test execution, preparation, or verification step without an arbitrary shell command
+            if not cmd and (
+                clean_action in ("test", "verify", "validate", "run_test", "run_tests")
+                or any(clean_action.startswith(p) for p in ("test", "verify", "validate", "run_test"))
+            ):
+                res = PolicyEvaluationResult(
+                    decision=PolicyDecision.ALLOW,
+                    reason="Autonomous test runner / verification permitted within workspace bounds.",
+                    action_risk=ActionRiskLevel.LOW,
+                )
+                self._record_audit(task_id, None, clean_action, prov_ids, res, files, args)
+                return res
 
             # Check for network exfiltration commands
             cmd_tokens = [tok.lower() for tok in cmd.split()]
@@ -536,6 +552,8 @@ class TaintPolicyEngine:
         args: dict[str, Any] = dict(step_input or {})
         if hasattr(step, "command") and getattr(step, "command", None):
             args["command"] = getattr(step, "command")
+        elif hasattr(step, "tests_to_run") and getattr(step, "tests_to_run", None):
+            args["command"] = getattr(step, "tests_to_run")[0]
 
         res = self.evaluate(
             action_type=action_type,

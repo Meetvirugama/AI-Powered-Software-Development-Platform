@@ -480,6 +480,9 @@ export function RepositoryTaskStudio() {
     setActionBusy('execute');
     setErrorBanner(null);
     try {
+      if (taskDetail.status === 'FAILED' || taskDetail.status === 'RECOVERY_REQUIRED') {
+        await recoverTask(tid);
+      }
       setActiveTab('workspace');
       await executeTask(tid, { run_steps: runSteps });
     } catch (err: any) {
@@ -496,6 +499,9 @@ export function RepositoryTaskStudio() {
     setActionBusy('autopilot');
     setErrorBanner(null);
     try {
+      if (taskDetail.status === 'FAILED' || taskDetail.status === 'RECOVERY_REQUIRED') {
+        await recoverTask(tid);
+      }
       if (taskDetail.status === 'PENDING_APPROVAL' && latestPlan) {
         await approveTaskPlan(tid, {
           plan_version: latestPlan.plan_version,
@@ -1330,6 +1336,8 @@ export function RepositoryTaskStudio() {
                   handleResumeTask={handleResumeTask}
                   handleCommitChanges={handleCommitChanges}
                   handleExecuteTask={handleExecuteTask}
+                  taskStatus={taskDetail.status}
+                  handleRecoverTask={handleRecoverTask}
                 />
               )}
 

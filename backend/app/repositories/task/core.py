@@ -323,6 +323,8 @@ class TaskCoreMixin(TaskRepositoryBase):
 
         old_status = task.status
         task.status = target_status_enum.value
+        if target_status_enum in (TaskStatus.READY_FOR_PUBLICATION, TaskStatus.DRAFT_PR_CREATED):
+            task.error_message = None
         task.updated_at = datetime.now(timezone.utc)
         self.session.flush()
 

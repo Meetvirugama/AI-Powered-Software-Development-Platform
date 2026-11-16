@@ -51,7 +51,7 @@ FORBIDDEN_FILE_PATTERNS: tuple[str, ...] = (
 
 # Regular expression to reject dangerous file names or paths
 DANGEROUS_PATH_SEGMENTS = re.compile(
-    r"(^|/|\\)(\.git|\.env|id_rsa|id_ed25519|id_ecdsa)(\.|$|/|\\)",
+    r"(^|/|\\)(\.git|\.env(?!\.(example|sample|template|dist|default)\b)|id_rsa|id_ed25519|id_ecdsa)(\.|$|/|\\)",
     re.IGNORECASE,
 )
 

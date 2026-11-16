@@ -351,28 +351,5 @@ def test_recover_targets_are_limited_at_service_level():
 
 # ---------------------------------------------------------------------------
 # 5. Tool policy covers git names too
+# Note: Covered canonically by test_security_w3_tools.py (section 5)
 # ---------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "tool,args",
-    [
-        ("check_stale_revision", {"base_branch": "--upload-pack=touch /tmp/pwned"}),
-        ("commit_task_changes", {"message": "x", "branch_name": "--receive-pack=x"}),
-        ("commit_task_changes", {"message": "x", "files": ["--chmod=+x"]}),
-        ("commit_task_changes", {"message": "x", "files": ["../../etc/passwd"]}),
-        ("inspect_git_diff", {"base_branch": "a;id"}),
-    ],
-)
-def test_tool_policy_rejects_injected_git_names(tool, args):
-    assert api_tool_policy_violation(tool, args, EXEC_TEMPLATES) is not None
-
-
-@pytest.mark.parametrize(
-    "tool,args",
-    [
-        ("check_stale_revision", {"base_branch": "main"}),
-        ("commit_task_changes", {"message": "feat: x", "branch_name": "agent/task-1", "files": ["src/a.py"]}),
-    ],
-)
-def test_tool_policy_allows_normal_git_names(tool, args):
-    assert api_tool_policy_violation(tool, args, EXEC_TEMPLATES) is None

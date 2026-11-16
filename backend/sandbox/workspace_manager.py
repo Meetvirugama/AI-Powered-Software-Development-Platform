@@ -2069,7 +2069,14 @@ class WorkspaceManager:
             for p in ws_path.rglob("*"):
                 if p.is_file():
                     name_lower = p.name.lower()
-                    if name_lower.startswith(".env") or name_lower in ("id_rsa", "id_ed25519", "id_dsa") or name_lower.endswith(".pem"):
+                    is_secret_env = (
+                        name_lower == ".env"
+                        or (
+                            name_lower.startswith(".env.")
+                            and not any(name_lower.endswith(s) for s in (".example", ".sample", ".template", ".dist", ".default"))
+                        )
+                    )
+                    if is_secret_env or name_lower in ("id_rsa", "id_ed25519", "id_dsa") or name_lower.endswith(".pem"):
                         violations.append(f"Forbidden file or directory detected: {p.name}")
 
         valid = len(violations) == 0

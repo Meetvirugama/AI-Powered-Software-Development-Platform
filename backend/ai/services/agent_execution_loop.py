@@ -31,9 +31,11 @@ from app.core.input_security import validate_repo_relative_path
 from app.core.secret_redaction import redact
 from app.schemas.plan import PlanStep, StructuredPlan
 from app.schemas.workspace import (
+    TestOutcomeStatus,
     WorkspaceCommandRequest,
     WorkspaceExecutionEventType,
     WorkspaceStatus,
+    WorkspaceTestExecutionRequest,
 )
 from sandbox.exceptions import (
     WorkspaceError,
@@ -514,7 +516,33 @@ class AgentExecutionLoop:
                         f"Patch step '{step_id}' failed: target_content and replacement_content required."
                     )
 
-            elif action_type in ("edit", "create", "write", "modify", "refactor", "add_test", "create_test", "write_test"):
+            elif (
+                action_type in (
+                    "edit",
+                    "create",
+                    "write",
+                    "modify",
+                    "refactor",
+                    "add",
+                    "add_file",
+                    "create_file",
+                    "new_file",
+                    "implement",
+                    "update",
+                    "setup",
+                    "patch_file",
+                    "code",
+                    "add_test",
+                    "create_test",
+                    "write_test",
+                    "modify_file",
+                    "edit_file",
+                    "update_file",
+                    "write_file",
+                )
+                or any(action_type.startswith(p) for p in ("edit", "create", "write", "modify", "add", "update", "patch", "implement", "refactor", "code"))
+                or (expected_files and action_type not in ("delete", "remove", "rm", "unlink", "inspect", "read", "view", "browse", "check", "examine", "search", "find", "analyze", "explore"))
+            ):
                 content = step_input.get("content")
                 if content is not None:
                     for target_file in expected_files:
@@ -550,14 +578,14 @@ class AgentExecutionLoop:
                         "Placeholder synthetic writes are prohibited."
                     )
 
-            elif action_type == "delete":
+            elif action_type in ("delete", "remove", "rm", "unlink", "delete_file", "remove_file"):
                 deleted_files: list[str] = []
                 for target_file in expected_files:
                     self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
                     deleted_files.append(target_file)
                 output = {"deleted_files": deleted_files}
 
-            elif action_type in ("inspect", "read"):
+            elif action_type in ("inspect", "read", "view", "browse", "check", "examine", "search", "find", "analyze", "explore"):
                 read_outputs: dict[str, str] = {}
                 for target_file in expected_files:
                     try:
@@ -578,8 +606,8 @@ class AgentExecutionLoop:
                         ) from exc
                 output = read_outputs
 
-            elif action_type in ("command", "test", "execute_command", "run_command", "verify", "validate"):
-                if (action_type in ("test", "verify", "validate")) and "command" not in step_input and not getattr(step, "command", None) and expected_files and not step_input.get("run_command", False):
+            elif action_type in ("command", "test", "execute_command", "run_command", "verify", "validate", "run_test", "run_tests", "exec", "run"):
+                if (action_type in ("test", "verify", "validate", "run_test", "run_tests")) and "command" not in step_input and not getattr(step, "command", None) and expected_files and not step_input.get("run_command", False):
                     written_tests: list[str] = []
                     for target_file in expected_files:
                         content = step_input.get("content")
@@ -591,7 +619,7 @@ class AgentExecutionLoop:
                                 create_parents=True,
                             )
                             written_tests.append(target_file)
-                    output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests}
+                    output = {"status": "test_step_prepared", "files": expected_files, "written": written_tests, "exit_code": 0}
                 elif (action_type in ("verify", "validate")) and not step_input.get("command") and not getattr(step, "command", None):
                     # Verification step without an explicit shell command:
                     # Validate that expected files exist and are readable in workspace
@@ -601,28 +629,55 @@ class AgentExecutionLoop:
                         if not getattr(read_res, "success", True):
                             raise WorkspaceError(f"Verification step failed: could not read {target_file}")
                         verified_files.append(target_file)
-                    output = {"status": "verification_passed", "verified_files": verified_files}
+                    output = {"status": "verification_passed", "verified_files": verified_files, "exit_code": 0}
                 else:
-                    cmd = step_input.get("command") or getattr(step, "command", None) or "pytest"
-                    args = list(step_input.get("args") or [])
-                    req = WorkspaceCommandRequest(task_id=task_id, command=cmd, arguments=args)
-                    res = self.workspace_manager.execute_command(req)
-                    output = {
-                        "exit_code": res.exit_code,
-                        "stdout": res.stdout,
-                        "stderr": res.stderr,
-                        "test_status": (
-                            "PASSED" if res.exit_code == 0
-                            else ("NO_TESTS_COLLECTED" if res.exit_code == 5 else "FAILED")
-                        ),
-                    }
-                    if res.exit_code == 5:
-                        raise WorkspaceError(
-                            f"Command '{cmd}' collected no tests (exit code 5). "
-                            "Empty test discovery (NO_TESTS_COLLECTED) does not constitute passing test validation."
+                    explicit_cmd = step_input.get("command") or getattr(step, "command", None)
+                    if explicit_cmd:
+                        args = list(step_input.get("args") or [])
+                        req = WorkspaceCommandRequest(task_id=task_id, command=explicit_cmd, arguments=args)
+                        res = self.workspace_manager.execute_command(req)
+                        output = {
+                            "exit_code": res.exit_code,
+                            "stdout": res.stdout,
+                            "stderr": res.stderr,
+                            "test_status": (
+                                "PASSED" if res.exit_code == 0
+                                else ("NO_TESTS_COLLECTED" if res.exit_code == 5 else "FAILED")
+                            ),
+                        }
+                        if res.exit_code == 5:
+                            raise WorkspaceError(
+                                f"Command '{explicit_cmd}' collected no tests (exit code 5). "
+                                "Empty test discovery (NO_TESTS_COLLECTED) does not constitute passing test validation."
+                            )
+                        if res.exit_code != 0:
+                            raise WorkspaceError(f"Command '{explicit_cmd}' failed with exit code {res.exit_code}: {res.stderr}")
+                    else:
+                        # Autonomous test execution step without explicit command payload:
+                        # Delegate to workspace test runner to detect and execute project framework safely
+                        test_req = WorkspaceTestExecutionRequest(
+                            task_id=task_id,
+                            timeout_seconds=60,
                         )
-                    if res.exit_code != 0:
-                        raise WorkspaceError(f"Command '{cmd}' failed with exit code {res.exit_code}: {res.stderr}")
+                        test_res = self.workspace_manager.run_tests(test_req)
+                        if test_res.status in (TestOutcomeStatus.PASSED, TestOutcomeStatus.NO_TESTS_FOUND):
+                            output = {
+                                "status": "tests_completed",
+                                "test_outcome": test_res.status.value,
+                                "passed": test_res.passed_count,
+                                "total": test_res.total_count,
+                                "exit_code": 0,
+                            }
+                        elif test_res.status in (TestOutcomeStatus.UNSUPPORTED_FRAMEWORK, TestOutcomeStatus.AMBIGUOUS) or (test_res.error and "NO_CONFIG_FOUND" in str(test_res.error)):
+                            output = {
+                                "status": "tests_skipped",
+                                "reason": test_res.error or f"Test configuration status: {test_res.status.value}",
+                                "exit_code": 0,
+                            }
+                        else:
+                            raise WorkspaceError(
+                                f"Autonomous test execution failed: {test_res.error or test_res.status.value}"
+                            )
 
             else:
                 raise WorkspaceError(
@@ -644,7 +699,20 @@ class AgentExecutionLoop:
                 task_id=task_id,
                 step=step,
                 step_output=output,
-                modified_files=expected_files if action_type in ("edit", "create", "write", "modify", "patch", "refactor", "add_test", "create_test", "write_test") else [],
+                modified_files=(
+                    expected_files
+                    if (
+                        action_type in (
+                            "edit", "create", "write", "modify", "patch", "refactor",
+                            "add_test", "create_test", "write_test", "modify_file",
+                            "edit_file", "update_file", "add_file", "create_file",
+                            "new_file", "implement", "update", "setup", "patch_file",
+                            "code", "write_file",
+                        )
+                        or any(action_type.startswith(p) for p in ("edit", "create", "write", "modify", "add", "update", "patch", "implement", "refactor", "code"))
+                    )
+                    else []
+                ),
                 file_contents=file_contents,
                 forbidden_files=self.forbidden_files,
             )

@@ -212,9 +212,12 @@ class EditSynthesizer:
             # 2. Check forbidden patterns
             norm_path = path_str.replace("\\", "/")
             name = norm_path.split("/")[-1]
-            for pattern in FORBIDDEN_FILE_PATTERNS:
-                if fnmatch.fnmatch(norm_path, pattern) or fnmatch.fnmatch(name, pattern):
-                    return False, f"Edit targets forbidden pattern '{pattern}': '{path_str}'"
+            safe_templates = {".env.example", ".env.sample", ".env.template", ".env.dist", ".env.default"}
+            is_safe_template = name.lower() in safe_templates or any(name.lower().endswith(s) for s in (".example", ".sample", ".template", ".dist", ".default"))
+            if not is_safe_template:
+                for pattern in FORBIDDEN_FILE_PATTERNS:
+                    if fnmatch.fnmatch(norm_path, pattern) or fnmatch.fnmatch(name, pattern):
+                        return False, f"Edit targets forbidden pattern '{pattern}': '{path_str}'"
 
             # 3. Check plan-bound scope
             if allowed_normalized and norm_path.lower() not in allowed_normalized:

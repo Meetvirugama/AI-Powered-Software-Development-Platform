@@ -2298,6 +2298,7 @@ class TaskExecutionOrchestrator:
             resolved_target = TaskStatus.PLANNING
 
         preserved_repair_used = task.repair_attempts_used
+        task.error_message = None
         task_repo.transition_status(
             task,
             resolved_target,
