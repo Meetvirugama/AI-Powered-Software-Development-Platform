@@ -172,8 +172,8 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     db=AsyncSessionLocal,
                     max_seeds=getattr(settings, "retrieval_graph_max_seeds", 5),
                     max_hops=getattr(settings, "retrieval_graph_max_hops", 1),
-                    max_related_per_seed=getattr(settings, "retrieval_graph_max_related", 10),
-                    max_expanded_chunks=getattr(settings, "retrieval_graph_max_chunks", 30),
+                    max_related_per_seed=getattr(settings, "retrieval_graph_max_neighbors_per_seed", 10),
+                    max_expanded_chunks=getattr(settings, "retrieval_graph_max_candidates", 30),
                     enabled=True,
                 )
             except Exception as g_exc:  # noqa: BLE001

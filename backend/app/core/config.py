@@ -138,6 +138,7 @@ class Settings(BaseSettings):
 
     reranker_backend: str = "pytorch"
     reranker_onnx_enabled: bool = False
+    reranker_onnx_model_path: str | None = None
     reranker_quantization: str = "none"
 
     # --- Distributed Tracing & Observability (F31 - Issue #212) -----------
