@@ -1,1 +1,0 @@
-test_prit_day7_acceptance.py

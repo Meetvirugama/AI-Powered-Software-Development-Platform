@@ -515,7 +515,7 @@ class AgentExecutionLoop:
                         f"Patch step '{step_id}' failed: target_content and replacement_content required."
                     )
 
-            elif action_type in ("edit", "create", "write", "modify", "refactor"):
+            elif action_type in ("edit", "create", "write", "modify", "refactor", "add_test", "create_test", "write_test"):
                 content = step_input.get("content")
                 if content is not None:
                     for target_file in expected_files:
@@ -645,7 +645,7 @@ class AgentExecutionLoop:
                 task_id=task_id,
                 step=step,
                 step_output=output,
-                modified_files=expected_files if action_type in ("edit", "create", "write", "modify", "patch", "refactor") else [],
+                modified_files=expected_files if action_type in ("edit", "create", "write", "modify", "patch", "refactor", "add_test", "create_test", "write_test") else [],
                 file_contents=file_contents,
                 forbidden_files=self.forbidden_files,
             )

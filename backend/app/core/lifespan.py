@@ -141,10 +141,16 @@ def init_rag_pipeline(app: FastAPI) -> bool:
                     db=AsyncSessionLocal,
                     embedding_service=embedding_service,
                 )
-                from ai.retrieval.reranker import CrossEncoderReranker
-                reranker = CrossEncoderReranker()
             except Exception as emb_exc:
                 logger.warning("vector_retriever_init_failed_falling_back_to_lexical", extra={"error": str(emb_exc)})
+
+        # Reranker independently created via factory (ISS-008)
+        reranker = None
+        try:
+            from ai.retrieval.reranker_factory import create_reranker
+            reranker = create_reranker()
+        except Exception as r_exc:  # noqa: BLE001
+            logger.warning("reranker_init_failed_falling_back_to_none", extra={"error": str(r_exc)})
 
         cache = None
         if getattr(settings, "retrieval_cache_enabled", False):
@@ -157,13 +163,21 @@ def init_rag_pipeline(app: FastAPI) -> bool:
             except Exception as c_exc:  # noqa: BLE001
                 logger.warning("retrieval_cache_init_failed", extra={"error": str(c_exc)})
 
+        # Symbol Graph Expander wired with proper flag and settings (ISS-007)
         graph_expander = None
-        if getattr(settings, "symbol_graph_expansion_enabled", False):
+        if getattr(settings, "retrieval_graph_expansion_enabled", True):
             try:
-                from ai.retrieval.graph_expander import SymbolGraphExpander
-                graph_expander = SymbolGraphExpander(db=AsyncSessionLocal)
+                from ai.retrieval.graph_expansion import SymbolGraphExpander
+                graph_expander = SymbolGraphExpander(
+                    db=AsyncSessionLocal,
+                    max_seeds=getattr(settings, "retrieval_graph_max_seeds", 5),
+                    max_hops=getattr(settings, "retrieval_graph_max_hops", 1),
+                    max_related_per_seed=getattr(settings, "retrieval_graph_max_related", 10),
+                    max_expanded_chunks=getattr(settings, "retrieval_graph_max_chunks", 30),
+                    enabled=True,
+                )
             except Exception as g_exc:  # noqa: BLE001
-                logger.warning("graph_expander_init_failed", extra={"error": str(g_exc)})
+                logger.error("graph_expander_init_failed", extra={"error": str(g_exc)})
 
         retriever = HybridRetriever(
             vector_retriever=vector_retriever,

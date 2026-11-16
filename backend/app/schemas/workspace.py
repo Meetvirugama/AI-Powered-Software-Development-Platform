@@ -800,6 +800,7 @@ class WorkspacePushResult(BaseModel):
     pushed_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
+    simulated: bool = False
     error: str | None = None
 
 
