@@ -55,6 +55,7 @@ import {
 } from '../hooks/useTasks';
 import {
   approveTaskPlan,
+  authorizeTaskPublication,
   cancelTask,
   commitTaskChanges,
   createTask,
@@ -673,6 +674,15 @@ export function RepositoryTaskStudio() {
     setActionBusy('create-pr');
     setErrorBanner(null);
     try {
+      if (publicationAuthorized) {
+        await authorizeTaskPublication(taskDetail.task_id, {
+          head_sha: verificationResult?.verified_revision || undefined,
+          notes: 'User authorized Draft PR publication via Studio',
+        }).catch(() => {
+          // Continue if already authorized
+        });
+      }
+
       const pr = await createTaskDraftPR(taskDetail.task_id, {
         publication_authorized: publicationAuthorized,
         title: `feat: ${taskDetail.title}`,

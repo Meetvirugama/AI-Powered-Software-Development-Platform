@@ -582,6 +582,7 @@ class TaskExecutionMixin:
         blocking_findings: Optional[list[dict[str, Any]]] = None,
         warnings: Optional[list[dict[str, Any]]] = None,
         summary: Optional[str] = None,
+        diff_hash: Optional[str] = None,
     ) -> VerificationResult:
         """Record independent verification outcome strictly bound to verified revision (Day 5)."""
         task = self.get_task(task_id, repository_id)
@@ -616,16 +617,20 @@ class TaskExecutionMixin:
 
         self.session.flush()
 
+        event_payload = {
+            "verified_revision": verified_revision,
+            "status": status_val,
+            "blocking_count": len(blocking_findings or []),
+            "task_status": task.status,
+        }
+        if diff_hash:
+            event_payload["diff_hash"] = diff_hash
+
         self.record_event(
             task_id=task.id,
             repository_id=task.repository_id,
             event_type=TaskEventType.VERIFICATION_COMPLETED.value,
-            event_data={
-                "verified_revision": verified_revision,
-                "status": status_val,
-                "blocking_count": len(blocking_findings or []),
-                "task_status": task.status,
-            },
+            event_data=event_payload,
         )
         self.session.commit()
         self.session.refresh(res)

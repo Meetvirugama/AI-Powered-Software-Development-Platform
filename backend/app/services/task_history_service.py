@@ -598,6 +598,7 @@ class TaskHistoryService:
         blocking_findings: Optional[list[dict[str, Any]]] = None,
         warnings: Optional[list[dict[str, Any]]] = None,
         summary: Optional[str] = None,
+        diff_hash: Optional[str] = None,
         db: Optional[Session] = None,
     ) -> VerificationResult:
         """Record independent verification outcome and update task status based on checks (Day 5)."""
@@ -612,6 +613,7 @@ class TaskHistoryService:
                 blocking_findings=blocking_findings,
                 warnings=warnings,
                 summary=summary,
+                diff_hash=diff_hash,
             )
 
     def get_verification_results(
