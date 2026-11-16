@@ -2014,25 +2014,11 @@ class TaskExecutionOrchestrator:
             # 4. Persisted publication authorization check (ISS-004)
             auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
             settings = get_settings()
-            if not auth_record and publication_authorized:
-                # If explicit human publication authorization was provided in the call, persist it
-                if ver and ver.verified_revision:
-                    try:
-                        task_repo.authorize_publication(
-                            task_id=task.id,
-                            repository_id=task.repository_id,
-                            head_sha=ver.verified_revision,
-                            user_id=actor_id,
-                            notes="Authorized via Draft PR creation",
-                        )
-                        auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
-                    except Exception:
-                        pass
             if not auth_record and not getattr(settings, "allow_mock_git_push", False):
                 raise APIError(
                     409,
                     ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
-                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{id}/authorize-publication first).",
+                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{task.id}/authorize-publication first).",
                 )
 
             # Check that authorized revision matches the latest verified revision (ISS-004)
