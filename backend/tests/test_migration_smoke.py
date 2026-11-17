@@ -161,8 +161,8 @@ def test_clean_schema_migration_lifecycle(clean_schema_name: str) -> None:
         pr_fks = insp.get_foreign_keys("pull_requests", schema=clean_schema_name)
         assert any(fk.get("options", {}).get("ondelete") == "CASCADE" or fk.get("name") == "pull_requests_repository_id_fkey" for fk in pr_fks)
 
-        # 2. Downgrade -1 (rolls back head j7a8b9c0d1e2)
-        command.downgrade(cfg, "-1")
+        # 2. Downgrade past j7a8b9c0d1e2 (to i6f7a8b9c0d1)
+        command.downgrade(cfg, "i6f7a8b9c0d1")
         insp_downgraded = inspect(_make_engine())
         symbol_cols_after = {col["name"] for col in insp_downgraded.get_columns("code_symbols", schema=clean_schema_name)}
         edge_cols_after = {col["name"] for col in insp_downgraded.get_columns("symbol_edges", schema=clean_schema_name)}
