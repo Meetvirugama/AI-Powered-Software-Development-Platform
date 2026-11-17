@@ -60,6 +60,7 @@ if "DATABASE_URL" not in os.environ:
 # don't interfere with test isolation or trigger real network/DB calls.
 os.environ.setdefault("DISABLE_EMBEDDED_WEBHOOK_WORKER", "true")
 os.environ.setdefault("RUN_STARTUP_RECONCILIATION", "false")
+os.environ["ENABLE_DEV_LOGIN"] = "false"
 
 from app.core.config import get_settings
 from app.core.database import Base, get_db

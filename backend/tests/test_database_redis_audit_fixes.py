@@ -207,6 +207,7 @@ def test_production_config_rejects_unencrypted_remote_redis():
             cookie_secure=True,
             cors_allowed_origins="https://ai-platform.example.com",
             redis_url="redis://default:token@my-upstash.upstash.io:6379",
+            enable_dev_login=False,
         )
 
 
@@ -218,6 +219,7 @@ def test_production_config_accepts_tls_remote_redis():
         cookie_secure=True,
         cors_allowed_origins="https://ai-platform.example.com",
         redis_url="rediss://default:token@my-upstash.upstash.io:6379",
+        enable_dev_login=False,
     )
     validated = settings.validate_production_security()
     assert validated.redis_url.startswith("rediss://")

@@ -31,9 +31,12 @@ EVIL_ORIGIN = "https://evil.example.com"
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
+@pytest.fixture(autouse=True)
 def limiter_store(monkeypatch) -> InMemoryRateLimitStore:
     """Fresh in-memory counters for every test (no Redis needed)."""
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    from app.core.config import get_settings
+    get_settings.cache_clear()
     store = InMemoryRateLimitStore()
     monkeypatch.setattr(rate_limit, "get_rate_limit_store", lambda: store)
     return store

@@ -548,6 +548,7 @@ def test_github_webhook_fails_closed_in_production_when_secret_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("ENABLE_DEV_LOGIN", "false")
     monkeypatch.setenv("GITHUB_WEBHOOK_SECRET", "")
     monkeypatch.setenv("JWT_SECRET", "production-test-key-32-chars-long-valid")
     monkeypatch.setenv("COOKIE_SECURE", "true")

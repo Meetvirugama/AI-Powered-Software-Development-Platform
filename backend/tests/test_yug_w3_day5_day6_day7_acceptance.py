@@ -29,6 +29,23 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import shutil as _shutil
+
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
@@ -225,6 +242,7 @@ def _create_approved_task(
 # 1. Day 5: Independent Verification & Multi-Dimensional Gates (F36)
 # ---------------------------------------------------------------------------
 
+@skip_no_docker
 def test_independent_verification_passes_clean_in_scope_changes(
     client: TestClient,
     db_session: Session,

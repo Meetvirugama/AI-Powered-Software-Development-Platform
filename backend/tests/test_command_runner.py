@@ -22,6 +22,23 @@ from sandbox.command_runner import WorkspaceCommandRunner, kill_process_tree
 from sandbox.constants import MAX_COMMAND_OUTPUT_BYTES
 from sandbox.resource_monitor import WorkspaceResourceMonitor
 
+import shutil
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
+
 
 def _is_pid_alive(pid: int) -> bool:
     try:
@@ -154,6 +171,7 @@ def test_kill_process_tree_safe_on_invalid_pids():
     assert True
 
 
+@skip_no_docker
 def test_streaming_output_limiter_bounds_memory_and_truncates(tmp_path: Path):
     """Runs a subprocess outputting large data; verifies output is cleanly bounded and truncated."""
     script = tmp_path / "large_output.py"
@@ -182,6 +200,7 @@ sys.stderr.flush()
     assert monitor.check_output_limit(MAX_COMMAND_OUTPUT_BYTES + 1) is True
 
 
+@skip_no_docker
 def test_streaming_output_limiter_zero_temporary_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verifies no temporary disk files are created during execution."""
     def _forbidden_tempfile(*args, **kwargs):
@@ -199,6 +218,7 @@ def test_streaming_output_limiter_zero_temporary_files(tmp_path: Path, monkeypat
     assert "streaming test passed" in result.stdout
 
 
+@skip_no_docker
 def test_command_timeout_kills_process_group_and_reaps(tmp_path: Path):
     """Verifies run_command on timeout terminates background grandchild and returns structured timeout result."""
     marker = tmp_path / "should_not_exist.txt"

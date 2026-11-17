@@ -23,7 +23,25 @@ import time
 from pathlib import Path
 from typing import Any
 
+import shutil
+
 import pytest
+
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
 
 from sandbox.command_runner import (
     WorkspaceCommandRunner,
@@ -50,6 +68,7 @@ def _is_pid_alive(pid: int) -> bool:
 # ============================================================================
 
 
+@skip_no_docker
 def test_adversarial_grandchild_when_intermediate_parent_exits_immediately(tmp_path: Path):
     """Stress-test 3-tier process tree: Leader A -> Child B -> Grandchild C.
 
@@ -173,6 +192,7 @@ sys.exit(0)
 # ============================================================================
 
 
+@skip_no_docker
 def test_adversarial_python_background_daemon_loop_terminated(tmp_path: Path):
     """Stress-test Python script launching infinite loop daemon child; verify zero orphan leaks."""
     daemon_pid_file = tmp_path / "py_daemon.pid"
@@ -201,6 +221,7 @@ time.sleep(60)
     assert not _is_pid_alive(daemon_pid), f"Python daemon {daemon_pid} survived timeout!"
 
 
+@skip_no_docker
 def test_adversarial_sh_background_daemon_loop_terminated(tmp_path: Path):
     """Stress-test sh launching background daemon loop `(while true; do sleep 1; done) &`."""
     daemon_pid_file = tmp_path / "sh_daemon.pid"
@@ -229,6 +250,7 @@ sleep 60
     assert not _is_pid_alive(daemon_pid), f"sh background daemon {daemon_pid} survived timeout!"
 
 
+@skip_no_docker
 def test_adversarial_bash_background_daemon_loop_terminated(tmp_path: Path):
     """Stress-test bash launching background daemon loop `(while true; do sleep 1; done) &`."""
     daemon_pid_file = tmp_path / "bash_daemon.pid"
@@ -312,6 +334,7 @@ def test_adversarial_stream_50mb_strict_memory_bound_and_no_disk():
     assert stream.closed is True, "Pipe should be closed after draining"
 
 
+@skip_no_docker
 def test_adversarial_stream_concurrent_stdout_stderr_saturation(tmp_path: Path):
     """Saturate both stdout and stderr with large bursts; verify zero deadlock and clean truncation."""
     script = tmp_path / "flood_both.py"

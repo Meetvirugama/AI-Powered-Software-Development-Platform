@@ -265,6 +265,7 @@ def test_vuln04_settings_is_production_property() -> None:
         jwt_secret="a-very-strong-production-secret-32chars!",
         frontend_url="https://app.example.com",
         cors_allowed_origins="https://app.example.com",
+        enable_dev_login=False,
     )
     assert prod_settings.is_production is True
 

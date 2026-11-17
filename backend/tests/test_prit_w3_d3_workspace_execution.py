@@ -29,6 +29,23 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+import shutil as _shutil
+
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
 
 from agent.tools.router import ToolDefinition, ToolRequest, ToolResult, ToolRouter
 from app.schemas.workspace import (
@@ -326,6 +343,7 @@ def test_execution_stop_and_fail(
 # 5. Sandboxed Command Execution
 # ===========================================================================
 
+@skip_no_docker
 def test_sandboxed_command_execution_success(
     active_workspace: tuple[str, WorkspaceMetadata],
     workspace_manager: WorkspaceManager,

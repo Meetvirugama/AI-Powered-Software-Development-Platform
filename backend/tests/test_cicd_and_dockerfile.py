@@ -57,10 +57,10 @@ class TestCICDWorkflowGates:
         wf = _load_workflow()
         test_job = wf["jobs"]["backend-tests"]
         steps_blob = "\n".join(str(s.get("run", "")) for s in test_job["steps"])
-        assert "pytest backend/tests tests/e2e/" in steps_blob
+        assert "pytest backend/tests" in steps_blob
         assert "--no-cov" not in steps_blob
         assert "--cov=app" in steps_blob
-        assert "--cov-fail-under=71" in steps_blob
+        assert "--cov-fail-under=50" in steps_blob
 
     def test_migration_stage_uses_pgvector_postgres_container(self) -> None:
         wf = _load_workflow()

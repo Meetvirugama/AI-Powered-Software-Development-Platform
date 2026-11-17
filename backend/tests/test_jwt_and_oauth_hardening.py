@@ -120,6 +120,8 @@ def _configure_test_settings(monkeypatch, **overrides: Any) -> Settings:
         "cookie_secure": False,
         "rate_limit_enabled": False,
         "app_env": "development",
+        # Ensure local .env ENABLE_DEV_LOGIN=true does not bleed into tests
+        "enable_dev_login": False,
     }
     defaults.update(overrides)
     for k, v in defaults.items():

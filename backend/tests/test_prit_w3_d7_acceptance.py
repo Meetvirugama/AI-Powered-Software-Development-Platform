@@ -36,6 +36,23 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+import shutil as _shutil
+
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
 
 from agent.tools.router import ToolRequest, ToolRouter
 from app.schemas.workspace import (
@@ -187,6 +204,7 @@ def workspace_manager(tmp_path: Path) -> WorkspaceManager:
 class TestFullWorkflowScenarioA:
     """Verifies the complete 17-step end-to-end autonomous workflow."""
 
+    @skip_no_docker
     def test_full_17_step_workflow_execution(
         self,
         workspace_manager: WorkspaceManager,
@@ -1169,6 +1187,7 @@ class TestPerformanceAndSlaBenchmarks:
         assert rec_res.total_scanned >= 1
         assert elapsed_ms < 1000
 
+    @skip_no_docker
     def test_command_execution_sla(
         self,
         workspace_manager: WorkspaceManager,

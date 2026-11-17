@@ -23,7 +23,25 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
+import shutil
+
 import pytest
+
+def _check_docker() -> bool:
+    import shutil, subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+_docker_available = _check_docker()
+skip_no_docker = pytest.mark.skipif(
+    not _docker_available,
+    reason="Docker daemon not available in this environment",
+)
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -78,6 +96,7 @@ def sandbox_dir(tmp_path: Path) -> Path:
 # 1. Timeouts
 # ---------------------------------------------------------------------------
 
+@skip_no_docker
 def test_command_is_stopped_at_timeout(sandbox_dir):
     _write(sandbox_dir, "slow.py", "import time\ntime.sleep(60)\n")
     runner = WorkspaceCommandRunner()
@@ -91,6 +110,7 @@ def test_command_is_stopped_at_timeout(sandbox_dir):
     assert elapsed < 20, f"command ran for {elapsed:.1f}s after a 1s timeout"
 
 
+@skip_no_docker
 def test_timeout_is_capped_and_no_shell_is_used(sandbox_dir, monkeypatch):
     seen: dict = {}
 
@@ -117,6 +137,7 @@ def test_timeout_is_capped_and_no_shell_is_used(sandbox_dir, monkeypatch):
     assert Path(seen["kwargs"]["cwd"]).resolve() == sandbox_dir.resolve()
 
 
+@skip_no_docker
 def test_timeout_also_stops_child_processes(sandbox_dir):
     marker = sandbox_dir / "child_survived.txt"
     _write(
@@ -141,6 +162,7 @@ def test_timeout_also_stops_child_processes(sandbox_dir):
 # 2. Output size and secret redaction
 # ---------------------------------------------------------------------------
 
+@skip_no_docker
 def test_huge_output_is_truncated(sandbox_dir):
     _write(
         sandbox_dir,
@@ -156,6 +178,7 @@ def test_huge_output_is_truncated(sandbox_dir):
     assert "TRUNCATED" in result.stderr
 
 
+@skip_no_docker
 def test_secrets_printed_by_tests_are_redacted(sandbox_dir):
     _write(
         sandbox_dir,
@@ -180,6 +203,7 @@ def test_secrets_printed_by_tests_are_redacted(sandbox_dir):
 # 3. Environment and working directory
 # ---------------------------------------------------------------------------
 
+@skip_no_docker
 def test_host_secrets_are_not_visible_to_tests(sandbox_dir, monkeypatch):
     secret_vars = {
         "GITHUB_TOKEN": FAKE_GITHUB_TOKEN,
@@ -235,11 +259,13 @@ def test_host_secrets_are_not_visible_to_tests(sandbox_dir, monkeypatch):
         ("pytest", [], ".git/hooks"),
     ],
 )
+@skip_no_docker
 def test_test_runner_refuses_unsafe_requests(sandbox_dir, command, arguments, test_path):
     with pytest.raises(WorkspaceError):
         WorkspaceTestRunner().validate_test_request(sandbox_dir, command, arguments, test_path)
 
 
+@skip_no_docker
 def test_test_runner_accepts_normal_request(sandbox_dir):
     _write(sandbox_dir, "tests/test_ok.py", "def test_ok():\n    assert True\n")
     WorkspaceTestRunner().validate_test_request(sandbox_dir, "pytest", ["-q"], "tests/test_ok.py")
