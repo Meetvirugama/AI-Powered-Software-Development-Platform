@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -49,3 +49,9 @@ class GitHubWebhookEvent(TimestampedModel, Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     replay_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Composite index to allow the webhook worker to drain pending events ready to process
+    # (WHERE status = 'PENDING' AND available_at <= now()) in a single fast index lookup
+    __table_args__ = (
+        Index("ix_webhook_events_status_available", "status", "available_at"),
+    )

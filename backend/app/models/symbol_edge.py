@@ -68,4 +68,7 @@ class SymbolEdge(TimestampedModel, Base):
         Index("ix_symbol_edges_source", "source_symbol_id"),
         Index("ix_symbol_edges_target", "target_symbol_id"),
         Index("ix_symbol_edges_repo_status", "repository_id", "resolution_status"),
+        # Composite indexes for graph traversal: quickly find all callers or callees of a symbol within a repository
+        Index("ix_symbol_edges_repo_source", "repository_id", "source_symbol_id"),
+        Index("ix_symbol_edges_repo_target", "repository_id", "target_symbol_id"),
     )
