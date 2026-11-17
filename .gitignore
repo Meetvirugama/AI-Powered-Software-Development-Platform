@@ -51,3 +51,4 @@ Thumbs.db
 # ── Private Project Knowledge Base ────────────────────────────────────────────
 PRIVATE_PROJECT_KNOWLEDGE/
 openapi.json
+azure-env-production.json
