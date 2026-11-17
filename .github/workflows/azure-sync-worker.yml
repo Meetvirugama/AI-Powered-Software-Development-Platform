@@ -15,9 +15,6 @@ jobs:
     name: Deploy sync_worker to Azure
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    environment:
-      name: production
-      url: https://ai-powered-dev-platform-worker.azurewebsites.net
 
     steps:
       - name: Download artifact from triggering workflow
