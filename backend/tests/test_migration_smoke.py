@@ -80,6 +80,8 @@ EXPECTED_MILESTONE_REVISIONS = (
     "j7a8b9c0d1e2",  # modernize code_symbols and symbol_edges for provenance, resolution status, and ranking
     "k8b9c0d1e2f3",  # add user_role for RBAC
     "l9c0d1e2f3a4",  # add FK ondelete CASCADE policies (ISS-034)
+    "daf0c05ab34b",  # sync task indexes and drop redundant
+    "m1a2b3c4d5e6",  # composite indexes for polling, repo lookups, and graph traversals (Issue #265 / F-45)
 )
 
 

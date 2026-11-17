@@ -42,5 +42,7 @@ class MemoryEntry(TimestampedModel, Base):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+        # Composite index for fast filtering of repository memories by type and active status
+        Index("ix_memory_entries_repo_type_status", "repository_id", "type", "status"),
     )
 
