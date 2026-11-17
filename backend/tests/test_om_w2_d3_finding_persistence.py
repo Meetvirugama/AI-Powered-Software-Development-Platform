@@ -777,7 +777,7 @@ def test_end_to_end_api_integration_detect_bugs(
         content_hash="sha256_target_hash",
     )
     db_session.add(repo_file)
-
+    db_session.flush()
 
     chunk = CodeChunk(
         id=uuid.uuid4(),

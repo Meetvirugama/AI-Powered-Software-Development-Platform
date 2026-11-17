@@ -419,17 +419,10 @@ class Settings(BaseSettings):
                         )
 
             # Validate sandbox backend in production: never permit local host subprocess (F20)
-            if "sandbox_backend" not in self.model_fields_set and (self.sandbox_backend or "").strip().lower() in ("local", "subprocess", "localsubprocess"):
-                self.sandbox_backend = "container"
             clean_backend = (self.sandbox_backend or "").strip().lower()
             if clean_backend in ("local", "subprocess", "localsubprocess"):
-                if "sandbox_backend" in self.model_fields_set:
-                    raise ValueError(
-                        "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
-                        "SANDBOX_BACKEND must be 'container' or 'runner'."
-                    )
-                else:
-                    self.sandbox_backend = "container"
+                self.sandbox_backend = "container"
+                clean_backend = "container"
             if clean_backend == "runner":
                 if not self.runner_base_url or not self.runner_base_url.strip():
                     raise ValueError(

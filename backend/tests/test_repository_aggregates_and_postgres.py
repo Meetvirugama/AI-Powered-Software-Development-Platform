@@ -467,6 +467,8 @@ class TestPostgresPgvectorAndFullTextIntegration:
             )
             session.add_all([chunk_match, chunk_far, chunk_other_tenant])
             session.commit()
+            repo_a_id = repo_a.id
+            chunk_match_id = chunk_match.id
 
         class _StubEmbeddingService:
             dimensions = 768
@@ -481,17 +483,17 @@ class TestPostgresPgvectorAndFullTextIntegration:
         try:
             async with session_maker() as async_sess:
                 vec_retriever = VectorRetriever(db=async_sess, embedding_service=_StubEmbeddingService())  # type: ignore[arg-type]
-                vec_hits = await vec_retriever.retrieve("verify jwt signature", repository_id=repo_a.id, top_k=5)
+                vec_hits = await vec_retriever.retrieve("verify jwt signature", repository_id=repo_a_id, top_k=5)
                 assert len(vec_hits) == 2
-                assert vec_hits[0].id == chunk_match.id
+                assert vec_hits[0].id == chunk_match_id
                 assert vec_hits[0].score > 0.99
                 assert vec_hits[0].importance_score == pytest.approx(0.92)
-                assert all(hit.repository_id == repo_a.id for hit in vec_hits)
+                assert all(hit.repository_id == repo_a_id for hit in vec_hits)
 
                 lex_retriever = LexicalRetriever(db=async_sess)
-                lex_hits = await lex_retriever.retrieve("verify_jwt_signature", repository_id=repo_a.id, top_k=5)
+                lex_hits = await lex_retriever.retrieve("verify_jwt_signature", repository_id=repo_a_id, top_k=5)
                 assert len(lex_hits) == 1
-                assert lex_hits[0].id == chunk_match.id
+                assert lex_hits[0].id == chunk_match_id
                 assert lex_hits[0].file_path == "backend/app/auth/jwt_handler.py"
         finally:
             await async_engine.dispose()

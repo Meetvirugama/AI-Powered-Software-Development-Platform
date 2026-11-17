@@ -585,6 +585,7 @@ def _seed_explainable_file(db: Session, repo: Repository) -> tuple[RepositoryFil
         signature="def verify_jwt_token(token: str) -> dict:",
     )
     db.add(sym)
+    db.flush()
 
     chunk = CodeChunk(
         id=uuid.uuid4(),

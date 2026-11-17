@@ -586,12 +586,20 @@ class TestDay7RepositoryAndUserScoping:
 
     def test_cascade_delete_integrity_repository_run_and_user(self, db_session: Session):
         """Confirm ON DELETE CASCADE on repo/run and ON DELETE SET NULL on user."""
-        user, repo = _create_user_and_repo(db_session, "cascade-user", "cascade-repo")
+        owner, repo = _create_user_and_repo(db_session, "cascade-owner", "cascade-repo")
+        runner_user = User(
+            id=uuid.uuid4(),
+            github_id=f"gh_{uuid.uuid4().hex[:8]}",
+            login="cascade-runner-user",
+            email="cascade-runner@example.com",
+        )
+        db_session.add(runner_user)
+        db_session.commit()
         repo_obj = AnalysisRunRepository(db_session)
 
         run = repo_obj.create_run(
             repository_id=repo.id,
-            user_id=user.id,
+            user_id=runner_user.id,
             feature_type="detect_bugs",
             status="COMPLETED",
             findings=[
@@ -625,7 +633,7 @@ class TestDay7RepositoryAndUserScoping:
         assert finding_repo_fks[0].ondelete.upper() == "CASCADE"
 
         # 2. Deleting user does not cascade delete run (run is preserved)
-        db_session.delete(user)
+        db_session.delete(runner_user)
         db_session.commit()
 
         reloaded_run = repo_obj.get_by_id(run_id)

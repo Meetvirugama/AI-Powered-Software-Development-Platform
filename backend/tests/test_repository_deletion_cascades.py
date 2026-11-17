@@ -41,7 +41,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import Base
@@ -74,6 +74,12 @@ from indexer.incremental import IncrementalIndexer
 @pytest.fixture
 def sqlite_engine():
     engine = create_engine("sqlite:///:memory:", echo=False)
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_connect(dbapi_conn, _):
+        if hasattr(dbapi_conn, "create_function"):
+            dbapi_conn.create_function("to_tsvector", 2, lambda _c, t: t or "", deterministic=True)
+
     Base.metadata.create_all(engine)
     yield engine
     Base.metadata.drop_all(engine)
@@ -89,7 +95,29 @@ def sqlite_session(sqlite_engine):
 
 
 def _create_test_hierarchy(session: Session, user_id: uuid.UUID | None = None) -> tuple[Repository, dict]:
-    uid = user_id or uuid.uuid4()
+    if user_id:
+        user = session.get(User, user_id)
+        if not user:
+            user = User(
+                id=user_id,
+                github_id=f"gh-{user_id.hex[:8]}",
+                login=f"user-{user_id.hex[:6]}",
+                email=f"user-{user_id.hex[:6]}@example.com",
+            )
+            session.add(user)
+            session.commit()
+        uid = user.id
+    else:
+        uid = uuid.uuid4()
+        user = User(
+            id=uid,
+            github_id=f"gh-{uid.hex[:8]}",
+            login=f"user-{uid.hex[:6]}",
+            email=f"user-{uid.hex[:6]}@example.com",
+        )
+        session.add(user)
+        session.commit()
+
     inst = GitHubInstallation(
         id=uuid.uuid4(),
         user_id=uid,
