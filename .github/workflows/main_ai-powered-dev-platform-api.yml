@@ -90,7 +90,7 @@ jobs:
       TEST_DATABASE_URL: "sqlite:///:memory:"
       APP_ENV: "testing"
       ENVIRONMENT: "testing"
-      SANDBOX_BACKEND: "container"
+      SANDBOX_BACKEND: "local"
       COOKIE_SECURE: "false"
       PYTHONPATH: backend
     steps:

@@ -120,6 +120,12 @@ def test_timeout_is_capped_and_no_shell_is_used(sandbox_dir, monkeypatch):
             seen["kwargs"] = kwargs
             self.returncode = 0
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
         def wait(self, timeout=None):
             seen["timeout"] = timeout
             return 0

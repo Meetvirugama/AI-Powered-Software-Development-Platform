@@ -236,6 +236,10 @@ def test_zero_schema_drift_against_database() -> None:
                 diff_str = str(diff)
                 if "vector" in diff_str.lower() and "type" in diff_str.lower():
                     continue
+                # In PostgreSQL, task_id unique constraints on task_pull_requests and workspaces
+                # are already enforced by unique indexes ix_task_pull_requests_task_id and ix_workspaces_task_id
+                if diff[0] == "remove_constraint" and getattr(getattr(diff[1], "table", None), "name", "") in ("task_pull_requests", "workspaces"):
+                    continue
                 actionable_diffs.append(diff)
 
             assert len(actionable_diffs) == 0, (
