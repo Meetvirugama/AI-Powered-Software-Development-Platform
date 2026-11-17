@@ -1,10 +1,7 @@
 name: Deploy Sync Worker to Azure Web App
 
 on:
-  workflow_run:
-    workflows: ["Build, Verify, and Deploy to Azure Web App"]
-    types: [completed]
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   id-token: write
