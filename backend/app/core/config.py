@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import field_validator, model_validator
+from pydantic import PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     app_name: str = "Agentic Software Engineering Platform"
     app_version: str = "1.0.0"
     app_env: str = "development"
+
+    _explicit_kwargs: set[str] = PrivateAttr(default_factory=set)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._explicit_kwargs = set(kwargs.keys())
     api_v1_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
@@ -419,17 +425,15 @@ class Settings(BaseSettings):
                         )
 
             # Validate sandbox backend in production: never permit local host subprocess (F20)
-            if "sandbox_backend" not in self.model_fields_set and (self.sandbox_backend or "").strip().lower() in ("local", "subprocess", "localsubprocess"):
-                self.sandbox_backend = "container"
             clean_backend = (self.sandbox_backend or "").strip().lower()
             if clean_backend in ("local", "subprocess", "localsubprocess"):
-                if "sandbox_backend" in self.model_fields_set:
+                if "sandbox_backend" in getattr(self, "_explicit_kwargs", set()):
                     raise ValueError(
                         "Production configuration error: LocalSubprocessBackend is strictly forbidden in production. "
                         "SANDBOX_BACKEND must be 'container' or 'runner'."
                     )
-                else:
-                    self.sandbox_backend = "container"
+                self.sandbox_backend = "container"
+                clean_backend = "container"
             if clean_backend == "runner":
                 if not self.runner_base_url or not self.runner_base_url.strip():
                     raise ValueError(
