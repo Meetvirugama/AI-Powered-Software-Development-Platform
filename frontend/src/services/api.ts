@@ -128,12 +128,19 @@ apiClient.interceptors.response.use(
 
     const normalised = normaliseError(error);
 
-    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting
+    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting.
+    // Skip the refresh+clear cycle when on /auth/callback: the token was just
+    // extracted from the URL fragment and stored; a 401 on /auth/me here simply
+    // means the first check raced ahead before the token was stored (or the
+    // bearer token was not yet attached). AuthCallback drives retries itself.
+    const onCallbackPage =
+      typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/callback');
     const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     if (
       error.response?.status === 401 &&
       originalRequest &&
       !originalRequest._retry &&
+      !onCallbackPage &&
       !originalRequest.url?.includes('/auth/refresh') &&
       !originalRequest.url?.includes('/auth/login') &&
       !originalRequest.url?.includes('/auth/github') &&

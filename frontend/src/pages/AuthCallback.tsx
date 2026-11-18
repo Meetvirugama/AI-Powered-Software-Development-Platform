@@ -30,7 +30,9 @@ export function AuthCallback() {
         setStoredToken(tokenFromUrl);
         // Clean URL to not expose token in browser address bar or history
         window.history.replaceState(null, '', window.location.pathname);
-        retrySessionCheck();
+        // Small delay so the axios interceptor picks up the stored token
+        // from localStorage before the /auth/me request fires.
+        setTimeout(() => retrySessionCheck(), 50);
       }
     }
   }, [searchParams, retrySessionCheck]);
