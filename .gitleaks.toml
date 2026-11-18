@@ -5,18 +5,29 @@ useDefault = true
 
 [allowlist]
 description = "Synthetic test fixtures, placeholder examples, and secret-redaction regex/test files"
+# Reviewed false-positive commits:
+#   78b6d733: task.md:7 — "SQLAlchemy/Alembic" is a stack dependency description, not an API key
+#   f1ab565f: secret_redaction.py:54 — PEM header string is a regex pattern literal in
+#              the secret detection module; it must reference these strings by design
+#   319e5190: benchmark_quality_suite.py:584 — sk-proj-9876... is a synthetic test fixture
+#              for the secret-detection benchmark (CWE-798 test case), not a real credential
+commits = [
+  "78b6d733acfa3308777359b38ecd7677f1ba0098",
+  "f1ab565f99ba7f70dd5caaf6039857578fcb5195",
+  "319e5190b23f3e67fb22f1247ad8798eae9b604a",
+]
 paths = [
-  '''^\.env\.example$''',
-  '''^\.env\.production\.example$''',
+  '''^\\.env\\.example$''',
+  '''^\\.env\\.production\\.example$''',
   '''^Docs/''',
   '''^backend/tests/''',
   '''^tests/''',
   '''^frontend/src/test/''',
-  '''^backend/scripts/security_gate\.py$''',
-  '''^backend/scripts/security_gate_allowlist\.txt$''',
-  '''^backend/scripts/benchmark_quality_suite\.py$''',
+  '''^backend/scripts/security_gate\\.py$''',
+  '''^backend/scripts/security_gate_allowlist\\.txt$''',
+  '''^backend/scripts/benchmark_quality_suite\\.py$''',
 ]
 regexes = [
-  '''\[REDACTED\]''',
+  '''\\[REDACTED\\]''',
   '''dummy[_-]|fake[_-]|mock[_-]|placeholder|changeme|example''',
 ]
