@@ -14,12 +14,17 @@ export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').rep
 export const DEFAULT_TIMEOUT_MS = 30000;
 export const AI_ANALYSIS_TIMEOUT_MS = 180000;
 
-const TOKEN_STORAGE_KEY = 'auth_token';
+const TOKEN_STORAGE_KEY = 'app_tok';
 
 export function getStoredToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    return (
+      localStorage.getItem(TOKEN_STORAGE_KEY) ||
+      sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+      localStorage.getItem('auth_token') ||
+      sessionStorage.getItem('auth_token')
+    );
   } catch {
     return null;
   }
@@ -43,6 +48,8 @@ export function clearStoredToken(): void {
   try {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    localStorage.removeItem('auth_token');
+    sessionStorage.removeItem('auth_token');
   } catch {
     // Storage unavailable
   }

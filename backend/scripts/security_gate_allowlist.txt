@@ -112,4 +112,5 @@ e612497353  # backend/tests/security/provenance/test_issue_intake_provenance.py 
 f8113d787c  # backend/tests/security/test_workspace_git_push_argv.py synthetic test secret
 5f0e4ba268  # backend/tests/security/test_log_redaction.py synthetic test key
 dbf9bea3aa  # backend/tests/security/test_log_redaction.py synthetic test token
+b00171bace  # frontend/src/services/api.ts TOKEN_STORAGE_KEY constant ("auth_token")
 
