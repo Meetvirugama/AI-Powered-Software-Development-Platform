@@ -1,14 +1,39 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { getSafeRedirectPath } from '../lib/authRedirect';
+import { setStoredToken } from '../services/api';
 
 export function AuthCallback() {
   const { isAuthenticated, isLoading, sessionError, retrySessionCheck } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const errorParam = searchParams.get('error') || searchParams.get('error_description');
+  const tokenHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (tokenHandledRef.current) return;
+
+    let tokenFromUrl: string | null = null;
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash;
+      if (hash) {
+        const hashParams = new URLSearchParams(hash.replace(/^#/, ''));
+        tokenFromUrl = hashParams.get('token') || hashParams.get('access_token');
+      }
+      if (!tokenFromUrl) {
+        tokenFromUrl = searchParams.get('token') || searchParams.get('access_token');
+      }
+      if (tokenFromUrl) {
+        tokenHandledRef.current = true;
+        setStoredToken(tokenFromUrl);
+        // Clean URL to not expose token in browser address bar or history
+        window.history.replaceState(null, '', window.location.pathname);
+        retrySessionCheck();
+      }
+    }
+  }, [searchParams, retrySessionCheck]);
 
   useEffect(() => {
     if (errorParam) {

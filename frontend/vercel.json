@@ -28,7 +28,7 @@
         },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; connect-src 'self'; img-src 'self' https://avatars.githubusercontent.com data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+          "value": "default-src 'self'; connect-src 'self' https://ai-powered-dev-platform-api-ehgdcmdfbseufsc6.indiasouthcentral-01.azurewebsites.net wss://ai-powered-dev-platform-api-ehgdcmdfbseufsc6.indiasouthcentral-01.azurewebsites.net; img-src 'self' https://avatars.githubusercontent.com data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
         }
       ]
     }

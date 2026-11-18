@@ -329,8 +329,14 @@ async def github_callback(
     refresh_tok, refresh_expires_in = create_refresh_token(str(user.id), role=user_role)
 
     final_destination = target_redirect or f"{frontend_base}/auth/callback"
+    if "/auth/callback" in final_destination or not target_redirect:
+        sep = "&" if "#" in final_destination else "#"
+        redirect_target = f"{final_destination}{sep}token={token}"
+    else:
+        redirect_target = final_destination
+
     redirect = RedirectResponse(
-        url=final_destination,
+        url=redirect_target,
         status_code=status.HTTP_302_FOUND,
     )
     redirect.set_cookie(

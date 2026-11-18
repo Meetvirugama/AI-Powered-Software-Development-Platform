@@ -14,6 +14,40 @@ export const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api/v1').rep
 export const DEFAULT_TIMEOUT_MS = 30000;
 export const AI_ANALYSIS_TIMEOUT_MS = 180000;
 
+const TOKEN_STORAGE_KEY = 'auth_token';
+
+export function getStoredToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredToken(token: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  } catch {
+    try {
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } catch {
+      // Storage unavailable
+    }
+  }
+}
+
+export function clearStoredToken(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+    sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage unavailable
+  }
+}
+
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
   withCredentials: true,
@@ -35,6 +69,12 @@ type RequestConfigWithMetadata = InternalAxiosRequestConfig & {
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const reqConfig = config as RequestConfigWithMetadata;
   reqConfig.metadata = { startTime: Date.now() };
+
+  // Attach Bearer token for cross-origin or cookie-independent authentication
+  const token = getStoredToken();
+  if (token && reqConfig.headers && !reqConfig.headers.Authorization) {
+    reqConfig.headers.Authorization = `Bearer ${token}`;
+  }
 
   // F-04 / OPT-02: Apply dedicated long-running timeout for AI mutation endpoints (POST/PUT/PATCH)
   // GET endpoints (e.g. status, plans, tests, settings) retain the default 30s timeout
@@ -93,10 +133,27 @@ apiClient.interceptors.response.use(
       !originalRequest.url?.includes('/auth/dev-login')
     ) {
       originalRequest._retry = true;
+      const currentToken = getStoredToken();
       return axios
-        .post('/api/v1/auth/refresh', {}, { withCredentials: true })
-        .then(() => apiClient(originalRequest))
+        .post<{ access_token?: string }>(
+          `${API_BASE_URL}/auth/refresh`,
+          {},
+          {
+            withCredentials: true,
+            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
+          }
+        )
+        .then((res) => {
+          if (res.data?.access_token) {
+            setStoredToken(res.data.access_token);
+            if (originalRequest.headers) {
+              originalRequest.headers.Authorization = `Bearer ${res.data.access_token}`;
+            }
+          }
+          return apiClient(originalRequest);
+        })
         .catch(() => {
+          clearStoredToken();
           if (
             typeof window !== 'undefined' &&
             !window.location.pathname.startsWith('/login') &&

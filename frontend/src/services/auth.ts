@@ -8,7 +8,7 @@
  * No JWT handling. No token storage. Authentication relies on the HTTP-only
  * cookie that the backend sets during the OAuth callback.
  */
-import { apiClient } from './api';
+import { apiClient, clearStoredToken, setStoredToken } from './api';
 import type { User } from '../types/api';
 
 /**
@@ -29,7 +29,11 @@ export async function getCurrentUser(): Promise<User> {
  * The frontend should clear its local auth state after this resolves.
  */
 export async function logout(): Promise<void> {
-  await apiClient.post('/auth/logout');
+  try {
+    await apiClient.post('/auth/logout');
+  } finally {
+    clearStoredToken();
+  }
 }
 
 /**
@@ -42,5 +46,8 @@ export async function devLogin(login?: string): Promise<User> {
     null,
     { params: login ? { login } : undefined }
   );
+  if (response.data.access_token) {
+    setStoredToken(response.data.access_token);
+  }
   return response.data.user;
 }
