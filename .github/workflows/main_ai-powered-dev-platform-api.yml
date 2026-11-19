@@ -116,6 +116,7 @@ jobs:
                  --ignore=backend/tests/fixtures \
                  --ignore=backend/tests/test_migration_smoke.py \
                  -o addopts= \
+                 --timeout=120 \
                  --cov=app \
                  --cov=ai \
                  --cov-report=term-missing \

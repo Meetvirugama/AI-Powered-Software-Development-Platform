@@ -1,9 +1,11 @@
 -r requirements.txt
 
 # Development, testing, static analysis, and security audit dependencies
-pytest>=8.0.0
-pytest-asyncio>=0.24,<1.0
-pytest-cov>=4.0.0
+# Pinned to ensure reproducible CI runs — update deliberately, not on every pip install
+pytest==8.4.2
+pytest-asyncio==0.26.0
+pytest-cov==7.1.0
+pytest-timeout>=2.3.0,<3.0.0
 respx>=0.21.0
 responses>=0.25.0
 ruff>=0.5.0
