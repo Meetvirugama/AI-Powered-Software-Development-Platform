@@ -77,6 +77,10 @@ class AutonomousWorkflowResult(BaseModel):
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     completed_at: str | None = None
     resumed_from_checkpoint: bool = False
+    durability_mode: str = Field(
+        default="NATIVE_TRANSIENT",
+        description="Workflow durability execution mode: 'DBOS_DURABLE' or 'NATIVE_TRANSIENT'.",
+    )
 
 
 class WorkflowStatusResponse(BaseModel):
@@ -95,4 +99,8 @@ class WorkflowStatusResponse(BaseModel):
     updated_at: str
     completed_at: str | None = None
     status_url: str = ""
+    durability_mode: str = Field(
+        default="NATIVE_TRANSIENT",
+        description="Workflow durability execution mode: 'DBOS_DURABLE' or 'NATIVE_TRANSIENT'.",
+    )
 

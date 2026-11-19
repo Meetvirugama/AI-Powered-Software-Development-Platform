@@ -166,10 +166,11 @@ class TaskPlanner:
                     if language.lower() in ("typescript", "javascript"):
                         test_command = "npm test -- --run"
 
+                # Dynamically retrieve repository files up to 500 to prevent arbitrary truncation
                 files = (
                     db.query(RepositoryFile)
                     .filter(RepositoryFile.repository_id == task.repository_id)
-                    .limit(100)
+                    .limit(500)
                     .all()
                 )
                 for f in files:
@@ -180,13 +181,14 @@ class TaskPlanner:
                     except UnsafePathError:
                         continue
 
+                # Dynamically query symbols up to 200, prioritizing non-empty names
                 symbols = (
                     db.query(CodeSymbol)
                     .filter(CodeSymbol.repository_id == task.repository_id)
-                    .limit(40)
+                    .limit(200)
                     .all()
                 )
-                relevant_symbols = list(dict.fromkeys(s.name for s in symbols if s.name))[:15]
+                relevant_symbols = list(dict.fromkeys(s.name for s in symbols if s.name))[:30]
 
                 if task.origin_finding_id:
                     finding = db.get(AnalysisFinding, task.origin_finding_id)
@@ -236,26 +238,39 @@ class TaskPlanner:
             req_target_files = (non_test or repo_files)[:2]
 
         if not req_target_files:
-            fallback_candidate = "src/main.py" if language.lower() == "python" else "src/index.ts"
-            if fallback_candidate.lower() in forbidden_lower:
-                fallback_candidate = "src/implementation.py"
-            req_target_files = [fallback_candidate]
+            # Defect remediation (F04/Issue 4): Never fabricate fictional files like src/main.py.
+            # Explicitly mark unresolved localization when repository files are unavailable.
+            req_target_files = ["UNRESOLVED"]
 
         if not localization_targets:
-            for idx, tf in enumerate(req_target_files[:3]):
-                sym_name = relevant_symbols[idx] if idx < len(relevant_symbols) else None
+            if req_target_files == ["UNRESOLVED"]:
                 localization_targets.append(
                     LocalizationTarget(
-                        file_path=tf,
-                        symbol_name=sym_name,
-                        symbol_kind="function" if sym_name else "module",
+                        file_path="UNRESOLVED",
+                        symbol_name=None,
+                        symbol_kind="module",
                         start_line=1,
-                        end_line=50,
-                        confidence=0.80 if idx == 0 else 0.65,
-                        localization_stage="line_range",
-                        rationale="Localized from task target scope and repository context",
+                        end_line=1,
+                        confidence=0.0,
+                        localization_stage="file",
+                        rationale="Unresolved localization: repository files unavailable or task scope ambiguous. Clarification or exploration required.",
                     )
                 )
+            else:
+                for idx, tf in enumerate(req_target_files[:3]):
+                    sym_name = relevant_symbols[idx] if idx < len(relevant_symbols) else None
+                    localization_targets.append(
+                        LocalizationTarget(
+                            file_path=tf,
+                            symbol_name=sym_name,
+                            symbol_kind="function" if sym_name else "module",
+                            start_line=1,
+                            end_line=50,
+                            confidence=0.80 if idx == 0 else 0.65,
+                            localization_stage="line_range",
+                            rationale="Localized from task target scope and repository context",
+                        )
+                    )
 
         return {
             "language": language,
@@ -308,12 +323,15 @@ class TaskPlanner:
         relevant_symbols: list[str] = list(ctx["relevant_symbols"])
         localization_targets: list[LocalizationTarget] = list(ctx.get("localization_targets") or [])
 
-        primary_file = target_files[0]
-        base_name = primary_file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
-        if ctx["language"].lower() in ("typescript", "javascript"):
-            test_file = f"src/test/{base_name}.test.ts"
+        primary_file = target_files[0] if target_files else "UNRESOLVED"
+        if primary_file == "UNRESOLVED":
+            test_file = f"tests/test_task_{str(task.id)[:8]}.py"
         else:
-            test_file = f"tests/test_{base_name}.py"
+            base_name = primary_file.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            if ctx["language"].lower() in ("typescript", "javascript"):
+                test_file = f"src/test/{base_name}.test.ts"
+            else:
+                test_file = f"tests/test_{base_name}.py"
         if test_file.lower() in forbidden_lower:
             test_file = f"tests/test_task_{str(task.id)[:8]}.py"
 

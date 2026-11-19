@@ -451,9 +451,30 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
 
       {latestPlan ? (
         <div className="rounded-xl border border-border bg-card p-4.5 space-y-4">
-          <div className="space-y-1">
-            <div className="text-[11px] font-mono uppercase text-primary font-bold">
-              AI Implementation Plan (v{latestPlan.plan_version})
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="text-[11px] font-mono uppercase text-primary font-bold">
+                AI Implementation Plan (v{latestPlan.plan_version})
+              </div>
+              <div className="flex items-center gap-2">
+                {latestPlan.intent && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30">
+                    <Wrench className="h-3 w-3" />
+                    <span>Intent: {latestPlan.intent.toUpperCase()}</span>
+                  </span>
+                )}
+                {latestPlan.critic_score !== undefined && (
+                  <span className={cn(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold border",
+                    latestPlan.critic_score >= 80
+                      ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                      : "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                  )}>
+                    <ShieldCheck className="h-3 w-3" />
+                    <span>Critic Score: {latestPlan.critic_score}/100</span>
+                  </span>
+                )}
+              </div>
             </div>
             <p className="text-sm font-medium text-foreground leading-snug break-words">
               {latestPlan.summary}
@@ -462,6 +483,19 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
               <p className="text-xs text-muted-foreground break-words pt-1">
                 {latestPlan.problem_statement}
               </p>
+            )}
+            {latestPlan.critic_notes && latestPlan.critic_notes.length > 0 && (
+              <div className="mt-2 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-amber-300 space-y-1">
+                <div className="font-semibold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="h-3.5 w-3.5" />
+                  <span>Adversarial Critic Notes:</span>
+                </div>
+                <ul className="list-disc list-inside space-y-0.5 text-[11px] text-muted-foreground">
+                  {latestPlan.critic_notes.map((note, idx) => (
+                    <li key={idx}>{note}</li>
+                  ))}
+                </ul>
+              </div>
             )}
           </div>
 

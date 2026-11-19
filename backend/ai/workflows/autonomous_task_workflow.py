@@ -78,6 +78,13 @@ def dbos_step(*dargs, **dkwargs):
         return fn
     return decorator
 
+def _detect_durability_mode() -> str:
+    """Disclose whether workflow execution is backed by DBOS durable execution or native transient thread."""
+    if HAS_DBOS and DBOS is not None and getattr(dbosreg, "dbos", None) is not None:
+        return "DBOS_DURABLE"
+    return "NATIVE_TRANSIENT"
+
+
 logger = logging.getLogger(__name__)
 
 # In-memory durable registry for fast status queries and duplicate prevention
@@ -379,6 +386,7 @@ def run_autonomous_task_workflow(
         status=AutonomousWorkflowStatus.RUNNING,
         started_at=start_iso,
         updated_at=start_iso,
+        durability_mode=_detect_durability_mode(),
     )
 
     with _registry_lock:
@@ -535,6 +543,7 @@ def submit_autonomous_workflow(
             status=AutonomousWorkflowStatus.QUEUED,
             started_at=start_iso,
             updated_at=start_iso,
+            durability_mode=_detect_durability_mode(),
         )
         _active_workflows[wf_id] = result
         _task_to_workflow[task_id] = wf_id

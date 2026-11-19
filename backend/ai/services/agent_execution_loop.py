@@ -490,6 +490,8 @@ class AgentExecutionLoop:
                             target_content=target_content,
                             replacement_content=replacement_content,
                         )
+                        if hasattr(res, "success") and not res.success:
+                            raise WorkspaceError(f"Patch step '{step_id}' failed on '{target_file}': {res.error}")
                         patched_files[target_file] = getattr(res, "occurrences_replaced", 1)
                     output = {"patched_files": patched_files}
                 elif self.edit_synthesizer is not None:
@@ -581,7 +583,7 @@ class AgentExecutionLoop:
             elif action_type in ("delete", "remove", "rm", "unlink", "delete_file", "remove_file"):
                 deleted_files: list[str] = []
                 for target_file in expected_files:
-                    self.workspace_manager.delete_file(task_id=task_id, file_path=target_file)
+                    self.workspace_manager.delete_file(task_id=task_id, file_path=target_file, safe_check=True)
                     deleted_files.append(target_file)
                 output = {"deleted_files": deleted_files}
 

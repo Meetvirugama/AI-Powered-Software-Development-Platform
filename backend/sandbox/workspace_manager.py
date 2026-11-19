@@ -891,6 +891,7 @@ class WorkspaceManager:
         file_path: str,
         target_content: str,
         replacement_content: str,
+        validate_syntax: bool = True,
     ) -> WorkspaceFilePatchResult:
         """Safely apply a text patch to a file within the task workspace."""
         if not target_content:
@@ -919,6 +920,24 @@ class WorkspaceManager:
         count = current_content.count(target_content)
         new_content = current_content.replace(target_content, replacement_content)
 
+        # AST and Syntax Validation Pre-check
+        if validate_syntax:
+            try:
+                from agent.tools.code_editor import CodeEditor
+                ws_root = self.get_workspace_path(task_id)
+                editor = CodeEditor(ws_root)
+                is_valid, syntax_err = editor.validate_code_syntax(file_path, new_content)
+                if not is_valid:
+                    return WorkspaceFilePatchResult(
+                        success=False,
+                        file_path=file_path,
+                        error=f"AST syntax validation failed: {syntax_err}",
+                        ast_valid=False,
+                        syntax_error_details=syntax_err,
+                    )
+            except Exception as e:
+                logger.debug("ast_prevalidation_skipped", extra={"error": str(e), "file_path": file_path})
+
         write_res = self.write_file(task_id, file_path, new_content, create_parents=False)
         if not write_res.success:
             return WorkspaceFilePatchResult(
@@ -931,11 +950,22 @@ class WorkspaceManager:
             success=True,
             file_path=file_path,
             occurrences_replaced=count,
+            ast_valid=True,
         )
 
-    def delete_file(self, task_id: str, file_path: str) -> bool:
+    def delete_file(self, task_id: str, file_path: str, safe_check: bool = False) -> bool:
         """Safely remove a file inside the isolated workspace."""
         root = self.get_workspace_path(task_id)
+        if safe_check:
+            from agent.tools.code_editor import SafeFileDeletionValidator
+            val_res = SafeFileDeletionValidator.evaluate_file_deletion(root, file_path)
+            if not val_res.can_delete:
+                logger.warning(
+                    "safe_file_deletion_blocked",
+                    extra={"file_path": file_path, "reason": val_res.blocking_reason},
+                )
+                raise WorkspacePolicyViolationError(val_res.blocking_reason or "Safe deletion validation failed.")
+
         resolved = WorkspacePathGuard.resolve_within_workspace(root, file_path)
         if resolved.exists() and resolved.is_file():
             resolved.unlink()

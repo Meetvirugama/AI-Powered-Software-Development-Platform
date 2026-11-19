@@ -12,10 +12,14 @@ Owners:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
+import uuid
 from uuid import UUID
 
 from ai.services.task_planner import TaskPlanner
+from ai.services.intent_router import IntentRouter
+from ai.services.plan_critic import PlanCritic
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -51,6 +55,8 @@ from app.schemas.plan import (
     PlanResourceBudget,
     PlanRisk,
     PlanStep,
+    PromptToPlanRequest,
+    PromptToPlanResponse,
     TaskApprovalResponse,
     TaskEventResponse,
     TaskPlanGenerateRequest,
@@ -555,6 +561,112 @@ def create_task(
     return _serialize_task_detail(task, task_repo)
 
 
+@router.post(
+    "/prompt-to-plan",
+    response_model=PromptToPlanResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Universal AI Prompt-to-Plan intake and adversarial verification",
+    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
+)
+async def prompt_to_plan(
+    payload: PromptToPlanRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PromptToPlanResponse:
+    user_id = _request_user_id(request)
+    repo = _owned_repository(payload.repository_id, user_id, db, min_role=UserRole.DEVELOPER)
+
+    # 1. Intent Analysis & Ambiguity Detection (Phase 2)
+    router_svc = IntentRouter()
+    intent_result = router_svc.classify_intent(payload.prompt)
+
+    base_rev = payload.base_revision or repo.default_branch or "main"
+    cleaned_prompt = payload.prompt.strip()
+
+    created_task = None
+    task_repo = TaskRepository(db)
+
+    # Extract target files from request or prompt
+    explicit_targets = list(getattr(payload, "target_files", None) or [])
+    if not explicit_targets:
+        extracted = re.findall(r"\b([a-zA-Z0-9_\-/\\]+\.(?:py|ts|tsx|js|jsx|json|yaml|yml))\b", cleaned_prompt)
+        explicit_targets = [f for f in extracted if not f.startswith(".")]
+
+    # 2. Persist Task record if requested
+    if payload.auto_create_task:
+        from app.schemas.task import TaskSourceReference, TaskRequirement
+        reqs_intake = [
+            TaskRequirement(
+                id="req-1",
+                description=cleaned_prompt[:256],
+                target_files=explicit_targets,
+            )
+        ]
+        task_intake = TaskCreateRequest(
+            repository_id=payload.repository_id,
+            description=cleaned_prompt,
+            base_revision=base_rev,
+            source=TaskSourceReference(type="USER_PROMPT"),
+            requirements=reqs_intake,
+        )
+        created_task = task_repo.create_task(user_id=user_id, intake=task_intake)
+        target_task = created_task
+    else:
+        target_task = AgentTask(
+            id=uuid.uuid4(),
+            repository_id=payload.repository_id,
+            user_id=user_id,
+            title=cleaned_prompt.split("\n")[0][:120],
+            description=cleaned_prompt,
+            base_revision=base_rev,
+            status=TaskStatus.PLANNING.value,
+        )
+
+    # 3. Generate structured implementation plan
+    planner: TaskPlanner | None = getattr(request.app.state, "task_planner", None)
+    if planner is None:
+        llm_gateway = getattr(request.app.state, "llm_gateway", None)
+        planner = TaskPlanner(llm_gateway=llm_gateway)
+
+    structured_plan = await planner.generate_plan(target_task, db=db)
+    if explicit_targets:
+        curr_exp = list(structured_plan.expected_files or [])
+        for et in explicit_targets:
+            if et not in curr_exp:
+                curr_exp.append(et)
+        structured_plan.expected_files = curr_exp
+        structured_plan.expected_files_to_modify = curr_exp
+
+    # 4. Adversarial Plan Critic Review
+    critic = PlanCritic()
+    from ai.services.task_requirement_discovery import TaskRequirementDiscovery
+    from ai.context.task_context import TaskContextBuilder
+    context_builder = TaskContextBuilder()
+    manifest = context_builder.build_task_context(target_task, db)
+    req_discovery = TaskRequirementDiscovery()
+    reqs = req_discovery.discover_requirements(target_task, manifest)
+    critic_review = critic.review_plan(structured_plan, requirements=reqs)
+
+    # 5. Save plan record if task was persisted
+    if created_task:
+        task_repo.save_plan(
+            task=created_task,
+            plan_schema=structured_plan,
+            base_revision=base_rev,
+            actor_id=user_id,
+        )
+
+    return PromptToPlanResponse(
+        task_id=str(created_task.id) if created_task else None,
+        repository_id=str(payload.repository_id),
+        intent_analysis=intent_result.model_dump(mode="json"),
+        plan=structured_plan.model_dump(mode="json"),
+        critic_review=critic_review.model_dump(mode="json"),
+        ambiguity_detected=intent_result.is_ambiguous,
+        clarifications=intent_result.suggested_clarifications,
+    )
+
+
 @router.get(
     "",
     response_model=PaginatedTaskListResponse,
@@ -706,6 +818,65 @@ def approve_task_plan(
 ) -> TaskApprovalResponse:
     task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
+
+    # Server-side completeness and validity enforcement (Part 17 / F04 / ADR-009)
+    target_version = body.plan_version if (body and body.plan_version is not None) else task.latest_plan_version
+    plan_record = task_repo.get_plan_by_version(task.id, target_version) if target_version else task_repo.get_latest_plan(task.id)
+    if plan_record is not None and plan_record.steps is not None and len(plan_record.steps) == 0:
+        raise APIError(
+            400,
+            ErrorCode.PLAN_VALIDATION_FAILED,
+            "Cannot approve plan: implementation plan contains zero executable steps.",
+        )
+
+    if task.requirements and plan_record:
+        from ai.services.task_completeness_checker import TaskCompletenessChecker
+        from ai.services.task_requirement_discovery import DiscoveredTaskRequirement
+        from app.schemas.plan import PlanStep, StructuredPlan
+        discovered_reqs: list[DiscoveredTaskRequirement] = []
+        for req in task.requirements:
+            if isinstance(req, dict) and req.get("requirement_id"):
+                try:
+                    discovered_reqs.append(
+                        DiscoveredTaskRequirement(
+                            requirement_id=req["requirement_id"],
+                            description=req.get("description", ""),
+                            category=req.get("category", "implementation"),
+                            priority=req.get("priority", "HIGH"),
+                            affected_files=req.get("affected_files", []),
+                            affected_symbols=req.get("affected_symbols", []),
+                            dependencies=req.get("dependencies", []),
+                            acceptance_criteria=req.get("acceptance_criteria", []),
+                            required_tests=req.get("required_tests", []),
+                            status=req.get("status", "REQUIRED"),
+                        )
+                    )
+                except Exception:
+                    continue
+        if discovered_reqs:
+            parsed_steps = []
+            for s in (plan_record.steps or []):
+                try:
+                    parsed_steps.append(PlanStep.model_validate(s) if isinstance(s, dict) else s)
+                except Exception:
+                    continue
+            dummy_plan = StructuredPlan(
+                task_id=str(task.id),
+                plan_version=plan_record.version,
+                base_revision=plan_record.base_revision,
+                summary=plan_record.summary,
+                steps=parsed_steps,
+                tests_to_run=plan_record.tests_to_run or [],
+                expected_files=plan_record.expected_files or [],
+            )
+            checker = TaskCompletenessChecker()
+            comp_report = checker.check_plan_completeness(dummy_plan, discovered_reqs)
+            if comp_report.missing_critical_count > 0:
+                raise APIError(
+                    409,
+                    ErrorCode.PLAN_VALIDATION_FAILED,
+                    f"Cannot approve plan: {comp_report.missing_critical_count} critical requirement(s) are not covered by any plan step.",
+                )
 
     effective_comment = (body.comment or body.notes) if body else None
     try:
@@ -2049,6 +2220,7 @@ def get_task_workflow_status(
                 else None
             ),
             "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
+            "durability_mode": "NATIVE_TRANSIENT",
         })
 
     total_steps = 7
@@ -2067,6 +2239,7 @@ def get_task_workflow_status(
         "updated_at": wf.updated_at,
         "completed_at": wf.completed_at,
         "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
+        "durability_mode": getattr(wf, "durability_mode", "NATIVE_TRANSIENT"),
     })
 
 
