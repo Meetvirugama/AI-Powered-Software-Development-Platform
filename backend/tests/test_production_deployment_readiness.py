@@ -123,7 +123,7 @@ class TestDeploymentConfigsAndStartupScript:
             "COOKIE_SECURE=true",
             "COOKIE_SAMESITE=",
             "TRUST_PROXY_HEADERS=true",
-            "DISABLE_EMBEDDED_SYNC_WORKER=true",
+            "DISABLE_EMBEDDED_SYNC_WORKER=",
             "RUN_MIGRATIONS_ON_STARTUP=true",
         ):
             assert key in prod_env, f"Missing '{key}' in .env.production.example"
