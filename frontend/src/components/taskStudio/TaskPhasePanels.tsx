@@ -18,7 +18,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import type { PlanStep } from '../../types/task';
+import type { PlanStep, TaskPlan } from '../../types/task';
 import {
   parseUnifiedDiffWithTokens,
   type SyntaxToken,
@@ -325,7 +325,7 @@ TaskPublicationPhasePanel.displayName = 'TaskPublicationPhasePanel';
 
 export interface RepositoryTaskPlanTabProps {
   taskDetail: any;
-  latestPlan: any;
+  latestPlan: TaskPlan | null | any;
   showRevisionInput: boolean;
   setShowRevisionInput: (v: boolean) => void;
   showRejectionInput: boolean;
@@ -491,7 +491,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
                   <span>Adversarial Critic Notes:</span>
                 </div>
                 <ul className="list-disc list-inside space-y-0.5 text-[11px] text-muted-foreground">
-                  {latestPlan.critic_notes.map((note, idx) => (
+                  {latestPlan.critic_notes.map((note: string, idx: number) => (
                     <li key={idx}>{note}</li>
                   ))}
                 </ul>
