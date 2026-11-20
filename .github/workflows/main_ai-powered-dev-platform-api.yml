@@ -384,6 +384,13 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F5CA4B1BDC3647FFBF114253AA948A4D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_FBC8B15832C5410083B5503431A35776 }}
 
+      - name: Ensure embedded sync worker is enabled in Azure Web App
+        run: |
+          az webapp config appsettings set \
+            --name 'ai-powered-dev-platform-api' \
+            --resource-group 'ai-platform-rg' \
+            --settings DISABLE_EMBEDDED_SYNC_WORKER=false
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp

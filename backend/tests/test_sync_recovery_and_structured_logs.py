@@ -531,3 +531,42 @@ async def test_download_zipball_extracts_files_and_strips_prefix(tmp_path: Path,
     assert (target / "src" / "index.js").exists()
     assert (target / "src" / "index.js").read_text() == "console.log('hi');"
 
+
+@pytest.mark.asyncio
+async def test_clone_repository_empty_repo_raises_clean_error(tmp_path: Path, monkeypatch) -> None:
+    """Verify clone_repository detects empty/missing branch git errors and raises clean GitHubCloneError."""
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from app.core.config import get_settings
+    from app.integrations.github.service import GitHubCloneError, GitHubService
+    from app.services.sync_worker import _user_facing_error
+
+    fake_redis = SimpleNamespace(get=AsyncMock(return_value="token123"))
+    service = GitHubService(redis=fake_redis, settings=get_settings(), workspace_root=tmp_path)
+    monkeypatch.setattr(service._token_manager, "get_token", AsyncMock(return_value="mock_token"))
+
+    class FakeProc:
+        returncode = 128
+
+        async def communicate(self):
+            return b"", b"Cloning into '/tmp/test'...\nfatal: Remote branch main not found in upstream origin\n"
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return FakeProc()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_create_subprocess_exec)
+
+    with pytest.raises(GitHubCloneError) as exc_info:
+        await service.clone_repository(
+            installation_id=1,
+            owner="parths1409",
+            repo="IT314_LAB_01_3SUM",
+            branch="main",
+            workspace_path=str(tmp_path / "cloned"),
+        )
+
+    assert "empty or branch 'main' was not found on GitHub" in str(exc_info.value)
+    user_msg = _user_facing_error(exc_info.value)
+    assert "Repository is empty on GitHub" in user_msg
+    assert "Push at least one commit" in user_msg
+
