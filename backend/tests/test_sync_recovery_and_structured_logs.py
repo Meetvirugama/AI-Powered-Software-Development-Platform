@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -191,7 +191,10 @@ def test_request_sync_supersedes_stale_job_with_fresh_job():
     result = service.request_sync(repo_id, user_id)
 
     # Verify stale job was failed
-    fake_repos.mark_sync_job_failed.assert_called_once_with(stale_job_id)
+    fake_repos.mark_sync_job_failed.assert_called_once_with(
+        stale_job_id,
+        error_message=ANY,
+    )
     # Verify fresh job was created and enqueued
     fake_repos.create_sync_job.assert_called_once_with(repo_id, user_id)
     assert result.id == fresh_job_id

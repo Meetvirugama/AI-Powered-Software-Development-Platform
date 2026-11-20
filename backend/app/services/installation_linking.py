@@ -78,15 +78,29 @@ async def link_installation_for_user(
     Raises APIError (400/403/404/503) when the installation cannot be linked.
     Idempotent: re-linking an installation the user already owns is a no-op refresh.
     """
-    clean_id = normalize_installation_id(installation_id)
+    raw_str = str(installation_id or "").strip()
     repo = GitHubInstallationRepository(db)
-    existing = repo.get_by_installation_id(clean_id)
+    existing = repo.get_by_installation_id(raw_str)
     if existing is not None and existing.user_id != user.id:
         logger.warning(
             "installation_link_cross_tenant_blocked",
-            extra={"user_id": str(user.id), "installation_id": clean_id},
+            extra={"user_id": str(user.id), "installation_id": raw_str},
         )
-        raise APIError(403, ErrorCode.FORBIDDEN, "This GitHub installation is linked to another user account.")
+        raise APIError(403, ErrorCode.FORBIDDEN, "GitHub installation is linked to another user account.")
+
+    if existing is not None and existing.user_id == user.id:
+        if github_service is None or not _INSTALLATION_ID_RE.fullmatch(raw_str):
+            return existing
+
+    clean_id = normalize_installation_id(installation_id)
+    if clean_id != raw_str:
+        existing = repo.get_by_installation_id(clean_id)
+        if existing is not None and existing.user_id != user.id:
+            logger.warning(
+                "installation_link_cross_tenant_blocked",
+                extra={"user_id": str(user.id), "installation_id": clean_id},
+            )
+            raise APIError(403, ErrorCode.FORBIDDEN, "GitHub installation is linked to another user account.")
 
     if github_service is None:
         if existing is not None:
