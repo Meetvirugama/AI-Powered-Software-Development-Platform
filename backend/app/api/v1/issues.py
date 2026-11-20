@@ -21,7 +21,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ai.services.issue_task_adapter import IssueToTaskAdapter, format_issue_from_finding
+from app.api.v1.dependencies import ensure_min_role
 from app.core.database import get_db
+from app.models.user import UserRole
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.integrations.github.base import GitHubIssueData
@@ -155,6 +157,7 @@ async def import_github_issue(
     request: Request,
     db: Session = Depends(get_db),
 ) -> IssueImportResponse:
+    ensure_min_role(request, UserRole.DEVELOPER)
     repo, user_id = _owned_repository(repository_id, request, db)
     task_repo = TaskRepository(db)
 
@@ -371,6 +374,7 @@ async def create_github_issue(
     request: Request,
     db: Session = Depends(get_db),
 ) -> IssueImportResponse:
+    ensure_min_role(request, UserRole.DEVELOPER)
     repo, user_id = _owned_repository(repository_id, request, db)
     task_repo = TaskRepository(db)
 

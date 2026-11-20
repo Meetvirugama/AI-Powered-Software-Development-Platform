@@ -12,17 +12,18 @@ import logging
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Query, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.v1.dependencies import ensure_min_role, require_min_role
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis, get_redis_async
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository
+from app.models.user import UserRole
 from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.repositories.repository_repository import RepositoryRepository
@@ -34,6 +35,11 @@ from app.schemas.repository import (
     PaginatedAvailableRepositoryResponse,
     RepositoryAutomationSettingsResponse,
     UpdateRepositoryAutomationSettingsRequest,
+)
+from app.services.installation_linking import (
+    link_installation_for_user,
+    normalize_installation_id,
+    sync_user_installations,
 )
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
 
@@ -83,101 +89,24 @@ async def list_github_repositories(
     installation_repo = GitHubInstallationRepository(db)
     user = UserRepository(db).get_by_id(user_id)
 
-    # If installation_id passed in query params, verify ownership before linking
+    github_service = getattr(request.app.state, "github_service", None)
+
+    # installation_id arrives from the post-install redirect; link it only after GitHub
+    # confirms the installation belongs to this user's own account.
     if installation_id and user:
-        clean_inst_id = str(installation_id).strip()
-        existing = installation_repo.get_by_installation_id(clean_inst_id)
-        if existing:
-            if existing.user_id != user.id:
-                raise APIError(
-                    403,
-                    ErrorCode.FORBIDDEN,
-                    "GitHub installation is linked to another user account.",
-                )
-        else:
-            # Installation not yet in DB; verify with GitHub App API before linking
-            github_service = getattr(request.app.state, "github_service", None)
-            if github_service:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        resp = await client.get(
-                            f"https://api.github.com/app/installations/{clean_inst_id}",
-                            headers=github_service._app_auth_headers(),
-                        )
-                        if resp.is_success:
-                            inst_data = resp.json()
-                            acc_login = (inst_data.get("account") or {}).get("login", "")
-                            acc_id = str(inst_data.get("target_id") or (inst_data.get("account") or {}).get("id") or "")
-                            if (
-                                (acc_login and acc_login.lower() == user.login.lower())
-                                or (user.github_id and acc_id == str(user.github_id))
-                            ):
-                                installation_repo.upsert(
-                                    user_id=user.id,
-                                    installation_id=clean_inst_id,
-                                    account_login=acc_login or user.login,
-                                    permissions=inst_data.get("permissions", {}),
-                                    allow_reassign=False,
-                                )
-                            else:
-                                raise APIError(
-                                    403,
-                                    ErrorCode.FORBIDDEN,
-                                    "GitHub installation account does not match the authenticated user.",
-                                )
-                        elif resp.status_code == 404:
-                            raise APIError(
-                                404,
-                                ErrorCode.RESOURCE_NOT_FOUND,
-                                "GitHub installation was not found on GitHub App.",
-                            )
-                        else:
-                            raise APIError(
-                                403,
-                                ErrorCode.FORBIDDEN,
-                                "Unable to verify GitHub installation ownership.",
-                            )
-                except APIError:
-                    raise
-                except Exception as exc:
-                    logger.warning("query_installation_link_error", extra={"error": str(exc)})
-            else:
-                logger.warning(
-                    "query_installation_link_blocked_no_service",
-                    extra={"installation_id": clean_inst_id, "user_id": str(user.id)},
-                )
+        try:
+            await link_installation_for_user(db, user, installation_id, github_service)
+        except APIError as exc:
+            if exc.status_code < 500:
+                raise
+            # GitHub/App unavailable: still list what is already linked instead of failing the page.
+            logger.warning("query_installation_link_unverified", extra={"reason": exc.message})
 
     installations = installation_repo.list_by_user(user_id)
 
-    # Auto-sync installations from GitHub App if not found in database
-    github_service = getattr(request.app.state, "github_service", None)
-    if not installations and github_service:
-        if user:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(
-                        "https://api.github.com/app/installations?per_page=100",
-                        headers=github_service._app_auth_headers(),
-                    )
-                    if resp.is_success:
-                        app_installs = resp.json()
-                        for inst in app_installs:
-                            acc_login = (inst.get("account") or {}).get("login", "")
-                            acc_id = str(inst.get("target_id") or (inst.get("account") or {}).get("id") or "")
-                            if (
-                                (acc_login and acc_login.lower() == user.login.lower())
-                                or (user.github_id and acc_id == str(user.github_id))
-                            ):
-                                installation_repo.upsert(
-                                    user_id=user.id,
-                                    installation_id=str(inst["id"]),
-                                    account_login=acc_login or user.login,
-                                    permissions=inst.get("permissions", {}),
-                                    allow_reassign=False,
-                                )
-                        installations = installation_repo.list_by_user(user_id)
-            except Exception as exc:
-                logger.warning("auto_sync_installations_error", extra={"error": str(exc)})
+    # Auto-discover installations on the user's own account if none are linked yet
+    if not installations and github_service and user:
+        installations = await sync_user_installations(db, user, github_service)
 
     if not installations:
         return PaginatedAvailableRepositoryResponse(
@@ -264,6 +193,7 @@ async def connect_repository(
 ) -> ConnectRepositoryResponse:
     """Register a GitHub repository and queue an initial sync job."""
     user_id = _request_user_id(request)
+    ensure_min_role(request, UserRole.DEVELOPER)
 
     repo_repo = RepositoryRepository(db)
 
@@ -366,30 +296,41 @@ class LinkInstallationRequest(BaseModel):
     installation_id: str
 
 
-@router.post("/installations/link", summary="Link a GitHub App installation to the authenticated user")
-def link_github_installation(
+def _installation_payload(inst: GitHubInstallation) -> dict:
+    return {
+        "id": str(inst.id),
+        "installation_id": inst.installation_id,
+        "account_login": inst.account_login,
+        "permissions": inst.permissions or {},
+        "installed_at": inst.installed_at.isoformat() if getattr(inst, "installed_at", None) else None,
+    }
+
+
+@router.get("/installations", summary="List GitHub App installations linked to the authenticated user")
+def list_linked_installations(request: Request, db: Session = Depends(get_db)) -> dict:
+    user_id = _request_user_id(request)
+    items = [_installation_payload(i) for i in GitHubInstallationRepository(db).list_by_user(user_id)]
+    return {"items": items, "total": len(items)}
+
+
+@router.post(
+    "/installations/link",
+    summary="Link a GitHub App installation to the authenticated user",
+    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
+)
+async def link_github_installation(
     body: LinkInstallationRequest,
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """Explicitly link an installation ID to the current authenticated user."""
+    """Link an installation after verifying with GitHub that it belongs to the caller's account."""
     user_id = _request_user_id(request)
     user = UserRepository(db).get_by_id(user_id)
     if not user:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "User account not found.")
 
-    inst_id_clean = body.installation_id.strip()
-    if not inst_id_clean:
-        raise APIError(400, ErrorCode.BAD_REQUEST, "installation_id cannot be empty.")
-
-    installation_repo = GitHubInstallationRepository(db)
-    inst = installation_repo.upsert(
-        user_id=user.id,
-        installation_id=inst_id_clean,
-        account_login=user.login,
-        permissions={},
-        allow_reassign=False,
-    )
+    github_service = getattr(request.app.state, "github_service", None)
+    inst = await link_installation_for_user(db, user, body.installation_id, github_service)
     return {
         "status": "linked",
         "installation_id": inst.installation_id,
@@ -398,35 +339,64 @@ def link_github_installation(
     }
 
 
+@router.delete(
+    "/installations/{installation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Unlink a GitHub App installation from the authenticated user",
+    dependencies=[Depends(require_min_role(UserRole.DEVELOPER))],
+)
+def unlink_github_installation(installation_id: str, request: Request, db: Session = Depends(get_db)) -> Response:
+    user_id = _request_user_id(request)
+    clean_id = normalize_installation_id(installation_id)
+    repo = GitHubInstallationRepository(db)
+    inst = repo.get_by_installation_id(clean_id)
+    if inst is None or inst.user_id != user_id:
+        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "Installation not found.")
+    in_use = db.query(Repository.id).filter(Repository.installation_id == inst.id).first()
+    if in_use is not None:
+        raise APIError(
+            409,
+            ErrorCode.CONFLICT,
+            "Disconnect the repositories that use this installation before unlinking it.",
+        )
+    repo.delete_by_installation_id(clean_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/installation/callback", summary="GitHub App installation redirect callback")
-def github_installation_callback(
+async def github_installation_callback(
     request: Request,
-    installation_id: str = Query(...),
+    installation_id: str | None = Query(default=None),
     setup_action: str = Query(default="install"),
     db: Session = Depends(get_db),
 ):
-    """Handle redirect from GitHub after user installs the GitHub App."""
-    settings = get_settings()
-    frontend_base = settings.cors_origins[0] if settings.cors_origins else "http://localhost:5173"
+    """Handle the redirect from GitHub after the user installs (or updates) the GitHub App.
 
-    try:
-        user_id = _request_user_id(request)
-        user = UserRepository(db).get_by_id(user_id)
-        if user:
-            GitHubInstallationRepository(db).upsert(
-                user_id=user.id,
-                installation_id=installation_id,
-                account_login=user.login,
-                permissions={},
-                allow_reassign=False,
+    The installation_id query parameter is attacker-controllable, so it is only linked after
+    GitHub confirms the installation belongs to the signed-in user's own account.
+    """
+    from app.api.v1.auth import _installation_redirect, _resolve_trusted_frontend_url
+
+    frontend_base = _resolve_trusted_frontend_url()
+    linked = False
+    clean_id = (installation_id or "").strip()
+    user_id_str = getattr(request.state, "user_id", None)
+    if clean_id and user_id_str and setup_action != "request":
+        try:
+            user = UserRepository(db).get_by_id(UUID(str(user_id_str)))
+            if user:
+                github_service = getattr(request.app.state, "github_service", None)
+                await link_installation_for_user(db, user, clean_id, github_service)
+                linked = True
+        except APIError as exc:
+            logger.warning(
+                "installation_callback_link_rejected",
+                extra={"installation_id": clean_id, "reason": exc.message},
             )
-    except Exception as exc:
-        logger.info("installation_callback_without_user", extra={"error": str(exc)})
+        except Exception as exc:
+            logger.info("installation_callback_without_user", extra={"error": str(exc)})
 
-    return RedirectResponse(
-        url=f"{frontend_base}/app/repositories?installed=true&installation_id={installation_id}",
-        status_code=status.HTTP_302_FOUND,
-    )
+    return _installation_redirect(frontend_base, clean_id or None, linked)
 
 
 SUPPORTED_WEBHOOK_EVENTS = {
@@ -729,6 +699,7 @@ async def replay_webhook_event(
 ):
     """Replay a failed or dead-letter webhook event. Actively processing events cannot be replayed."""
     user_id = _request_user_id(request)
+    ensure_min_role(request, UserRole.DEVELOPER)
     try:
         event_uuid = UUID(event_id)
     except ValueError:
@@ -801,6 +772,7 @@ def update_repository_automation(
 ) -> RepositoryAutomationSettingsResponse:
     """Update opt-in automation settings (push-sync, PR review, draft review) for a repository."""
     user_id = _request_user_id(request)
+    ensure_min_role(request, UserRole.DEVELOPER)
     repo = RepositoryRepository(db).get_by_github_id_and_user(github_repo_id, user_id)
     if not repo:
         raise APIError(404, ErrorCode.REPOSITORY_NOT_FOUND, "Repository not found or access denied.")

@@ -21,7 +21,9 @@ from app.api.v1.analysis.common import (
     _owned_repository_async,
     _request_user_id,
 )
+from app.api.v1.dependencies import ensure_min_role
 from app.core.database import get_db
+from app.models.user import UserRole
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.core.stage_metrics import StageExecutionTimer
@@ -64,6 +66,7 @@ async def detect_bugs(
     db: Session = Depends(get_db),
 ) -> BugDetectionResponse:
     """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
+    ensure_min_role(request, UserRole.DEVELOPER)
     timer = StageExecutionTimer("detect_bugs", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)

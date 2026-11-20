@@ -22,7 +22,9 @@ from app.api.v1.analysis.common import (
     _owned_repository_async,
     _request_user_id,
 )
+from app.api.v1.dependencies import ensure_min_role
 from app.core.database import get_db
+from app.models.user import UserRole
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.core.stage_metrics import StageExecutionTimer
@@ -72,6 +74,7 @@ async def review_code(
     db: Session = Depends(get_db),
 ) -> ReviewReportResponse:
     """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
+    ensure_min_role(request, UserRole.DEVELOPER)
     timer = StageExecutionTimer("review", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)
@@ -337,6 +340,7 @@ async def publish_review_to_github(
     db: Session = Depends(get_db),
 ) -> ReviewPublicationResponse:
     """Manually publish qualified findings from an analysis run as inline PR comments."""
+    ensure_min_role(request, UserRole.DEVELOPER)
     from app.models.analysis_run import AnalysisRun
     from app.services.review_publication_service import ReviewPublicationService
 
@@ -453,6 +457,7 @@ def submit_finding_feedback(
     db: Session = Depends(get_db),
 ) -> ReviewFeedbackResponse:
     """Submit useful/not_useful/false_positive feedback on a code review finding."""
+    ensure_min_role(request, UserRole.DEVELOPER)
     from app.models.analysis_finding import AnalysisFinding
     from app.services.review_feedback_service import ReviewFeedbackService
 
@@ -534,6 +539,7 @@ def update_repository_review_settings(
     db: Session = Depends(get_db),
 ) -> ReviewSettingsResponse:
     """Update repository code review and PR publication settings."""
+    ensure_min_role(request, UserRole.DEVELOPER)
     from app.services.review_settings_service import set_repo_review_settings
 
     repo = _owned_repository(repository_id, request, db)

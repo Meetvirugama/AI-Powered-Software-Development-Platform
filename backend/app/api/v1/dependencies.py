@@ -33,9 +33,38 @@ def get_request_user_id(request: Request) -> UUID:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "Invalid authenticated user.") from exc
 
 
+VALID_ROLES: frozenset[str] = frozenset(ROLE_HIERARCHY)
+
+
+def normalize_role(role: object, default: str = UserRole.DEVELOPER.value) -> str:
+    """Lower-case a role value and map unknown values to the least-privileged role.
+
+    A missing role falls back to ``default``; a present-but-unknown role (for example a
+    typo stored in the database or a tampered claim) is treated as VIEWER so that bad
+    data can never escalate privileges.
+    """
+    if role is None or (isinstance(role, str) and not role.strip()):
+        return default
+    value = (role.value if isinstance(role, UserRole) else str(role)).strip().lower()
+    return value if value in VALID_ROLES else UserRole.VIEWER.value
+
+
 def get_request_user_role(request: Request) -> str:
     """Extract authenticated user's role from request state, defaulting to 'developer'."""
-    return getattr(request.state, "role", UserRole.DEVELOPER.value) or UserRole.DEVELOPER.value
+    return normalize_role(getattr(request.state, "role", None))
+
+
+def ensure_min_role(request: Request, min_role: str | UserRole) -> str:
+    """Imperative RBAC check for handlers that cannot use ``Depends`` (raises 403)."""
+    min_role_str = normalize_role(min_role)
+    current_role = get_request_user_role(request)
+    if ROLE_HIERARCHY.get(current_role, 1) < ROLE_HIERARCHY.get(min_role_str, 2):
+        raise APIError(
+            403,
+            ErrorCode.FORBIDDEN,
+            f"Insufficient privileges. Action requires at least '{min_role_str}' role.",
+        )
+    return current_role
 
 
 def require_role(*allowed_roles: str | UserRole):

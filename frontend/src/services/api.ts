@@ -110,6 +110,28 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 // ---------------------------------------------------------------------------
 // Response interceptor — latency logging & error normalisation
 // ---------------------------------------------------------------------------
+/**
+ * Refresh tokens are single-use (rotated on every refresh). When several requests fail with
+ * 401 at the same time they must share ONE refresh call; otherwise the second call presents an
+ * already-used refresh token and the backend revokes the session.
+ *
+ * The refresh token lives only in the HTTP-only cookie, so no Authorization header is sent:
+ * the stored value is an access token and is never valid as a refresh token.
+ */
+let refreshInFlight: Promise<string | undefined> | null = null;
+
+function refreshAccessToken(): Promise<string | undefined> {
+  if (!refreshInFlight) {
+    refreshInFlight = axios
+      .post<{ access_token?: string }>(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true })
+      .then((res) => res.data?.access_token)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
 apiClient.interceptors.response.use(
   (response) => {
     const reqConfig = response.config as RequestConfigWithMetadata;
@@ -147,26 +169,18 @@ apiClient.interceptors.response.use(
       !originalRequest.url?.includes('/auth/dev-login')
     ) {
       originalRequest._retry = true;
-      const currentToken = getStoredToken();
-      return axios
-        .post<{ access_token?: string }>(
-          `${API_BASE_URL}/auth/refresh`,
-          {},
-          {
-            withCredentials: true,
-            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
-          }
-        )
-        .then((res) => {
-          if (res.data?.access_token) {
-            setStoredToken(res.data.access_token);
+      return refreshAccessToken()
+        .then((accessToken) => {
+          if (accessToken) {
+            setStoredToken(accessToken);
             if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${res.data.access_token}`;
+              originalRequest.headers.Authorization = `Bearer ${accessToken}`;
             }
           }
           return apiClient(originalRequest);
-        })
-        .catch(() => {
+        }, () => {
+          // Only a failed *refresh* ends the session. Errors from the retried request itself
+          // (e.g. a 500 or 404) must propagate normally instead of logging the user out.
           clearStoredToken();
           if (
             typeof window !== 'undefined' &&
