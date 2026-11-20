@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import APIError, ErrorCode
 from app.models.repository import Repository, SyncStatus
-from app.models.sync_job import SyncJob, SyncJobStatus
+from app.models.sync_job import SyncJob, SyncJobStage, SyncJobStatus
 from app.repositories.repository_repository import RepositoryRepository
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,11 @@ def reconcile_stale_sync_jobs(
 
     for job in stale_jobs:
         job.status = SyncJobStatus.FAILED
+        job.stage = SyncJobStage.FAILED.value
+        job.finished_at = datetime.now(timezone.utc)
+        job.error_message = job.error_message or (
+            f"Sync did not finish within {timeout_seconds} seconds and was marked as failed. Retry the sync."
+        )
         reconciled_ids.append(job.id)
         repo = session.get(Repository, job.repository_id)
         if repo and repo.sync_status == SyncStatus.SYNCING:
@@ -129,6 +134,12 @@ class RepositorySyncService:
         self.queue = queue
         self.timeout_seconds = timeout_seconds
 
+    def _fail_job(self, job_id: UUID, reason: str) -> None:
+        try:
+            self.repositories.mark_sync_job_failed(job_id, error_message=reason)
+        except TypeError:  # test doubles with the legacy one-argument signature
+            self.repositories.mark_sync_job_failed(job_id)
+
     def request_sync(self, repository_id: UUID, user_id: UUID, force: bool = False) -> SyncJob:
         """Create a job and dispatch it for the GitHub-backed sync worker.
 
@@ -152,7 +163,7 @@ class RepositorySyncService:
                         "force_sync_requested_superseding_active_job",
                         extra={"job_id": str(active_job.id), "repository_id": str(repository_id)},
                     )
-                    self.repositories.mark_sync_job_failed(active_job.id)
+                    self._fail_job(active_job.id, "Superseded by a forced re-sync.")
                 else:
                     now = datetime.now(timezone.utc)
                     job_time = getattr(active_job, "updated_at", None) or getattr(active_job, "created_at", None)
@@ -180,7 +191,7 @@ class RepositorySyncService:
                                 "age_seconds": round(age_seconds, 1),
                             },
                         )
-                        self.repositories.mark_sync_job_failed(active_job.id)
+                        self._fail_job(active_job.id, "Superseded: the previous sync stopped making progress.")
 
         job = self.repositories.create_sync_job(repository.id, user_id)
         try:
@@ -188,7 +199,7 @@ class RepositorySyncService:
         except Exception as exc:
             # The persisted job is useful for operations/debugging, but it must
             # not look runnable when no worker can receive it.
-            self.repositories.mark_sync_job_failed(job.id)
+            self._fail_job(job.id, "The sync queue is unavailable; the job could not be dispatched.")
             self.repositories.update_sync_status(repository.id, SyncStatus.FAILED)
             raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Sync queue is unavailable.", retryable=True) from exc
 

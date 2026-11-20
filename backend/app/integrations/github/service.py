@@ -341,26 +341,143 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         data = await self._get(url, self._app_auth_headers())
         return self._parse_repo(data)
 
-    async def list_branches(self, owner: str, repo: str) -> list[GitHubBranch]:
-        """Return all branches for the given repository."""
-        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/branches?per_page=100"
-        data = await self._get(url, self._app_auth_headers())
+    async def _repo_read_headers(self, installation_id: int | str | None) -> dict[str, str]:
+        """Repository endpoints (/repos/...) reject App JWTs; they need an installation token."""
+        if installation_id is not None and str(installation_id).isdigit():
+            return await self._installation_auth_headers(int(installation_id))
+        return self._app_auth_headers()
 
-        branches = [
-            GitHubBranch(
-                name=b["name"],
-                sha=b["commit"]["sha"],
-                protected=b.get("protected", False),
+    async def list_branches(
+        self,
+        owner: str,
+        repo: str,
+        installation_id: int | str | None = None,
+        max_pages: int = 10,
+    ) -> list[GitHubBranch]:
+        """Return the repository's branches (paginated, up to ``max_pages`` x 100)."""
+        owner, repo = self._validate_owner_and_repo(owner, repo)
+        headers = await self._repo_read_headers(installation_id)
+        inst = int(installation_id) if installation_id is not None and str(installation_id).isdigit() else None
+        branches: list[GitHubBranch] = []
+        for page in range(1, max_pages + 1):
+            url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/branches?per_page=100&page={page}"
+            data = await self._get(url, headers, inst)
+            batch = data if isinstance(data, list) else []
+            branches.extend(
+                GitHubBranch(
+                    name=b["name"],
+                    sha=(b.get("commit") or {}).get("sha", ""),
+                    protected=b.get("protected", False),
+                )
+                for b in batch
+                if isinstance(b, dict) and b.get("name")
             )
-            for b in data
-        ]
+            if len(batch) < 100:
+                break
         logger.debug("Listed %d branches for %s/%s", len(branches), owner, repo)
         return branches
 
-    async def get_default_branch(self, owner: str, repo: str) -> str:
+    async def get_default_branch(
+        self, owner: str, repo: str, installation_id: int | str | None = None
+    ) -> str:
         """Return the name of the repository's default branch."""
-        repo_data = await self.get_repository(owner, repo)
-        return repo_data.default_branch
+        owner, repo = self._validate_owner_and_repo(owner, repo)
+        headers = await self._repo_read_headers(installation_id)
+        inst = int(installation_id) if installation_id is not None and str(installation_id).isdigit() else None
+        data = await self._get(f"{_GITHUB_API_BASE}/repos/{owner}/{repo}", headers, inst)
+        return str((data or {}).get("default_branch") or "main")
+
+    async def get_branch_head_sha(
+        self, owner: str, repo: str, branch: str, installation_id: int | str | None = None
+    ) -> str | None:
+        """Return the commit SHA at the tip of ``branch``."""
+        from urllib.parse import quote
+
+        owner, repo = self._validate_owner_and_repo(owner, repo)
+        headers = await self._repo_read_headers(installation_id)
+        inst = int(installation_id) if installation_id is not None and str(installation_id).isdigit() else None
+        url = f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/branches/{quote(branch, safe='')}"
+        data = await self._get(url, headers, inst)
+        sha = ((data or {}).get("commit") or {}).get("sha")
+        return str(sha) if sha else None
+
+    async def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        installation_id: int | str | None = None,
+        *,
+        branch: str | None = None,
+        path: str | None = None,
+        page: int = 1,
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Return recent commits (newest first) as compact dicts."""
+        from urllib.parse import urlencode
+
+        owner, repo = self._validate_owner_and_repo(owner, repo)
+        headers = await self._repo_read_headers(installation_id)
+        inst = int(installation_id) if installation_id is not None and str(installation_id).isdigit() else None
+        params: dict[str, Any] = {"per_page": max(1, min(per_page, 100)), "page": max(1, page)}
+        if branch:
+            params["sha"] = branch
+        if path:
+            params["path"] = path
+        data = await self._get(f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/commits?{urlencode(params)}", headers, inst)
+        commits: list[dict[str, Any]] = []
+        for item in data if isinstance(data, list) else []:
+            commit = item.get("commit") or {}
+            author = commit.get("author") or {}
+            commits.append(
+                {
+                    "sha": item.get("sha", ""),
+                    "message": (commit.get("message") or "").split("\n", 1)[0][:300],
+                    "author_name": author.get("name"),
+                    "author_login": (item.get("author") or {}).get("login"),
+                    "authored_at": author.get("date"),
+                    "html_url": item.get("html_url"),
+                }
+            )
+        return commits
+
+    async def list_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        installation_id: int | str | None = None,
+        *,
+        state: str = "open",
+        page: int = 1,
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Return pull requests as compact dicts."""
+        from urllib.parse import urlencode
+
+        owner, repo = self._validate_owner_and_repo(owner, repo)
+        if state not in {"open", "closed", "all"}:
+            state = "open"
+        headers = await self._repo_read_headers(installation_id)
+        inst = int(installation_id) if installation_id is not None and str(installation_id).isdigit() else None
+        params = {"state": state, "per_page": max(1, min(per_page, 100)), "page": max(1, page)}
+        data = await self._get(f"{_GITHUB_API_BASE}/repos/{owner}/{repo}/pulls?{urlencode(params)}", headers, inst)
+        pulls: list[dict[str, Any]] = []
+        for item in data if isinstance(data, list) else []:
+            pulls.append(
+                {
+                    "number": item.get("number"),
+                    "title": item.get("title", ""),
+                    "state": item.get("state", ""),
+                    "draft": bool(item.get("draft", False)),
+                    "merged": bool(item.get("merged_at")),
+                    "author_login": (item.get("user") or {}).get("login"),
+                    "head_branch": (item.get("head") or {}).get("ref"),
+                    "base_branch": (item.get("base") or {}).get("ref"),
+                    "created_at": item.get("created_at"),
+                    "updated_at": item.get("updated_at"),
+                    "html_url": item.get("html_url"),
+                }
+            )
+        return pulls
 
     async def _download_zipball(
         self,

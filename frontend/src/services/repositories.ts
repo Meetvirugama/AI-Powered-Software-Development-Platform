@@ -20,6 +20,11 @@ import type {
   RepositoryDependency,
   RepositoryFileContent,
   RemoteIssueInfo,
+  SyncJob,
+  RepositoryMetrics,
+  RepositoryBranch,
+  RepositoryCommit,
+  RepositoryPullRequest,
 } from '../types/api';
 
 export interface ListRepositoriesParams {
@@ -30,11 +35,12 @@ export interface ListRepositoriesParams {
 /**
  * Fetch a page of repositories for the authenticated user.
  *
- * GET /api/v1/repositories
+ * GET /api/v1/repositories?page=&page_size=
  *
- * Until the backend supports pagination query parameters, client-side slicing
- * is used so the hook contract is stable. This function is the single place
- * to update once server-side pagination is confirmed.
+ * The backend returns one page as a plain list and the overall count in the
+ * `X-Total-Count` header. Previously `total` was taken from the page length, so
+ * with more than one page of repositories the dashboard always showed "1 / 1"
+ * and the remaining repositories were unreachable.
  */
 export async function listRepositories(
   params: ListRepositoriesParams,
@@ -43,17 +49,18 @@ export async function listRepositories(
   const response = await apiClient.get<Repository[]>('/repositories', {
     params: { page, page_size: pageSize },
   });
-  const all = response.data;
+  const pageItems = Array.isArray(response.data) ? response.data : [];
 
-  // Server-side pagination support with graceful fallback (ISS-024)
-  const items = all.length > pageSize ? all.slice((page - 1) * pageSize, page * pageSize) : all;
+  const headerTotal = Number.parseInt(String(response.headers?.['x-total-count'] ?? ''), 10);
+  if (Number.isFinite(headerTotal) && headerTotal >= 0) {
+    return { items: pageItems, total: headerTotal, page, page_size: pageSize };
+  }
 
-  return {
-    items,
-    total: all.length,
-    page,
-    page_size: pageSize,
-  };
+  // Fallback for older backends that ignore pagination and return everything.
+  const items =
+    pageItems.length > pageSize ? pageItems.slice((page - 1) * pageSize, page * pageSize) : pageItems;
+  const total = pageItems.length > pageSize ? pageItems.length : (page - 1) * pageSize + pageItems.length;
+  return { items, total, page, page_size: pageSize };
 }
 
 /**
@@ -241,3 +248,59 @@ export async function listRepositorySymbols(
 
 
 
+
+
+// ---------------------------------------------------------------------------
+// Sync status, metrics and live GitHub data
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/repositories/:id/sync-jobs — newest first, with stage, timing and failure reason. */
+export async function getRepositorySyncJobs(id: string, limit = 10): Promise<SyncJob[]> {
+  const response = await apiClient.get<SyncJob[]>(`/repositories/${id}/sync-jobs`, { params: { limit } });
+  return response.data;
+}
+
+/** GET /api/v1/repositories/:id/sync-jobs/:jobId */
+export async function getRepositorySyncJob(id: string, jobId: string): Promise<SyncJob> {
+  const response = await apiClient.get<SyncJob>(`/repositories/${id}/sync-jobs/${jobId}`);
+  return response.data;
+}
+
+/** GET /api/v1/repositories/:id/metrics */
+export async function getRepositoryMetrics(id: string, top = 10): Promise<RepositoryMetrics> {
+  const response = await apiClient.get<RepositoryMetrics>(`/repositories/${id}/metrics`, { params: { top } });
+  return response.data;
+}
+
+/** GET /api/v1/repositories/:id/branches */
+export async function getRepositoryBranches(id: string): Promise<RepositoryBranch[]> {
+  const response = await apiClient.get<RepositoryBranch[]>(`/repositories/${id}/branches`);
+  return response.data;
+}
+
+/** GET /api/v1/repositories/:id/commits */
+export async function getRepositoryCommits(
+  id: string,
+  params: { branch?: string; path?: string; page?: number; pageSize?: number } = {},
+): Promise<RepositoryCommit[]> {
+  const response = await apiClient.get<RepositoryCommit[]>(`/repositories/${id}/commits`, {
+    params: {
+      ...(params.branch ? { branch: params.branch } : {}),
+      ...(params.path ? { path: params.path } : {}),
+      page: params.page ?? 1,
+      page_size: params.pageSize ?? 30,
+    },
+  });
+  return response.data;
+}
+
+/** GET /api/v1/repositories/:id/pulls */
+export async function getRepositoryPullRequests(
+  id: string,
+  params: { state?: 'open' | 'closed' | 'all'; page?: number; pageSize?: number } = {},
+): Promise<RepositoryPullRequest[]> {
+  const response = await apiClient.get<RepositoryPullRequest[]>(`/repositories/${id}/pulls`, {
+    params: { state: params.state ?? 'open', page: params.page ?? 1, page_size: params.pageSize ?? 30 },
+  });
+  return response.data;
+}

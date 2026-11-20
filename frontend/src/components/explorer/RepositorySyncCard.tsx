@@ -8,6 +8,8 @@ export interface RepositorySyncCardProps {
   progress: SyncProgress;
   isSyncActive: boolean;
   onSync: () => void;
+  /** Failure reason recorded by the sync worker, shown when the last sync failed. */
+  errorMessage?: string | null;
 }
 
 export function RepositorySyncCard({
@@ -15,6 +17,7 @@ export function RepositorySyncCard({
   progress,
   isSyncActive,
   onSync,
+  errorMessage,
 }: RepositorySyncCardProps) {
   return (
     <div className="flex-1 min-h-0 flex items-center justify-center p-4 sm:p-6">
@@ -55,6 +58,17 @@ export function RepositorySyncCard({
             )}
           </div>
         </div>
+
+        {progress.isFailed && errorMessage && (
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs">
+            <p className="font-medium text-destructive">Reason</p>
+            <p className="mt-1 text-foreground/80 break-words">{errorMessage}</p>
+          </div>
+        )}
+
+        {isSyncActive && !progress.isFailed && progress.label && (
+          <p className="text-xs text-muted-foreground" aria-live="polite">{progress.label}</p>
+        )}
 
         <SyncProgressIndicator
           currentStage={progress.stage}

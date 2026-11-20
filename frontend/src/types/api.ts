@@ -93,6 +93,88 @@ export interface Repository {
   file_count?: number;
   symbol_count?: number;
   chunk_count?: number;
+  /** Failure reason of the most recent sync job, present only when that job FAILED. */
+  last_sync_error?: string | null;
+  last_indexed_commit_sha?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Sync jobs, metrics and live GitHub data — backend/app/schemas/repository.py
+// ---------------------------------------------------------------------------
+
+export type SyncJobStage =
+  | 'QUEUED'
+  | 'CLONING'
+  | 'SCANNING'
+  | 'INDEXING'
+  | 'FINALIZING'
+  | 'COMPLETED'
+  | 'FAILED';
+
+export interface SyncJob {
+  job_id: string;
+  repository_id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  stage: SyncJobStage | string | null;
+  error_message: string | null;
+  commit_sha: string | null;
+  stats: Record<string, unknown> | null;
+  created_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+}
+
+export interface RepositoryLanguageMetric {
+  language: string;
+  files: number;
+  lines: number;
+  bytes: number;
+}
+
+export interface RepositoryMetrics {
+  repository_id: string;
+  file_count: number;
+  total_lines: number;
+  total_bytes: number;
+  symbol_count: number;
+  chunk_count: number;
+  edge_count: number;
+  languages: RepositoryLanguageMetric[];
+  symbols_by_kind: Record<string, number>;
+  top_symbols: CodeSymbol[];
+  last_synced_at: string | null;
+  last_indexed_commit_sha: string | null;
+}
+
+export interface RepositoryBranch {
+  name: string;
+  sha: string;
+  protected: boolean;
+  is_default: boolean;
+}
+
+export interface RepositoryCommit {
+  sha: string;
+  message: string;
+  author_name: string | null;
+  author_login: string | null;
+  authored_at: string | null;
+  html_url: string | null;
+}
+
+export interface RepositoryPullRequest {
+  number: number | null;
+  title: string;
+  state: string;
+  draft: boolean;
+  merged: boolean;
+  author_login: string | null;
+  head_branch: string | null;
+  base_branch: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  html_url: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +216,7 @@ export interface CodeSymbol {
   end_line: number;
   signature: string | null;
   parent_id: string | null;
+  importance_score?: number | null;
 }
 
 export interface RepositoryFileContent {

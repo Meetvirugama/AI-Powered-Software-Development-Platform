@@ -155,11 +155,16 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
             </div>
           ) : syncStatus === 'FAILED' ? (
             <div className="flex items-center gap-1.5">
-              <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-destructive/10 border border-destructive/20 text-destructive text-[11px] font-medium">
-                Failed
+              <span
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-destructive/10 border border-destructive/20 text-destructive text-[11px] font-medium max-w-[260px]"
+                title={repository?.last_sync_error ?? 'The last synchronization failed.'}
+              >
+                <span className="truncate">
+                  {repository?.last_sync_error ? `Failed: ${repository.last_sync_error}` : 'Failed'}
+                </span>
               </span>
               <button
-                onClick={() => syncMutation.mutate(repoId)}
+                onClick={() => syncMutation.mutate({ id: repoId, force: true })}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors shadow-2xs"
                 title="Retry repository sync"
                 aria-label="Retry sync"

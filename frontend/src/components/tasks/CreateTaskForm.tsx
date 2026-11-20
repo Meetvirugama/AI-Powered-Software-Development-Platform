@@ -1,5 +1,5 @@
 import { useState, useId, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Trash2,
@@ -54,7 +54,9 @@ export function CreateTaskForm() {
   const createTaskMutation = useCreateTask();
 
   // Basic fields state
-  const [repositoryId, setRepositoryId] = useState<string>('');
+  // Quick task creation: /app/tasks/new?repository_id=<id> preselects the repository.
+  const [searchParams] = useSearchParams();
+  const [repositoryId, setRepositoryId] = useState<string>(() => searchParams.get('repository_id') ?? '');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [sourceType, setSourceType] = useState<TaskSourceType>('USER_PROMPT');

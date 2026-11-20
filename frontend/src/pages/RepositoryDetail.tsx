@@ -6,6 +6,7 @@ import {
   useRepositoryDependencies,
   useSyncRepository,
   useDeleteRepository,
+  useRepositorySyncJobs,
   syncProgressFromStatus,
 } from '../hooks/useRepositories';
 import { getRepositoryFiles, lookupRepositoryFileByPath } from '../services/repositories';
@@ -68,7 +69,13 @@ export function RepositoryDetail() {
     },
   });
 
-  const progress = repo ? syncProgressFromStatus(repo.sync_status) : null;
+  // Fine-grained stage + failure reason from the sync job history (only needed before the repo is ready).
+  const { data: syncJobs } = useRepositorySyncJobs(
+    repo && repo.sync_status !== 'SYNCED' ? id : undefined,
+    1
+  );
+  const latestJob = syncJobs?.[0];
+  const progress = repo ? syncProgressFromStatus(repo.sync_status, latestJob?.stage) : null;
   const isReady = progress?.isComplete ?? false;
 
   // Loaded files state supporting server-side pagination and load-more
@@ -266,6 +273,7 @@ export function RepositoryDetail() {
           repo={repo}
           progress={progress}
           isSyncActive={isSyncActive}
+          errorMessage={latestJob?.error_message ?? repo.last_sync_error ?? null}
           onSync={() => handleSync(isSyncActive)}
         />
       ) : (
@@ -282,6 +290,7 @@ export function RepositoryDetail() {
           <div className="md:col-span-4 lg:col-span-3 min-h-0 h-full">
             <RepositoryMetricsSidebar
               repo={repo}
+              repositoryId={repo.id}
               totalFiles={filesData?.total}
               dependencies={dependencies}
               depsLoading={depsLoading}

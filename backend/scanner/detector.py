@@ -9,8 +9,12 @@ class LanguageDetector:
         self.root_path = Path(root_path).resolve() if root_path is not None else None
         self.extension_map = {
             '.py': 'Python',
+            '.pyi': 'Python',
+            '.pyw': 'Python',
             '.ts': 'TypeScript',
             '.tsx': 'TypeScript',
+            '.mts': 'TypeScript',
+            '.cts': 'TypeScript',
             '.js': 'JavaScript',
             '.jsx': 'JavaScript',
             '.mjs': 'JavaScript',
@@ -24,6 +28,9 @@ class LanguageDetector:
             '.hpp': 'C++',
             '.cc': 'C++',
             '.cxx': 'C++',
+            '.hh': 'C++',
+            '.hxx': 'C++',
+            '.c++': 'C++',
         }
 
     def detect(self, file_info: FileInfo | str | Path, root_path: str | Path | None = None) -> str:

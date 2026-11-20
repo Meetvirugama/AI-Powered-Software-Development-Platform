@@ -37,6 +37,7 @@ const ToolsIntegrationsAdminPage = lazy(() =>
   import('./pages/ToolsIntegrationsAdminPage').then((m) => ({ default: m.ToolsIntegrationsAdminPage }))
 );
 
+/** Full-screen fallback for routes outside the app shell (login, auth callback, 404). */
 function RouteFallback() {
   return (
     <div className="flex min-h-screen w-full items-center justify-center bg-background">
@@ -75,6 +76,9 @@ export function App() {
                   <Route path="review" element={<RepositoryReviewStudio />} />
                   <Route path="tasks" element={<RepositoryTaskStudio />} />
                 </Route>
+
+                {/* Unknown /app/* paths: 404 inside the app shell, keeping navigation available */}
+                <Route path="*" element={<NotFound embedded />} />
               </Route>
             </Route>
 

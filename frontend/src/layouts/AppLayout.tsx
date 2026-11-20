@@ -1,15 +1,20 @@
-import type { ReactNode } from 'react';
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { Suspense, useEffect, type ReactNode } from 'react';
+import { Outlet, NavLink, useNavigate, useLocation, matchPath } from 'react-router-dom';
 import { useAppStore } from '../stores/useAppStore';
 import { useAuth } from '../hooks/useAuth';
 import { useRealtimeRepositories } from '../hooks/useRealtimeRepositories';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
-import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu, ListTodo, Wrench } from 'lucide-react';
+import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { CommandPalette } from '../components/studios/CommandPalette';
+import { Menu, LayoutDashboard, FolderGit2, LogOut, Terminal, Cpu, ListTodo, Wrench, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export function AppLayout() {
   const sidebarOpen = useAppStore((state) => state.sidebarOpen);
   const toggleSidebar = useAppStore((state) => state.toggleSidebar);
+  const commandPaletteOpen = useAppStore((state) => state.commandPaletteOpen);
+  const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
+  const toggleCommandPalette = useAppStore((state) => state.toggleCommandPalette);
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -17,8 +22,27 @@ export function AppLayout() {
   // Maintain the SSE connection for the duration of the authenticated session.
   useRealtimeRepositories();
 
-  // Check if we are inside any repository workspace studio
-  const isRepositoryWorkspace = location.pathname.includes('/repositories/');
+  // Repository workspace (and its id) — used for the full-bleed layout and repo-aware palette.
+  const repoMatch = matchPath({ path: '/app/repositories/:id/*' }, location.pathname);
+  const activeRepoId = repoMatch?.params.id;
+  const isRepositoryWorkspace = Boolean(activeRepoId);
+
+  // Global Ctrl/Cmd+K: command-based navigation from every page, not only inside a repository.
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        toggleCommandPalette();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleCommandPalette]);
+
+  // Close the palette whenever the route changes (e.g. browser back button).
+  useEffect(() => {
+    setCommandPaletteOpen(false);
+  }, [location.pathname, setCommandPaletteOpen]);
 
 
   async function handleLogout() {
@@ -115,6 +139,16 @@ export function AppLayout() {
           </div>
 
           <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={() => setCommandPaletteOpen(true)}
+              title="Open Command Palette (Ctrl/Cmd + K)"
+              aria-label="Open command palette"
+              className="hidden sm:inline-flex items-center gap-2 px-2.5 py-1 text-xs rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Search className="w-3.5 h-3.5" />
+              <span>Search</span>
+              <kbd className="font-mono text-[10px] px-1 rounded border border-border bg-background">⌘K</kbd>
+            </button>
             <span className="text-xs text-muted-foreground font-mono hidden md:inline">{user?.login}</span>
             <button
               onClick={handleLogout}
@@ -130,19 +164,36 @@ export function AppLayout() {
 
         {/* Content area */}
         <main className="flex-1 bg-background min-w-0 overflow-hidden flex flex-col h-full">
-          <ErrorBoundary>
-            {isRepositoryWorkspace ? (
-              <div className="h-full flex flex-col min-h-0 overflow-hidden">
-                <Outlet />
-              </div>
-            ) : (
-              <div className="h-full flex flex-col min-h-0 max-w-7xl w-full mx-auto p-4 sm:p-6 overflow-hidden">
-                <Outlet />
-              </div>
-            )}
+          {/* resetKeys: a crash on one page must not keep the error screen up after navigating away. */}
+          <ErrorBoundary resetKeys={[location.pathname]}>
+            {/* Suspense inside the shell: lazy pages load in the content area while the sidebar
+                and header stay mounted (the top-level fallback replaced the whole screen). */}
+            <Suspense
+              fallback={
+                <div className="flex h-full w-full items-center justify-center">
+                  <LoadingSpinner size="lg" label="Loading page..." />
+                </div>
+              }
+            >
+              {isRepositoryWorkspace ? (
+                <div className="h-full flex flex-col min-h-0 overflow-hidden">
+                  <Outlet />
+                </div>
+              ) : (
+                <div className="h-full flex flex-col min-h-0 max-w-7xl w-full mx-auto p-4 sm:p-6 overflow-hidden">
+                  <Outlet />
+                </div>
+              )}
+            </Suspense>
           </ErrorBoundary>
         </main>
       </div>
+
+      <CommandPalette
+        repoId={activeRepoId}
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+      />
     </div>
   );
 }

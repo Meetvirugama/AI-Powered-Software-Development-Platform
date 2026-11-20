@@ -41,7 +41,8 @@ from app.core.database import AsyncSessionLocal, SessionLocal
 from app.core.redis import get_redis_async
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
-from app.models.sync_job import SyncJob, SyncJobStatus
+from app.core.secret_redaction import redact
+from app.models.sync_job import SYNC_ERROR_MAX_CHARS, SyncJob, SyncJobStage, SyncJobStatus
 from app.services.repository_sync import reconcile_stale_sync_jobs
 from indexer.incremental import IncrementalIndexer
 from scanner.walker import FileWalker
@@ -55,6 +56,27 @@ __all__ = [
     "sync_worker_loop",
     "_heartbeat_lease",
 ]
+
+
+def _user_facing_error(exc: BaseException) -> str:
+    """Short, redacted failure reason safe to show in the UI (no tracebacks, no tokens)."""
+    message = str(exc).strip() or exc.__class__.__name__
+    message = message.splitlines()[0]
+    return redact(f"{exc.__class__.__name__}: {message}")[:SYNC_ERROR_MAX_CHARS]
+
+
+def _set_job_progress(job_id: UUID, **fields: Any) -> None:
+    """Best-effort update of a job's stage/timing/stats; never fails the sync itself."""
+    try:
+        with SessionLocal() as db:
+            job = db.get(SyncJob, job_id)
+            if job is None:
+                return
+            for key, value in fields.items():
+                setattr(job, key, value)
+            db.commit()
+    except Exception as exc:
+        logger.debug("sync_job_progress_update_failed", extra={"job_id": str(job_id), "error": str(exc)})
 
 
 class RepositoryBusyError(Exception):
@@ -183,6 +205,9 @@ async def process_sync_job(
             )
             if job:
                 job.status = SyncJobStatus.FAILED
+                job.stage = SyncJobStage.FAILED.value
+                job.error_message = "Repository was disconnected before the sync started."
+                job.finished_at = datetime.now(timezone.utc)
                 db.commit()
             return True
 
@@ -207,9 +232,16 @@ async def process_sync_job(
                     "commit_sha": target_commit_sha,
                 },
             )
+            now = datetime.now(timezone.utc)
             job.status = SyncJobStatus.COMPLETED
+            job.stage = SyncJobStage.COMPLETED.value
+            job.commit_sha = target_commit_sha
+            job.started_at = job.started_at or now
+            job.finished_at = now
+            job.error_message = None
+            job.stats = {"skipped_reason": "commit_already_indexed"}
             repo.sync_status = SyncStatus.SYNCED
-            repo.last_synced_at = datetime.now(timezone.utc)
+            repo.last_synced_at = now
             db.commit()
             return True
 
@@ -290,6 +322,9 @@ async def process_sync_job(
                 return True
 
             job.status = SyncJobStatus.RUNNING
+            job.stage = SyncJobStage.CLONING.value
+            job.started_at = datetime.now(timezone.utc)
+            job.finished_at = None
             repo.sync_status = SyncStatus.SYNCING
             db.commit()
 
@@ -300,6 +335,11 @@ async def process_sync_job(
                     extra={"repo_id": str(repository_id)},
                 )
                 job.status = SyncJobStatus.FAILED
+                job.stage = SyncJobStage.FAILED.value
+                job.error_message = (
+                    "The GitHub App installation for this repository is missing. Reinstall the app and reconnect."
+                )
+                job.finished_at = datetime.now(timezone.utc)
                 repo.sync_status = SyncStatus.FAILED
                 db.commit()
                 return True
@@ -311,6 +351,32 @@ async def process_sync_job(
 
         if github_service is None:
             raise RuntimeError("GitHubService is not initialized on app.state")
+
+        # Default branch detection: GitHub repos can rename their default branch after they were
+        # connected (e.g. master -> main). Re-read it so we never clone a stale/deleted branch.
+        head_sha = target_commit_sha
+        try:
+            live_branch = await github_service.get_default_branch(owner, name, installation_id=installation_id)
+            if isinstance(live_branch, str) and live_branch and live_branch != branch:
+                logger.info(
+                    "sync_default_branch_changed",
+                    extra={"repo_id": str(repository_id), "old": branch, "new": live_branch},
+                )
+                branch = live_branch
+                with SessionLocal() as db:
+                    repo_row = db.get(Repository, repository_id)
+                    if repo_row is not None:
+                        repo_row.default_branch = live_branch
+                        db.commit()
+        except Exception as branch_exc:
+            logger.debug("sync_default_branch_refresh_skipped", extra={"error": str(branch_exc)})
+        if not head_sha:
+            try:
+                live_sha = await github_service.get_branch_head_sha(owner, name, branch, installation_id=installation_id)
+                if isinstance(live_sha, str) and live_sha:
+                    head_sha = live_sha
+            except Exception as sha_exc:
+                logger.debug("sync_head_sha_lookup_skipped", extra={"error": str(sha_exc)})
 
         # Step 5: Shallow clone workspace
         temp_root = Path(tempfile.gettempdir()) / "ai_platform_workspaces"
@@ -338,11 +404,21 @@ async def process_sync_job(
         )
 
         # Step 6: Walk repository files
+        _set_job_progress(job_id, stage=SyncJobStage.SCANNING.value)
         walker = FileWalker()
         scanned_files = walker.walk(str(clone_dir))
         logger.info(
             "sync_worker_files_scanned",
             extra={"repo_id": str(repository_id), "file_count": len(scanned_files)},
+        )
+        files_by_category: dict[str, int] = {}
+        for scanned in scanned_files:
+            category = str(getattr(scanned, "category", "source") or "source")
+            files_by_category[category] = files_by_category.get(category, 0) + 1
+        _set_job_progress(
+            job_id,
+            stage=SyncJobStage.INDEXING.value,
+            stats={"files_scanned": len(scanned_files), "files_by_category": files_by_category},
         )
 
         # Step 7: Initialize rate limiter and EmbeddingService
@@ -383,7 +459,10 @@ async def process_sync_job(
                 logger.warning("sync_worker_aborted_repository_deleted", extra={"repo_id": str(repository_id)})
                 if clone_dir and clone_dir.exists():
                     shutil.rmtree(clone_dir, ignore_errors=True)
-                return
+                await embedding_service.aclose()
+                # Must return True (handled): a bare `return` (None) was treated as a retryable
+                # failure, so a deleted repository was re-cloned up to max_retries times.
+                return True
 
         try:
             if not gemini_keys and not hasattr(embedding_service, "_mock_name") and embedding_provider is None:
@@ -420,11 +499,22 @@ async def process_sync_job(
                 )
                 return True
 
+            now = datetime.now(timezone.utc)
             job.status = SyncJobStatus.COMPLETED
+            job.stage = SyncJobStage.COMPLETED.value
+            job.finished_at = now
+            job.error_message = None
+            job.commit_sha = head_sha
+            job.stats = {
+                "files_scanned": len(scanned_files),
+                "files_by_category": files_by_category,
+                **{k: int(v) for k, v in (stats or {}).items() if isinstance(v, (int, float))},
+            }
             repo.sync_status = SyncStatus.SYNCED
-            repo.last_synced_at = datetime.now(timezone.utc)
-            if target_commit_sha:
-                repo.last_indexed_commit_sha = target_commit_sha
+            repo.last_synced_at = now
+            if head_sha:
+                repo.last_indexed_commit_sha = head_sha
+                repo.active_commit_sha = head_sha
             db.commit()
 
         # Step 9b: Invalidate distributed retrieval cache for repository
@@ -495,6 +585,9 @@ async def process_sync_job(
             job = db.get(SyncJob, job_id)
             if repo and job:
                 job.status = SyncJobStatus.FAILED
+                job.stage = SyncJobStage.FAILED.value
+                job.error_message = _user_facing_error(exc)
+                job.finished_at = datetime.now(timezone.utc)
                 repo.sync_status = SyncStatus.FAILED
                 db.commit()
 
@@ -640,6 +733,11 @@ async def recover_stale_processing_jobs(redis: Any, timeout_seconds: int = 600) 
                             if hasattr(redis, "lrem"):
                                 await redis.lrem("sync_jobs:processing", 1, raw_item)
                             job.status = SyncJobStatus.FAILED
+                            job.stage = SyncJobStage.FAILED.value
+                            job.finished_at = datetime.now(timezone.utc)
+                            job.error_message = job.error_message or (
+                                "The sync worker stopped responding and retries were exhausted."
+                            )
                             repo = db.get(Repository, job.repository_id)
                             if repo and repo.sync_status == SyncStatus.SYNCING:
                                 repo.sync_status = SyncStatus.FAILED
@@ -903,6 +1001,11 @@ async def sync_worker_loop(
                                     failed_job = db.get(SyncJob, UUID(payload["job_id"]))
                                     if failed_job:
                                         failed_job.status = SyncJobStatus.FAILED
+                                        failed_job.stage = SyncJobStage.FAILED.value
+                                        failed_job.finished_at = datetime.now(timezone.utc)
+                                        failed_job.error_message = failed_job.error_message or (
+                                            f"Sync failed after {cur_attempt} attempts."
+                                        )
                                         db.commit()
                         except Exception as db_err:
                             logger.warning("sync_job_db_status_failed_warning", extra={"error": str(db_err)})

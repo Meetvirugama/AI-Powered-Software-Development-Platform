@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
 import { Database, FileText, Code, Layers, Box, Search, X } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
+import { useRepositoryMetrics } from '../../hooks/useRepositories';
 import type { Repository, RepositoryDependency } from '../../types/api';
 
 export interface RepositoryMetricsSidebarProps {
   repo: Pick<Repository, 'file_count' | 'symbol_count' | 'chunk_count'>;
+  /** Enables the language breakdown and top-symbol ranking from GET /repositories/:id/metrics. */
+  repositoryId?: string;
   totalFiles?: number;
   dependencies?: RepositoryDependency[] | null;
   depsLoading: boolean;
@@ -13,12 +16,14 @@ export interface RepositoryMetricsSidebarProps {
 
 export function RepositoryMetricsSidebar({
   repo,
+  repositoryId,
   totalFiles,
   dependencies,
   depsLoading,
   depsError,
 }: RepositoryMetricsSidebarProps) {
   const [dependencyFilter, setDependencyFilter] = useState('');
+  const { data: metrics } = useRepositoryMetrics(repositoryId);
 
   // Filter dependencies
   const filteredDependencies = useMemo(() => {
@@ -73,6 +78,52 @@ export function RepositoryMetricsSidebar({
             </div>
           </div>
         </div>
+
+        {metrics && metrics.languages.length > 0 && (
+          <div className="space-y-1.5 pt-1" aria-label="Language breakdown">
+            <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              {metrics.languages.slice(0, 6).map((lang, i) => (
+                <div
+                  key={lang.language}
+                  className={['bg-primary', 'bg-emerald-500', 'bg-amber-500', 'bg-sky-500', 'bg-fuchsia-500', 'bg-muted-foreground'][i]}
+                  style={{ width: `${metrics.total_lines ? (lang.lines / metrics.total_lines) * 100 : 0}%` }}
+                  title={`${lang.language}: ${lang.lines.toLocaleString()} lines`}
+                />
+              ))}
+            </div>
+            <ul className="space-y-0.5 text-[11px]">
+              {metrics.languages.slice(0, 4).map((lang) => (
+                <li key={lang.language} className="flex justify-between text-muted-foreground">
+                  <span className="truncate">{lang.language === 'unknown' ? 'Other' : lang.language}</span>
+                  <span className="font-mono">
+                    {lang.files} files · {lang.lines.toLocaleString()} lines
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-[10px] text-muted-foreground font-mono">
+              {metrics.total_lines.toLocaleString()} lines · {metrics.edge_count.toLocaleString()} graph edges
+            </p>
+          </div>
+        )}
+
+        {metrics && metrics.top_symbols.length > 0 && (
+          <div className="space-y-1 pt-1 border-t border-border/60" aria-label="Most important symbols">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground pt-1.5">
+              Key symbols (PageRank)
+            </p>
+            <ul className="space-y-0.5">
+              {metrics.top_symbols.slice(0, 5).map((sym) => (
+                <li key={sym.id} className="flex items-center justify-between gap-2 text-[11px]">
+                  <span className="truncate font-mono text-foreground" title={sym.signature ?? sym.name}>
+                    {sym.name}
+                  </span>
+                  <span className="text-muted-foreground shrink-0">{sym.kind}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* Box B: Dependencies Explorer (Scrollable Box) */}

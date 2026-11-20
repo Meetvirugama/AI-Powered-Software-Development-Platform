@@ -4,6 +4,11 @@ interface Props {
   children: ReactNode;
   /** Optional custom fallback UI. Defaults to a generic error message. */
   fallback?: ReactNode;
+  /**
+   * When any value in this array changes (e.g. the route path), a caught error is cleared.
+   * Without it, one crashing page kept showing the error screen even after navigating away.
+   */
+  resetKeys?: ReadonlyArray<unknown>;
 }
 
 interface State {
@@ -24,6 +29,16 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidUpdate(prevProps: Props) {
+    if (!this.state.hasError) return;
+    const prev = prevProps.resetKeys ?? [];
+    const next = this.props.resetKeys ?? [];
+    const changed = prev.length !== next.length || next.some((key, i) => !Object.is(key, prev[i]));
+    if (changed) {
+      this.setState({ hasError: false, error: null });
+    }
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {

@@ -1,27 +1,18 @@
-import { useState, useEffect } from 'react';
 import { useParams, Outlet } from 'react-router-dom';
 import { useRepository } from '../hooks/useRepositories';
 import { StudioSubNav } from '../components/studios/StudioSubNav';
-import { CommandPalette } from '../components/studios/CommandPalette';
+import { useAppStore } from '../stores/useAppStore';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 
 export function RepositoryStudioLayout() {
   const { id } = useParams<{ id: string }>();
-  const { data: repo, isLoading, isError, error, refetch } = useRepository(id);
-  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-
-  // Global Cmd+K / Ctrl+K listener for instant command palette access
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setIsCommandPaletteOpen((prev) => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  // Poll while a sync is running so the studio header leaves "Syncing…" without a manual reload.
+  const { data: repo, isLoading, isError, error, refetch } = useRepository(id, {
+    refetchInterval: (query) => (query.state.data?.sync_status === 'SYNCING' ? 3000 : false),
+  });
+  // The command palette (and its Ctrl/Cmd+K shortcut) is global and lives in AppLayout.
+  const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
 
   if (isLoading) {
     return (
@@ -54,17 +45,11 @@ export function RepositoryStudioLayout() {
       <StudioSubNav
         repository={repo}
         isLoading={isLoading}
-        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
       <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
         <Outlet context={{ repository: repo, id }} />
       </div>
-
-      <CommandPalette
-        repoId={id ?? repo.id}
-        isOpen={isCommandPaletteOpen}
-        onClose={() => setIsCommandPaletteOpen(false)}
-      />
     </div>
   );
 }

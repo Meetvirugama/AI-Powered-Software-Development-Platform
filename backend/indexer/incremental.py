@@ -64,6 +64,10 @@ def compute_chunk_index_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+class _SnapshotUnchanged(Exception):
+    """Internal control-flow signal: nothing changed, keep the previous snapshot."""
+
+
 def _read_file_safe(path: str) -> str | None:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -133,6 +137,81 @@ class IncrementalIndexer:
         self.embedding_service = embedding_service
         self.detector = LanguageDetector()
         self.extractor = extractor or SymbolExtractor()
+        self._graph_is_complete = False
+
+    async def _merge_unchanged_graph_inputs(
+        self,
+        *,
+        session: Any,
+        repository_id: UUID,
+        root_path: str,
+        symbols: list[Any],
+        file_contents_by_id: dict[UUID, str],
+        file_id_to_path: dict[UUID, str],
+    ) -> None:
+        """Add persisted symbols (and on-disk contents) of files that were not re-indexed this run.
+
+        Mutates the given collections in place and sets ``self._graph_is_complete`` on success.
+        """
+        from scanner.symbols import Symbol
+
+        self._graph_is_complete = False
+        fresh_file_ids = {getattr(sym, "file_id", None) for sym in symbols}
+        res = await self._execute(
+            text(
+                "SELECT s.id, s.file_id, s.name, s.kind, s.start_line, s.end_line, s.signature, s.parent_id, f.path "
+                "FROM code_symbols s JOIN repository_files f ON f.id = s.file_id "
+                "WHERE s.repository_id = :repo_id"
+            ),
+            {"repo_id": repository_id},
+            sess=session,
+        )
+        rows = res.fetchall() if hasattr(res, "fetchall") else None
+        if rows is None:
+            return
+
+        def _as_uuid(value: Any) -> UUID | None:
+            if value is None or value == "":
+                return None
+            return value if isinstance(value, UUID) else UUID(str(value))
+
+        loaded: list[Any] = []
+        unchanged_paths: dict[UUID, str] = {}
+        for row in rows:
+            file_uuid = _as_uuid(row[1])
+            if file_uuid is None or file_uuid in fresh_file_ids:
+                continue  # fresh, in-memory symbols already represent this file
+            sym_id = _as_uuid(row[0])
+            if sym_id is None:
+                continue
+            path = str(row[8] or "")
+            loaded.append(
+                Symbol(
+                    id=sym_id,
+                    name=str(row[2] or ""),
+                    kind=str(row[3] or "symbol"),
+                    file_id=file_uuid,
+                    start_line=int(row[4] or 1),
+                    end_line=int(row[5] or row[4] or 1),
+                    signature=str(row[6] or ""),
+                    parent_id=_as_uuid(row[7]),
+                    file_path=path,
+                )
+            )
+            unchanged_paths[file_uuid] = path
+
+        for file_uuid, path in unchanged_paths.items():
+            file_id_to_path[file_uuid] = path
+            if file_uuid not in file_contents_by_id and root_path:
+                content = await asyncio.to_thread(_read_file_safe, os.path.join(root_path, path))
+                if content:
+                    file_contents_by_id[file_uuid] = content
+        symbols.extend(loaded)
+        self._graph_is_complete = True
+        logger.info(
+            "graph_full_rebuild_inputs_loaded",
+            extra={"repo_id": str(repository_id), "unchanged_symbols": len(loaded), "files": len(unchanged_paths)},
+        )
 
     def _is_sqlite(self) -> bool:
         bind = getattr(self._db, "bind", None)
@@ -376,6 +455,8 @@ class IncrementalIndexer:
 
         indexed_count = 0
         skipped_count = 0
+        embedding_failed_count = 0
+        graph_dirty = False
         all_extracted_symbols: list[Any] = []
         file_contents_by_id: dict[UUID, str] = {}
         file_id_to_path: dict[UUID, str] = {}
@@ -417,6 +498,7 @@ class IncrementalIndexer:
                 language = self.detector.detect(file_info)
 
             logger.info("Indexing changed/new file: %s (%s)", file_rel_path, language)
+            graph_dirty = True
 
             if file_id:
                 # Reconcile obsolete chunks and old symbols for this file before re-inserting
@@ -618,7 +700,15 @@ class IncrementalIndexer:
                         len(chunks),
                         len(vectors) if vectors else 0,
                     )
-                    indexed_count += 1
+                    # The file row already carries the *new* content hash. Left as-is, the next sync
+                    # would see "unchanged" and skip it forever, so the file would silently never be
+                    # searchable. Clear the hash so the next sync retries the embedding.
+                    await self._execute(
+                        text("UPDATE repository_files SET content_hash = '' WHERE id = :file_id"),
+                        {"file_id": file_id},
+                        sess=session,
+                    )
+                    embedding_failed_count += 1
                     await asyncio.sleep(0.05)
                     continue
 
@@ -775,6 +865,26 @@ class IncrementalIndexer:
 
         persisted_edges_count = 0
         built_edges: list[Any] = []
+        graph_dirty = graph_dirty or reconciled_removed_count > 0
+        self._graph_is_complete = False
+        # Incremental sync: files that did not change still own symbols and call sites. The graph must be
+        # rebuilt over the *whole* repository, otherwise edges from unchanged files into a changed file are
+        # deleted (their target symbols were re-created) and never restored, and PageRank only sees the delta.
+        if graph_dirty and (skipped_count > 0 or reconciled_removed_count > 0):
+            try:
+                await self._merge_unchanged_graph_inputs(
+                    session=session,
+                    repository_id=repository_id,
+                    root_path=root_path,
+                    symbols=all_extracted_symbols,
+                    file_contents_by_id=file_contents_by_id,
+                    file_id_to_path=file_id_to_path,
+                )
+            except Exception as merge_exc:
+                logger.warning(
+                    "graph_full_rebuild_inputs_unavailable",
+                    extra={"repo_id": str(repository_id), "error": str(merge_exc)},
+                )
         if all_extracted_symbols:
             try:
                 from scanner.import_tracker import ImportTracker
@@ -828,21 +938,23 @@ class IncrementalIndexer:
                         batch_size=250,
                     )
 
-                if skipped_count == 0:
+                if skipped_count == 0 or self._graph_is_complete:
+                    # The graph was built over every symbol in the repository: replace it wholesale.
                     await self._execute(
                         text("DELETE FROM symbol_edges WHERE repository_id = :repo_id"),
                         {"repo_id": repository_id},
                         sess=session,
                     )
                 else:
-                    for sym in all_extracted_symbols:
-                        await self._execute(
-                            text(
-                                "DELETE FROM symbol_edges WHERE repository_id = :repo_id AND source_symbol_id = :source_id"
-                            ),
-                            {"repo_id": repository_id, "source_id": sym.id},
-                            sess=session,
-                        )
+                    # Fallback (unchanged files could not be loaded): only replace the changed symbols' edges.
+                    await self._execute_batch(
+                        text(
+                            "DELETE FROM symbol_edges WHERE repository_id = :repo_id AND source_symbol_id = :source_id"
+                        ),
+                        [{"repo_id": repository_id, "source_id": sym.id} for sym in all_extracted_symbols],
+                        sess=session,
+                        batch_size=250,
+                    )
 
                 edge_insert_query = text(
                     """
@@ -894,8 +1006,12 @@ class IncrementalIndexer:
             await self._rollback(sess=session)
             return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
 
-        # Build and persist the Repository Intelligence Snapshot (task.md §3, §4, §10)
+        # Build and persist the Repository Intelligence Snapshot (task.md §3, §4, §10).
+        # Skip when nothing changed: rebuilding from an empty symbol list would overwrite the
+        # previous, complete snapshot with an empty graph.
         try:
+            if not graph_dirty:
+                raise _SnapshotUnchanged()
             from ai.intelligence.builder import RepositoryIntelligenceBuilder
             from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 
@@ -927,6 +1043,8 @@ class IncrementalIndexer:
             snapshot_mgr = RepositoryIntelligenceSnapshotManager()
             manifest = snapshot_mgr.publish_snapshot(snapshot)
             logger.info("Published persistent intelligence snapshot for repo %s (valid: %s)", repository_id, manifest.is_valid)
+        except _SnapshotUnchanged:
+            logger.debug("Repository unchanged; keeping existing intelligence snapshot for %s", repository_id)
         except Exception as snap_exc:
             logger.warning("Repository intelligence snapshot generation skipped: %s", snap_exc)
 
@@ -976,6 +1094,7 @@ class IncrementalIndexer:
             "skipped": skipped_count,
             "reconciled_removed": reconciled_removed_count,
             "graph_edges": persisted_edges_count,
+            "embedding_failed": embedding_failed_count,
         }
 
 
