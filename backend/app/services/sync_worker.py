@@ -60,8 +60,14 @@ __all__ = [
 
 def _user_facing_error(exc: BaseException) -> str:
     """Short, redacted failure reason safe to show in the UI (no tracebacks, no tokens)."""
-    message = str(exc).strip() or exc.__class__.__name__
-    message = message.splitlines()[0]
+    raw_message = str(exc).strip() or exc.__class__.__name__
+    if ("Remote branch" in raw_message and "not found" in raw_message) or "empty or branch" in raw_message:
+        return "Repository is empty on GitHub (no commits or branch found). Push at least one commit to GitHub and click Sync again."
+    if "is empty" in raw_message.lower():
+        for line in raw_message.splitlines():
+            if "is empty" in line.lower():
+                return redact(line.strip())[:SYNC_ERROR_MAX_CHARS]
+    message = raw_message.splitlines()[0]
     return redact(f"{exc.__class__.__name__}: {message}")[:SYNC_ERROR_MAX_CHARS]
 
 

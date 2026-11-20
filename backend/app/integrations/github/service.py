@@ -658,12 +658,20 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
             stdout, stderr = await asyncio.wait_for(result.communicate(), timeout=300)
 
             if result.returncode != 0:
-                stderr_text = stderr.decode(errors="replace")
+                stderr_text = stderr.decode(errors="replace").strip()
                 if token:
                     stderr_text = stderr_text.replace(token, "[REDACTED]")
                 logger.error("git clone failed (rc=%d): %s", result.returncode, stderr_text)
+                if ("Remote branch" in stderr_text and "not found" in stderr_text) or (
+                    "empty repository" in stderr_text.lower()
+                ):
+                    raise GitHubCloneError(
+                        f"Repository '{owner}/{repo}' is empty or branch '{branch}' was not found on GitHub. Push at least one commit to GitHub and sync again.",
+                        returncode=result.returncode,
+                    )
+                clean_stderr = " ".join(line.strip() for line in stderr_text.splitlines() if line.strip())
                 raise GitHubCloneError(
-                    f"git clone failed for {owner}/{repo}: {stderr_text}",
+                    f"git clone failed for {owner}/{repo}: {clean_stderr}",
                     returncode=result.returncode,
                 )
 

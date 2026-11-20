@@ -20,6 +20,12 @@ if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then
     ALEMBIC_CONFIG="alembic.ini"
 fi
 
+# If running single-process API service and DISABLE_EMBEDDED_SYNC_WORKER is not explicitly set,
+# enable the embedded sync worker so background indexing jobs are actively consumed.
+if [ -z "$DISABLE_EMBEDDED_SYNC_WORKER" ] && [ "${SERVICE_ROLE:-${1:-api}}" = "api" ]; then
+    export DISABLE_EMBEDDED_SYNC_WORKER="false"
+fi
+
 ROLE="${SERVICE_ROLE:-${1:-api}}"
 
 if [ "$ROLE" = "migrate" ]; then
