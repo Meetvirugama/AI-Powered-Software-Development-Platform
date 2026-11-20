@@ -302,6 +302,9 @@ export interface TaskPlan {
   risks?: string[] | PlanRisk[] | any;
   required_permissions?: string[];
   resource_budget?: PlanResourceBudget;
+  critic_score?: number;
+  critic_notes?: string[];
+  intent?: string;
   status: TaskPlanStatus;
   approved_by?: string | null;
   approved_at?: string | null;

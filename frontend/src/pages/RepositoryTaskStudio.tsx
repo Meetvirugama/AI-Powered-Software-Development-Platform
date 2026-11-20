@@ -214,7 +214,6 @@ export function RepositoryTaskStudio() {
   // New Task Modal State
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [newTaskPrompt, setNewTaskPrompt] = useState('');
-  const [autoPilotOnCreate, setAutoPilotOnCreate] = useState(false);
 
   // Import Issue Form State
   const [showImportIssueModal, setShowImportIssueModal] = useState(false);
@@ -400,10 +399,6 @@ export function RepositoryTaskStudio() {
         await generateTaskPlan(created.task_id, {
           prompt_instructions: `Autonomous plan for: ${prompt}`,
         });
-        if (autoPilotOnCreate) {
-          await approveTaskPlan(created.task_id, { comment: 'Auto-pilot instant approval' });
-          await executeTask(created.task_id, { run_steps: true, run_tests_after: true, auto_repair: true });
-        }
       } catch {
         // Non-blocking
       }
@@ -1469,15 +1464,10 @@ export function RepositoryTaskStudio() {
               </div>
 
               <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-3">
-                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autoPilotOnCreate}
-                    onChange={(e) => setAutoPilotOnCreate(e.target.checked)}
-                    className="rounded border-border text-primary focus:ring-primary/40"
-                  />
-                  <span>Run on <strong>⚡ Auto-Pilot</strong> (Plan + Execute + Verify)</span>
-                </label>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                  <span>Mandatory Review: Plan will be presented for your approval</span>
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button

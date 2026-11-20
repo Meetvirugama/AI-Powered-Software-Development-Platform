@@ -1,9 +1,31 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Home, FolderGit2, ArrowLeft } from 'lucide-react';
 
-export function NotFound() {
+interface NotFoundProps {
+  /** Rendered inside the app shell (sidebar/header present) instead of full screen. */
+  embedded?: boolean;
+}
+
+export function NotFound({ embedded = false }: NotFoundProps) {
+  const navigate = useNavigate();
+
+  function goBack() {
+    // history.back() from a deep link would leave the app; fall back to the dashboard.
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate('/app/dashboard', { replace: true });
+    }
+  }
+
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12 text-foreground">
+    <div
+      className={
+        embedded
+          ? 'flex h-full flex-col items-center justify-center px-4 py-12 text-foreground'
+          : 'flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12 text-foreground'
+      }
+    >
       <div className="w-full max-w-md text-center">
         <div className="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-muted/60 border border-border/80 shadow-sm">
           <span className="font-mono text-2xl font-bold tracking-tight text-primary">404</span>
@@ -32,7 +54,7 @@ export function NotFound() {
 
         <div className="mt-8 pt-6 border-t border-border/60">
           <button
-            onClick={() => window.history.back()}
+            onClick={goBack}
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />

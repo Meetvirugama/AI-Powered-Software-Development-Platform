@@ -55,20 +55,34 @@ class TaskTestPlanner:
         # First check explicit file list if provided
         if file_paths:
             norm_paths = [p.replace("\\", "/").lower() for p in file_paths]
+            if any("vitest.config" in p or "vitest" in p for p in norm_paths):
+                return "vitest"
             if any(p.endswith((".test.ts", ".spec.ts", ".test.tsx", ".spec.tsx", ".test.js", ".spec.js")) for p in norm_paths):
                 return "jest"
             if any("pytest" in p or "conftest.py" in p or "pytest.ini" in p for p in norm_paths):
                 return "pytest"
 
-
         # Check directory manifests via FrameworkDetector
         if target_root and target_root.exists():
+            vitest_configs = ("vitest.config.ts", "vitest.config.js", "vitest.config.mts", "vitest.config.mjs")
+            if any((target_root / cfg).exists() for cfg in vitest_configs):
+                return "vitest"
+            pkg_json = target_root / "package.json"
+            if pkg_json.exists():
+                try:
+                    pkg_text = pkg_json.read_text(encoding="utf-8", errors="ignore")
+                    if '"vitest"' in pkg_text:
+                        return "vitest"
+                except Exception:
+                    pass
             try:
                 res = self._framework_detector.detect(repo_root=str(target_root))
                 if res and res.framework:
                     fw_raw = getattr(res.framework, "value", res.framework)
                     fw_name = str(fw_raw).lower()
-                    if "jest" in fw_name or "vitest" in fw_name:
+                    if "vitest" in fw_name:
+                        return "vitest"
+                    if "jest" in fw_name:
                         return "jest"
                     if "unittest" in fw_name:
                         return "unittest"
@@ -84,7 +98,9 @@ class TaskTestPlanner:
                 if res and res.framework:
                     fw_raw = getattr(res.framework, "value", res.framework)
                     fw_name = str(fw_raw).lower()
-                    if "jest" in fw_name or "vitest" in fw_name:
+                    if "vitest" in fw_name:
+                        return "vitest"
+                    if "jest" in fw_name:
                         return "jest"
                     if "unittest" in fw_name:
                         return "unittest"
@@ -288,6 +304,12 @@ class TaskTestPlanner:
                 files_str = " ".join(selected_files)
                 return f"npm test -- {files_str} --verbose"
             return "npm test -- --verbose"
+
+        elif framework == "vitest":
+            if selected_files:
+                files_str = " ".join(selected_files)
+                return f"npx vitest run {files_str}"
+            return "npx vitest run"
 
         return "pytest tests/ -v"
 

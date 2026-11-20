@@ -42,6 +42,17 @@ from ai.services.issue_task_adapter import (
     fence_untrusted_issue_data,
     format_issue_from_finding,
 )
+from ai.services.intent_router import (
+    IntentAnalysisResult,
+    IntentRouter,
+    TaskIntent,
+)
+from ai.services.plan_critic import (
+    CriticIssue,
+    CriticReview,
+    CriticSeverity,
+    PlanCritic,
+)
 from ai.services.plan_replanner import PlanReplanner
 from ai.services.requirement_verifier import (
     RequirementComplianceItem,
@@ -78,6 +89,9 @@ __all__ = [
     "BugDetectionEngine",
     "CodeExplanationService",
     "CompletenessIssue",
+    "CriticIssue",
+    "CriticReview",
+    "CriticSeverity",
     "DiscoveredTaskRequirement",
     "ExecutionBudget",
     "ExecutionBudgetManager",
@@ -85,10 +99,13 @@ __all__ = [
     "ExecutionCheckpointManager",
     "ExecutionRecoveryService",
     "ExecutionVerifier",
+    "IntentAnalysisResult",
+    "IntentRouter",
     "IssueToTaskAdapter",
     "LLMRepairSynthesizer",
     "LatencyPercentiles",
     "LoopDetectedError",
+    "PlanCritic",
     "PlanCompletenessReport",
     "PlanReplanner",
     "PlanningOutcome",
@@ -102,6 +119,7 @@ __all__ = [
     "StepVerificationEvidence",
     "StepVerificationOutcome",
     "TaskCompletenessChecker",
+    "TaskIntent",
     "TaskPlanner",
     "TaskRequirementDiscovery",
     "TestGenerationService",

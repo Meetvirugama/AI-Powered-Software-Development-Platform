@@ -62,7 +62,14 @@ cors_middleware_kwargs: dict[str, Any] = {
     "allow_credentials": True,  # the auth JWT travels in an httpOnly cookie
     "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization", "X-Request-ID"],
-    "expose_headers": ["X-Request-ID", "Retry-After", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"],
+    "expose_headers": [
+        "X-Request-ID",
+        "Retry-After",
+        "X-RateLimit-Limit",
+        "X-RateLimit-Remaining",
+        "X-RateLimit-Reset",
+        "X-Total-Count",  # pagination total for GET /repositories
+    ],
     "max_age": 600,
 }
 effective_cors_regex = getattr(settings, "effective_cors_origin_regex", settings.cors_origin_regex)

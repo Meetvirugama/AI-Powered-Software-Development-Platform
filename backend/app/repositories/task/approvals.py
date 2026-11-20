@@ -7,7 +7,7 @@ import json
 import uuid
 from typing import Any, Optional
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, or_, select
 
 from app.core.errors import APIError, ErrorCode
 from app.models.task import (
@@ -39,6 +39,7 @@ class TaskApprovalMixin:
         task_id: uuid.UUID | str,
         repository_id: Optional[uuid.UUID | str] = None,
         plan_version: Optional[int] = None,
+        approval_type: Optional[str] = "plan",
     ) -> Optional[TaskApproval]:
         """Fetch approval for a specific plan version or latest approval for an authorized task."""
         t_uuid = _ensure_uuid(task_id)
@@ -51,6 +52,13 @@ class TaskApprovalMixin:
             t_uuid = task.id
 
         query = select(TaskApproval).where(TaskApproval.task_id == t_uuid)
+        if approval_type is not None:
+            query = query.where(
+                or_(
+                    TaskApproval.approval_type == approval_type,
+                    TaskApproval.approval_type.is_(None),
+                )
+            )
         if plan_version is not None:
             query = query.where(TaskApproval.plan_version == plan_version)
 
@@ -61,6 +69,7 @@ class TaskApprovalMixin:
         self,
         task_id: uuid.UUID | str,
         repository_id: Optional[uuid.UUID | str] = None,
+        approval_type: Optional[str] = "plan",
     ) -> list[TaskApproval]:
         """List all approval and rejection records for an authorized task ordered by creation time."""
         t_uuid = _ensure_uuid(task_id)
@@ -72,8 +81,16 @@ class TaskApprovalMixin:
                 raise TaskNotFoundError(f"Task {task_id} not found in repository {repository_id}")
             t_uuid = task.id
 
-        stmt = select(TaskApproval).where(TaskApproval.task_id == t_uuid).order_by(TaskApproval.created_at.asc())
-        return list(self.session.execute(stmt).scalars().all())
+        query = select(TaskApproval).where(TaskApproval.task_id == t_uuid)
+        if approval_type is not None:
+            query = query.where(
+                or_(
+                    TaskApproval.approval_type == approval_type,
+                    TaskApproval.approval_type.is_(None),
+                )
+            )
+        query = query.order_by(TaskApproval.created_at.asc())
+        return list(self.session.execute(query).scalars().all())
 
     def approve_plan(
         self,

@@ -287,6 +287,8 @@ class WorkspaceFilePatchResult(BaseModel):
     file_path: str
     occurrences_replaced: int = 0
     error: str | None = None
+    ast_valid: bool = True
+    syntax_error_details: str | None = None
 
 
 # ---------------------------------------------------------------------------

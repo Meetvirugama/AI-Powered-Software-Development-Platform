@@ -1,6 +1,8 @@
 """Request and response models for the authentication API."""
 
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class AuthenticatedUser(BaseModel):
@@ -19,3 +21,19 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: AuthenticatedUser
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: Literal["viewer", "developer", "admin"]
+
+    @field_validator("role", mode="before")
+    @classmethod
+    def _normalize(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class UserListResponse(BaseModel):
+    items: list[AuthenticatedUser]
+    total: int
+    page: int
+    page_size: int

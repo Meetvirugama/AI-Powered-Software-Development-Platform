@@ -7,6 +7,11 @@ import {
   syncRepository,
   deleteRepository,
   getRepositoryFileContent,
+  getRepositorySyncJobs,
+  getRepositoryMetrics,
+  getRepositoryBranches,
+  getRepositoryCommits,
+  getRepositoryPullRequests,
 } from '../services/repositories';
 import type {
   PaginatedRepositoryResponse,
@@ -17,6 +22,11 @@ import type {
   RepositoryDependency,
   RepositoryFileContent,
   ApiError,
+  SyncJob,
+  RepositoryMetrics,
+  RepositoryBranch,
+  RepositoryCommit,
+  RepositoryPullRequest,
 } from '../types/api';
 
 /**
@@ -39,6 +49,11 @@ export const repositoryKeys = {
     [...repositoryKeys.detail(id), 'files', fileId, 'content'] as const,
   dependencies: (id: string) =>
     [...repositoryKeys.detail(id), 'dependencies'] as const,
+  syncJobs: (id: string) => [...repositoryKeys.detail(id), 'sync-jobs'] as const,
+  metrics: (id: string) => [...repositoryKeys.detail(id), 'metrics'] as const,
+  branches: (id: string) => [...repositoryKeys.detail(id), 'branches'] as const,
+  commits: (id: string, branch?: string) => [...repositoryKeys.detail(id), 'commits', branch ?? ''] as const,
+  pulls: (id: string, state: string) => [...repositoryKeys.detail(id), 'pulls', state] as const,
 };
 
 export function useRepositories(
@@ -114,9 +129,20 @@ export function useRepository(
  *   The entire SYNCING state is represented as CLONING until the backend
  *   exposes the Scanning/Indexing intermediate stages.
  */
-export function syncProgressFromStatus(status: SyncStatus): SyncProgress {
+export function syncProgressFromStatus(status: SyncStatus, jobStage?: string | null): SyncProgress {
   switch (status) {
-    case 'SYNCING':
+    case 'SYNCING': {
+      // The backend now reports the running job's stage (GET /repositories/:id/sync-jobs).
+      const stageMap: Record<string, { stage: SyncProgress['stage']; label: string }> = {
+        CLONING: { stage: 'CLONING', label: 'Cloning repository…' },
+        SCANNING: { stage: 'SCANNING', label: 'Scanning files…' },
+        INDEXING: { stage: 'INDEXING', label: 'Indexing code…' },
+        FINALIZING: { stage: 'INDEXING', label: 'Finalizing index…' },
+      };
+      const mapped = jobStage ? stageMap[jobStage] : undefined;
+      if (mapped) {
+        return { stage: mapped.stage, label: mapped.label, isActive: true, isComplete: false, isFailed: false };
+      }
       // General syncing state without assuming specific sub-stages
       return {
         stage: 'SYNCING',
@@ -125,6 +151,7 @@ export function syncProgressFromStatus(status: SyncStatus): SyncProgress {
         isComplete: false,
         isFailed: false,
       };
+    }
 
     case 'SYNCED':
       return {
@@ -242,3 +269,60 @@ export function useRepositoryFileContent(
   });
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Sync status, metrics and live GitHub data
+// ---------------------------------------------------------------------------
+
+/** Recent sync jobs; polls every 2s while the newest job is still queued or running. */
+export function useRepositorySyncJobs(id: string | undefined, limit = 10) {
+  return useQuery<SyncJob[], ApiError>({
+    queryKey: repositoryKeys.syncJobs(id ?? ''),
+    queryFn: () => getRepositorySyncJobs(id!, limit),
+    enabled: Boolean(id),
+    refetchInterval: (query) => {
+      const latest = query.state.data?.[0];
+      return latest && (latest.status === 'QUEUED' || latest.status === 'RUNNING') ? 2000 : false;
+    },
+  });
+}
+
+export function useRepositoryMetrics(id: string | undefined) {
+  return useQuery<RepositoryMetrics, ApiError>({
+    queryKey: repositoryKeys.metrics(id ?? ''),
+    queryFn: () => getRepositoryMetrics(id!),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+  });
+}
+
+/** Live GitHub data: a missing GitHub App (503/409) is not worth retrying. */
+const githubQueryDefaults = { staleTime: 60_000, retry: 1 } as const;
+
+export function useRepositoryBranches(id: string | undefined) {
+  return useQuery<RepositoryBranch[], ApiError>({
+    queryKey: repositoryKeys.branches(id ?? ''),
+    queryFn: () => getRepositoryBranches(id!),
+    enabled: Boolean(id),
+    ...githubQueryDefaults,
+  });
+}
+
+export function useRepositoryCommits(id: string | undefined, branch?: string) {
+  return useQuery<RepositoryCommit[], ApiError>({
+    queryKey: repositoryKeys.commits(id ?? '', branch),
+    queryFn: () => getRepositoryCommits(id!, { branch, pageSize: 20 }),
+    enabled: Boolean(id),
+    ...githubQueryDefaults,
+  });
+}
+
+export function useRepositoryPullRequests(id: string | undefined, state: 'open' | 'closed' | 'all' = 'open') {
+  return useQuery<RepositoryPullRequest[], ApiError>({
+    queryKey: repositoryKeys.pulls(id ?? '', state),
+    queryFn: () => getRepositoryPullRequests(id!, { state, pageSize: 20 }),
+    enabled: Boolean(id),
+    ...githubQueryDefaults,
+  });
+}

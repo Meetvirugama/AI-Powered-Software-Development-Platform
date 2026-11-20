@@ -1,9 +1,20 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SyncProgressIndicator } from '../components/explorer/SyncProgressIndicator';
 import { RepositorySyncCard } from '../components/explorer/RepositorySyncCard';
 import { RepositoryMetricsSidebar } from '../components/explorer/RepositoryMetricsSidebar';
 import type { RepositoryDependency } from '../types/api';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: false },
+  },
+});
+
+function renderWithClient(ui: React.ReactElement) {
+  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
 
 describe('SyncProgressIndicator', () => {
   it('renders all four progress stages: Cloning, Scanning, Indexing, and Ready', () => {
@@ -42,7 +53,7 @@ describe('RepositorySyncCard', () => {
     );
 
     expect(screen.getByText('Repository Synchronization in Progress')).toBeInTheDocument();
-    expect(screen.getByText('Indexing')).toBeInTheDocument();
+    expect(screen.getAllByText('Indexing').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders retry button and triggers onSync when failed', () => {
@@ -78,7 +89,7 @@ describe('RepositoryMetricsSidebar', () => {
   ];
 
   it('renders metrics numbers for files, symbols, and chunks', () => {
-    render(
+    renderWithClient(
       <RepositoryMetricsSidebar
         repo={{ file_count: 55, symbol_count: 210, chunk_count: 880 }}
         totalFiles={55}
@@ -94,7 +105,7 @@ describe('RepositoryMetricsSidebar', () => {
   });
 
   it('filters dependencies by search input', () => {
-    render(
+    renderWithClient(
       <RepositoryMetricsSidebar
         repo={{ file_count: 3, symbol_count: 10, chunk_count: 20 }}
         totalFiles={3}
@@ -115,7 +126,7 @@ describe('RepositoryMetricsSidebar', () => {
   });
 
   it('displays empty message when filter matches no dependencies', () => {
-    render(
+    renderWithClient(
       <RepositoryMetricsSidebar
         repo={{ file_count: 3, symbol_count: 10, chunk_count: 20 }}
         totalFiles={3}

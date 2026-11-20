@@ -1,11 +1,14 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useRepositories } from '../hooks/useRepositories';
+import { useTasks } from '../hooks/useTasks';
+import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
+import { TaskStatus } from '../types/task';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type { PaginatedRepositoryResponse, Repository } from '../types/api';
-import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw } from 'lucide-react';
+import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw, ListTodo, ArrowRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 // ---------------------------------------------------------------------------
@@ -14,6 +17,17 @@ import { cn } from '../lib/utils';
 
 /** Repositories shown per page. Change here to adjust the grid layout. */
 const PAGE_SIZE = 6;
+
+/** Recent tasks shown in the dashboard task overview. */
+const RECENT_TASKS = 5;
+
+const ATTENTION_STATUSES = new Set<string>([
+  TaskStatus.PENDING_APPROVAL,
+  TaskStatus.FAILED,
+  TaskStatus.RECOVERY_REQUIRED,
+  TaskStatus.BLOCKED,
+]);
+const DONE_STATUSES = new Set<string>([TaskStatus.DRAFT_PR_CREATED, TaskStatus.CANCELLED, TaskStatus.REJECTED]);
 
 // ---------------------------------------------------------------------------
 // Dashboard
@@ -39,6 +53,14 @@ export function Dashboard() {
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
 
+  // If the last repository on a page is disconnected, step back instead of showing the
+  // "No repositories connected" empty state while other pages still have repositories.
+  useEffect(() => {
+    if (data && page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [data, page, totalPages]);
+
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       {/* ------------------------------------------------------------------ */}
@@ -48,7 +70,7 @@ export function Dashboard() {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">Dashboard</h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Your connected GitHub repositories.
+            Your connected repositories and recent development tasks.
           </p>
         </div>
         <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
@@ -61,6 +83,14 @@ export function Dashboard() {
           >
             <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
             <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={() => navigate('/app/tasks/new')}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Create a new task"
+          >
+            <ListTodo className="h-3.5 w-3.5" />
+            New Task
           </button>
           <button
             onClick={() => navigate('/app/repositories')}
@@ -77,6 +107,11 @@ export function Dashboard() {
       {/* Scrollable Repository Cards Box                                     */}
       {/* ------------------------------------------------------------------ */}
       <div className="flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-4">
+        <TaskOverview
+          hasRepositories={Boolean(data && data.total > 0)}
+          onCreateTask={() => navigate('/app/tasks/new')}
+        />
+
         {/* Loading */}
         {isLoading && (
           <div className="flex items-center justify-center py-16">
@@ -156,6 +191,116 @@ export function Dashboard() {
   );
 }
 
+
+// ---------------------------------------------------------------------------
+// TaskOverview
+// ---------------------------------------------------------------------------
+
+function TaskOverview({
+  hasRepositories,
+  onCreateTask,
+}: {
+  hasRepositories: boolean;
+  onCreateTask: () => void;
+}) {
+  const { data, isLoading, isError, refetch } = useTasks({ page: 1, page_size: 20 });
+  const tasks = useMemo(() => data?.items ?? [], [data]);
+
+  const counts = useMemo(() => {
+    let attention = 0;
+    let done = 0;
+    for (const t of tasks) {
+      const status = String(t.status);
+      if (ATTENTION_STATUSES.has(status)) attention += 1;
+      else if (DONE_STATUSES.has(status)) done += 1;
+    }
+    return { attention, done, active: tasks.length - attention - done };
+  }, [tasks]);
+
+  return (
+    <section aria-labelledby="dashboard-tasks-heading" className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <ListTodo className="h-4 w-4 text-primary" />
+          <h2 id="dashboard-tasks-heading" className="text-sm font-semibold text-foreground">
+            Development tasks
+          </h2>
+          {data && (
+            <span className="text-[11px] text-muted-foreground font-mono">{data.total} total</span>
+          )}
+        </div>
+        <Link
+          to="/app/tasks"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          View all <ArrowRight className="h-3 w-3" />
+        </Link>
+      </div>
+
+      {isLoading && <LoadingSpinner size="sm" label="Loading tasks…" />}
+
+      {isError && !isLoading && (
+        <div className="flex items-center gap-3 text-xs text-muted-foreground">
+          <span>Could not load tasks.</span>
+          <button onClick={() => refetch()} className="underline hover:text-foreground">
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!isLoading && !isError && tasks.length === 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-dashed border-border p-3">
+          <p className="text-xs text-muted-foreground">
+            {hasRepositories
+              ? 'No tasks yet. Describe a change and the agent will plan it for your approval.'
+              : 'Connect a repository first, then create a task for it.'}
+          </p>
+          {hasRepositories && (
+            <button
+              onClick={onCreateTask}
+              className="inline-flex items-center gap-1.5 self-start rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <PlusCircle className="h-3.5 w-3.5" />
+              Create first task
+            </button>
+          )}
+        </div>
+      )}
+
+      {!isLoading && !isError && tasks.length > 0 && (
+        <>
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <TaskStat label="In progress" value={counts.active} />
+            <TaskStat label="Needs attention" value={counts.attention} highlight={counts.attention > 0} />
+            <TaskStat label="Finished" value={counts.done} />
+          </div>
+          <ul className="divide-y divide-border/60" aria-label="Recent tasks">
+            {tasks.slice(0, RECENT_TASKS).map((task) => (
+              <li key={task.task_id}>
+                <Link
+                  to={`/app/tasks/${task.task_id}`}
+                  className="flex items-center justify-between gap-3 py-2 text-xs hover:bg-accent/40 rounded px-1 -mx-1 transition-colors"
+                >
+                  <span className="truncate font-medium text-foreground">{task.title || task.task_id}</span>
+                  <TaskStatusBadge status={task.status} size="sm" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+function TaskStat({ label, value, highlight = false }: { label: string; value: number; highlight?: boolean }) {
+  return (
+    <div className={cn('rounded-lg border px-2 py-1.5', highlight ? 'border-amber-500/40 bg-amber-500/5' : 'border-border')}>
+      <div className={cn('text-base font-semibold', highlight ? 'text-amber-500' : 'text-foreground')}>{value}</div>
+      <div className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // EmptyState

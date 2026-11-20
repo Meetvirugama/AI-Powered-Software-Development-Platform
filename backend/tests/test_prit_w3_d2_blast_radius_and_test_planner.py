@@ -113,6 +113,7 @@ class TestTaskTestPlanner:
 
     def test_detect_framework_fallback_from_paths(self):
         planner = TaskTestPlanner()
+        assert planner.detect_framework(file_paths=["vitest.config.ts", "src/components/App.test.tsx"]) == "vitest"
         assert planner.detect_framework(file_paths=["src/components/App.test.tsx"]) == "jest"
         assert planner.detect_framework(file_paths=["src/auth.py", "conftest.py", "tests/test_auth.py"]) == "pytest"
         assert planner.detect_framework(file_paths=["src/auth.py", "tests/test_auth.py"]) == "unittest"
@@ -165,6 +166,11 @@ class TestTaskTestPlanner:
         # Jest
         cmd_jest = planner.build_test_command("jest", ["src/__tests__/app.test.ts"])
         assert cmd_jest.startswith("npm test -- src/__tests__/app.test.ts")
+
+        # Vitest
+        cmd_vitest = planner.build_test_command("vitest", ["src/__tests__/app.test.ts"])
+        assert cmd_vitest == "npx vitest run src/__tests__/app.test.ts"
+        assert planner.build_test_command("vitest", []) == "npx vitest run"
 
         # Unittest
         cmd_ut = planner.build_test_command("unittest", ["tests/test_calc.py"])

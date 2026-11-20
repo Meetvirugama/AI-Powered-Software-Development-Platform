@@ -106,11 +106,15 @@ class GitHubIntegrationBase(ABC):
         """Fetch full metadata for a single repository."""
 
     @abstractmethod
-    async def list_branches(self, owner: str, repo: str) -> list[GitHubBranch]:
-        """Return all branches for the given repository."""
+    async def list_branches(
+        self, owner: str, repo: str, installation_id: int | str | None = None
+    ) -> list[GitHubBranch]:
+        """Return all branches for the given repository (installation token required for private repos)."""
 
     @abstractmethod
-    async def get_default_branch(self, owner: str, repo: str) -> str:
+    async def get_default_branch(
+        self, owner: str, repo: str, installation_id: int | str | None = None
+    ) -> str:
         """Return the name of the repository's default branch."""
 
     @abstractmethod

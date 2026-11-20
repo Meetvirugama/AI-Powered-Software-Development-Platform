@@ -23,6 +23,8 @@ class RepositoryResponse(BaseModel):
     file_count: int | None = None
     symbol_count: int | None = None
     chunk_count: int | None = None
+    last_sync_error: str | None = None
+    last_indexed_commit_sha: str | None = None
 
 
 class RepositoryDependencyResponse(BaseModel):
@@ -54,6 +56,7 @@ class CodeSymbolResponse(BaseModel):
     end_line: int
     signature: str | None
     parent_id: str | None
+    importance_score: float | None = None
 
 
 class RepositoryFileContentResponse(BaseModel):
@@ -78,6 +81,74 @@ class PaginatedResponse(BaseModel):
 class SyncJobResponse(BaseModel):
     job_id: str
     status: str = "QUEUED"
+
+
+class SyncJobDetailResponse(BaseModel):
+    """Progress and outcome of one repository synchronization job."""
+
+    job_id: str
+    repository_id: str
+    status: str
+    stage: str | None = None
+    error_message: str | None = None
+    commit_sha: str | None = None
+    stats: dict | None = None
+    created_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_seconds: float | None = None
+
+
+class BranchResponse(BaseModel):
+    name: str
+    sha: str
+    protected: bool = False
+    is_default: bool = False
+
+
+class CommitResponse(BaseModel):
+    sha: str
+    message: str
+    author_name: str | None = None
+    author_login: str | None = None
+    authored_at: str | None = None
+    html_url: str | None = None
+
+
+class PullRequestSummaryResponse(BaseModel):
+    number: int | None = None
+    title: str
+    state: str
+    draft: bool = False
+    merged: bool = False
+    author_login: str | None = None
+    head_branch: str | None = None
+    base_branch: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    html_url: str | None = None
+
+
+class LanguageMetric(BaseModel):
+    language: str
+    files: int
+    lines: int
+    bytes: int
+
+
+class RepositoryMetricsResponse(BaseModel):
+    repository_id: str
+    file_count: int
+    total_lines: int
+    total_bytes: int
+    symbol_count: int
+    chunk_count: int
+    edge_count: int
+    languages: list[LanguageMetric]
+    symbols_by_kind: dict[str, int]
+    top_symbols: list[CodeSymbolResponse]
+    last_synced_at: datetime | None = None
+    last_indexed_commit_sha: str | None = None
 
 
 class RepositorySearchRequest(BaseModel):

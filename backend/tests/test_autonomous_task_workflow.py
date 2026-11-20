@@ -212,3 +212,5 @@ def test_api_workflow_status_endpoint(client, db_session, test_user, auth_header
     assert data["task_id"] == str(task_id)
     assert data["status"] == "COMPLETED"
     assert data["progress_percentage"] == 100
+    assert "durability_mode" in data
+    assert data["durability_mode"] in ("NATIVE_TRANSIENT", "DBOS_DURABLE")

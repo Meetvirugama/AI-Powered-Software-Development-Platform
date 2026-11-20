@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 import time
+from urllib.parse import urlparse
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -163,7 +165,6 @@ class JWTMiddleware(BaseHTTPMiddleware):
     """Populate request state from a Bearer token or the HTTP-only auth cookie."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        app_settings = get_settings()
         is_public = (
             request.url.path in PUBLIC_PATHS
             or request.url.path.startswith("/api/v1/auth/github/")
@@ -180,28 +181,13 @@ class JWTMiddleware(BaseHTTPMiddleware):
 
         # CSRF Protection: For state-changing requests authenticated by cookies, validate Origin
         if auth_source == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-            origin = request.headers.get("origin")
-            trusted_origins = {o.rstrip("/") for o in app_settings.cors_origins}
-            effective_regex = getattr(app_settings, "effective_cors_origin_regex", app_settings.cors_origin_regex)
-            if origin:
-                origin_clean = origin.rstrip("/")
-                is_trusted = origin_clean in trusted_origins
-                if not is_trusted and effective_regex:
-                    import re
-                    is_trusted = bool(re.fullmatch(effective_regex, origin_clean))
-                if not is_trusted:
-                    logger.warning("untrusted_origin_rejected", extra={"origin": origin, "path": request.url.path})
-                    return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")
-            elif app_settings.is_production:
-                referer = request.headers.get("referer")
-                if referer:
-                    from urllib.parse import urlparse
-                    ref_parsed = urlparse(referer)
-                    ref_origin = f"{ref_parsed.scheme}://{ref_parsed.netloc}".rstrip("/")
-                    if ref_origin not in trusted_origins:
-                        return error_response(403, ErrorCode.FORBIDDEN, "Cross-origin request rejected.")
-                else:
-                    return error_response(403, ErrorCode.FORBIDDEN, "Origin header is required for cookie-authenticated requests.")
+            csrf_error = csrf_origin_error(request)
+            if csrf_error is not None:
+                logger.warning(
+                    "untrusted_origin_rejected",
+                    extra={"origin": request.headers.get("origin"), "path": request.url.path},
+                )
+                return error_response(403, ErrorCode.FORBIDDEN, csrf_error)
 
         try:
             claims = decode_access_token(token)
@@ -211,7 +197,7 @@ class JWTMiddleware(BaseHTTPMiddleware):
             request.state.user_id = str(claims["sub"])
             request.state.token_jti = jti
             request.state.token_exp = int(claims["exp"])
-            request.state.role = str(claims.get("role", "developer"))
+            request.state.role = _claim_role(claims)
             request.state.permissions = list(claims.get("permissions", []))
         except APIError as exc:
             return error_response(exc.status_code, exc.code, exc.message, retryable=exc.retryable)
@@ -233,10 +219,50 @@ async def _try_populate_user_state(request: Request) -> None:
             request.state.user_id = str(claims["sub"])
             request.state.token_jti = jti
             request.state.token_exp = int(claims["exp"])
-            request.state.role = str(claims.get("role", "developer"))
+            request.state.role = _claim_role(claims)
             request.state.permissions = list(claims.get("permissions", []))
     except Exception as exc:
         logger.debug("Failed validating token in auth middleware: %s", exc)
+
+
+def _claim_role(claims: dict) -> str:
+    """Normalize the role claim; unknown values degrade to the least-privileged role."""
+    role = claims.get("role")
+    if role is None or (isinstance(role, str) and not role.strip()):
+        return "developer"
+    role_str = str(role).strip().lower()
+    return role_str if role_str in {"viewer", "developer", "admin"} else "viewer"
+
+
+def _is_trusted_origin(origin: str) -> bool:
+    settings = get_settings()
+    origin_clean = origin.strip().rstrip("/")
+    if origin_clean in {o.rstrip("/") for o in settings.cors_origins}:
+        return True
+    effective_regex = getattr(settings, "effective_cors_origin_regex", settings.cors_origin_regex)
+    # fullmatch: a prefix-only match would accept https://trusted.example.com.evil.net
+    return bool(effective_regex) and re.fullmatch(effective_regex, origin_clean) is not None
+
+
+def csrf_origin_error(request: Request) -> str | None:
+    """Return an error message when a cookie-authenticated mutation comes from an untrusted origin.
+
+    Browsers always send Origin on cross-site POST/PUT/PATCH/DELETE, so a missing Origin is
+    tolerated only outside production (curl, TestClient). In production the Referer must then
+    match a trusted origin.
+    """
+    origin = request.headers.get("origin")
+    if origin:
+        return None if _is_trusted_origin(origin) else "Cross-origin request rejected."
+    if not get_settings().is_production:
+        return None
+    referer = request.headers.get("referer")
+    if not referer:
+        return "Origin header is required for cookie-authenticated requests."
+    parsed = urlparse(referer)
+    if not parsed.scheme or not parsed.netloc:
+        return "Cross-origin request rejected."
+    return None if _is_trusted_origin(f"{parsed.scheme}://{parsed.netloc}") else "Cross-origin request rejected."
 
 
 def _get_token_and_source(request: Request) -> tuple[str | None, str]:

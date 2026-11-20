@@ -13,9 +13,25 @@ from sqlalchemy.orm import Session
 from app.models.repository import Repository, SyncStatus
 from app.models.repository_file import RepositoryFile
 from app.models.code_symbol import CodeSymbol
-from app.models.sync_job import SyncJob, SyncJobStatus
+from app.models.sync_job import SYNC_ERROR_MAX_CHARS, SyncJob, SyncJobStage, SyncJobStatus
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_repo_path(path: str) -> str:
+    """Strip whitespace and leading "./" / "/" prefixes without eating dot-files.
+
+    ``str.lstrip("./")`` removes *characters*, so ".github/ci.yml" became "github/ci.yml".
+    """
+    clean = (path or "").strip().replace("\\", "/")
+    while clean.startswith("./"):
+        clean = clean[2:]
+    return clean.lstrip("/")
+
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so "_" and "%" in file paths match literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 class RepositoryRepository:
@@ -77,22 +93,47 @@ class RepositoryRepository:
     ) -> tuple[list[RepositoryFile], int]:
         statement = select(RepositoryFile).where(RepositoryFile.repository_id == repo_id)
         if path:
-            clean_path = path.strip().lstrip("./")
-            statement = statement.where(RepositoryFile.path.ilike(f"%{clean_path}%"))
+            clean_path = normalize_repo_path(path)
+            if clean_path:
+                statement = statement.where(
+                    RepositoryFile.path.ilike(f"%{_escape_like(clean_path)}%", escape="\\")
+                )
         statement = statement.order_by(RepositoryFile.path)
         total = self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0
         return list(self.session.scalars(statement.offset(offset).limit(limit)).all()), total
 
     def get_file_by_path(self, repo_id: uuid.UUID, path: str) -> Optional[RepositoryFile]:
-        clean_path = path.strip().lstrip("./")
+        clean_path = normalize_repo_path(path)
         statement = select(RepositoryFile).where(
             RepositoryFile.repository_id == repo_id,
             RepositoryFile.path == clean_path,
         )
         return self.session.scalars(statement).first()
 
-    def list_symbols(self, repo_id: uuid.UUID, offset: int, limit: int) -> tuple[list[CodeSymbol], int]:
-        statement = select(CodeSymbol).where(CodeSymbol.repository_id == repo_id).order_by(CodeSymbol.name, CodeSymbol.start_line)
+    def count_by_user(self, user_id: uuid.UUID) -> int:
+        stmt = select(func.count(Repository.id)).where(Repository.user_id == user_id)
+        return int(self.session.scalar(stmt) or 0)
+
+    def list_symbols(
+        self,
+        repo_id: uuid.UUID,
+        offset: int,
+        limit: int,
+        *,
+        kind: Optional[str] = None,
+        file_id: Optional[uuid.UUID] = None,
+        query: Optional[str] = None,
+    ) -> tuple[list[CodeSymbol], int]:
+        statement = select(CodeSymbol).where(CodeSymbol.repository_id == repo_id)
+        if kind:
+            statement = statement.where(CodeSymbol.kind == kind)
+        if file_id:
+            statement = statement.where(CodeSymbol.file_id == file_id)
+        if query and query.strip():
+            statement = statement.where(
+                CodeSymbol.name.ilike(f"%{_escape_like(query.strip())}%", escape="\\")
+            )
+        statement = statement.order_by(CodeSymbol.name, CodeSymbol.start_line)
         total = self.session.scalar(select(func.count()).select_from(statement.subquery())) or 0
         return list(self.session.scalars(statement.offset(offset).limit(limit)).all()), total
 
@@ -103,14 +144,50 @@ class RepositoryRepository:
         self.session.refresh(job)
         return job
 
-    def mark_sync_job_failed(self, job_id: uuid.UUID) -> Optional[SyncJob]:
+    def mark_sync_job_failed(self, job_id: uuid.UUID, error_message: Optional[str] = None) -> Optional[SyncJob]:
         """Record a dispatch failure after a job has been persisted."""
         job = self.session.get(SyncJob, job_id)
         if job:
             job.status = SyncJobStatus.FAILED
+            job.stage = SyncJobStage.FAILED.value
+            job.finished_at = datetime.now(timezone.utc)
+            if error_message:
+                job.error_message = error_message[:SYNC_ERROR_MAX_CHARS]
             self.session.commit()
             self.session.refresh(job)
         return job
+
+    def list_sync_jobs(self, repository_id: uuid.UUID, limit: int = 20) -> list[SyncJob]:
+        stmt = (
+            select(SyncJob)
+            .where(SyncJob.repository_id == repository_id)
+            .order_by(SyncJob.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def get_sync_job(self, repository_id: uuid.UUID, job_id: uuid.UUID) -> Optional[SyncJob]:
+        stmt = select(SyncJob).where(SyncJob.id == job_id, SyncJob.repository_id == repository_id)
+        return self.session.scalars(stmt).first()
+
+    def latest_sync_errors(self, repository_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """Error message of the most recent job per repository, only when that job FAILED."""
+        if not repository_ids:
+            return {}
+        stmt = (
+            select(SyncJob.repository_id, SyncJob.status, SyncJob.error_message)
+            .where(SyncJob.repository_id.in_(repository_ids))
+            .order_by(SyncJob.repository_id, SyncJob.created_at.desc())
+        )
+        latest: dict[uuid.UUID, str] = {}
+        seen: set[uuid.UUID] = set()
+        for repo_id, status, error in self.session.execute(stmt).all():
+            if repo_id in seen:
+                continue
+            seen.add(repo_id)
+            if status == SyncJobStatus.FAILED:
+                latest[repo_id] = error or "Synchronization failed."
+        return latest
 
     def get_active_sync_job(self, repository_id: uuid.UUID) -> Optional[SyncJob]:
         """Find the most recent in-flight (QUEUED or RUNNING) sync job for a repository."""

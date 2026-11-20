@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str | None = None
     enable_dev_login: bool = False
+    # Comma-separated GitHub logins that are promoted to the ADMIN role when they sign in.
+    # Used to bootstrap the first administrator; admins can then manage roles via the API.
+    admin_github_logins: str = ""
 
     # --- AI / LLM Configuration (Gemini Primary, Groq Fallback) -----------
     ai_primary_provider: str = "gemini"
@@ -303,6 +306,13 @@ class Settings(BaseSettings):
         if not self.is_production:
             return r"^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$"
         return None
+
+    @property
+    def admin_logins(self) -> frozenset[str]:
+        """Normalized (lower-case) set of GitHub logins that bootstrap as admins."""
+        return frozenset(
+            login.strip().lower() for login in (self.admin_github_logins or "").split(",") if login.strip()
+        )
 
     @property
     def effective_cookie_samesite(self) -> str:

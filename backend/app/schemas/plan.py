@@ -1209,6 +1209,36 @@ class TaskEventResponse(BaseModel):
         return self
 
 
+class PromptToPlanRequest(BaseModel):
+    """Request payload for POST /api/v1/tasks/prompt-to-plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    repository_id: UUID = Field(..., description="Target repository UUID.")
+    prompt: str = Field(..., min_length=3, max_length=10000, description="Natural language development prompt.")
+    base_revision: str | None = Field(default=None, description="Optional target base revision (commit SHA or branch).")
+    target_files: list[str] = Field(default_factory=list, description="Optional target files for planning.")
+    auto_create_task: bool = Field(default=True, description="Whether to persist the created task and plan record.")
+
+
+class PromptToPlanResponse(BaseModel):
+    """Response payload for POST /api/v1/tasks/prompt-to-plan."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    task_id: str | None = None
+    repository_id: str
+    intent_analysis: dict[str, Any]
+    plan: dict[str, Any]
+    critic_review: dict[str, Any]
+    ambiguity_detected: bool = False
+    clarifications: list[str] = Field(default_factory=list)
+
+
+PromptToPlanRequest.model_rebuild()
+PromptToPlanResponse.model_rebuild()
+
+
 __all__ = [
     "GitHubIssueCreateRequest",
     "GitHubIssueImportRequest",
@@ -1228,6 +1258,8 @@ __all__ = [
     "PlanStep",
     "PlanStepActionType",
     "PlannerSchema",
+    "PromptToPlanRequest",
+    "PromptToPlanResponse",
     "RiskSeverity",
     "StepType",
     "StructuredPlan",

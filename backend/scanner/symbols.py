@@ -86,6 +86,8 @@ class FileInfo:
     size_bytes: int
     language: str
     is_binary: bool
+    # source | test | config | docs | build | other  (see scanner.walker.classify_file)
+    category: str = "source"
 
 
 @dataclass

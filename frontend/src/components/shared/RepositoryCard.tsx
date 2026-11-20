@@ -83,7 +83,7 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
 
   const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
-  const { mutate: deleteRepo, isPending: isDeletePending } = useDeleteRepository();
+  const { mutate: deleteRepo, isPending: isDeletePending, error: deleteError } = useDeleteRepository();
 
   const isSyncing = repo.sync_status === 'SYNCING' || isSyncPending;
   const isFailed = repo.sync_status === 'FAILED';
@@ -167,6 +167,16 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
         </div>
       </div>
 
+      {/* Why the last sync failed (recorded by the sync worker) */}
+      {isFailed && repo.last_sync_error && (
+        <p
+          className="rounded-md border border-destructive/20 bg-destructive/5 px-2.5 py-1.5 text-[11px] text-destructive line-clamp-2"
+          title={repo.last_sync_error}
+        >
+          {repo.last_sync_error}
+        </p>
+      )}
+
       {/* Confirmation banner for deletion */}
       {showConfirmDelete && (
         <div
@@ -175,6 +185,9 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
         >
           <p className="text-foreground font-medium">Disconnect this repository?</p>
           <p className="text-muted-foreground">This removes all indexed files and vector embeddings.</p>
+          {deleteError && (
+            <p className="text-destructive">{deleteError.message || 'Could not disconnect the repository.'}</p>
+          )}
           <div className="flex items-center gap-2 justify-end pt-1">
             <button
               onClick={() => setShowConfirmDelete(false)}
