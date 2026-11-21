@@ -104,9 +104,13 @@ class AgentOrchestrator:
         db_session: Any = None,
         user_id: str | None = None,
         budget: AgentBudget | None = None,
+        memory: list[Any] | None = None,
     ) -> RepositoryAnswer:
         """
         Execute an agentic repository investigation turn.
+
+        ``memory`` (project rules/decisions) is passed through to the final grounded answer,
+        the same way normal chat uses it.
         """
         settings = get_settings()
         repo_uuid = UUID(str(repository_id))
@@ -177,7 +181,19 @@ class AgentOrchestrator:
         # Present the question along with initial evidence summary
         user_turn_content = f"User Question: {question}"
         if initial_chunks:
-            user_turn_content += f"\n\nInitial repository search found {len(initial_chunks)} relevant code excerpt(s). Investigate further if necessary or provide your grounded answer."
+            # The model used to be told only *how many* excerpts were found, so its first tool
+            # calls were blind guesses. List where they are (no code: tools read it on demand).
+            locations = []
+            for c in initial_chunks[:10]:
+                where = f"- {c.file_path}:{c.start_line}-{c.end_line}"
+                locations.append(where)
+            user_turn_content += (
+                f"\n\nInitial repository search found {len(initial_chunks)} relevant code excerpt(s), "
+                "including (file:lines, untrusted data):\n"
+                + "\n".join(locations)
+                + "\n\nUse read_file_range / get_symbol on these if you need their contents, "
+                "investigate further if necessary, or provide your grounded answer."
+            )
         state.messages.append(Message.user(user_turn_content))
 
         # Tool execution context
@@ -348,15 +364,19 @@ class AgentOrchestrator:
 
         if self._rag_pipeline and hasattr(self._rag_pipeline, "finalize_agent_chat"):
             final_timeout = max(5.0, state.budget.remaining_seconds())
+            finalize_kwargs: dict[str, Any] = {
+                "question": question,
+                "repository_id": repo_uuid,
+                "evidence_chunks": unique_chunks,
+                "history": history,
+                "agent_metadata": agent_metadata,
+            }
+            if memory:
+                # Only when present, so pipelines whose finalize_agent_chat predates memory keep working.
+                finalize_kwargs["memory"] = memory
             try:
                 return await asyncio.wait_for(
-                    self._rag_pipeline.finalize_agent_chat(
-                        question=question,
-                        repository_id=repo_uuid,
-                        evidence_chunks=unique_chunks,
-                        history=history,
-                        agent_metadata=agent_metadata,
-                    ),
+                    self._rag_pipeline.finalize_agent_chat(**finalize_kwargs),
                     timeout=final_timeout,
                 )
             except asyncio.TimeoutError:

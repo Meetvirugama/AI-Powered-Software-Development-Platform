@@ -316,11 +316,14 @@ def fit_items(
     for item in items:
         tokens = count_tokens(formatter(item), safety_factor=safety_factor)
         if used + tokens > budget:
+            # Skip this item but keep going: a single large item used to `break` the loop, so one
+            # oversized top-ranked chunk could leave the prompt with no code at all even though
+            # smaller, lower-ranked chunks still fit. Order of kept items is unchanged.
             logger.debug(
                 "context_truncation",
                 extra={"dropped_item_tokens": tokens, "remaining_budget": budget - used},
             )
-            break
+            continue
         kept.append(item)
         used += tokens
     return used, kept

@@ -442,12 +442,17 @@ class LLMGateway:
             },
         ) as span:
             async with self.semaphore:
+                yielded_any = False
                 try:
                     async for chunk in self._provider.generate_stream(req_with_id):
+                        yielded_any = True
                         yield chunk
                     span.set_status(Status(StatusCode.OK))
                 except Exception as exc:
-                    if not self._should_attempt_fallback(exc) or not self._fallback_provider:
+                    # Once text has reached the caller, restarting on the fallback provider would
+                    # send the answer again from the beginning (duplicated output). Only fall back
+                    # if the primary failed before producing anything.
+                    if yielded_any or not self._should_attempt_fallback(exc) or not self._fallback_provider:
                         span.record_exception(exc)
                         span.set_status(Status(StatusCode.ERROR, description=str(exc)))
                         raise

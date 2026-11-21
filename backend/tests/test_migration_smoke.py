@@ -58,6 +58,8 @@ EXPECTED_TABLES = frozenset({
     "task_events",
     "task_pull_requests",
     "github_webhook_events",
+    "chat_conversations",
+    "chat_messages",
 })
 
 EXPECTED_MILESTONE_REVISIONS = (
@@ -83,6 +85,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "daf0c05ab34b",  # sync task indexes and drop redundant
     "m1a2b3c4d5e6",  # composite indexes for polling, repo lookups, and graph traversals (Issue #265 / F-45)
     "n2b3c4d5e6f7",  # add sync job progress, stage, error details, and duration tracking
+    "o3c4d5e6f7a8",  # server-side repository chat history (conversations + messages)
 )
 
 

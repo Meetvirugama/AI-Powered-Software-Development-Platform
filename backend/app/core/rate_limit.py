@@ -4,7 +4,7 @@ Owner: Sukun — W1, Day 6 (API Security) / Extended by Yug — W2 & W3
 Limits:
     /auth/github/callback                      10 req/min per IP
     /repositories/:id/sync                      5 req/min per user
-    /repositories/:id/chat                     30 req/min per user
+    /repositories/:id/chat[/stream]            30 req/min per user (shared bucket)
     /repositories/:id/explain                  20 req/min per user
     /repositories/:id/detect-bugs              20 req/min per user
     /repositories/:id/generate-tests           20 req/min per user
@@ -60,7 +60,8 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
         RateLimitRule("repo_sync", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/sync/?$"), 5, 60, "user"),
         RateLimitRule("repo_chat", frozenset({"POST"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/chat/?$"), 30, 60, "user"),
+                      # Covers the streaming variant (/chat/stream) too — same LLM cost per request.
+                      re.compile(rf"^{p}/repositories/[^/]+/chat(?:/stream)?/?$"), 30, 60, "user"),
         RateLimitRule("repo_explain", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/explain/?$"), 20, 60, "user"),
         RateLimitRule("repo_detect_bugs", frozenset({"POST"}),

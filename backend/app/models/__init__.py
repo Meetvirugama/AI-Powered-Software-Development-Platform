@@ -10,6 +10,7 @@ from app.models.symbol_edge import SymbolEdge
 from app.models.code_chunk import CodeChunk
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.models.memory_entry import MemoryEntry, MemoryType, MemoryStatus
+from app.models.chat_conversation import ChatConversation, ChatMessageRecord
 from app.models.pull_request import PullRequest
 from app.models.analysis_run import AnalysisRun, AnalysisRunStatus, AnalysisFeature
 from app.models.analysis_finding import AnalysisFinding
@@ -49,6 +50,7 @@ __all__ = [
     "TimestampedModel", "User", "UserRole", "GitHubInstallation", "Repository", "SyncStatus",
     "RepositoryFile", "CodeSymbol", "SymbolEdge", "CodeChunk", "SyncJob", "SyncJobStatus",
     "MemoryEntry", "MemoryType", "MemoryStatus", "PullRequest",
+    "ChatConversation", "ChatMessageRecord",
     "AnalysisRun", "AnalysisRunStatus", "AnalysisFeature", "AnalysisFinding",
     "GitHubWebhookEvent", "WebhookEventStatus",
     "GitHubIssue", "AgentTask", "TaskPlanRecord", "TaskApprovalRecord", "TaskEventRecord",

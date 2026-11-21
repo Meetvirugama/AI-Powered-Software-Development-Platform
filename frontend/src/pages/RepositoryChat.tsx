@@ -22,8 +22,18 @@ import {
   Wrench,
   ChevronDown,
   ChevronRight,
+  History,
+  Plus,
 } from 'lucide-react';
-import type { ChatMessage, ChatSource, ChatConfidence, AgentMetadata, ChatMode } from '../types/api';
+import type {
+  ChatMessage,
+  ChatSource,
+  ChatConfidence,
+  AgentMetadata,
+  ChatMode,
+  ChatConversationSummary,
+  ChatStreamStage,
+} from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Page
@@ -41,9 +51,21 @@ export function RepositoryChat() {
   // Repository metadata — reuses the existing query, no new API call.
   const { data: repo, isLoading: repoLoading } = useRepository(id);
 
-  // Chat state — conversation messages live in this hook's local state.
-  const { messages, isPending, error, mode, setMode, sendMessage, clearConversation } =
-    useRepositoryChat(id);
+  // Chat state — streamed answers, with conversations saved on the server.
+  const {
+    messages,
+    isPending,
+    error,
+    mode,
+    setMode,
+    sendMessage,
+    clearConversation,
+    conversations,
+    activeConversationId,
+    isLoadingHistory,
+    selectConversation,
+    deleteConversation,
+  } = useRepositoryChat(id);
 
   const fileParam = searchParams.get('file');
   const promptParam = searchParams.get('prompt');
@@ -213,15 +235,24 @@ export function RepositoryChat() {
             </button>
           )}
 
+          {conversations.length > 0 && (
+            <ConversationMenu
+              conversations={conversations}
+              activeId={activeConversationId}
+              onSelect={selectConversation}
+              onDelete={deleteConversation}
+            />
+          )}
+
           {messages.length > 0 && (
             <button
               onClick={clearConversation}
               className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="Clear conversation"
-              title="Clear conversation"
+              aria-label="Start a new conversation"
+              title="Start a new conversation (this one stays in History)"
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Clear</span>
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">New chat</span>
             </button>
           )}
         </div>
@@ -251,7 +282,11 @@ export function RepositoryChat() {
         aria-live="off"
         aria-label="Chat conversation"
       >
-        {messages.length === 0 && !isPending ? (
+        {isLoadingHistory && messages.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <LoadingSpinner size="sm" label="Loading conversation…" />
+          </div>
+        ) : messages.length === 0 && !isPending ? (
           <EmptyState repoName={repoName} repoLoading={repoLoading} />
         ) : (
           <>
@@ -493,7 +528,7 @@ function MessageBubble({
             <MessageContent content={message.content} />
           ) : (
             <span className="text-muted-foreground/60 text-xs italic">
-              {message.mode === 'agentic' ? 'Investigating repository code…' : 'Thinking…'}
+              {stageLabel(message.streamStage, message.mode)}
             </span>
           )}
           {message.isStreaming && (
@@ -532,6 +567,111 @@ function MessageBubble({
           <SourceList sources={message.sources} onSelectSource={onSelectSource} />
         )}
       </div>
+    </div>
+  );
+}
+
+const STAGE_LABELS: Record<ChatStreamStage, string> = {
+  retrieving: 'Searching the repository…',
+  generating: 'Writing the answer…',
+  grounding: 'Checking citations…',
+  investigating: 'Investigating repository code…',
+};
+
+function stageLabel(stage: ChatStreamStage | null | undefined, mode?: ChatMode): string {
+  if (stage && STAGE_LABELS[stage]) return STAGE_LABELS[stage];
+  return mode === 'agentic' ? 'Investigating repository code…' : 'Thinking…';
+}
+
+// ---------------------------------------------------------------------------
+// ConversationMenu — saved conversations (server-side history)
+// ---------------------------------------------------------------------------
+
+function ConversationMenu({
+  conversations,
+  activeId,
+  onSelect,
+  onDelete,
+}: {
+  conversations: ChatConversationSummary[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded border border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        title="Saved conversations"
+      >
+        <History className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">History ({conversations.length})</span>
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-y-auto rounded-lg border border-border bg-card shadow-xl z-40 p-1"
+        >
+          {conversations.map((conv) => (
+            <div
+              key={conv.id}
+              className={cn(
+                'group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs',
+                conv.id === activeId ? 'bg-primary/10 text-primary' : 'hover:bg-accent text-foreground',
+              )}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  onSelect(conv.id);
+                  setOpen(false);
+                }}
+                className="flex-1 min-w-0 text-left"
+              >
+                <div className="truncate font-medium">{conv.title}</div>
+                <div className="text-[10px] text-muted-foreground">
+                  {conv.message_count} messages
+                  {conv.updated_at ? ` · ${new Date(conv.updated_at).toLocaleDateString()}` : ''}
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Delete "${conv.title}"?`)) onDelete(conv.id);
+                }}
+                className="p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-destructive"
+                aria-label={`Delete conversation ${conv.title}`}
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

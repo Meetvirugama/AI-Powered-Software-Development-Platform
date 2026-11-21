@@ -524,7 +524,44 @@ export interface RepositoryChatRequest {
   question: string;
   history: ChatHistoryMessage[];
   mode?: ChatMode;
+  /**
+   * Server-side conversation to continue. When set, the backend loads history itself
+   * (the `history` field is ignored) and saves this exchange.
+   */
+  conversation_id?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Server-side chat history — backend/app/api/v1/chat.py
+// ---------------------------------------------------------------------------
+
+export interface ChatConversationSummary {
+  id: string;
+  repository_id: string;
+  title: string;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface StoredChatMessage {
+  id: string;
+  role: ChatRole;
+  content: string;
+  sources: ChatSource[];
+  confidence: ChatConfidence | null;
+  status: string | null;
+  mode: ChatMode | null;
+  agent_metadata: AgentMetadata | null;
+  created_at: string | null;
+}
+
+export interface ChatConversationDetail extends ChatConversationSummary {
+  messages: StoredChatMessage[];
+}
+
+/** Progress stages reported by POST /chat/stream before the final answer. */
+export type ChatStreamStage = 'retrieving' | 'generating' | 'grounding' | 'investigating';
 
 /**
  * A source citation returned by the backend RAG pipeline.
@@ -606,8 +643,8 @@ export interface ChatMessage {
   confidence?: ChatConfidence;
   /**
    * True while the assistant is in a streaming/pending state.
-   * Set to false once the complete response is received.
-   * Reserved for future real streaming support.
+   * Set to false once the complete response is received. While true, `content`
+   * holds the answer text streamed so far (POST /chat/stream).
    */
   isStreaming?: boolean;
   /**
@@ -618,4 +655,6 @@ export interface ChatMessage {
    * Compact metadata summary if produced by agentic mode.
    */
   agentMetadata?: AgentMetadata | null;
+  /** While streaming: what the backend is doing right now. */
+  streamStage?: ChatStreamStage | null;
 }
