@@ -58,9 +58,14 @@ class AnalysisRunHistoryService(BaseHistoryService):
             if "model" not in payload:
                 try:
                     from app.core.config import get_settings
-                    payload["model"] = getattr(get_settings(), "groq_chat_model", "openai/gpt-oss-120b")
+                    settings = get_settings()
+                    payload["model"] = (
+                        getattr(settings, "active_chat_model", None)
+                        or getattr(settings, "groq_chat_model", None)
+                        or "unknown"
+                    )
                 except Exception:
-                    payload["model"] = "openai/gpt-oss-120b"
+                    payload["model"] = "unknown"
 
         with self._get_session(db) as session:
             repo = AnalysisRunRepository(session)

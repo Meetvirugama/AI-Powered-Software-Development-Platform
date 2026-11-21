@@ -4,6 +4,7 @@ Owner: Meet — W1-12
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -11,9 +12,48 @@ from typing import Any
 from ai.retrieval.base import CodeChunk
 from .models import AgentContext, ChatMessage, MemoryEntry, RepositoryFile
 from .renderers import format_chunk, format_history_message, format_memory
-from .token_budget import fit_history, fit_items
+from .token_budget import count_tokens, fit_history, fit_items
 
 logger = logging.getLogger(__name__)
+
+# When code chunks are available, conversation history may use at most this share of the budget.
+# Without a cap a long conversation consumed the whole budget and no code reached the model.
+HISTORY_BUDGET_SHARE = 0.3
+# Below this many tokens a compressed chunk is not worth including.
+_MIN_COMPRESSED_CHUNK_TOKENS = 120
+
+
+def compress_chunk(chunk: Any, budget: int) -> Any | None:
+    """Return a copy of ``chunk`` trimmed to whole leading lines that fit in ``budget`` tokens.
+
+    Line numbers are adjusted so citations to the trimmed chunk stay accurate. Returns None
+    when the chunk cannot be copied or not even a useful head fits.
+    """
+    content = getattr(chunk, "content", None)
+    start_line = getattr(chunk, "start_line", None)
+    if not isinstance(content, str) or not isinstance(start_line, int) or budget < _MIN_COMPRESSED_CHUNK_TOKENS:
+        return None
+    lines = content.splitlines()
+    kept: list[str] = []
+    header_budget = count_tokens(format_chunk(chunk).split("\n", 1)[0]) + 16
+    used = header_budget
+    for line in lines:
+        cost = count_tokens(line) + 1
+        if used + cost > budget:
+            break
+        kept.append(line)
+        used += cost
+    if len(kept) < 3 or len(kept) >= len(lines):
+        return None
+    note = f"... [{len(lines) - len(kept)} more lines omitted to fit the context budget]"
+    try:
+        return dataclasses.replace(
+            chunk,
+            content="\n".join(kept + [note]),
+            end_line=start_line + len(kept) - 1,
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 def dedup_memory(entries: Sequence[MemoryEntry]) -> list[MemoryEntry]:
@@ -62,8 +102,11 @@ def build_chat_context(
     effective_overhead = min(overhead_tokens, max_tokens)
     available_budget = max(0, max_tokens - effective_overhead)
 
+    history_budget = available_budget
+    if safe_chunks:
+        history_budget = int(available_budget * HISTORY_BUDGET_SHARE)
     history_tokens, history_kept = fit_history(
-        safe_history, available_budget, format_history_message
+        safe_history, history_budget, format_history_message
     )
     remaining_budget = max(0, available_budget - history_tokens)
 
@@ -76,6 +119,17 @@ def build_chat_context(
         safe_chunks, remaining_budget, format_chunk
     )
     remaining_budget = max(0, remaining_budget - chunk_tokens)
+
+    # Context compression: the best-ranked chunk is the most likely to hold the answer. If it was
+    # skipped for being too large, include its leading lines instead of dropping it entirely.
+    if safe_chunks and (not chunks_kept or chunks_kept[0] is not safe_chunks[0]):
+        compressed = compress_chunk(safe_chunks[0], remaining_budget)
+        if compressed is not None:
+            compressed_tokens = count_tokens(format_chunk(compressed))
+            if compressed_tokens <= remaining_budget:
+                chunks_kept = [compressed, *chunks_kept]
+                chunk_tokens += compressed_tokens
+                remaining_budget -= compressed_tokens
 
     # ---- Step 5: Total token count --------------------------------------
     total = (

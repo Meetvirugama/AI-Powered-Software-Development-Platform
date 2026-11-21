@@ -130,6 +130,17 @@ _VECTOR_SEARCH_SQL = text(
     """
 )
 
+# Same query restricted to chunks embedded with the query's embedding profile. Vectors from a
+# different profile (another model, task type or dimensionality) live in a different space, so
+# cosine distances against them are meaningless; while a repository is being re-embedded after
+# a profile change, only already-migrated chunks are searched (lexical search still covers the rest).
+_VECTOR_SEARCH_PROFILE_SQL = text(
+    str(_VECTOR_SEARCH_SQL.text).replace(
+        "AND embedding IS NOT NULL",
+        "AND embedding IS NOT NULL\n      AND COALESCE(metadata->>'embedding_profile_version', 'v1') = :profile_version",
+    )
+)
+
 
 def _vec_to_pg_literal(vector: list[float], expected_dim: int | None = None) -> str:
     """Serialise a Python float list to the PostgreSQL vector literal format.
@@ -246,20 +257,25 @@ class VectorRetriever(Retriever):
         query_vec_literal = _vec_to_pg_literal(query_vector, expected_dim=expected_dim)
 
         # Step 2 — cosine distance search in pgvector with transaction-local HNSW profile
-        params = {
+        params: dict[str, Any] = {
             "query_vec": query_vec_literal,
             "repository_id": str(repo_uuid),
             "top_k": top_k,
         }
+        search_sql = _VECTOR_SEARCH_SQL
+        profile_version = getattr(self._embedding_service, "profile_version", None)
+        if isinstance(profile_version, str) and profile_version:
+            params["profile_version"] = profile_version
+            search_sql = _VECTOR_SEARCH_PROFILE_SQL
         db_obj: Any = self._db
         if hasattr(db_obj, "execute"):
             await _apply_adaptive_hnsw(db_obj, ef_search=ef_search, iterative_scan=iterative_scan)
-            result = await db_obj.execute(_VECTOR_SEARCH_SQL, params)
+            result = await db_obj.execute(search_sql, params)
             rows = result.fetchall()
         else:
             async with db_obj() as session:
                 await _apply_adaptive_hnsw(session, ef_search=ef_search, iterative_scan=iterative_scan)
-                result = await session.execute(_VECTOR_SEARCH_SQL, params)
+                result = await session.execute(search_sql, params)
                 rows = result.fetchall()
 
         if not rows:

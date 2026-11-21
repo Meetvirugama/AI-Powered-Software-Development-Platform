@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
+import { findMatchingRepositoryFile } from '../lib/sourceReference';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Sparkles,
@@ -194,7 +195,9 @@ export function RepositoryExplainStudio() {
     if (selectedFile && source.file_path && source.file_path !== selectedFile.path) {
       const targetFile = files.find((f) => f.path === source.file_path);
       if (targetFile) {
-        handleSelectFile(targetFile);
+        // preserveResults: jumping to a citation in another file must not wipe the
+        // explanation the user is reading (the file-change callback clears results).
+        handleSelectFile(targetFile, { preserveResults: true });
         handleTargetChange({
           type: 'range',
           path: source.file_path,
@@ -580,6 +583,12 @@ export function RepositoryExplainStudio() {
           initialFeature="explain"
           currentFilePath={selectedFile?.path}
           onReopenExplain={(explanation, target, run) => {
+            // A saved run may belong to another file. Select that file first (keeping results),
+            // otherwise its line range was applied to whichever file happened to be open.
+            const runFile = target.path ? findMatchingRepositoryFile(files, target.path) : null;
+            if (runFile && runFile.path !== selectedFile?.path) {
+              handleSelectFile(runFile, { preserveResults: true });
+            }
             setExplanationResult(explanation);
             handleTargetChange(target);
             setRunId(run);

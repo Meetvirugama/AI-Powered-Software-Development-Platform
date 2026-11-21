@@ -1,6 +1,7 @@
 """Public repository-management response models."""
 
 from datetime import datetime
+from uuid import UUID
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -217,6 +218,13 @@ class RepositoryChatRequest(BaseModel):
         default="normal",
         description="Chat execution mode: 'normal' for fast standard RAG, 'agentic' for multi-step bounded investigation.",
     )
+    conversation_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Server-side conversation to continue. When set, history is loaded from the server "
+            "(the `history` field is ignored) and this exchange is saved to the conversation."
+        ),
+    )
 
     @field_validator("question")
     @classmethod
@@ -225,6 +233,44 @@ class RepositoryChatRequest(BaseModel):
         if not value:
             raise ValueError("question must contain non-whitespace characters")
         return value
+
+
+class ChatConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=500)
+
+
+class ChatConversationRename(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+
+
+class ChatConversationSummary(BaseModel):
+    id: str
+    repository_id: str
+    title: str
+    message_count: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ChatMessageOut(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    content: str
+    sources: list[dict] = Field(default_factory=list)
+    confidence: str | None = None
+    status: str | None = None
+    mode: str | None = None
+    agent_metadata: dict | None = None
+    created_at: datetime | None = None
+
+
+class ChatConversationDetail(ChatConversationSummary):
+    messages: list[ChatMessageOut] = Field(default_factory=list)
+
+
+class ChatConversationList(BaseModel):
+    items: list[ChatConversationSummary]
+    total: int
 
 
 # ---------------------------------------------------------------------------

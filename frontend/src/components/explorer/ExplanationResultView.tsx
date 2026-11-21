@@ -35,9 +35,11 @@ import {
   ArrowRight,
   ArrowDown,
   Target,
+  Download,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { CodeExplanation, SourceReference, SymbolSummary } from '../../types/analysis';
+import { buildExplanationMarkdown, downloadExplanationMarkdown } from '../../lib/explanationMarkdown';
 
 export interface ExplanationResultViewProps {
   explanation: CodeExplanation;
@@ -81,6 +83,7 @@ export function ExplanationResultView({
   className,
 }: ExplanationResultViewProps) {
   const [copied, setCopied] = useState(false);
+  const [markdownCopied, setMarkdownCopied] = useState(false);
   const [activeRelationshipTab, setActiveRelationshipTab] = useState<
     'call_graph' | 'data_flow' | 'related_files' | 'source_evidence'
   >('call_graph');
@@ -241,6 +244,38 @@ export function ExplanationResultView({
           )}
           <span className="capitalize">{confidence} Confidence</span>
         </div>
+      </div>
+
+      {/* Analysis Export — save or share this single explanation as Markdown */}
+      <div className="flex items-center justify-end gap-1.5" data-testid="explanation-export-actions">
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(
+                buildExplanationMarkdown(explanation, { targetFilePath: defaultFilePath || undefined }),
+              );
+              setMarkdownCopied(true);
+              setTimeout(() => setMarkdownCopied(false), 2000);
+            } catch {
+              // Clipboard can be blocked (insecure origin / permissions); download still works.
+            }
+          }}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border/70 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+          title="Copy this explanation as Markdown"
+        >
+          {markdownCopied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+          {markdownCopied ? 'Copied' : 'Copy Markdown'}
+        </button>
+        <button
+          type="button"
+          onClick={() => downloadExplanationMarkdown(explanation, defaultFilePath || undefined)}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border/70 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+          title="Download this explanation as a Markdown file"
+        >
+          <Download className="h-3 w-3" />
+          Export .md
+        </button>
       </div>
 
       {/* -------------------------------------------------------------- */}

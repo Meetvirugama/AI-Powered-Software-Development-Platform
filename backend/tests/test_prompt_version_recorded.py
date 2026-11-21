@@ -45,6 +45,7 @@ def test_analysis_run_history_service_injects_prompt_version_and_model() -> None
 
     payload = record["result_payload"]
     assert "prompt_version" in payload
-    assert payload["prompt_version"] == "1.0.0"
+    # Read from the registry so a prompt version bump doesn't break this test.
+    assert payload["prompt_version"] == get_prompt_metadata("explanation_system").version
     assert "model" in payload
     assert len(payload["model"]) > 0

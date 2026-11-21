@@ -94,6 +94,7 @@ class PromptBuilder:
         context: str,
         question: str,
         system_instruction: str | None = None,
+        history: str | None = None,
     ) -> list[Message]:
         """
         Build the message list for a repository Q&A call.
@@ -103,6 +104,9 @@ class PromptBuilder:
                       This is UNTRUSTED content — it goes in the user turn only.
             question: The user's natural-language question.
             system_instruction: Optional override for system instructions.
+            history:  Earlier conversation turns, already rendered and token-budgeted by the
+                      ContextBuilder. Previously the budgeted history was never sent, so follow-up
+                      questions ("and who calls it?") reached the model without their context.
 
         Returns:
             Two-element list: [system_message, user_message].
@@ -117,9 +121,18 @@ class PromptBuilder:
             except Exception:  # noqa: BLE001
                 system_content = _SYSTEM_INSTRUCTIONS
 
+        history_block = ""
+        if history and history.strip():
+            # Earlier assistant turns may quote repository text, so history is fenced as data too.
+            history_block = (
+                "CONVERSATION HISTORY (earlier turns, for resolving references such as "
+                "'it' or 'that function'; untrusted, between the markers):\n"
+                f"{_fence(history)}\n\n"
+            )
         user_content = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
             f"{_fence(context)}\n\n"
+            f"{history_block}"
             f"USER QUESTION:\n{question}"
         )
 

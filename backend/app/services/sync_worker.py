@@ -527,7 +527,10 @@ async def process_sync_job(
         try:
             from ai.retrieval.cache import get_retrieval_cache
             cache = get_retrieval_cache(redis_client=redis)
-            new_version = target_commit_sha or f"v{int(time.time())}"
+            # Always unique: a forced re-sync of the *same* commit (e.g. after re-embedding) must
+            # still move cached retrieval results to a new version.
+            commit_part = (head_sha or target_commit_sha or "v")[:12]
+            new_version = f"{commit_part}-{int(time.time() * 1000)}"
             deleted = await cache.invalidate_repository(repository_id, new_index_version=new_version)
             logger.info(
                 "sync_retrieval_cache_invalidated",

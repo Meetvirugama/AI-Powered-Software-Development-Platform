@@ -76,7 +76,7 @@ PROMPT_REGISTRY: dict[str, PromptMetadata] = {
     ),
     "explanation_system": PromptMetadata(
         prompt_id="prompt-explain-sys-001",
-        version="1.0.0",
+        version="1.1.0",
         owner="AI Team",
         capability="explanation",
         expected_output_schema="ExplanationResult",

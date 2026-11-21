@@ -284,18 +284,29 @@ class HybridRetriever(Retriever):
 
         # Step 6: Optional Cross-Encoder Reranking
         final_results: list[CodeChunk]
+        rerank_failed = False
         if self._reranker is not None:
-            final_results = await asyncio.to_thread(
-                self._reranker.rerank,
-                query=query,
-                candidates=fused,
-                top_n=top_k,
-            )
+            try:
+                final_results = await asyncio.to_thread(
+                    self._reranker.rerank,
+                    query=query,
+                    candidates=fused,
+                    top_n=top_k,
+                )
+            except Exception as rerank_exc:  # noqa: BLE001
+                # The reranker is an optional precision step (e.g. ONNX session or model download
+                # failure); it must never turn a successful retrieval into a failed chat request.
+                rerank_failed = True
+                logger.warning(
+                    "hybrid_retrieval_rerank_failed_using_fused_order",
+                    extra={"repo_id": str(repo_uuid), "error": str(rerank_exc)},
+                )
+                final_results = fused[:top_k]
         else:
             final_results = fused[:top_k]
 
         # Step 7: Store Final Results in Redis Cache (skip caching degraded fallback results)
-        if self._cache is not None and final_results and not fallback_used:
+        if self._cache is not None and final_results and not fallback_used and not rerank_failed:
             await self._cache.set(cache_key, final_results)
 
         return final_results

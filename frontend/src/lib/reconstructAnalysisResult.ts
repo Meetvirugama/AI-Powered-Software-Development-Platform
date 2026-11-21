@@ -41,6 +41,14 @@ export type ReopenedAnalysisResult =
       message: string;
     };
 
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 /**
  * Safely reconstruct a typed analysis result from a persisted AnalysisRunDetailResponse.
  * Complies with F-03 & F-07:
@@ -59,6 +67,7 @@ export function reconstructAnalysisResult(
     symbol: detail.target_symbol ?? undefined,
     start_line: detail.start_line ?? undefined,
     end_line: detail.end_line ?? undefined,
+    revision: detail.source_revision ?? undefined,
   };
 
   const featureType = detail.feature_type;
@@ -95,6 +104,22 @@ export function reconstructAnalysisResult(
       sources: Array.isArray(rawExplanation.sources) ? rawExplanation.sources : [],
       confidence: rawExplanation.confidence || 'medium',
       missing_context: Array.isArray(rawExplanation.missing_context) ? rawExplanation.missing_context : [],
+      // Everything else the explanation was saved with. These used to be dropped, so a run
+      // reopened from history lost its detailed walkthrough, execution flow, issues, corrected
+      // code, redaction notice and call-graph data.
+      execution_flow: stringList(rawExplanation.execution_flow),
+      related_files: stringList(rawExplanation.related_files),
+      detailed_explanation: optionalString(rawExplanation.detailed_explanation),
+      code_output_explanation: optionalString(rawExplanation.code_output_explanation),
+      code_issues_and_solutions: stringList(rawExplanation.code_issues_and_solutions),
+      corrected_code: optionalString(rawExplanation.corrected_code),
+      has_redacted_content: Boolean(rawExplanation.has_redacted_content),
+      redacted_occurrences:
+        typeof rawExplanation.redacted_occurrences === 'number' ? rawExplanation.redacted_occurrences : 0,
+      redaction_notice: optionalString(rawExplanation.redaction_notice) ?? null,
+      call_graph_depth_expanded: Boolean(rawExplanation.call_graph_depth_expanded),
+      expanded_callers: stringList(rawExplanation.expanded_callers),
+      expanded_callees: stringList(rawExplanation.expanded_callees),
     };
 
     return {

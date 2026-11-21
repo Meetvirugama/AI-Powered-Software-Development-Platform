@@ -29,6 +29,8 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Protocol, Self, runtime_checkable
 from uuid import UUID
 
@@ -53,6 +55,86 @@ from ai.schemas.prompt_builder import PromptBuilder
 from ai.schemas.validator import OutputValidator
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _PreparedChat:
+    """Output of retrieval + context + prompt construction for one chat turn."""
+
+    repo_uuid: UUID
+    question: str
+    model: str
+    ctx: AgentContext
+    messages: list[Message]
+    retrieval_latency_ms: float
+
+
+_JSON_ESCAPES = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+
+class _StreamingAnswerExtractor:
+    """Incrementally decode the ``"answer"`` string of a JSON object as it streams in.
+
+    The model streams ``{"answer": "...", "sources": [...], ...}``; only the answer text is
+    useful to show while generating. Handles escape sequences split across chunks.
+    """
+
+    _KEY_RE = re.compile(r'"answer"\s*:\s*"')
+
+    def __init__(self) -> None:
+        self._raw = ""
+        self._pos: int | None = None  # index in _raw where the answer string body starts
+        self._out: list[str] = []
+        self._done = False
+
+    def feed(self, delta: str) -> str:
+        self._raw += delta
+        if self._pos is None:
+            match = self._KEY_RE.search(self._raw)
+            if not match:
+                return ""
+            self._pos = match.end()
+        while not self._done and self._pos < len(self._raw):
+            ch = self._raw[self._pos]
+            if ch == '"':
+                self._done = True
+                break
+            if ch != "\\":
+                self._out.append(ch)
+                self._pos += 1
+                continue
+            # Escape sequence: wait until it is complete.
+            if self._pos + 1 >= len(self._raw):
+                break
+            esc = self._raw[self._pos + 1]
+            if esc == "u":
+                hex_part = self._raw[self._pos + 2 : self._pos + 6]
+                if len(hex_part) < 4:
+                    break
+                try:
+                    self._out.append(chr(int(hex_part, 16)))
+                except ValueError:
+                    pass
+                self._pos += 6
+            else:
+                self._out.append(_JSON_ESCAPES.get(esc, esc))
+                self._pos += 2
+        return "".join(self._out)
+
+
+def _redact_streaming_text(text: str) -> str:
+    """Redact partial answer text, holding back the trailing word.
+
+    A secret is usually one whitespace-free token; while it is still arriving the redactor
+    cannot recognise it, so nothing after the last whitespace is shown until it is complete.
+    The final answer is always re-redacted in full.
+    """
+    if not text:
+        return ""
+    cut = max(text.rfind(" "), text.rfind("\n"), text.rfind("\t"))
+    if cut <= 0:
+        return ""
+    return redact(text[:cut])
 
 
 @runtime_checkable
@@ -240,6 +322,114 @@ class RAGPipeline:
             APIError(500, INTERNAL_SERVER_ERROR)                 — unrecoverable LLM error.
         """
         start_time = time.monotonic()
+        prepared = await self._prepare_chat(question, repository_id, history, memory, model, system_instruction)
+        if isinstance(prepared, RepositoryAnswer):
+            return prepared
+
+        llm_start = time.monotonic()
+        raw_answer = await self._generate_with_repair(
+            messages=prepared.messages,
+            original_question=prepared.question,
+            model=prepared.model,
+        )
+        llm_latency_ms = (time.monotonic() - llm_start) * 1000
+
+        validated = await self._ground_and_redact(raw_answer, prepared)
+        self._log_completion(prepared, raw_answer, validated, start_time, llm_latency_ms)
+        return validated
+
+    async def chat_stream(
+        self,
+        question: str,
+        repository_id: UUID | str,
+        history: list[ChatMessage | dict],
+        memory: list[MemoryEntry] | None = None,
+        model: str | None = None,
+        system_instruction: str | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Stream a grounded answer as events.
+
+        Yields dicts with an ``event`` key:
+          - ``{"event": "status", "stage": "retrieving" | "generating" | "grounding"}``
+          - ``{"event": "answer", "text": <redacted answer text so far>}``  (snapshots, not deltas)
+          - ``{"event": "done", "answer": <RepositoryAnswer>}``  — authoritative, grounded result
+
+        The model is asked for the same JSON object as :meth:`chat`; the ``answer`` field is
+        decoded incrementally while it streams. Citations are only final in ``done``, after
+        grounding validation. If the provider cannot stream, or the streamed JSON is invalid,
+        the method falls back to the normal (non-streaming) generation + repair loop.
+        """
+        start_time = time.monotonic()
+        yield {"event": "status", "stage": "retrieving"}
+        prepared = await self._prepare_chat(question, repository_id, history, memory, model, system_instruction)
+        if isinstance(prepared, RepositoryAnswer):
+            yield {"event": "done", "answer": prepared}
+            return
+
+        yield {"event": "status", "stage": "generating"}
+        llm_start = time.monotonic()
+        raw_answer: RepositoryAnswer | None = None
+        stream_fn = getattr(self.llm, "generate_stream", None)
+        if callable(stream_fn) and inspect.isasyncgenfunction(getattr(type(self.llm), "generate_stream", None) or stream_fn):
+            extractor = _StreamingAnswerExtractor()
+            buffer: list[str] = []
+            last_sent = ""
+            try:
+                req = LLMRequest(model=prepared.model, messages=list(prepared.messages), response_schema=RepositoryAnswer)
+                async for chunk in stream_fn(req):
+                    delta = getattr(chunk, "delta", "") or ""
+                    if not delta:
+                        continue
+                    buffer.append(delta)
+                    text = extractor.feed(delta)
+                    safe = _redact_streaming_text(text)
+                    if safe and safe != last_sent:
+                        last_sent = safe
+                        yield {"event": "answer", "text": safe}
+                raw_text = "".join(buffer)
+                try:
+                    data = json.loads(self._clean_json_content(raw_text))
+                    if isinstance(data, dict):
+                        data["agent_metadata"] = None
+                    raw_answer = RepositoryAnswer(**data)
+                except (json.JSONDecodeError, ValueError, TypeError) as parse_err:
+                    logger.warning("rag_stream_json_invalid_falling_back", extra={"error_type": type(parse_err).__name__})
+            except (LLMTimeoutError, LLMUnavailableError, LLMRateLimitError) as exc:
+                logger.warning("rag_stream_provider_error_falling_back", extra={"error": str(exc)})
+            except LLMError as exc:
+                logger.warning("rag_stream_llm_error_falling_back", extra={"error": str(exc)})
+
+        if raw_answer is None:
+            raw_answer = await self._generate_with_repair(
+                messages=prepared.messages,
+                original_question=prepared.question,
+                model=prepared.model,
+            )
+        llm_latency_ms = (time.monotonic() - llm_start) * 1000
+
+        yield {"event": "status", "stage": "grounding"}
+        validated = await self._ground_and_redact(raw_answer, prepared)
+        self._log_completion(prepared, raw_answer, validated, start_time, llm_latency_ms)
+        yield {"event": "done", "answer": validated}
+
+    # ------------------------------------------------------------------
+    # Shared chat steps (used by chat and chat_stream)
+    # ------------------------------------------------------------------
+
+    async def _prepare_chat(
+        self,
+        question: str,
+        repository_id: UUID | str,
+        history: list[ChatMessage | dict] | None,
+        memory: list[MemoryEntry] | None,
+        model: str | None,
+        system_instruction: str | None,
+    ) -> "_PreparedChat | RepositoryAnswer":
+        """Steps 1–4: validate, retrieve, assemble context, build prompt.
+
+        Returns a RepositoryAnswer directly for the early-exit cases (empty question,
+        no retriever, nothing found).
+        """
         cleaned_question = (question or "").strip()
         repo_uuid = self._coerce_uuid(repository_id)
         memory = memory or []
@@ -274,7 +464,7 @@ class RAGPipeline:
         retrieval_start = time.monotonic()
         try:
             chunks, related_files = await asyncio.gather(
-                self._retrieve(cleaned_question, repo_uuid),
+                self._retrieve(self._retrieval_query(cleaned_question, chat_history), repo_uuid),
                 self._get_repository_files(repo_uuid),
             )
         except RetrievalUnavailableError as exc:
@@ -319,41 +509,46 @@ class RAGPipeline:
 
         # ---- Step 4: Prompt construction ---------------------------------
         rendered_data = redact(self.context_builder.render_repository_data(ctx))
-        messages = self.prompt_builder.build_chat_prompt(
-            context=rendered_data,
+        prompt_kwargs: dict[str, Any] = {"context": rendered_data, "question": cleaned_question}
+        rendered_history = self.context_builder.render_history_section(ctx) if ctx.recent_history else ""
+        if isinstance(rendered_history, str) and rendered_history.strip():
+            prompt_kwargs["history"] = redact(rendered_history)
+        if system_instruction is not None:
+            prompt_kwargs["system_instruction"] = system_instruction
+        messages = self.prompt_builder.build_chat_prompt(**prompt_kwargs)
+
+        return _PreparedChat(
+            repo_uuid=repo_uuid,
             question=cleaned_question,
-        )
-
-        # ---- Step 5: LLM call with JSON repair loop ----------------------
-        llm_start = time.monotonic()
-        raw_answer = await self._generate_with_repair(
-            messages=messages,
-            original_question=cleaned_question,
             model=selected_model,
+            ctx=ctx,
+            messages=messages,
+            retrieval_latency_ms=retrieval_latency_ms,
         )
-        llm_latency_ms = (time.monotonic() - llm_start) * 1000
 
-        # ---- Step 6: Grounding validation & secret redaction -------------
+    async def _ground_and_redact(self, raw_answer: RepositoryAnswer, prepared: "_PreparedChat") -> RepositoryAnswer:
+        """Step 6: drop hallucinated citations and redact secrets."""
         try:
             validated = await self.grounding_validator.validate_sources(
-                raw_answer, repo_uuid, retrieved_chunks=ctx.code_chunks
+                raw_answer, prepared.repo_uuid, retrieved_chunks=prepared.ctx.code_chunks
             )
         except TypeError:
-            validated = await self.grounding_validator.validate_sources(
-                raw_answer, repo_uuid
-            )
-        validated = validated.model_copy(
-            update={
-                "answer": redact(validated.answer),
-                "agent_metadata": None,
-            }
-        )
+            validated = await self.grounding_validator.validate_sources(raw_answer, prepared.repo_uuid)
+        return validated.model_copy(update={"answer": redact(validated.answer), "agent_metadata": None})
 
-        total_latency_ms = (time.monotonic() - start_time) * 1000
+    def _log_completion(
+        self,
+        prepared: "_PreparedChat",
+        raw_answer: RepositoryAnswer,
+        validated: RepositoryAnswer,
+        start_time: float,
+        llm_latency_ms: float,
+    ) -> None:
+        ctx = prepared.ctx
         logger.info(
             "rag_pipeline_complete",
             extra={
-                "repo_id": str(repo_uuid),
+                "repo_id": str(prepared.repo_uuid),
                 "chunks_used": len(ctx.code_chunks),
                 "total_tokens": getattr(ctx, "total_tokens", 0),
                 "chunk_tokens": getattr(ctx, "chunk_tokens", 0),
@@ -362,13 +557,30 @@ class RAGPipeline:
                 "sources_before": len(raw_answer.sources),
                 "sources_after": len(validated.sources),
                 "confidence": validated.confidence,
-                "retrieval_latency_ms": round(retrieval_latency_ms, 2),
+                "retrieval_latency_ms": round(prepared.retrieval_latency_ms, 2),
                 "llm_latency_ms": round(llm_latency_ms, 2),
-                "total_latency_ms": round(total_latency_ms, 2),
+                "total_latency_ms": round((time.monotonic() - start_time) * 1000, 2),
             },
         )
 
-        return validated
+    # Follow-up questions ("who calls it?") carry no searchable terms on their own.
+    _FOLLOW_UP_MAX_WORDS = 12
+    _FOLLOW_UP_HINT_RE = re.compile(
+        r"\b(it|its|this|that|these|those|they|them|there|above|same|previous|earlier|also)\b", re.IGNORECASE
+    )
+
+    @classmethod
+    def _retrieval_query(cls, question: str, history: list[ChatMessage]) -> str:
+        """Retrieval query for this turn: short or pronoun-led follow-ups borrow the previous user question."""
+        if not history:
+            return question
+        previous = next((m.content for m in reversed(history) if m.role == "user" and m.content.strip()), "")
+        if not previous or previous.strip() == question:
+            return question
+        is_short = len(question.split()) <= cls._FOLLOW_UP_MAX_WORDS
+        if is_short or cls._FOLLOW_UP_HINT_RE.search(question):
+            return f"{previous.strip()[:500]}\n{question}"
+        return question
 
     async def finalize_agent_chat(
         self,
