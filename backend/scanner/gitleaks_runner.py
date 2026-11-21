@@ -253,8 +253,11 @@ class GitleaksRunner:
             for rule in GITLEAKS_PATTERNS:
                 for m in rule["pattern"].finditer(line):
                     secret_val = m.group(1)
-                    # Check for placeholder strings (ignore false positives)
-                    if _PLACEHOLDER_REGEX.search(secret_val) or _PLACEHOLDER_REGEX.search(line):
+                    # Ignore placeholder / example *values*. The check used to run on the
+                    # whole line too, so a real key was dropped whenever the same line
+                    # mentioned e.g. "sample", "mock" or os.getenv (and a hardcoded
+                    # getenv fallback value is itself a leak).
+                    if _PLACEHOLDER_REGEX.search(secret_val):
                         continue
                     line_secrets.add(secret_val)
                     matched_rules.append((rule, secret_val))

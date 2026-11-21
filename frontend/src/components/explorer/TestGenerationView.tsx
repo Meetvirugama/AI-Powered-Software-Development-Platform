@@ -118,6 +118,10 @@ export function TestGenerationView({
 
   const requirements = useMemo<TestRequirement[]>(() => result.requirements || [], [result.requirements]);
   const qualityReport: TestQualityReport | null = result.quality_report || null;
+  // The backend labels requirement-based estimates; a measured run replaces that note.
+  const mutationIsEstimate = Boolean(
+    qualityReport?.summary_notes?.some((n) => n.startsWith('Mutation score is an estimate'))
+  );
 
   const filteredRequirements = useMemo(() => {
     if (reqFilter === 'ALL') return requirements;
@@ -764,7 +768,16 @@ export function TestGenerationView({
                   </div>
                 </div>
                 <div className="p-2 rounded-lg bg-muted/20 border border-border/40 space-y-1">
-                  <div className="text-[10px] text-muted-foreground uppercase">Mutation Score</div>
+                  <div
+                    className="text-[10px] text-muted-foreground uppercase"
+                    title={
+                      mutationIsEstimate
+                        ? 'Estimated from requirement coverage and assertion quality (not measured)'
+                        : 'Share of injected code defects the generated tests caught'
+                    }
+                  >
+                    Mutation Score{mutationIsEstimate ? ' (est.)' : ''}
+                  </div>
                   <div className="text-sm font-semibold text-purple-400">
                     {qualityReport.mutation_score_percent !== null && qualityReport.mutation_score_percent !== undefined
                       ? `${qualityReport.mutation_score_percent}%`
@@ -778,6 +791,14 @@ export function TestGenerationView({
                   </div>
                 </div>
               </div>
+
+              {qualityReport.summary_notes && qualityReport.summary_notes.length > 0 && (
+                <ul className="space-y-1 text-[11px] text-muted-foreground list-disc pl-4">
+                  {qualityReport.summary_notes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              )}
 
               {qualityReport.untested_critical_requirements && qualityReport.untested_critical_requirements.length > 0 && (
                 <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[11px] flex items-center gap-1.5">

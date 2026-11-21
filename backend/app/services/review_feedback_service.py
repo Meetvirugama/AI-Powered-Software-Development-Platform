@@ -105,12 +105,28 @@ class ReviewFeedbackService:
 
         meta["feedback"] = feedback_entry
 
-        # If feedback is dismissed or false_positive, also update lifecycle status
+        # Feedback drives the finding lifecycle:
+        #   false_positive / dismissed -> DISMISSED
+        #   already_fixed              -> FIXED   (previously ignored)
+        #   useful / not_useful on a DISMISSED or FIXED finding -> REOPENED
+        #     (previously a dismissal could never be undone)
         lifecycle = dict(meta.get("lifecycle") or {})
+        previous_status = lifecycle.get("status")
+        new_status = previous_status
         if clean_type in ("false_positive", "dismissed"):
-            lifecycle["status"] = "DISMISSED"
+            new_status = "DISMISSED"
             lifecycle["dismissed_reason"] = clean_type
+        elif clean_type == "already_fixed":
+            new_status = "FIXED"
+            lifecycle.pop("dismissed_reason", None)
+        elif previous_status in ("DISMISSED", "FIXED"):
+            new_status = "REOPENED"
+            lifecycle.pop("dismissed_reason", None)
+        if new_status != previous_status:
+            lifecycle["status"] = new_status
+            lifecycle["status_changed_at"] = feedback_entry["updated_at"]
             meta["lifecycle"] = lifecycle
+        feedback_entry["lifecycle_status"] = lifecycle.get("status") or "NEW"
 
         finding.finding_metadata = meta
         db.commit()

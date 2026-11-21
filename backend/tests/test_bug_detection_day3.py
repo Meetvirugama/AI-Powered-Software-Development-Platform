@@ -187,10 +187,10 @@ def test_detect_bugs_merges_static_and_ai_findings_and_ranks_by_severity(
         # 1. Hallucinated file finding was stripped by grounding
         assert all(f["source_reference"]["file_path"] == "src/pagination.py" for f in findings)
 
-        # 2. Findings are ranked deterministically by severity: CRITICAL (eval B307) first
+        # 2. Findings are ranked deterministically by severity: CRITICAL (eval B307 / AST-SEC-001) first
         severities = [f["severity"] for f in findings]
         assert severities[0] == "CRITICAL"
-        assert findings[0]["rule_id"] == "B307"
+        assert findings[0]["rule_id"] in ("B307", "AST-SEC-001")
 
         # 3. Overlapping static AST001 + AI off_by_one finding was deduplicated & merged into COMBINED
         off_by_one_findings = [f for f in findings if f["category"] == "off_by_one"]

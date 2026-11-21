@@ -147,10 +147,14 @@ export function reconstructAnalysisResult(
       target,
       findings,
       total_findings: detail.findings_count || findings.length,
+      // Same counting rule as the backend: COMBINED counts toward both.
       static_findings_count:
-        payload?.static_findings_count ?? findings.filter((f) => f.source_type === 'STATIC').length,
+        payload?.static_findings_count ??
+        findings.filter((f) => f.source_type === 'STATIC' || f.source_type === 'COMBINED').length,
       ai_findings_count:
-        payload?.ai_findings_count ?? findings.filter((f) => f.source_type === 'AI').length,
+        payload?.ai_findings_count ??
+        findings.filter((f) => f.source_type === 'AI' || f.source_type === 'COMBINED').length,
+      revision: payload?.revision ?? detail.source_revision ?? undefined,
       missing_context: payload?.missing_context || [],
       created_at: detail.created_at,
       completed_at: detail.completed_at ?? undefined,
@@ -187,9 +191,14 @@ export function reconstructAnalysisResult(
       status: detail.status,
       target,
       result: {
-        detected_framework: rawResult?.detected_framework || 'pytest',
+        // Keep everything the run saved (execution, verification, coverage,
+        // stability, quality/mutation reports, requirements); the explicit
+        // fields below only normalise legacy aliases and fill defaults.
+        ...(rawResult && typeof rawResult === 'object' ? rawResult : {}),
+        detected_framework: rawResult?.detected_framework || rawResult?.framework || 'pytest',
         proposed_test_path: rawResult?.proposed_test_path || `tests/test_${detail.target_path?.split('/').pop() || 'generated.py'}`,
         test_content: testContent || '',
+        raw_execution_output: rawResult?.raw_execution_output ?? detail.test_output ?? null,
         covered_scenarios: Array.isArray(rawResult?.covered_scenarios) ? rawResult.covered_scenarios : [],
         assumptions_and_warnings: Array.isArray(rawResult?.assumptions_and_warnings)
           ? rawResult.assumptions_and_warnings
@@ -249,6 +258,8 @@ export function reconstructAnalysisResult(
         category_counts: rawReport?.category_counts || {},
         missing_context: rawReport?.missing_context || [],
       },
+      // Publication status (posted to GitHub PR or not) was dropped on reopen.
+      review_publication: payload?.review_publication ?? null,
       created_at: detail.created_at,
       completed_at: detail.completed_at,
     };

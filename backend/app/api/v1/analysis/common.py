@@ -9,7 +9,7 @@ import inspect
 import logging
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from ai.llm.schemas import (
     LLMError,
@@ -359,3 +359,30 @@ def _coerce_run_summary(item: Any, repository_id: UUID) -> AnalysisRunSummary:
         completed_at=getattr(item, "completed_at", None),
     )
 
+
+
+# Namespace for deriving persistent finding ids (any fixed UUID works).
+_FINDING_ID_NAMESPACE = UUID("6f1c2a52-4f0e-4b1e-9a57-3a0d2b8e7c11")
+
+
+def assign_persistent_finding_ids(findings: list[Any], run_id: str) -> list[Any]:
+    """Gives every finding a UUID that is also its database id.
+
+    Engines label findings "rev-finding-1", "static-3", ... which are not UUIDs,
+    so persistence stored each under a fresh random UUID while the response
+    kept the label. Feedback, lifecycle updates and finding-to-issue linking
+    look findings up by database id, so they could never match. A UUID derived
+    from (run_id, original id) is stable, unique per run, and used by both.
+    """
+    result: list[Any] = []
+    for finding in findings:
+        raw_id = str(getattr(finding, "id", "") or "")
+        try:
+            UUID(raw_id)
+            result.append(finding)
+            continue
+        except ValueError:
+            pass
+        new_id = str(uuid5(_FINDING_ID_NAMESPACE, f"{run_id}:{raw_id}"))
+        result.append(finding.model_copy(update={"id": new_id}) if hasattr(finding, "model_copy") else finding)
+    return result

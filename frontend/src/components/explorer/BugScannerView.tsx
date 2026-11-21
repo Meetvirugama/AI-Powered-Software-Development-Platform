@@ -22,6 +22,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { FindingsExportButtons } from './FindingsExportButtons';
 import type {
   BugDetectionResponse,
   FindingSeverity,
@@ -116,7 +117,28 @@ const SOURCE_TYPE_CONFIG: Record<
     className: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40 font-semibold',
     description: 'Corroborated by both static rules and AI validation (High Confidence)',
   },
+  HYBRID: {
+    label: 'Hybrid',
+    icon: ShieldAlert,
+    className: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
+    description: 'Static candidate investigated and confirmed by AI reasoning',
+  },
 };
+
+/** Readable engine name from provenance like "static_rule:taint". */
+const ENGINE_LABELS: Record<string, string> = {
+  taint: 'Taint',
+  config: 'Config',
+  change_risk: 'Change Risk',
+  semgrep: 'Semgrep',
+  osv: 'OSV',
+  gitleaks: 'Secrets',
+};
+
+function engineLabel(provenance?: string | null): string | null {
+  const engine = provenance?.split(':')[1]?.toLowerCase();
+  return engine ? ENGINE_LABELS[engine] ?? engine : null;
+}
 
 const EVIDENCE_LEVEL_CONFIG: Record<
   string,
@@ -322,6 +344,15 @@ export function BugScannerView({
           </div>
 
           <div className="flex items-center gap-2 text-[10px] font-mono">
+            <FindingsExportButtons
+              input={{
+                kind: 'Bug Detection',
+                targetLabel: result.target.path || 'target',
+                runId: result.run_id,
+                findings,
+                missingContext: result.missing_context,
+              }}
+            />
             <span className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary font-semibold">
               {result.total_findings} {result.total_findings === 1 ? 'Finding' : 'Findings'}
             </span>
@@ -613,7 +644,10 @@ export function BugScannerView({
                           title={originCfg.description}
                         >
                           <OriginIcon className="h-3 w-3" />
-                          <span>{originCfg.label}</span>
+                          <span>
+                            {originCfg.label}
+                            {engineLabel(finding.provenance) ? ` · ${engineLabel(finding.provenance)}` : ''}
+                          </span>
                         </span>
 
                         {/* Rule ID Tag (if available) */}

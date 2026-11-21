@@ -100,8 +100,19 @@ class TestQualityAnalyzer:
                             result.assertion_less_tests.append(f"Test '{node.name}' has no assert statements")
                             result.weak_assertions.append(f"{file_path}:{node.lineno} - Test '{node.name}' contains zero assertions")
 
-                        # Check duplicate logic across tests
-                        body_signature = "|".join(sorted(body_stmts))
+                        # Duplicate = structurally identical body (same calls *and*
+                        # same arguments/expected values). Comparing only the sorted
+                        # call names flagged every test of the same function as a
+                        # duplicate, e.g. add(1, 2) vs add(-1, -2).
+                        body = list(node.body)
+                        if (
+                            body
+                            and isinstance(body[0], ast.Expr)
+                            and isinstance(getattr(body[0], "value", None), ast.Constant)
+                            and isinstance(body[0].value.value, str)
+                        ):
+                            body = body[1:]  # ignore docstring
+                        body_signature = "|".join(ast.dump(stmt) for stmt in body) if body_stmts else ""
                         if body_signature and body_signature in test_bodies:
                             first_test = test_bodies[body_signature]
                             result.duplicate_tests.append(
@@ -195,6 +206,11 @@ class TestQualityAnalyzer:
 
         if total_weak == 0 and total_flaky == 0:
             notes.append("Clean assertion quality: 0 weak assertions and 0 flaky patterns detected.")
+        if mutation_score is not None:
+            notes.append(
+                "Mutation score is an estimate from requirement coverage and assertion quality; "
+                "enable isolated execution to measure it against injected defects."
+            )
 
         return TestQualityReport(
             requirement_coverage_percent=req_cov_pct,

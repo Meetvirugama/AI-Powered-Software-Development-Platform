@@ -270,6 +270,7 @@ export async function submitFindingFeedback(
   finding_id: string;
   feedback_type: string;
   comment?: string | null;
+  lifecycle_status?: string | null;
   repository_stats: {
     useful_count: number;
     not_useful_count: number;

@@ -274,6 +274,28 @@ class FrameworkDetector:
     # Python Framework Detection
     # -----------------------------------------------------------------------
 
+    @staticmethod
+    def _nearest_config(files: Sequence[str], target_file: str | None, name: str) -> str | None:
+        """Path of ``name`` in the closest ancestor directory of the target.
+
+        Looking only at the repo root (plus hard-coded ``backend/`` and
+        ``frontend/``) misdetected monorepos: a backend whose pytest config
+        lives in ``services/api/pyproject.toml`` fell back to unittest. Tools
+        such as pytest and npm resolve config upward from the code, so we do
+        too, then fall back to the legacy root/backend/frontend locations.
+        """
+        file_set = set(files)
+        parts = (target_file or "").replace("\\", "/").strip("/").split("/")[:-1]
+        for depth in range(len(parts), -1, -1):
+            prefix = "/".join(parts[:depth])
+            candidate = f"{prefix}/{name}" if prefix else name
+            if candidate in file_set:
+                return candidate
+        for legacy in (f"backend/{name}", f"frontend/{name}"):
+            if legacy in file_set:
+                return legacy
+        return None
+
     def _detect_python_framework(
         self,
         root: Path | None,
@@ -290,7 +312,7 @@ class FrameworkDetector:
         test_command: str | None = None
 
         # 1. Inspect pytest.ini
-        for fname in ("pytest.ini", "backend/pytest.ini"):
+        for fname in filter(None, [self._nearest_config(files, target_file, "pytest.ini")]):
             if fname in files:
                 config_file = fname
                 pytest_signals.append(f"Config file '{fname}' present")
@@ -301,15 +323,16 @@ class FrameworkDetector:
                 break
 
         # 2. Inspect pyproject.toml
-        if "pyproject.toml" in files:
-            content = self._read_file(root, "pyproject.toml")
+        pyproject = self._nearest_config(files, target_file, "pyproject.toml")
+        if pyproject:
+            content = self._read_file(root, pyproject)
             if "[tool.pytest" in content or "pytest" in content:
-                pytest_signals.append("pyproject.toml contains pytest configuration/dependencies")
+                pytest_signals.append(f"{pyproject} contains pytest configuration/dependencies")
                 if not config_file:
-                    config_file = "pyproject.toml"
+                    config_file = pyproject
 
         # 3. Inspect setup.cfg / tox.ini
-        for fname in ("setup.cfg", "tox.ini"):
+        for fname in filter(None, (self._nearest_config(files, target_file, n) for n in ("setup.cfg", "tox.ini"))):
             if fname in files:
                 content = self._read_file(root, fname)
                 if "[tool:pytest]" in content or "[pytest]" in content:
@@ -318,7 +341,16 @@ class FrameworkDetector:
                         config_file = fname
 
         # 4. Inspect requirements.txt / Pipfile
-        for fname in ("requirements.txt", "backend/requirements.txt", "Pipfile"):
+        for fname in dict.fromkeys(
+            filter(
+                None,
+                (
+                    self._nearest_config(files, target_file, "requirements.txt"),
+                    self._nearest_config(files, target_file, "requirements-dev.txt"),
+                    self._nearest_config(files, target_file, "Pipfile"),
+                ),
+            )
+        ):
             if fname in files:
                 content = self._read_file(root, fname)
                 if re.search(r"\bpytest\b", content):
@@ -533,10 +565,7 @@ class FrameworkDetector:
         preferred_framework: str | None,
     ) -> FrameworkDetectionResult:
         """Detect Jest vs Vitest vs Mocha in JS/TS repositories."""
-        pkg_json_file = next(
-            (f for f in ("package.json", "frontend/package.json") if f in files),
-            None,
-        )
+        pkg_json_file = self._nearest_config(files, target_file, "package.json")
         test_dir, naming_pattern = self._discover_js_test_conventions(files, language)
 
         detected_framework: str | None = None
@@ -558,8 +587,9 @@ class FrameworkDetector:
             "jest.config.mjs",
             "jest.config.json",
         ):
-            if jc in files:
-                config_file = jc
+            jc_path = self._nearest_config(files, target_file, jc)
+            if jc_path:
+                config_file = jc_path
                 candidate_frameworks.append("jest")
                 break
 
@@ -571,9 +601,10 @@ class FrameworkDetector:
             "vite.config.js",
             "vite.config.mjs",
         ):
-            if vc in files:
+            vc_path = self._nearest_config(files, target_file, vc)
+            if vc_path:
                 if not config_file:
-                    config_file = vc
+                    config_file = vc_path
                 candidate_frameworks.append("vitest")
                 break
 

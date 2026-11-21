@@ -166,13 +166,15 @@ def test_publish_review_endpoint(db_session, test_user, test_repo, auth_headers)
         evidence="x=1 syntax error here",
     )
     db_session.add(finding)
+    # Publication permission: the repository must allow PR review publishing.
+    test_repo.pr_review_enabled = True
     db_session.commit()
 
     client = TestClient(app)
 
     res = client.post(
         f"/api/v1/repositories/{test_repo.id}/review/publish",
-        json={"run_id": str(run.id), "pr_number": 5, "commit_sha": "c0ffee", "force_publish": True},
+        json={"run_id": str(run.id), "pr_number": 5, "commit_sha": "c0ffee"},
         headers=auth_headers,
     )
 
@@ -186,6 +188,51 @@ def test_publish_review_endpoint(db_session, test_user, test_repo, auth_headers)
     # Verify installation_id passed to publication is resolved from GitHubInstallation (inst_999), not DB UUID
     call_kwargs = mock_gh.create_pull_request_review.call_args.kwargs
     assert call_kwargs["installation_id"] == "inst_999"
+
+
+def test_publish_review_respects_repository_permission(db_session, test_user, test_repo, auth_headers):
+    app.dependency_overrides[get_db] = lambda: db_session
+    mock_gh = AsyncMock()
+    app.state.github_service = mock_gh
+
+    run = AnalysisRun(
+        id=uuid4(),
+        repository_id=test_repo.id,
+        user_id=test_user.id,
+        feature_type="review",
+        status="COMPLETED",
+        source_revision="c0ffee",
+        result_payload={"report": {"findings": []}, "target": {"type": "pr", "pr_number": 5}},
+    )
+    db_session.add(run)
+    test_repo.pr_review_enabled = False
+    db_session.commit()
+    client = TestClient(app)
+
+    # Publishing disabled: a normal publish is skipped with the reason...
+    res = client.post(
+        f"/api/v1/repositories/{test_repo.id}/review/publish",
+        json={"run_id": str(run.id), "pr_number": 5},
+        headers=auth_headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["status"] == "SKIPPED"
+    # ...and a developer cannot force past the setting.
+    res_force = client.post(
+        f"/api/v1/repositories/{test_repo.id}/review/publish",
+        json={"run_id": str(run.id), "pr_number": 5, "force_publish": True},
+        headers=auth_headers,
+    )
+    assert res_force.status_code == 403
+    mock_gh.create_pull_request_review.assert_not_called()
+
+    # Unknown run ids no longer fall back to another review.
+    res_missing = client.post(
+        f"/api/v1/repositories/{test_repo.id}/review/publish",
+        json={"run_id": str(uuid4()), "pr_number": 5},
+        headers=auth_headers,
+    )
+    assert res_missing.status_code == 404
 
 
 def test_submit_finding_feedback_idor_and_run_mismatch_rejected(db_session, test_user, test_repo, auth_headers):

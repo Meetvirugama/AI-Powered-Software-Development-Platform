@@ -134,6 +134,26 @@ class BugCandidateDiscoveryService:
         # 9. Deduplicate and normalize
         return self._deduplicate_candidates(candidates)
 
+    _DEPENDENCY_MANIFESTS = frozenset(
+        {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "requirements.txt", "poetry.lock",
+         "pipfile.lock", "go.sum", "cargo.lock", "gemfile.lock", "composer.lock"}
+    )
+
+    def scanner_availability_notes(self, file_path: str) -> list[str]:
+        """Explains which optional external scanners did not run for this scan.
+
+        Semgrep, Gitleaks and OSV-Scanner are optional binaries. Without this,
+        a clean result could not be told apart from "the scanner wasn't there".
+        """
+        notes: list[str] = []
+        if not self.semgrep_runner.is_available():
+            notes.append("Semgrep is not installed on this server; Semgrep security rules were skipped.")
+        if not self.gitleaks_runner.is_available():
+            notes.append("Gitleaks CLI is not installed; secrets were checked with built-in patterns only.")
+        if Path(file_path).name.lower() in self._DEPENDENCY_MANIFESTS and not self.osv_runner.is_available():
+            notes.append("OSV-Scanner is not installed; dependency vulnerabilities were checked against the built-in advisory list only.")
+        return notes
+
     def _discover_ast_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
         """Extract and normalize candidates from AST rule scanner."""
         scan_res = self.static_scanner.scan_code(content=code, file_path=file_path)
@@ -141,14 +161,28 @@ class BugCandidateDiscoveryService:
         candidates: list[BugCandidate] = []
 
         for i, f in enumerate(findings):
+            # StaticBugScanner nests category/end_line/evidence/remediation/
+            # confidence under "metadata"; reading only top-level keys made every
+            # AST finding "logic_error" with no end line, code evidence or
+            # confidence. Prefer top-level, fall back to metadata.
+            meta = f.get("metadata") or {}
+
+            def pick(key: str, default: Any = None) -> Any:
+                value = f.get(key)
+                return value if value not in (None, "") else meta.get(key, default)
+
             rule_id = f.get("rule_id", f"AST-RULE-{i+1}")
-            category = f.get("category", "logic_error")
+            category = pick("category", "logic_error")
             severity = (f.get("severity") or "MEDIUM").upper()
-            start_l = f.get("line_number") or f.get("line", 1)
-            end_l = f.get("end_line") or start_l
+            start_l = f.get("line_number") or f.get("line") or 1
+            end_l = pick("end_line") or start_l
 
             reg_rule = self.rule_registry.get(rule_id)
-            remediation = f.get("remediation") or (reg_rule.remediation_template if reg_rule else "")
+            remediation = pick("remediation") or (reg_rule.remediation_template if reg_rule else "")
+            message = f.get("message") or f.get("title", "")
+            code_evidence = pick("evidence")
+            evidence = f"{message} Code: `{code_evidence}`" if code_evidence and message else (code_evidence or message)
+            confidence = pick("confidence") or ("high" if pick("is_structural", True) else "medium")
 
             candidates.append(
                 BugCandidate(
@@ -159,11 +193,11 @@ class BugCandidateDiscoveryService:
                     end_line=end_l,
                     category=category,
                     severity=severity,
-                    evidence=f.get("evidence") or f.get("message") or f.get("title", ""),
+                    evidence=evidence,
                     source_type="STATIC",
-                    confidence="high" if f.get("is_structural", True) else "medium",
+                    confidence=confidence,
                     remediation=remediation,
-                    metadata={"enclosing_symbol": f.get("enclosing_symbol")},
+                    metadata={"enclosing_symbol": pick("enclosing_symbol")},
                 )
             )
         return candidates

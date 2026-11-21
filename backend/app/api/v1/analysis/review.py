@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.v1.analysis.common import (
+    assign_persistent_finding_ids,
     ANALYSIS_ERROR_RESPONSES,
     _get_service,
     _invoke_service_method,
@@ -273,6 +274,9 @@ async def review_code(
             missing_context=merged_missing,
             explicit_risk_level=raw_report.risk_level,
         )
+        grounded_report = grounded_report.model_copy(
+            update={"findings": assign_persistent_finding_ids(list(grounded_report.findings), run_id)}
+        )
 
     # Security (W2 Day 5–6): Never echo raw untrusted diff text back in response.target.diff
     sanitized_target = resolved.target.model_copy(
@@ -328,6 +332,17 @@ async def review_code(
 # Code Review Publication, Feedback & Settings Endpoints (F14)
 # ---------------------------------------------------------------------------
 
+def _review_run_pr_number(run: Any) -> int | None:
+    """PR number a saved review run targeted (stored in its result payload)."""
+    payload = getattr(run, "result_payload", None) or {}
+    target = payload.get("target") if isinstance(payload, dict) else None
+    pr_number = target.get("pr_number") if isinstance(target, dict) else None
+    try:
+        return int(pr_number) if pr_number is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post(
     "/repositories/{repository_id}/review/publish",
     response_model=ReviewPublicationResponse,
@@ -347,23 +362,36 @@ async def publish_review_to_github(
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)
 
+    # Publication permission: the repository's opt-in switch decides whether
+    # reviews may be posted to GitHub. Overriding it is an admin action
+    # (previously force_publish defaulted to True, so the switch never applied).
+    if payload.force_publish and not getattr(repo, "pr_review_enabled", False):
+        ensure_min_role(request, UserRole.ADMIN)
+
     findings_data = []
     commit_sha = payload.commit_sha
     run_record = None
 
     if payload.run_id:
+        # An explicit run must exist, belong to this repository and be a review.
+        # It used to fall back to the latest review of *any* PR, which could post
+        # another PR's findings onto this one.
         try:
             r_uuid = UUID(payload.run_id)
-            run_record = (
-                db.query(AnalysisRun)
-                .filter(AnalysisRun.id == r_uuid, AnalysisRun.repository_id == repository_id)
-                .first()
-            )
-        except ValueError:
-            pass
-
-    if not run_record:
+        except ValueError as exc:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid run_id.") from exc
         run_record = (
+            db.query(AnalysisRun)
+            .filter(AnalysisRun.id == r_uuid, AnalysisRun.repository_id == repository_id)
+            .first()
+        )
+        if run_record is None or run_record.feature_type != "review":
+            raise APIError(404, ErrorCode.NOT_FOUND, f"Review run '{payload.run_id}' was not found in this repository.")
+        if run_record.status != "COMPLETED":
+            raise APIError(409, ErrorCode.CONFLICT, "Only completed review runs can be published.")
+    else:
+        # No run given: use the latest completed review *of this PR*.
+        recent_runs = (
             db.query(AnalysisRun)
             .filter(
                 AnalysisRun.repository_id == repository_id,
@@ -371,28 +399,53 @@ async def publish_review_to_github(
                 AnalysisRun.status == "COMPLETED",
             )
             .order_by(AnalysisRun.created_at.desc())
-            .first()
+            .limit(50)
+            .all()
         )
+        run_record = next(
+            (r for r in recent_runs if _review_run_pr_number(r) == payload.pr_number),
+            None,
+        )
+        if run_record is None:
+            raise APIError(
+                404,
+                ErrorCode.NOT_FOUND,
+                f"No completed review of pull request #{payload.pr_number} was found. Run a PR review first.",
+            )
 
-    if run_record:
-        commit_sha = commit_sha or run_record.source_revision
-        if run_record.findings:
-            findings_data = [
-                {
-                    "id": str(f.id),
-                    "category": f.category,
-                    "severity": f.severity,
-                    "confidence": f.confidence,
-                    "title": f.title,
-                    "description": f.description,
-                    "evidence": f.evidence,
-                    "suggested_fix": f.suggested_fix,
-                    "source_reference": f.source_reference,
-                }
-                for f in run_record.findings
-            ]
-        elif run_record.result_payload and "report" in run_record.result_payload:
-            findings_data = run_record.result_payload["report"].get("findings", [])
+    commit_sha = commit_sha or run_record.source_revision
+    if run_record.findings:
+        findings_data = [
+            {
+                "id": str(f.id),
+                "category": f.category,
+                "severity": f.severity,
+                "confidence": f.confidence,
+                "title": f.title,
+                "description": f.description,
+                "evidence": f.evidence,
+                "suggested_fix": f.suggested_fix,
+                "source_reference": f.source_reference,
+            }
+            for f in run_record.findings
+        ]
+    elif run_record.result_payload and "report" in run_record.result_payload:
+        findings_data = run_record.result_payload["report"].get("findings", [])
+
+    # Request values override; otherwise the repository's saved settings apply
+    # (they were previously ignored in favour of hard-coded request defaults).
+    from app.services.review_settings_service import get_repo_review_settings
+
+    repo_settings = get_repo_review_settings(repository_id)
+    max_comments = payload.max_comments or repo_settings["max_comments"]
+    min_confidence = (payload.min_confidence or repo_settings["min_confidence"]).lower()
+    if min_confidence not in ("low", "medium", "high"):
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "min_confidence must be low, medium or high.")
+    changed_lines_only = (
+        payload.changed_lines_only
+        if payload.changed_lines_only is not None
+        else repo_settings["changed_lines_only"]
+    )
 
     github_service = getattr(request.app.state, "github_service", None)
     if not github_service:
@@ -415,18 +468,21 @@ async def publish_review_to_github(
         owner=repo.owner,
         repo_name=repo.name,
         pr_number=payload.pr_number,
-        commit_sha=commit_sha or "HEAD",
+        # Empty, not "HEAD": a literal "HEAD" never equals the PR head SHA, so
+        # every publish without a known commit was skipped as "stale", and
+        # GitHub rejects it as a commit_id.
+        commit_sha=commit_sha or "",
         findings=findings_data,
         github_service=github_service,
         repository=repo,
         installation_id=gh_installation_id,
         force_publish=payload.force_publish,
-        max_comments=payload.max_comments,
-        min_confidence=payload.min_confidence,
-        changed_lines_only=payload.changed_lines_only,
+        max_comments=max_comments,
+        min_confidence=min_confidence,
+        changed_lines_only=changed_lines_only,
     )
 
-    if run_record and run_record.result_payload:
+    if run_record.result_payload:
         payload_dict = dict(run_record.result_payload)
         payload_dict["review_publication"] = res.to_dict()
         run_record.result_payload = payload_dict
@@ -466,7 +522,7 @@ def submit_finding_feedback(
         f_uuid = UUID(finding_id)
         r_uuid = UUID(run_id)
     except ValueError:
-        raise APIError(400, ErrorCode.INVALID_PARAMETER, f"Invalid finding_id or run_id")
+        raise APIError(400, ErrorCode.INVALID_REQUEST, "Invalid finding_id or run_id.")
 
     finding = (
         db.query(AnalysisFinding)
@@ -498,6 +554,7 @@ def submit_finding_feedback(
         user_id=feedback_entry["user_id"],
         comment=feedback_entry["comment"],
         updated_at=feedback_entry["updated_at"],
+        lifecycle_status=feedback_entry.get("lifecycle_status"),
         repository_stats=stats.to_dict(),
     )
 

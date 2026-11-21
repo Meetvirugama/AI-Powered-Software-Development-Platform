@@ -293,6 +293,10 @@ async def import_github_issue(
     )
 
     issue_resp = _serialize_issue(persisted_issue, task_id=str(task.id))
+    if gh_issue is None:
+        # GitHub was unavailable: the issue number and URL above are local
+        # placeholders, not a real GitHub issue. Say so instead of linking to it.
+        issue_resp = issue_resp.model_copy(update={"published_to_github": False})
     return IssueImportResponse(
         task_id=str(task.id),
         repository_id=str(repo.id),
@@ -530,6 +534,10 @@ async def create_github_issue(
     )
 
     issue_resp = _serialize_issue(persisted_issue, task_id=str(task.id))
+    if gh_created is None:
+        # GitHub was unavailable: the issue number and URL above are local
+        # placeholders, not a real GitHub issue. Say so instead of linking to it.
+        issue_resp = issue_resp.model_copy(update={"published_to_github": False})
     return IssueImportResponse(
         task_id=str(task.id),
         repository_id=str(repo.id),

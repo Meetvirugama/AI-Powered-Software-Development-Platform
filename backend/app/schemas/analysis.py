@@ -1409,12 +1409,15 @@ class ReviewPublicationRequest(BaseModel):
     """Payload to trigger manual publication of a code review run to a GitHub PR."""
 
     run_id: str | None = None
-    pr_number: int
+    pr_number: int = Field(..., ge=1)
     commit_sha: str | None = None
-    force_publish: bool = True
-    max_comments: int = Field(default=15, ge=1, le=50)
-    min_confidence: str = Field(default="medium")
-    changed_lines_only: bool = True
+    # False by default: the repository's "publish reviews to GitHub" setting is
+    # the publication permission. Overriding a disabled setting requires admin.
+    force_publish: bool = False
+    # None = use the repository's saved review settings.
+    max_comments: int | None = Field(default=None, ge=1, le=50)
+    min_confidence: str | None = None
+    changed_lines_only: bool | None = None
 
 
 class ReviewPublicationResponse(BaseModel):
@@ -1445,6 +1448,10 @@ class ReviewFeedbackResponse(BaseModel):
     user_id: str | None = None
     comment: str | None = None
     updated_at: str
+    lifecycle_status: str | None = Field(
+        default=None,
+        description="Finding lifecycle status after this feedback (NEW, DISMISSED, FIXED, REOPENED, ...).",
+    )
     repository_stats: dict[str, Any] | None = None
 
 
