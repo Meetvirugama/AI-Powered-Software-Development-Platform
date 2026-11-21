@@ -52,3 +52,4 @@ Thumbs.db
 PRIVATE_PROJECT_KNOWLEDGE/
 openapi.json
 azure-env-production.json
+*.zip

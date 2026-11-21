@@ -40,6 +40,96 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MODEL = "gemini-flash-lite-latest"
 _MAX_REPAIR_ATTEMPTS = 2
+
+# ---------------------------------------------------------------------------
+# Explanation levels (Module 7: Summary / Detailed / Deep modes)
+#
+# Previously every level appended the *same* 8-item requirement list
+# (including "complete production-ready refactored code") and used one fixed
+# 4096-token budget. Result: "concise" was as long and slow as "detailed",
+# and "deep" on a large file was truncated mid-JSON, burning repair attempts.
+# Each level now has its own required sections and an output budget sized for
+# them.
+# ---------------------------------------------------------------------------
+_LEVEL_INSTRUCTIONS: dict[str, str] = {
+    "concise": (
+        "EXPLANATION LEVEL: CONCISE (Summary)\n"
+        "- Focus on high-level purpose, essential operational steps, and primary inputs/outputs.\n"
+        "- Keep every field short: 1-3 sentences for prose fields, at most 6 logic steps."
+    ),
+    "detailed": (
+        "EXPLANATION LEVEL: DETAILED\n"
+        "- Explain control flow, key symbols, dependencies, and component connections.\n"
+        "- Provide clear, structured step-by-step logic and output analysis."
+    ),
+    "deep": (
+        "EXPLANATION LEVEL: DEEP TECHNICAL / EXPLAIN AT DEPTH (1-hop call graph)\n"
+        "- Trace both 1-hop inbound callers and 1-hop outbound callees included in the context.\n"
+        "- Dive deeply into algorithms, data transformations, data structures, and edge cases.\n"
+        "- Provide comprehensive output explanations with derivations and concrete examples.\n"
+        "- If `[REDACTED]` placeholders appear in the code, explicitly note that configuration/secret values were redacted for security."
+    ),
+}
+
+_COMMON_FIELDS = (
+    "Key Symbols, Inputs/Outputs, Dependencies, Assumptions & Limitations, Sources: "
+    "populate grounded entries for these schema fields. Include exact 1-indexed line "
+    "references like (L13-L16) in logic steps."
+)
+
+_LEVEL_REQUIREMENTS: dict[str, str] = {
+    "concise": (
+        "REQUIREMENTS (concise):\n"
+        "1. Purpose: one short paragraph.\n"
+        "2. Logic Flow: the essential steps only.\n"
+        f"3. {_COMMON_FIELDS}\n"
+        "Do NOT fill detailed_explanation, code_output_explanation, execution_flow, "
+        "code_issues_and_solutions, or corrected_code (leave them null/empty)."
+    ),
+    "detailed": (
+        "REQUIREMENTS (detailed):\n"
+        "1. Purpose: clear overview of what the code accomplishes.\n"
+        "2. Detailed Explanation: technical walkthrough of how the code works.\n"
+        "3. Logic Flow: sequential execution steps in chronological order.\n"
+        "4. Code Output Explanation: how outputs/return values are derived, with one example.\n"
+        "5. Code Issues & Solutions: notable bugs, edge cases or missing validations, each with a fix.\n"
+        f"6. {_COMMON_FIELDS}\n"
+        "Leave corrected_code null unless an issue's fix cannot be expressed in prose; "
+        "if you include it, show only the changed function(s), not the whole file."
+    ),
+    "deep": (
+        "REQUIREMENTS (deep):\n"
+        "1. Purpose: clear overview of what the code accomplishes.\n"
+        "2. Detailed Explanation: in-depth walkthrough of mechanisms, algorithms, data transformations and architecture.\n"
+        "3. Logic Flow: sequential execution steps in chronological order.\n"
+        "4. Execution Flow: cross-file runtime sequence connecting 1-hop callers, the target, and 1-hop callees.\n"
+        "5. Code Output Explanation: how every output field is derived (formulas, thresholds, branch outcomes) with example payloads per path.\n"
+        "6. Code Issues & Solutions: bugs, edge cases, missing validations, or vulnerabilities, each with a fix.\n"
+        "7. Corrected Code: refactored version of the TARGET code only (the selected symbol/range, or the "
+        "smallest set of changed functions for a whole file) solving the identified issues.\n"
+        f"8. {_COMMON_FIELDS}"
+    ),
+}
+
+_LEVEL_MAX_TOKENS: dict[str, int] = {
+    "concise": 1536,
+    "detailed": 4096,
+    "deep": 8192,
+}
+
+
+def _resolve_level_key(level: str | None, depth_enabled: bool) -> str:
+    """Maps the API level + depth flags onto one of the internal level keys.
+
+    An explicit "concise" request wins over depth flags: the user asked for a
+    short summary, so call-graph expansion still feeds context but the output
+    stays brief.
+    """
+    if level == "concise":
+        return "concise"
+    if level == "deep_technical" or depth_enabled:
+        return "deep"
+    return "detailed"
 _REDACTED_RE = re.compile(r"\[REDACTED(?:_[A-Z0-9_]+)?\]")
 
 
@@ -152,40 +242,15 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
             or level == "deep_technical"
         )
 
-        if level == "concise":
-            level_instructions = (
-                "EXPLANATION LEVEL: CONCISE (Overview)\n"
-                "- Focus on high-level purpose, essential operational steps, and primary inputs/outputs.\n"
-                "- Keep explanations focused, punchy, and quick to digest."
-            )
-        elif level == "deep_technical" or depth_enabled:
-            level_instructions = (
-                "EXPLANATION LEVEL: DEEP TECHNICAL / EXPLAIN AT DEPTH (1-Hop Call Graph F07-C3)\n"
-                "- Trace both 1-hop inbound callers and 1-hop outbound callees included in the context.\n"
-                "- Dive deeply into algorithms, mathematical transformations, data structures, and edge cases.\n"
-                "- Provide comprehensive code output explanations with derivation formulas and concrete examples.\n"
-                "- If `[REDACTED]` placeholders appear in the code, explicitly note that configuration/secret values were redacted for security."
-            )
-        else:
-            level_instructions = (
-                "EXPLANATION LEVEL: DETAILED (task.md §6.D)\n"
-                "- Explain control flow, key symbols, dependencies, and component connections.\n"
-                "- Provide clear, structured step-by-step logic and output analysis."
-            )
+        level_key = _resolve_level_key(level, depth_enabled)
+        level_instructions = _LEVEL_INSTRUCTIONS[level_key]
+        level_requirements = _LEVEL_REQUIREMENTS[level_key]
 
         user_content = (
             "REPOSITORY DATA (untrusted, between the markers):\n"
             f"{fenced_context}\n\n"
             f"{level_instructions}\n\n"
-            "DETAILED REQUIREMENTS:\n"
-            "1. Purpose: Provide a clear, concise overview of what the code is intended to accomplish.\n"
-            "2. Detailed Explanation: Provide an in-depth technical walkthrough of how the code works under the hood, key mechanisms, algorithms, data transformations, and architectural considerations.\n"
-            "3. Logic Flow: Provide the sequential execution steps in chronological order. Include exact 1-indexed line references like (L13–L16) or (L15) for each step.\n"
-            "4. Execution Flow: Provide the cross-file / cross-component runtime sequence connecting 1-hop callers, target symbol, and 1-hop callees.\n"
-            "5. Code Output Explanation: Explain the outputs produced by the code in full detail, explaining how output fields are derived (including formulas, thresholds, or branch outcomes), and provide concrete example input/output payloads for different execution paths.\n"
-            "6. Code Issues & Solutions: Identify bugs, edge cases, missing validations, or vulnerabilities in the code, and explain how to solve each one.\n"
-            "7. Corrected Code: Provide the complete, production-ready, refactored code solving all identified issues with proper error handling and clean architecture.\n"
-            "8. Key Symbols, Inputs/Outputs, Dependencies, Assumptions & Limitations: Populate grounded entries for all schema fields.\n\n"
+            f"{level_requirements}\n\n"
             "EXPLANATION TARGET:\n"
             f"Explain `{payload.target.path}` "
             f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
@@ -202,7 +267,7 @@ class CodeExplanationService(CodeExplanationServiceProtocol):
             model=self._model,
             messages=messages,
             temperature=0.1,
-            max_tokens=4096,
+            max_tokens=_LEVEL_MAX_TOKENS[level_key],
             response_schema=CodeExplanation,
         )
 

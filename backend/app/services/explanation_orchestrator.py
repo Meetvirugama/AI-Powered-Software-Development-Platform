@@ -735,6 +735,22 @@ def calculate_grounding_confidence(
     return initial_confidence if initial_confidence in ("high", "medium", "low") else "high"
 
 
+_CRITICAL_RESOLVER_GAP_MARKERS = (
+    "no indexed code chunks found",
+)
+
+
+def _has_critical_resolver_gap(resolved: ResolvedExplanationTarget) -> bool:
+    """True when the explained code itself was not available to the model."""
+    if not (resolved.code_content or "").strip():
+        return True
+    return any(
+        marker in m.lower()
+        for m in resolved.missing_context
+        for marker in _CRITICAL_RESOLVER_GAP_MARKERS
+    )
+
+
 def ground_explanation_sources(
     explanation: CodeExplanation,
     *,
@@ -795,10 +811,14 @@ def ground_explanation_sources(
         )
     )
     source_references_valid = len(grounded_sources) > 0 or not raw_sources
-    critical_context_missing = any(
-        "unavailable" in m.lower() or "incomplete" in m.lower() or "missing" in m.lower()
-        for m in merged_missing
-    )
+    # Only *resolver-level* gaps about the target code itself are critical.
+    # Previously any missing-context line containing "missing"/"unavailable"/
+    # "incomplete" forced LOW — and the LLM almost always lists some soft gap
+    # (e.g. "caller implementations unavailable"), so nearly every explanation
+    # was badge-marked low even when its citations were fully grounded. Soft
+    # gaps from the model or optional enrichment now cap confidence at MEDIUM.
+    critical_context_missing = _has_critical_resolver_gap(resolved)
+    soft_context_missing = bool(merged_missing) and not critical_context_missing
     related_symbols_verified = bool(
         resolved.resolved_symbol
         or resolved.related_files
@@ -814,6 +834,8 @@ def ground_explanation_sources(
         ungrounded_ratio=ungrounded_ratio,
         initial_confidence=explanation.confidence,
     )
+    if soft_context_missing and confidence == "high":
+        confidence = "medium"
 
     # Guarantee that when a real target file was resolved, its grounded citation is attached
     if not grounded_sources and resolved.file_record is not None:
@@ -923,9 +945,16 @@ def record_analysis_run(
         if "model" not in result_payload:
             try:
                 from app.core.config import get_settings
-                result_payload["model"] = getattr(get_settings(), "groq_chat_model", "openai/gpt-oss-120b")
+                # Record the model that actually served the request (primary
+                # provider), not always the Groq model name.
+                settings = get_settings()
+                result_payload["model"] = (
+                    getattr(settings, "active_chat_model", None)
+                    or getattr(settings, "groq_chat_model", None)
+                    or "unknown"
+                )
             except Exception:
-                result_payload["model"] = "openai/gpt-oss-120b"
+                result_payload["model"] = "unknown"
 
     record = {
         "id": str(run_id),

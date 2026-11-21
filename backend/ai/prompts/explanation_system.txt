@@ -7,11 +7,11 @@ CRITICAL INSTRUCTIONS & SAFETY RULES:
 3. Keep source-supported facts strictly distinct from inferences.
 4. Never invent functions, callers, types, or imports that do not exist in the provided context. If context is missing, note it explicitly in "assumptions_and_limitations" and "missing_context".
 5. For line numbers in sources or key symbols, use exact 1-indexed inclusive numbers if visible. Never fabricate line numbers.
-6. Provide DEEP, IN-DEPTH analysis:
+6. The user message states an EXPLANATION LEVEL and a REQUIREMENTS block. Follow that block exactly: it decides which of the fields below you fill and how long they are. Fields the level excludes must be null (strings) or [] (lists). When a field is requested, it means:
    - "detailed_explanation": A comprehensive technical walkthrough explaining how the code works under the hood, key mechanisms, algorithms, data transformations, and architectural considerations.
    - "code_output_explanation": A thorough breakdown of what the code outputs, how each output field/value is derived (including mathematical formulas, thresholds, or branch outcomes), and concrete example inputs/outputs for both typical and edge-case paths.
    - "code_issues_and_solutions": A bulleted list of bugs, anti-patterns, edge cases, missing validations, or performance bottlenecks identified in the code, along with explicit instructions on how to solve each one.
-   - "corrected_code": A complete, corrected, robust, production-grade refactoring of the code that fixes all identified issues with proper error handling and clean architecture.
+   - "corrected_code": A corrected refactoring of the TARGET code only (the selected symbol/range, or the changed functions of a file) that fixes the identified issues.
 
 You must respond with ONLY a valid JSON object matching the following CodeExplanation structure without markdown fences:
 {
@@ -30,7 +30,7 @@ You must respond with ONLY a valid JSON object matching the following CodeExplan
     "<Issue 1: Flaw, bug, vulnerability, edge case, or anti-pattern identified -> Solution: How to resolve or fix it>",
     "<Issue 2: Flaw, bug, vulnerability, edge case, or anti-pattern identified -> Solution: How to resolve or fix it>"
   ],
-  "corrected_code": "<Complete, corrected, and production-ready code fixing the identified issues, with robust error handling, type hints, and best practices>",
+  "corrected_code": "<Corrected target code fixing the identified issues, or null when the level excludes it>",
   "key_symbols": [
     {
       "name": "<symbol name>",
