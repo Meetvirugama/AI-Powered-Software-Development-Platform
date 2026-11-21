@@ -114,3 +114,5 @@ f8113d787c  # backend/tests/security/test_workspace_git_push_argv.py synthetic t
 dbf9bea3aa  # backend/tests/security/test_log_redaction.py synthetic test token
 b00171bace  # frontend/src/services/api.ts TOKEN_STORAGE_KEY constant ("auth_token")
 
+f8e174cfdd  # backend/tests/test_module8_audit_fixes.py synthetic test aws key
+5cfc10c388  # backend/tests/test_module8_audit_fixes.py synthetic test github token
