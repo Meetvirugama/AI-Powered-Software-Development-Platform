@@ -45,11 +45,12 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_FBC8B15832C5410083B5503431A35776 }}
 
       - name: Set SERVICE_ROLE app setting on worker web app
+        continue-on-error: true
         run: |
           az webapp config appsettings set \
             --name ai-powered-dev-platform-worker \
             --resource-group ai-platform-rg \
-            --settings SERVICE_ROLE=sync_worker WEBSITES_PORT=8000
+            --settings SERVICE_ROLE=sync_worker WEBSITES_PORT=8000 || echo "::warning::Could not set Azure appsettings via CLI (requires Website Contributor role)."
 
       - name: Deploy to Azure Web App (worker)
         uses: azure/webapps-deploy@v3
