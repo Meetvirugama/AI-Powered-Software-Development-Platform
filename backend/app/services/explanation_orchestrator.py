@@ -742,7 +742,7 @@ _CRITICAL_RESOLVER_GAP_MARKERS = (
 
 def _has_critical_resolver_gap(resolved: ResolvedExplanationTarget) -> bool:
     """True when the explained code itself was not available to the model."""
-    if not (resolved.code_content or "").strip():
+    if not (resolved.code_content or "").strip() and resolved.missing_context:
         return True
     return any(
         marker in m.lower()
