@@ -990,6 +990,44 @@ class BuiltinStaticBugScanner:
 # Grounding, Deduplication, Merging & Ranking Functions
 # ---------------------------------------------------------------------------
 
+_VALID_SOURCE_TYPES = frozenset({"STATIC", "AI", "COMBINED", "HYBRID"})
+
+_VULNERABILITY_TITLES = {
+    "sql_injection": "SQL injection: untrusted input reaches a database query",
+    "command_injection": "Command injection: untrusted input reaches an OS command",
+    "code_injection": "Code injection: untrusted input is evaluated as code",
+    "path_traversal": "Path traversal: untrusted input controls a file path",
+    "ssrf": "Server-side request forgery: untrusted input controls an outbound URL",
+    "xss": "Cross-site scripting: untrusted input rendered without escaping",
+}
+
+
+def _candidate_title(data: dict[str, Any], meta: dict[str, Any]) -> str:
+    """Human-readable title for detector candidates that only carry a rule id."""
+    if data.get("message"):
+        return str(data["message"])[:300]
+    vuln = meta.get("vulnerability_type")
+    if vuln in _VULNERABILITY_TITLES:
+        return _VULNERABILITY_TITLES[vuln]
+    rule_id = data.get("rule_id")
+    if rule_id:
+        try:
+            from scanner.rule_registry import RuleRegistry
+
+            rule = RuleRegistry.get_instance().get(str(rule_id))
+            if rule is not None and getattr(rule, "name", None):
+                return str(rule.name)[:300]
+        except Exception:  # registry is optional here
+            pass
+    if meta.get("secret_type"):
+        return f"Hardcoded secret detected: {meta['secret_type']}"[:300]
+    evidence = str(data.get("evidence") or "").strip()
+    if evidence:
+        first = re.split(r"(?<=[.!?])\s", evidence, maxsplit=1)[0]
+        return first[:300]
+    return str(rule_id or data.get("category") or "Potential defect")[:300]
+
+
 def normalize_and_ground_findings(
     raw_items: list[Any],
     *,
@@ -1014,6 +1052,18 @@ def normalize_and_ground_findings(
                 data["id"] = f"finding-{idx + 1}"
             if default_source_type and not data.get("source_type"):
                 data["source_type"] = default_source_type
+            # Discovery engines label candidates TAINT / CONFIG / CHANGE_RISK /
+            # SEMGREP / OSV ..., which are not valid FindingSourceType values.
+            # Passing them through made BugFinding validation raise and the whole
+            # detect-bugs request fail with "invalid output schema" whenever a
+            # taint flow existed. They are deterministic detectors, so they are
+            # STATIC findings; the specific engine is kept in provenance.
+            raw_source = str(data.get("source_type") or "").upper()
+            if raw_source and raw_source not in _VALID_SOURCE_TYPES:
+                data["source_type"] = "STATIC"
+                data.setdefault("provenance", f"static_rule:{raw_source.lower()}")
+            if "title" not in data:
+                data["title"] = _candidate_title(data, meta)
             if "category" not in data or not data["category"]:
                 data["category"] = meta.get("category") or data.get("rule_id") or data.get("issue_type") or "security"
             if data.get("severity") and isinstance(data["severity"], str):
@@ -1024,7 +1074,9 @@ def normalize_and_ground_findings(
             if "title" not in data:
                 data["title"] = data.get("message") or data.get("rule_id") or data.get("category") or "Potential defect"
             if "description" not in data:
-                data["description"] = data.get("message") or data.get("explanation") or data["title"]
+                data["description"] = (
+                    data.get("message") or data.get("explanation") or data.get("evidence") or data["title"]
+                )
             if "evidence" not in data:
                 data["evidence"] = data.get("snippet") or data.get("code") or data.get("line_content") or meta.get("evidence") or data["description"]
             if "suggested_fix" not in data and ("remediation" in data or "fix" in data or "remediation" in meta):

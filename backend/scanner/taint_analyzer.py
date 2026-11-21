@@ -114,6 +114,13 @@ class TaintAnalyzer:
         "get", "post", "put", "delete", "request", "urlopen", "fetch"
     }
 
+    CODE_SINKS = {"eval", "exec", "compile"}
+
+    # Receivers that identify an HTTP client call for SSRF detection.
+    HTTP_CLIENT_RECEIVERS = {
+        "requests", "httpx", "session", "client", "http_client", "aiohttp", "urllib3", "http",
+    }
+
     SANITIZERS = {
         # SQL sanitizers
         "int": "type_cast_integer",
@@ -193,54 +200,91 @@ class TaintAnalyzer:
         sanitized_vars: dict[str, list[TaintNode]] = {}
         propagators: dict[str, list[TaintNode]] = {}
 
-        # Scan statements in order
-        for stmt in ast.walk(scope_node):
-            if isinstance(stmt, ast.Assign):
-                # Variable assignment: var = expr
-                source_node = self._find_taint_source_in_expr(stmt.value, lines)
-                target_names = [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+        # Visit statements in *source order*. ``ast.walk`` is breadth-first, so an
+        # assignment nested inside ``with``/``if``/``try`` was previously visited
+        # after a shallower sink call further down the function, and the flow
+        # was missed. Sorting by position restores def-before-use ordering.
+        relevant = [
+            n
+            for n in ast.walk(scope_node)
+            if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Call))
+        ]
+        relevant.sort(key=lambda n: (getattr(n, "lineno", 0), getattr(n, "col_offset", 0)))
 
+        for stmt in relevant:
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                value = stmt.value
+                if value is None:  # bare annotation: ``x: int``
+                    continue
+                raw_targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                target_names: list[str] = []
+                for t in raw_targets:
+                    if isinstance(t, ast.Name):
+                        target_names.append(t.id)
+                    elif isinstance(t, (ast.Tuple, ast.List)):
+                        target_names.extend(e.id for e in t.elts if isinstance(e, ast.Name))
+                line_text = lines[stmt.lineno - 1].strip() if stmt.lineno <= len(lines) else ""
+
+                source_node = self._find_taint_source_in_expr(value, lines)
                 if source_node:
+                    sanitizer = self._find_sanitizer_in_expr(value, lines)
                     for name in target_names:
                         tainted_vars[name] = source_node
+                        if sanitizer:
+                            sanitized_vars[name] = [sanitizer]
+                        else:
+                            sanitized_vars.pop(name, None)
                         propagators[name] = [
                             TaintNode(
                                 name=name,
                                 line=stmt.lineno,
-                                kind="propagator",
-                                expression=lines[stmt.lineno - 1].strip() if stmt.lineno <= len(lines) else name,
-                                detail=f"Assigned untrusted input to '{name}'",
+                                kind="sanitizer" if sanitizer else "propagator",
+                                expression=line_text or name,
+                                detail=(
+                                    f"Applied sanitizer '{sanitizer.name}'"
+                                    if sanitizer
+                                    else f"Assigned untrusted input to '{name}'"
+                                ),
                             )
                         ]
-                else:
-                    # Check if assigned value propagates another tainted variable
-                    for name in target_names:
-                        referenced_taint = self._find_tainted_ref_in_expr(stmt.value, tainted_vars)
-                        if referenced_taint:
-                            # Propagate origin taint source
-                            tainted_vars[name] = tainted_vars[referenced_taint]
-                            # Check if sanitizer is applied in this assignment
-                            sanitizer = self._find_sanitizer_in_expr(stmt.value, lines)
-                            if sanitizer:
-                                sanitized_vars.setdefault(name, []).append(sanitizer)
-                            # Also inherit any sanitizers already on referenced_taint
-                            if referenced_taint in sanitized_vars:
-                                sanitized_vars.setdefault(name, []).extend(sanitized_vars[referenced_taint])
+                    continue
 
-                            prev_props = list(propagators.get(referenced_taint, []))
-                            prev_props.append(
-                                TaintNode(
-                                    name=name,
-                                    line=stmt.lineno,
-                                    kind="sanitizer" if sanitizer else "propagator",
-                                    expression=lines[stmt.lineno - 1].strip() if stmt.lineno <= len(lines) else name,
-                                    detail=f"Applied sanitizer '{sanitizer.name}'" if sanitizer else f"Propagated untrusted data from '{referenced_taint}' into '{name}'",
-                                )
+                referenced_taint = self._find_tainted_ref_in_expr(value, tainted_vars)
+                if referenced_taint:
+                    sanitizer = self._find_sanitizer_in_expr(value, lines)
+                    for name in target_names:
+                        # ``q += user`` keeps q's own taint history too.
+                        tainted_vars[name] = tainted_vars[referenced_taint]
+                        inherited = list(sanitized_vars.get(referenced_taint, []))
+                        if sanitizer:
+                            inherited.append(sanitizer)
+                        if inherited:
+                            sanitized_vars[name] = inherited
+                        else:
+                            sanitized_vars.pop(name, None)
+                        prev_props = list(propagators.get(referenced_taint, []))
+                        prev_props.append(
+                            TaintNode(
+                                name=name,
+                                line=stmt.lineno,
+                                kind="sanitizer" if sanitizer else "propagator",
+                                expression=line_text or name,
+                                detail=(
+                                    f"Applied sanitizer '{sanitizer.name}'"
+                                    if sanitizer
+                                    else f"Propagated untrusted data from '{referenced_taint}' into '{name}'"
+                                ),
                             )
-                            propagators[name] = prev_props
+                        )
+                        propagators[name] = prev_props
+                elif not isinstance(stmt, ast.AugAssign):
+                    # Re-assigned to a clean value: the variable is no longer tainted.
+                    for name in target_names:
+                        tainted_vars.pop(name, None)
+                        sanitized_vars.pop(name, None)
+                        propagators.pop(name, None)
 
             elif isinstance(stmt, ast.Call):
-                # Inspect call node for dangerous sinks
                 sink_candidate = self._inspect_call_sink(
                     stmt, lines, file_path, tainted_vars, sanitized_vars, propagators
                 )
@@ -254,6 +298,9 @@ class TaintAnalyzer:
         # Check attribute access like request.query_params['id'] or request.args.get(...)
         for sub in ast.walk(expr):
             sub_str = self._ast_to_source(sub)
+            if isinstance(sub, ast.Call):
+                # Patterns like "input(" describe a call; _ast_to_source drops "(".
+                sub_str = f"{sub_str}("
             for pattern, (label, detail) in self.SOURCE_PATTERNS.items():
                 if pattern in sub_str:
                     lineno = getattr(sub, "lineno", 1)
@@ -295,6 +342,70 @@ class TaintAnalyzer:
                         )
         return None
 
+    def _resolve_arg_taint(
+        self,
+        arg: ast.AST,
+        lines: list[str],
+        tainted_vars: dict[str, TaintNode],
+        sanitized_vars: dict[str, list[TaintNode]],
+        propagators: dict[str, list[TaintNode]],
+    ) -> tuple[TaintNode, list[TaintNode], list[TaintNode]] | None:
+        """Returns (source, sanitizers, propagators) when an argument carries taint.
+
+        Handles both a previously tainted variable *and* an untrusted source used
+        directly inside the call, e.g. ``subprocess.call(request.args["cmd"])``,
+        which the variable-only lookup used to miss.
+        """
+        ref = self._find_tainted_ref_in_expr(arg, tainted_vars)
+        if ref:
+            sanitizers = list(sanitized_vars.get(ref, []))
+            inline_san = self._find_sanitizer_in_expr(arg, lines)
+            if inline_san:
+                sanitizers.append(inline_san)
+            return tainted_vars[ref], sanitizers, list(propagators.get(ref, []))
+        source = self._find_taint_source_in_expr(arg, lines)
+        if source:
+            inline_san = self._find_sanitizer_in_expr(arg, lines)
+            return source, ([inline_san] if inline_san else []), []
+        return None
+
+    def _flow(
+        self,
+        *,
+        prefix: str,
+        rule_id: str,
+        vuln: str,
+        severity: str,
+        lineno: int,
+        file_path: str,
+        func_label: str,
+        raw_line: str,
+        sink_detail: str,
+        taint: tuple[TaintNode, list[TaintNode], list[TaintNode]],
+        is_safe: bool,
+        evidence: str,
+        remediation: str,
+    ) -> TaintFlowCandidate:
+        source_node, sanitizers, props = taint
+        return TaintFlowCandidate(
+            candidate_id=f"TAINT-{prefix}-{lineno}",
+            rule_id=rule_id,
+            category="security",
+            vulnerability_type=vuln,
+            severity=severity if not is_safe else "LOW",
+            file_path=file_path,
+            start_line=lineno,
+            end_line=lineno,
+            source=source_node,
+            sink=TaintNode(name=func_label, line=lineno, kind="sink", expression=raw_line, detail=sink_detail),
+            propagators=props,
+            sanitizers_found=sanitizers,
+            is_sanitized=is_safe,
+            evidence=evidence,
+            remediation=remediation,
+            confidence="high" if not is_safe else "low",
+        )
+
     def _inspect_call_sink(
         self,
         call: ast.Call,
@@ -311,118 +422,103 @@ class TaintAnalyzer:
         lineno = getattr(call, "lineno", 1)
         raw_line = lines[lineno - 1].strip() if lineno <= len(lines) else func_expr
 
+        def taint_of(arg: ast.AST):
+            return self._resolve_arg_taint(arg, lines, tainted_vars, sanitized_vars, propagators)
+
         # 1. SQL Injection Sink
         if func_name in self.SQL_SINKS:
             for i, arg in enumerate(call.args):
-                tainted_ref = self._find_tainted_ref_in_expr(arg, tainted_vars)
-                # Check for string formatting / f-strings / concatenation
                 is_concatenated = self._is_unsafe_sql_construction(arg)
-                if tainted_ref and (is_concatenated or i == 0):
-                    sanitizers = sanitized_vars.get(tainted_ref, [])
-                    # Check if query has separate parameters in call: e.g. execute(sql, (p1, p2))
-                    has_param_tuple = len(call.args) > 1 or any(k.arg in ("params", "parameters") for k in call.keywords)
-                    is_safe = bool(sanitizers) or (has_param_tuple and not is_concatenated)
-
-                    source_node = tainted_vars[tainted_ref]
-                    sink_node = TaintNode(
-                        name=func_name,
-                        line=lineno,
-                        kind="sink",
-                        expression=raw_line,
-                        detail="Database query execution sink",
-                    )
-
-                    return TaintFlowCandidate(
-                        candidate_id=f"TAINT-SQL-{lineno}",
-                        rule_id="TAINT-SQL-001",
-                        category="security",
-                        vulnerability_type="sql_injection",
-                        severity="CRITICAL" if not is_safe else "LOW",
-                        file_path=file_path,
-                        start_line=lineno,
-                        end_line=lineno,
-                        source=source_node,
-                        sink=sink_node,
-                        propagators=propagators.get(tainted_ref, []),
-                        sanitizers_found=sanitizers,
-                        is_sanitized=is_safe,
-                        evidence=f"Untrusted input '{source_node.name}' (line {source_node.line}) reaches SQL query '{func_name}' at line {lineno} without parameterized binding.",
-                        remediation="Use parameterized queries (e.g. `cursor.execute(query, (param,))`) or ORM models instead of string interpolation.",
-                        confidence="high" if not is_safe else "low",
-                    )
+                if not (is_concatenated or i == 0):
+                    continue
+                taint = taint_of(arg)
+                if not taint:
+                    continue
+                # Separate bind parameters: execute(sql, (p1, p2)) is safe unless the SQL text itself is built from input.
+                has_param_tuple = len(call.args) > 1 or any(k.arg in ("params", "parameters") for k in call.keywords)
+                is_safe = bool(taint[1]) or (has_param_tuple and not is_concatenated)
+                return self._flow(
+                    prefix="SQL", rule_id="TAINT-SQL-001", vuln="sql_injection", severity="CRITICAL",
+                    lineno=lineno, file_path=file_path, func_label=func_name, raw_line=raw_line,
+                    sink_detail="Database query execution sink", taint=taint, is_safe=is_safe,
+                    evidence=(
+                        f"Untrusted input '{taint[0].name}' (line {taint[0].line}) reaches SQL query "
+                        f"'{func_name}' at line {lineno} without parameterized binding."
+                    ),
+                    remediation="Use parameterized queries (e.g. `cursor.execute(query, (param,))`) or ORM models instead of string interpolation.",
+                )
 
         # 2. Command Injection Sink
         cmd_modules = {"subprocess", "os"}
-        is_cmd = func_name in self.CMD_SINKS and (len(func_parts) > 1 and func_parts[0] in cmd_modules or func_name in ("system", "popen"))
+        is_cmd = func_name in self.CMD_SINKS and (
+            (len(func_parts) > 1 and func_parts[0] in cmd_modules) or func_name in ("system", "popen")
+        )
         if is_cmd:
+            shell_true = any(
+                k.arg == "shell" and getattr(k.value, "value", False) is True for k in call.keywords
+            )
             for arg in call.args:
-                tainted_ref = self._find_tainted_ref_in_expr(arg, tainted_vars)
-                if tainted_ref:
-                    sanitizers = sanitized_vars.get(tainted_ref, [])
-                    # Check shell=True kwargs - if shell=True is passed, it is not safe even with partial sanitizers
-                    shell_true = any(k.arg == "shell" and getattr(k.value, "value", False) is True for k in call.keywords)
-                    is_safe = bool(sanitizers) and not shell_true
+                taint = taint_of(arg)
+                if not taint:
+                    continue
+                # shell=True stays unsafe even with partial sanitizers.
+                is_safe = bool(taint[1]) and not shell_true
+                return self._flow(
+                    prefix="CMD", rule_id="TAINT-CMD-001", vuln="command_injection", severity="CRITICAL",
+                    lineno=lineno, file_path=file_path, func_label=func_expr, raw_line=raw_line,
+                    sink_detail="Operating system command execution sink", taint=taint, is_safe=is_safe,
+                    evidence=f"Untrusted input reaches OS command runner '{func_expr}' at line {lineno}.",
+                    remediation="Avoid shell execution; pass arguments as an explicit sequence to `subprocess.run(..., shell=False)`.",
+                )
 
-                    source_node = tainted_vars[tainted_ref]
-                    sink_node = TaintNode(
-                        name=func_expr,
-                        line=lineno,
-                        kind="sink",
-                        expression=raw_line,
-                        detail="Operating system command execution sink",
-                    )
-                    return TaintFlowCandidate(
-                        candidate_id=f"TAINT-CMD-{lineno}",
-                        rule_id="TAINT-CMD-001",
-                        category="security",
-                        vulnerability_type="command_injection",
-                        severity="CRITICAL" if not is_safe else "LOW",
-                        file_path=file_path,
-                        start_line=lineno,
-                        end_line=lineno,
-                        source=source_node,
-                        sink=sink_node,
-                        propagators=propagators.get(tainted_ref, []),
-                        sanitizers_found=sanitizers,
-                        is_sanitized=is_safe,
-                        evidence=f"Untrusted input reaches OS command runner '{func_expr}' at line {lineno}.",
-                        remediation="Avoid shell execution; pass arguments as an explicit sequence to `subprocess.run(..., shell=False)`.",
-                        confidence="high" if not is_safe else "low",
-                    )
-
-        # 3. Path Traversal Sink
-        if func_name in self.PATH_SINKS:
+        # 3. Code Injection Sink (eval / exec / compile on untrusted data)
+        if func_name in self.CODE_SINKS and (len(func_parts) == 1 or func_parts[0] == "builtins"):
             if call.args:
-                path_arg = call.args[0]
-                tainted_ref = self._find_tainted_ref_in_expr(path_arg, tainted_vars)
-                if tainted_ref:
-                    sanitizers = sanitized_vars.get(tainted_ref, [])
-                    is_safe = bool(sanitizers)
-                    source_node = tainted_vars[tainted_ref]
-                    sink_node = TaintNode(
-                        name=func_name,
-                        line=lineno,
-                        kind="sink",
-                        expression=raw_line,
-                        detail="File system I/O sink",
+                taint = taint_of(call.args[0])
+                if taint:
+                    return self._flow(
+                        prefix="CODE", rule_id="TAINT-CODE-001", vuln="code_injection", severity="CRITICAL",
+                        lineno=lineno, file_path=file_path, func_label=func_name, raw_line=raw_line,
+                        sink_detail="Dynamic code evaluation sink", taint=taint,
+                        # No sanitizer makes eval of user input safe.
+                        is_safe=False,
+                        evidence=f"Untrusted input '{taint[0].name}' (line {taint[0].line}) is evaluated as code by '{func_name}' at line {lineno}.",
+                        remediation="Never evaluate user input. Use `ast.literal_eval` for literals or an explicit allow-list / parser.",
                     )
-                    return TaintFlowCandidate(
-                        candidate_id=f"TAINT-PATH-{lineno}",
-                        rule_id="TAINT-PATH-001",
-                        category="security",
-                        vulnerability_type="path_traversal",
-                        severity="HIGH" if not is_safe else "LOW",
-                        file_path=file_path,
-                        start_line=lineno,
-                        end_line=lineno,
-                        source=source_node,
-                        sink=sink_node,
-                        propagators=propagators.get(tainted_ref, []),
-                        sanitizers_found=sanitizers,
-                        is_sanitized=is_safe,
-                        evidence=f"Untrusted file path reaches '{func_name}' at line {lineno} without canonical path sanitization.",
-                        remediation="Sanitize path using `os.path.basename()` or verify absolute path belongs to allowed base directory.",
-                        confidence="high" if not is_safe else "low",
+
+        # 4. Path Traversal Sink
+        if func_name in self.PATH_SINKS and call.args:
+            taint = taint_of(call.args[0])
+            if taint:
+                return self._flow(
+                    prefix="PATH", rule_id="TAINT-PATH-001", vuln="path_traversal", severity="HIGH",
+                    lineno=lineno, file_path=file_path, func_label=func_name, raw_line=raw_line,
+                    sink_detail="File system I/O sink", taint=taint, is_safe=bool(taint[1]),
+                    evidence=f"Untrusted file path reaches '{func_name}' at line {lineno} without canonical path sanitization.",
+                    remediation="Sanitize path using `os.path.basename()` or verify absolute path belongs to allowed base directory.",
+                )
+
+        # 5. SSRF Sink (outbound HTTP to a user-controlled URL). The sink set was
+        # declared but never checked. Restricted to HTTP-client receivers so that
+        # ``dict.get(...)`` and friends are not treated as network calls.
+        is_http_client = (
+            func_name in self.SSRF_SINKS
+            and len(func_parts) > 1
+            and func_parts[0] in self.HTTP_CLIENT_RECEIVERS
+        ) or func_name == "urlopen"
+        if is_http_client:
+            url_arg = call.args[0] if call.args else next(
+                (k.value for k in call.keywords if k.arg == "url"), None
+            )
+            if url_arg is not None:
+                taint = taint_of(url_arg)
+                if taint and taint[0].name not in ("os.environ", "os.getenv"):
+                    return self._flow(
+                        prefix="SSRF", rule_id="TAINT-SSRF-001", vuln="ssrf", severity="HIGH",
+                        lineno=lineno, file_path=file_path, func_label=func_expr, raw_line=raw_line,
+                        sink_detail="Outbound network request sink", taint=taint, is_safe=bool(taint[1]),
+                        evidence=f"Untrusted input controls the URL of outbound request '{func_expr}' at line {lineno}.",
+                        remediation="Validate the URL against an allow-list of hosts/schemes and block internal address ranges before making the request.",
                     )
 
         return None

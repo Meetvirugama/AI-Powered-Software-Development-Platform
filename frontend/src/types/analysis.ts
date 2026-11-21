@@ -92,7 +92,7 @@ export type AnalysisStatus =
 
 export type FindingSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
 
-export type FindingSourceType = 'STATIC' | 'AI' | 'COMBINED';
+export type FindingSourceType = 'STATIC' | 'AI' | 'COMBINED' | 'HYBRID';
 
 export interface StageMetrics {
   stages_ms: Record<string, number>;
@@ -154,6 +154,8 @@ export interface BugFinding {
   is_uncertain?: boolean;
   source_type: FindingSourceType;
   rule_id?: string | null;
+  /** Origin of the finding, e.g. "static_rule", "static_rule:taint", "llm", "combined". */
+  provenance?: string | null;
   priority_score?: number | null;
   evidence_level?: "PROVEN" | "STRONG" | "SUSPECTED" | "NEEDS_CONTEXT" | string;
   dependency_trace?: string[];

@@ -4,6 +4,8 @@ Test Generation API endpoint (POST /api/v1/repositories/{repository_id}/generate
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 from typing import Any
 from uuid import UUID, uuid4
@@ -285,7 +287,10 @@ async def generate_tests(
 
                         verifier = TestExecutionVerifier()
 
-                    verified_result = verifier.verify_generated_test(
+                    # Sandbox verification is synchronous and slow (3 stability
+                    # runs, two coverage passes, mutation scoring). Running it in
+                    # a worker thread keeps the event loop serving other requests.
+                    verify_kwargs = dict(
                         result=sanitized_result,
                         target_path=resolved.target.path or "",
                         target_source_code=resolved.code_content or "",
@@ -293,6 +298,13 @@ async def generate_tests(
                         base_revision=resolved.revision,
                         existing_files=manifest_contents,
                     )
+                    verify_fn = verifier.verify_generated_test
+                    if inspect.iscoroutinefunction(verify_fn):
+                        verified_result = await verify_fn(**verify_kwargs)
+                    else:
+                        verified_result = await asyncio.to_thread(verify_fn, **verify_kwargs)
+                        if inspect.isawaitable(verified_result):
+                            verified_result = await verified_result
                     sanitized_result = verified_result
                 except Exception as verif_exc:
                     logger.warning(f"Test verification pipeline error: {verif_exc}")

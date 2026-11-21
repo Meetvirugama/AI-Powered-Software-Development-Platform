@@ -71,7 +71,7 @@ class RepositoryTaintSpec(BaseModel):
                 if isinstance(shared_map, dict):
                     setattr(taint_analyzer, attr, shared_map.copy())
 
-        for attr in ("SQL_SINKS", "CMD_SINKS", "PATH_SINKS", "SSRF_SINKS"):
+        for attr in ("SQL_SINKS", "CMD_SINKS", "PATH_SINKS", "SSRF_SINKS", "CODE_SINKS"):
             if hasattr(taint_analyzer, attr):
                 shared_set = getattr(taint_analyzer, attr)
                 if isinstance(shared_set, (set, frozenset)):
@@ -104,6 +104,9 @@ class RepositoryTaintSpec(BaseModel):
                 registered_count += 1
             elif "ssrf" in cat and hasattr(taint_analyzer, "SSRF_SINKS"):
                 taint_analyzer.SSRF_SINKS.add(sk.name)
+                registered_count += 1
+            elif ("code" in cat or "eval" in cat) and hasattr(taint_analyzer, "CODE_SINKS"):
+                taint_analyzer.CODE_SINKS.add(sk.name)
                 registered_count += 1
 
         return registered_count

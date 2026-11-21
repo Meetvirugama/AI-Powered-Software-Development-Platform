@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.api.v1.analysis.common import (
+    assign_persistent_finding_ids,
     ANALYSIS_ERROR_RESPONSES,
     _get_service,
     _invoke_service_method,
@@ -80,22 +81,27 @@ async def detect_bugs(
 
     run_id = str(uuid4())
     try:
-        with timer.measure("llm_inference"):
-            raw_result = await _invoke_service_method(
-                method,
-                repository_id,
-                payload,
-                user_id=user_id,
-                db=db,
-                file_record=resolved.file_record,
-                extra_kwargs={
-                    "context": resolved.intelligence_context,
-                    "code_content": resolved.code_content,
-                    "revision": resolved.revision,
-                    "skip_internal_static": True,
-                    "_skip_engine_static": True,
-                },
-            )
+        if not payload.include_ai:
+            # Static-only scan: don't spend LLM tokens (or fail on a provider
+            # outage) for findings that filter_and_rank_findings drops anyway.
+            raw_result: Any = []
+        else:
+            with timer.measure("llm_inference"):
+                raw_result = await _invoke_service_method(
+                    method,
+                    repository_id,
+                    payload,
+                    user_id=user_id,
+                    db=db,
+                    file_record=resolved.file_record,
+                    extra_kwargs={
+                        "context": resolved.intelligence_context,
+                        "code_content": resolved.code_content,
+                        "revision": resolved.revision,
+                        "skip_internal_static": True,
+                        "_skip_engine_static": True,
+                    },
+                )
     except APIError as exc:
         if payload.options.persist_run:
             record_analysis_run(
@@ -196,6 +202,7 @@ async def detect_bugs(
                     )
                     for cand in discovered_cands:
                         extra_static_raw.append(cand.to_dict())
+                    parser_warnings.extend(discovery_svc.scanner_availability_notes(resolved.target.path))
                 except Exception as cand_exc:
                     logger.warning("candidate_discovery_error", extra={"error": str(cand_exc)})
 
@@ -273,7 +280,7 @@ async def detect_bugs(
                 prog_slice = await graph_svc.build_program_slice(
                     repository_id=repository_id,
                     target_file_path=resolved.target.path,
-                    target_symbol_id=getattr(resolved.target_symbol, "id", None) if hasattr(resolved, "target_symbol") and resolved.target_symbol else None,
+                    target_symbol_id=getattr(getattr(resolved, "resolved_symbol", None), "id", None),
                     target_line=resolved.target.start_line,
                     max_depth=2,
                 )
@@ -336,6 +343,7 @@ async def detect_bugs(
             retryable=False,
         ) from exc
 
+    ranked_findings = assign_persistent_finding_ids(ranked_findings, run_id)
     static_count = sum(
         1 for f in ranked_findings if f.source_type in ("STATIC", "COMBINED")
     )

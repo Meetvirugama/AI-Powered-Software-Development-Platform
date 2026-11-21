@@ -103,6 +103,9 @@ export function CreateIssueModal({
 
   if (!isOpen || !finding) return null;
 
+  // Older backends omit the flag; treat missing as published.
+  const publishedToGitHub = createdResult?.issue?.published_to_github !== false;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!finding || isSubmitting) return;
@@ -188,10 +191,14 @@ export function CreateIssueModal({
               <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-1 text-xs">
                 <h4 className="font-semibold text-emerald-300 text-sm">
-                  GitHub Issue #{createdResult.issue?.issue_number} & Task Created
+                  {publishedToGitHub
+                    ? `GitHub Issue #${createdResult.issue?.issue_number} & Task Created`
+                    : 'Task Created (saved locally)'}
                 </h4>
                 <p className="text-muted-foreground">
-                  The finding has been published as an issue and normalized into task{' '}
+                  {publishedToGitHub
+                    ? 'The finding has been published as an issue and normalized into task'
+                    : 'GitHub could not be reached, so no GitHub issue was published. The finding was saved as task'}{' '}
                   <span className="font-mono text-foreground">
                     {createdResult.task_id.slice(0, 8)}
                   </span>{' '}
@@ -201,7 +208,7 @@ export function CreateIssueModal({
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-2">
-              {createdResult.issue?.html_url && (
+              {publishedToGitHub && createdResult.issue?.html_url && (
                 <a
                   href={createdResult.issue.html_url}
                   target="_blank"

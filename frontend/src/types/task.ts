@@ -459,6 +459,8 @@ export interface IssueImportResponse {
   issue?: {
     issue_number: number;
     html_url?: string;
+    /** False when GitHub was unreachable and only a local task was created. */
+    published_to_github?: boolean;
     [key: string]: any;
   };
 }

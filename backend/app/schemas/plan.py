@@ -133,6 +133,10 @@ class GitHubIssueResponse(BaseModel):
     origin_finding_id: str | None = None
     task_id: str | None = None
     is_imported: bool = False
+    published_to_github: bool = Field(
+        default=True,
+        description="False when GitHub was unreachable and the issue/task were saved locally only.",
+    )
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

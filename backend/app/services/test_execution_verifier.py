@@ -8,6 +8,7 @@ Stage 1: Static Validation (Syntax, imports, protected-file guards, safety polic
 Stage 2: Sandbox Execution (Isolated temporary workspace provisioned via WorkspaceManager)
 Stage 3: Stability Validation (3 consecutive runs to guarantee non-flakiness)
 Stage 4: Coverage Validation (Baseline vs post-gen coverage delta and attribution)
+Stage 4c: Mutation Scoring (bounded; Python targets whose tests passed 3/3 runs)
 Stage 5: Final Classification:
   - VERIFIED: All static, execution, 3/3 stability, and coverage attribution checks pass.
   - UNVERIFIED: Statically valid, but fails execution, is flaky (2/3), or adds zero coverage.
@@ -29,17 +30,27 @@ from app.schemas.analysis import (
     IterationRound,
     StabilityReport,
     TestGenerationResult,
+    TestQualityReport,
     TestVerificationStatus,
 )
 from app.schemas.workspace import (
+    TestOutcomeStatus,
     WorkspaceCreateRequest,
+    WorkspaceTestExecutionRequest,
 )
+from app.services.test_mutation_service import MutationTestingService
 from app.services.test_coverage_service import TestCoverageService
 from app.services.test_iteration_service import TestIterationOrchestrator
 from app.services.test_stability_service import TestStabilityValidator
 from sandbox.workspace_manager import WorkspaceManager
 
 logger = logging.getLogger(__name__)
+
+# Mutation scoring re-runs the suite once per mutant, so it is bounded: a few
+# mutants with a short per-run timeout keeps the request within ~2 minutes.
+MAX_MUTANTS_PER_REQUEST = 8
+MUTANT_RUN_TIMEOUT_SECONDS = 20
+_MUTATION_FRAMEWORKS = frozenset({"pytest", "unittest"})
 
 
 class TestExecutionVerifier:
@@ -53,6 +64,7 @@ class TestExecutionVerifier:
         stability_validator: TestStabilityValidator | None = None,
         coverage_service: TestCoverageService | None = None,
         iteration_orchestrator: TestIterationOrchestrator | None = None,
+        mutation_service: MutationTestingService | None = None,
     ) -> None:
         self._workspace_manager = workspace_manager or WorkspaceManager()
         self._stability_validator = stability_validator or TestStabilityValidator()
@@ -60,6 +72,62 @@ class TestExecutionVerifier:
             command_runner=self._workspace_manager.command_runner
         )
         self._iteration_orchestrator = iteration_orchestrator or TestIterationOrchestrator()
+        self._mutation_service = mutation_service or MutationTestingService()
+
+    def _score_mutations(
+        self,
+        *,
+        ws_root: Path,
+        target_full_path: Path,
+        target_source_code: str,
+        test_path: str,
+        framework: str,
+        task_id: str,
+    ) -> tuple[float | None, str]:
+        """Runs the generated tests against a few AST mutants of the target.
+
+        A mutant is *killed* when the suite fails on it. The score (killed /
+        total) shows whether the tests check behaviour or merely execute code:
+        a suite that passes with 100% coverage but kills no mutants asserts
+        nothing useful. The original target is always restored afterwards.
+        """
+        mutants = self._mutation_service.generate_mutants(
+            target_source_code, max_mutants=MAX_MUTANTS_PER_REQUEST
+        )
+        if not mutants:
+            return None, "Mutation scoring skipped: no mutable operators found in the target."
+
+        test_runner = self._workspace_manager.test_runner
+
+        def run_against(mutant_source: str) -> tuple[bool, str | None]:
+            target_full_path.write_text(mutant_source, encoding="utf-8")
+            exec_res = test_runner.run_tests(
+                workspace_root=ws_root,
+                request=WorkspaceTestExecutionRequest(
+                    task_id=f"{task_id}-mut",
+                    test_path=test_path,
+                    framework=framework,
+                    timeout_seconds=MUTANT_RUN_TIMEOUT_SECONDS,
+                ),
+            )
+            passed = exec_res.status == TestOutcomeStatus.PASSED and exec_res.failed_count == 0
+            return passed, None
+
+        try:
+            report = self._mutation_service.evaluate_mutants(mutants, run_against)
+        finally:
+            target_full_path.write_text(target_source_code, encoding="utf-8")
+
+        note = (
+            f"Mutation score {report.mutation_score:.0f}%: generated tests caught "
+            f"{report.killed_mutants}/{report.total_mutants} injected defects"
+        )
+        if report.survived_mutants:
+            survived = [m for m in report.mutants if m.status == "SURVIVED"][:3]
+            note += "; missed e.g. " + ", ".join(
+                f"L{m.line_number} `{m.original_code}` -> `{m.mutated_code}`" for m in survived
+            )
+        return report.mutation_score, redact(note + ".")
 
     @staticmethod
     def _check_safety_policy(test_content: str, proposed_test_path: str = "") -> list[str]:
@@ -88,7 +156,9 @@ class TestExecutionVerifier:
             (r"\bos\s*\.\s*(?:system|popen|spawn[lv]?[pe]?|exec[lv]?[pe]?|remove|unlink|rmdir)\s*\(", "os command/file destruction call"),
             (r"\bsubprocess\s*\.\s*(?:run|Popen|call|check_output|check_call)\s*\(", "subprocess execution call"),
             (r"\bshutil\s*\.\s*rmtree\s*\(", "shutil.rmtree call"),
-            (r"\b(?:eval|exec|__import__)\s*\(", "dynamic code execution primitive"),
+            # (?<![\w.]) so method calls such as ``model.eval()`` or
+            # ``cursor.exec(...)`` are not mistaken for the eval/exec builtins.
+            (r"(?<![\w.])(?:eval|exec|__import__)\s*\(", "dynamic code execution primitive"),
             (r"\bpty\s*\.\s*spawn\s*\(", "pty.spawn call"),
         )
         for pattern, label in dangerous_patterns:
@@ -346,6 +416,39 @@ class TestExecutionVerifier:
                     f"First run error: {first_run.error_message if first_run else 'Execution error'}"
                 )
 
+            # ---------------------------------------------------------------
+            # Stage 4c: Mutation Scoring (only meaningful for a passing suite)
+            # ---------------------------------------------------------------
+            quality_report = result.quality_report
+            if (
+                stability_report.classification == "STABLE"
+                and result.detected_framework in _MUTATION_FRAMEWORKS
+                and target_path.endswith(".py")
+            ):
+                try:
+                    score, note = self._score_mutations(
+                        ws_root=ws_root,
+                        target_full_path=target_full_path,
+                        target_source_code=target_source_code,
+                        test_path=result.proposed_test_path,
+                        framework=result.detected_framework,
+                        task_id=task_id,
+                    )
+                except Exception as mut_err:  # noqa: BLE001
+                    score, note = None, f"Mutation scoring could not run: {redact(str(mut_err))}"
+                base = quality_report or TestQualityReport()
+                notes = list(base.summary_notes)
+                if score is not None:
+                    # A measured score replaces the requirement-based estimate.
+                    notes = [n for n in notes if not n.startswith("Mutation score is an estimate")]
+                quality_report = base.model_copy(
+                    update={
+                        "mutation_score_percent": score if score is not None else base.mutation_score_percent,
+                        "summary_notes": [*notes, note],
+                    }
+                )
+                raw_logs.append(note)
+
             uncovered = getattr(post_gen_cov, "uncovered_lines", [])
             cov_val = cov_report.final_line_coverage if cov_report else None
             prev_cov = cov_report.baseline_line_coverage if cov_report else None
@@ -379,6 +482,7 @@ class TestExecutionVerifier:
                     "execution_status": execution_status,
                     "execution_summary": exec_summary,
                     "raw_execution_output": redact("\n".join(raw_logs)),
+                    "quality_report": quality_report,
                 }
             )
 

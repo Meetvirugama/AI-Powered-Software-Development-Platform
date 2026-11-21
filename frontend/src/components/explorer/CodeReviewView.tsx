@@ -32,6 +32,8 @@ import {
   Send,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { ReviewPublicationSettings } from './ReviewPublicationSettings';
+import { FindingsExportButtons } from './FindingsExportButtons';
 import {
   getCodeReviewHistory,
   reopenCodeReview,
@@ -179,6 +181,12 @@ const SOURCE_TYPE_CONFIG: Record<
     className: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40 font-semibold',
     description: 'Corroborated by both static rules and AI validation',
   },
+  HYBRID: {
+    label: 'Hybrid',
+    icon: ShieldAlert,
+    className: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
+    description: 'Static candidate investigated and confirmed by AI validation',
+  },
 };
 
 const CATEGORY_NAMES: Record<ReviewCategory, string> = {
@@ -266,7 +274,10 @@ export function CodeReviewView({
   const [showMissingContext, setShowMissingContext] = useState(false);
 
   const [feedbackMap, setFeedbackMap] = useState<
-    Record<string, { type: ReviewFeedbackType; submitting?: boolean }>
+    Record<
+      string,
+      { type: ReviewFeedbackType; submitting?: boolean; lifecycle?: FindingLifecycleStatus; error?: string }
+    >
   >(() => {
     const init: Record<string, { type: ReviewFeedbackType }> = {};
     findings.forEach((f) => {
@@ -290,15 +301,25 @@ export function CodeReviewView({
       [findingId]: { ...prev[findingId], type: feedbackType, submitting: true },
     }));
     try {
-      await submitFindingFeedback(result.run_id, findingId, { feedback_type: feedbackType });
+      const res = await submitFindingFeedback(result.run_id, findingId, { feedback_type: feedbackType });
       setFeedbackMap((prev) => ({
         ...prev,
-        [findingId]: { type: feedbackType, submitting: false },
+        [findingId]: {
+          type: feedbackType,
+          submitting: false,
+          // Server-computed status (DISMISSED / FIXED / REOPENED) so the badge updates now.
+          lifecycle: (res?.lifecycle_status as FindingLifecycleStatus | undefined) ?? prev[findingId]?.lifecycle,
+        },
       }));
-    } catch {
+    } catch (err: any) {
+      // Previously failures were swallowed and the click looked like it did nothing.
       setFeedbackMap((prev) => ({
         ...prev,
-        [findingId]: { ...prev[findingId], submitting: false },
+        [findingId]: {
+          ...prev[findingId],
+          submitting: false,
+          error: err?.message || 'Feedback could not be saved.',
+        },
       }));
     }
   }
@@ -311,7 +332,9 @@ export function CodeReviewView({
         run_id: result.run_id,
         pr_number: target.pr_number,
         commit_sha: target.commit_sha || target.head_revision || undefined,
-        force_publish: true,
+        // The repository's "publish PR reviews" setting is the permission; when it is
+        // off the backend returns SKIPPED with the reason (admins can still override via API).
+        force_publish: false,
       });
       setPublicationState({ isPublishing: false, publishedResult: pubRes });
     } catch (err: any) {
@@ -440,6 +463,22 @@ export function CodeReviewView({
             <div className="text-[10px] font-mono text-muted-foreground">
               Run ID: <span className="text-foreground">{result.run_id.slice(0, 8)}…</span>
             </div>
+            <FindingsExportButtons
+              input={{
+                kind: 'Code Review',
+                targetLabel:
+                  target.type === 'pr'
+                    ? `PR #${target.pr_number}`
+                    : target.type === 'commit'
+                    ? `commit ${(target.commit_sha || '').slice(0, 12)}`
+                    : target.path || target.type,
+                runId: result.run_id,
+                summary: report.summary,
+                riskLevel: report.risk_level,
+                findings,
+                missingContext: report.missing_context,
+              }}
+            />
             {repositoryId && (
               <button
                 type="button"
@@ -485,6 +524,7 @@ export function CodeReviewView({
             <span>Unified Diff ({target.diff?.length || 0} characters)</span>
           )}
         </div>
+        {target.type === 'pr' && repositoryId && <ReviewPublicationSettings repositoryId={repositoryId} />}
       </div>
 
       {/* ------------------------------------------------------------------ */}
@@ -834,7 +874,8 @@ export function CodeReviewView({
                   typeof finding.source_reference.start_line === 'number';
 
                 const lifecycleStatus: FindingLifecycleStatus =
-                  (finding.lifecycle?.status ||
+                  (feedbackMap[finding.id]?.lifecycle ||
+                    finding.lifecycle?.status ||
                     (finding.finding_metadata as any)?.lifecycle?.status ||
                     'NEW') as FindingLifecycleStatus;
                 const lifeMeta = LIFECYCLE_CONFIG[lifecycleStatus] || LIFECYCLE_CONFIG.NEW;
@@ -1096,8 +1137,28 @@ export function CodeReviewView({
                               <Flag className="h-2.5 w-2.5" />
                               <span>False Positive</span>
                             </button>
+                            <button
+                              type="button"
+                              onClick={() => handleFeedback(finding.id, 'already_fixed')}
+                              disabled={feedbackMap[finding.id]?.submitting}
+                              className={cn(
+                                'inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border transition-colors',
+                                feedbackMap[finding.id]?.type === 'already_fixed'
+                                  ? 'bg-sky-500/20 text-sky-300 border-sky-500/50 font-bold'
+                                  : 'border-border/60 text-muted-foreground hover:bg-sky-500/10 hover:text-sky-400'
+                              )}
+                              title="Mark finding as already fixed"
+                            >
+                              <CheckCircle2 className="h-2.5 w-2.5" />
+                              <span>Fixed</span>
+                            </button>
                             {feedbackMap[finding.id]?.submitting && (
                               <Loader2 className="h-3 w-3 animate-spin text-muted-foreground ml-1" />
+                            )}
+                            {feedbackMap[finding.id]?.error && !feedbackMap[finding.id]?.submitting && (
+                              <span className="text-[10px] text-rose-400 ml-1" role="alert">
+                                {feedbackMap[finding.id]?.error}
+                              </span>
                             )}
                           </div>
                         </div>
