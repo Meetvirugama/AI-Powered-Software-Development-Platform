@@ -31,7 +31,7 @@ def _extract_pkg_names(req_path: Path) -> set[str]:
     names: set[str] = set()
     for raw in req_path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
-        if not line or line.startswith("-r"):
+        if not line or line.startswith(("-r", "--")):
             continue
         pkg = re.split(r"[<>=!~;\[]", line, maxsplit=1)[0].strip().lower()
         if pkg:
