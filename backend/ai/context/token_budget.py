@@ -62,6 +62,10 @@ MODEL_ENCODINGS: dict[str, str] = {
     "llama-3.1-8b-instant": "cl100k_base",
     "qwen/qwen3.8-27b": "cl100k_base",
     # Gemini models (approximate cl100k_base)
+    "gemini-2.5-flash": "cl100k_base",
+    "gemini-2.5-flash-lite": "cl100k_base",
+    "gemini-3.5-flash-lite": "cl100k_base",
+    "gemini-3.5-flash": "cl100k_base",
     "gemini-flash-latest": "cl100k_base",
     "gemini-flash-lite-latest": "cl100k_base",
     "gemini-1.5-flash": "cl100k_base",

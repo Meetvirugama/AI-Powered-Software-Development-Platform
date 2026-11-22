@@ -38,7 +38,7 @@ from app.schemas.analysis import CodeExplanation, ExplainCodeRequest
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "gemini-flash-lite-latest"
+_DEFAULT_MODEL = "gemini-2.5-flash"
 _MAX_REPAIR_ATTEMPTS = 2
 
 # ---------------------------------------------------------------------------

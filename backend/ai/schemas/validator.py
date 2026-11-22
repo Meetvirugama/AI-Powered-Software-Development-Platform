@@ -194,7 +194,7 @@ class OutputValidator:
                 from app.core.config import settings
                 repair_model = settings.active_chat_model
             except Exception:  # noqa: BLE001
-                repair_model = "gemini-flash-lite-latest"
+                repair_model = "gemini-2.5-flash"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
             bounded_raw = current_raw[:4000] if current_raw else ""

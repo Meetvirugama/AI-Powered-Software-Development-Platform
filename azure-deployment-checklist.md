@@ -133,7 +133,8 @@ Set these in **Azure Portal → App Service → Configuration → Application Se
 | `AI_FALLBACK_PROVIDER` | `groq` |
 | `GEMINI_API_KEY` | `REPLACE_ME` |
 | `GEMINI_API_KEYS` | `REPLACE_ME` (comma-separated for rotation) |
-| `GEMINI_CHAT_MODEL` | `gemini-flash-lite-latest` |
+| `GEMINI_CHAT_MODEL` | `gemini-2.5-flash` |
+| `AGENT_MODEL` | `gemini-2.5-flash` |
 | `AI_EMBEDDING_PROVIDER` | `gemini` |
 | `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` |
 | `EMBEDDING_DIMENSIONS` | `768` |
