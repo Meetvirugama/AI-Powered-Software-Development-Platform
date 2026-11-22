@@ -483,7 +483,7 @@ async def process_sync_job(
                 embedding_service=embedding_service,
             )
 
-            max_index_timeout = float(getattr(settings, "sync_job_timeout_seconds", 600))
+            max_index_timeout = float(settings.sync_job_timeout_seconds)
             stats = await asyncio.wait_for(
                 indexer.sync(
                     repository_id=repository_id,
@@ -865,13 +865,19 @@ async def sync_worker_loop(
                 last_sweep_time = now_mono
                 try:
                     with SessionLocal() as db_session:
-                        reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+                        reconciled = reconcile_stale_sync_jobs(
+                            db_session,
+                            timeout_seconds=int(settings.sync_job_timeout_seconds),
+                        )
                         if reconciled:
                             logger.info(
                                 "periodic_stale_sync_jobs_reconciled",
                                 extra={"count": len(reconciled), "job_ids": [str(j) for j in reconciled]},
                             )
-                    recovered = await recover_stale_processing_jobs(redis, timeout_seconds=600)
+                    recovered = await recover_stale_processing_jobs(
+                        redis,
+                        timeout_seconds=int(settings.sync_job_timeout_seconds),
+                    )
                     if recovered:
                         logger.info(
                             "periodic_processing_jobs_recovered",
