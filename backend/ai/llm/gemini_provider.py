@@ -137,7 +137,7 @@ class GeminiProvider(LLMProvider):
     def __init__(
         self,
         api_keys: Sequence[str],
-        default_model: str = "gemini-2.5-flash",
+        default_model: str = "gemini-flash-lite-latest",
         timeout_seconds: float = 30.0,
         max_retries: int = 3,
         client: httpx.AsyncClient | None = None,
