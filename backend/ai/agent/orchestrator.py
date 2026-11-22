@@ -87,7 +87,7 @@ class AgentOrchestrator:
             max_result_bytes=getattr(settings, "agent_max_tool_result_bytes", 8192),
         )
         self._rag_pipeline = rag_pipeline
-        self._model = model or getattr(settings, "agent_model", "gemini-2.5-flash")
+        self._model = model or getattr(settings, "agent_model", "gemini-3.8-flash")
         self._primary_provider = primary_provider or getattr(settings, "agent_primary_provider", "gemini")
         self._fallback_provider = (
             fallback_provider if fallback_provider is not None else getattr(settings, "agent_fallback_provider", "groq")
