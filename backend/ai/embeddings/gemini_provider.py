@@ -354,7 +354,7 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
                 )
 
             if attempt < max_attempts:
-                wait_time = min(_BACKOFF_BASE_SECONDS * (1.5 ** (attempt - 1)), 8.0)
+                wait_time = min(_BACKOFF_BASE_SECONDS * (1.5 ** (attempt - 1)), 4.0)
                 logger.info(
                     "gemini_embedding_retry_backoff",
                     extra={"attempt": attempt, "wait_seconds": wait_time, "error": str(last_error)},
