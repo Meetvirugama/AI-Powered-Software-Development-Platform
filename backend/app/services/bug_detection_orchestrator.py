@@ -103,7 +103,8 @@ CONFIDENCE_RANK: dict[str, int] = {
 _COMPATIBLE_CATEGORIES: dict[str, frozenset[str]] = {
     "off_by_one": frozenset({"off_by_one", "boundary_condition"}),
     "boundary_condition": frozenset({"off_by_one", "boundary_condition"}),
-    "null_safety": frozenset({"null_safety"}),
+    "null_safety": frozenset({"null_safety", "null_dereference"}),
+    "null_dereference": frozenset({"null_safety", "null_dereference"}),
     "unhandled_exception": frozenset({"unhandled_exception"}),
     "resource_leak": frozenset({"resource_leak"}),
     "race_condition": frozenset({"race_condition"}),
@@ -446,7 +447,7 @@ def resolve_bug_target_and_build_context(
 
     project_rules: list[str] = []
     if defensive_guards:
-        project_rules.append("Defensive Guard Context: " + "; ".join(defensive_guards[:5]))
+        project_rules.extend(defensive_guards[:5])
 
     # Also extract related files from snapshot if available
     try:
@@ -1179,10 +1180,12 @@ def _lines_overlap(a: AnalysisSourceReference, b: AnalysisSourceReference, toler
 
 
 def _categories_compatible(cat_a: str, cat_b: str) -> bool:
-    if cat_a == cat_b:
+    a = str(cat_a).lower()
+    b = str(cat_b).lower()
+    if a == b:
         return True
-    allowed = _COMPATIBLE_CATEGORIES.get(cat_a, frozenset({cat_a}))
-    return cat_b in allowed
+    allowed = _COMPATIBLE_CATEGORIES.get(a, frozenset({a}))
+    return b in allowed
 
 
 def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFinding:
@@ -1289,6 +1292,15 @@ def _merge_two_findings(primary: BugFinding, secondary: BugFinding) -> BugFindin
     )
 
 
+_EQUIVALENT_RULE_SETS: tuple[frozenset[str], ...] = (
+    frozenset({"AST001", "AST-BOUND-001"}),
+    frozenset({"AST002", "AST-EXC-001"}),
+    frozenset({"AST003", "AST-ARG-001"}),
+    frozenset({"AST004", "AST-RES-001"}),
+    frozenset({"B307", "AST-SEC-001"}),
+)
+
+
 def _are_equivalent_secret_rules(rule_a: str | None, rule_b: str | None) -> bool:
     """Return True when both rules represent hardcoded secret detectors (e.g. SEC001 and GITLEAKS-*)."""
     if not rule_a or not rule_b:
@@ -1297,6 +1309,20 @@ def _are_equivalent_secret_rules(rule_a: str | None, rule_b: str | None) -> bool
     return any(rule_a.startswith(p) for p in secret_prefixes) and any(
         rule_b.startswith(p) for p in secret_prefixes
     )
+
+
+def _are_equivalent_static_rules(rule_a: str | None, rule_b: str | None) -> bool:
+    """Return True if rule_a and rule_b check the same underlying static defect."""
+    if not rule_a or not rule_b:
+        return False
+    if rule_a == rule_b:
+        return True
+    if _are_equivalent_secret_rules(rule_a, rule_b):
+        return True
+    for eq_set in _EQUIVALENT_RULE_SETS:
+        if rule_a in eq_set and rule_b in eq_set:
+            return True
+    return False
 
 
 def merge_and_deduplicate_findings(findings: list[BugFinding]) -> list[BugFinding]:
@@ -1313,12 +1339,12 @@ def merge_and_deduplicate_findings(findings: list[BugFinding]) -> list[BugFindin
             ):
                 matched_idx = idx
                 break
-            # Never merge two distinct static analyzer rules unless both are secret detectors on the same line
+            # Never merge two distinct static analyzer rules unless they are equivalent rules on the same line
             if (
                 existing.rule_id
                 and candidate.rule_id
                 and existing.rule_id != candidate.rule_id
-                and not _are_equivalent_secret_rules(existing.rule_id, candidate.rule_id)
+                and not _are_equivalent_static_rules(existing.rule_id, candidate.rule_id)
             ):
                 continue
             tol = 1 if existing.source_type != candidate.source_type else 0
@@ -1359,14 +1385,17 @@ def filter_and_rank_findings(
         if f.priority_score is None:
             has_trace = bool(f.dependency_trace)
             is_sec = str(f.category).lower() == "security"
-            has_counter = bool(f.counterevidence)
+            is_sanitized = any(
+                any(kw in str(c).lower() for kw in ("sanitizer", "typecast", "guard detected", "try/except block handles"))
+                for c in f.counterevidence
+            ) if f.counterevidence else False
             p_res = priority_svc.calculate_priority(
                 severity=str(f.severity),
                 evidence_level=f.evidence_level or ("PROVEN" if f.source_type == "STATIC" else "SUSPECTED"),
                 confidence=str(f.confidence),
                 has_callers=has_trace,
                 is_security=is_sec,
-                is_sanitized=has_counter,
+                is_sanitized=is_sanitized,
                 caller_count=len(f.dependency_trace),
             )
             f = f.model_copy(update={"priority_score": p_res.priority_score})
