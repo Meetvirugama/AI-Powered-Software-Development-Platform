@@ -110,28 +110,6 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 // ---------------------------------------------------------------------------
 // Response interceptor — latency logging & error normalisation
 // ---------------------------------------------------------------------------
-/**
- * Refresh tokens are single-use (rotated on every refresh). When several requests fail with
- * 401 at the same time they must share ONE refresh call; otherwise the second call presents an
- * already-used refresh token and the backend revokes the session.
- *
- * The refresh token lives only in the HTTP-only cookie, so no Authorization header is sent:
- * the stored value is an access token and is never valid as a refresh token.
- */
-let refreshInFlight: Promise<string | undefined> | null = null;
-
-function refreshAccessToken(): Promise<string | undefined> {
-  if (!refreshInFlight) {
-    refreshInFlight = axios
-      .post<{ access_token?: string }>(`${API_BASE_URL}/auth/refresh`, {}, { withCredentials: true })
-      .then((res) => res.data?.access_token)
-      .finally(() => {
-        refreshInFlight = null;
-      });
-  }
-  return refreshInFlight;
-}
-
 apiClient.interceptors.response.use(
   (response) => {
     const reqConfig = response.config as RequestConfigWithMetadata;
@@ -150,37 +128,38 @@ apiClient.interceptors.response.use(
 
     const normalised = normaliseError(error);
 
-    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting.
-    // Skip the refresh+clear cycle when on /auth/callback: the token was just
-    // extracted from the URL fragment and stored; a 401 on /auth/me here simply
-    // means the first check raced ahead before the token was stored (or the
-    // bearer token was not yet attached). AuthCallback drives retries itself.
-    const onCallbackPage =
-      typeof window !== 'undefined' && window.location.pathname.startsWith('/auth/callback');
+    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting
     const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     if (
       error.response?.status === 401 &&
       originalRequest &&
       !originalRequest._retry &&
-      !onCallbackPage &&
       !originalRequest.url?.includes('/auth/refresh') &&
       !originalRequest.url?.includes('/auth/login') &&
       !originalRequest.url?.includes('/auth/github') &&
       !originalRequest.url?.includes('/auth/dev-login')
     ) {
       originalRequest._retry = true;
-      return refreshAccessToken()
-        .then((accessToken) => {
-          if (accessToken) {
-            setStoredToken(accessToken);
+      const currentToken = getStoredToken();
+      return axios
+        .post<{ access_token?: string }>(
+          `${API_BASE_URL}/auth/refresh`,
+          {},
+          {
+            withCredentials: true,
+            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
+          }
+        )
+        .then((res) => {
+          if (res.data?.access_token) {
+            setStoredToken(res.data.access_token);
             if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+              originalRequest.headers.Authorization = `Bearer ${res.data.access_token}`;
             }
           }
           return apiClient(originalRequest);
-        }, () => {
-          // Only a failed *refresh* ends the session. Errors from the retried request itself
-          // (e.g. a 500 or 404) must propagate normally instead of logging the user out.
+        })
+        .catch(() => {
           clearStoredToken();
           if (
             typeof window !== 'undefined' &&

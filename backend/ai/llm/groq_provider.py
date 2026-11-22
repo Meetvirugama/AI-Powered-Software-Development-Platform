@@ -61,6 +61,9 @@ _MODEL_MAP: dict[str, str] = {
     "openai/gpt-oss-20b": "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b": "qwen/qwen3.8-27b",
     "allam-2-7b": "allam-2-7b",
+    "gemini-2.5-flash": "openai/gpt-oss-120b",
+    "gemini-2.5-flash-lite": "openai/gpt-oss-120b",
+    "gemini-3.5-flash-lite": "openai/gpt-oss-120b",
     "gemini-flash-lite-latest": "openai/gpt-oss-120b",
     "gemini-flash-latest": "openai/gpt-oss-120b",
     # Legacy and fallback mappings to active Groq models

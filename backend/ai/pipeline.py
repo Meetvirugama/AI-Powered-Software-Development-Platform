@@ -179,7 +179,7 @@ class RAGPipeline:
         grounding_validator: GroundingValidator instance (default: GroundingValidator()
                           with no DB session — citations pass through as grounded).
         max_context_tokens: Token budget forwarded to ContextBuilder (default 100_000).
-        model:            Default model identifier for LLM inference (default: 'gemini-flash-lite-latest').
+        model:            Default model identifier for LLM inference (default: 'gemini-2.5-flash').
         max_retrieval_top_k: Maximum candidate chunks fetched per retrieval turn.
         max_repair_attempts: Maximum attempts to repair invalid JSON responses.
 
@@ -198,7 +198,7 @@ class RAGPipeline:
     """
 
     _DEFAULT_TOP_K: int = 30
-    _DEFAULT_MODEL: str = "gemini-flash-lite-latest"
+    _DEFAULT_MODEL: str = "gemini-2.5-flash"
     _DEFAULT_MAX_REPAIR_ATTEMPTS: int = 2
 
     def __init__(
