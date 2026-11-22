@@ -24,6 +24,7 @@ class StaticBugScanner:
         code_content: str = "",
         target: Any = None,
         repo_root: str | None = None,
+        base_start_line: int = 1,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Adapter method compatible with analysis orchestrator hooks."""
@@ -37,10 +38,14 @@ class StaticBugScanner:
                 "findings": [],
                 "rules_evaluated": 0,
             }
+        base_line = base_start_line
+        if target is not None and hasattr(target, "start_line") and target.start_line:
+            base_line = target.start_line
         return self.scan_code(
             content=code_content,
             file_path=file_path,
             repo_root=repo_root,
+            base_start_line=base_line,
         )
 
     def scan_code(
@@ -49,6 +54,7 @@ class StaticBugScanner:
         file_path: str,
         *,
         repo_root: str | None = None,
+        base_start_line: int = 1,
     ) -> dict[str, Any]:
         """Analyze source code and return findings plus parse status."""
 
@@ -58,6 +64,22 @@ class StaticBugScanner:
         )
 
         findings = self.analyzer.to_static_findings(result.findings)
+        if base_start_line > 1:
+            shifted_findings = []
+            for f in findings:
+                f_copy = dict(f)
+                if "line_number" in f_copy and isinstance(f_copy["line_number"], int):
+                    f_copy["line_number"] = base_start_line + f_copy["line_number"] - 1
+                if "line" in f_copy and isinstance(f_copy["line"], int):
+                    f_copy["line"] = base_start_line + f_copy["line"] - 1
+                meta = dict(f_copy.get("metadata") or {})
+                if "start_line" in meta and isinstance(meta["start_line"], int):
+                    meta["start_line"] = base_start_line + meta["start_line"] - 1
+                if "end_line" in meta and isinstance(meta["end_line"], int):
+                    meta["end_line"] = base_start_line + meta["end_line"] - 1
+                f_copy["metadata"] = meta
+                shifted_findings.append(f_copy)
+            findings = shifted_findings
 
         return {
             "success": result.success,
