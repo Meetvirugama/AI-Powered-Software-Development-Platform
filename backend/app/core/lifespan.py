@@ -263,8 +263,8 @@ def init_intelligence_services(app: FastAPI) -> bool:
     # Bug Detection Service
     try:
         if getattr(app.state, "bug_detection_service", None) is None:
+            from app.services.bug_detection_orchestrator import LLMBugDetectionService
             if llm_gateway is not None:
-                from app.services.bug_detection_orchestrator import LLMBugDetectionService
                 app.state.bug_detection_service = LLMBugDetectionService(
                     llm_gateway=llm_gateway,
                     model=settings.active_chat_model,
@@ -272,6 +272,10 @@ def init_intelligence_services(app: FastAPI) -> bool:
                 app.state.service_readiness["bug_detection_service"] = True
                 logger.info("bug_detection_service_ready")
             else:
+                app.state.bug_detection_service = LLMBugDetectionService(
+                    llm_gateway=None,
+                    model=settings.active_chat_model,
+                )
                 app.state.service_readiness["bug_detection_service"] = False
         else:
             app.state.service_readiness["bug_detection_service"] = True
