@@ -93,6 +93,7 @@ class BugCandidateDiscoveryService:
         changed_files: Sequence[str] | None = None,
         repository_id: UUID | None = None,
         workspace_root: str | None = None,
+        base_start_line: int = 1,
     ) -> list[BugCandidate]:
         """Run multi-detector discovery and normalize candidates."""
         if not code_content or not code_content.strip():
@@ -101,25 +102,25 @@ class BugCandidateDiscoveryService:
         candidates: list[BugCandidate] = []
 
         # 1. Deterministic AST Bug Scanning (Python)
-        candidates.extend(self._discover_ast_candidates(code_content, file_path))
+        candidates.extend(self._discover_ast_candidates(code_content, file_path, base_start_line=base_start_line))
 
         # 2. Source-to-Sink Taint Analysis (Security)
-        candidates.extend(self._discover_taint_candidates(code_content, file_path, language))
+        candidates.extend(self._discover_taint_candidates(code_content, file_path, language, base_start_line=base_start_line))
 
         # 3. Multi-Language Security Scanning (JS/TS, Go, Java)
-        candidates.extend(self._discover_multilang_candidates(code_content, file_path, language))
+        candidates.extend(self._discover_multilang_candidates(code_content, file_path, language, base_start_line=base_start_line))
 
         # 4. Semgrep CE Deterministic Security Engine
-        candidates.extend(self._discover_semgrep_candidates(code_content, file_path, workspace_root))
+        candidates.extend(self._discover_semgrep_candidates(code_content, file_path, workspace_root, base_start_line=base_start_line))
 
         # 5. OSV-Scanner Dependency Analysis (for lockfiles / dependency manifests)
         candidates.extend(self._discover_osv_candidates(code_content, file_path))
 
         # 6. Gitleaks Secret Detection with strict redaction
-        candidates.extend(self._discover_secret_candidates(code_content, file_path))
+        candidates.extend(self._discover_secret_candidates(code_content, file_path, base_start_line=base_start_line))
 
         # 7. Insecure Configuration & Secret Checks
-        candidates.extend(self._discover_config_candidates(code_content, file_path))
+        candidates.extend(self._discover_config_candidates(code_content, file_path, base_start_line=base_start_line))
 
         # 8. Change-risk and Regression Heuristics (for "change" or "deep" modes)
         if scan_mode in ("change", "deep") or changed_files:
@@ -128,6 +129,7 @@ class BugCandidateDiscoveryService:
                     code_content=code_content,
                     file_path=file_path,
                     changed_files=changed_files or [],
+                    base_start_line=base_start_line,
                 )
             )
 
@@ -154,9 +156,9 @@ class BugCandidateDiscoveryService:
             notes.append("OSV-Scanner is not installed; dependency vulnerabilities were checked against the built-in advisory list only.")
         return notes
 
-    def _discover_ast_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
+    def _discover_ast_candidates(self, code: str, file_path: str, base_start_line: int = 1) -> list[BugCandidate]:
         """Extract and normalize candidates from AST rule scanner."""
-        scan_res = self.static_scanner.scan_code(content=code, file_path=file_path)
+        scan_res = self.static_scanner.scan_code(content=code, file_path=file_path, base_start_line=base_start_line)
         findings = scan_res.get("findings", [])
         candidates: list[BugCandidate] = []
 
@@ -173,6 +175,8 @@ class BugCandidateDiscoveryService:
 
             rule_id = f.get("rule_id", f"AST-RULE-{i+1}")
             category = pick("category", "logic_error")
+            if category == "null_dereference":
+                category = "null_safety"
             severity = (f.get("severity") or "MEDIUM").upper()
             start_l = f.get("line_number") or f.get("line") or 1
             end_l = pick("end_line") or start_l
@@ -207,10 +211,12 @@ class BugCandidateDiscoveryService:
         code: str,
         file_path: str,
         language: str,
+        base_start_line: int = 1,
     ) -> list[BugCandidate]:
         """Extract and normalize candidates from Taint Analyzer."""
         taint_results = self.taint_analyzer.analyze_source(code, file_path=file_path, language=language)
         candidates: list[BugCandidate] = []
+        offset = max(0, base_start_line - 1)
 
         for i, t in enumerate(taint_results):
             # Only include high-confidence unsanitized flows as primary candidates
@@ -218,13 +224,15 @@ class BugCandidateDiscoveryService:
             if t.is_sanitized and t.severity == "LOW":
                 continue
 
+            s_line = t.start_line + offset
+            e_line = t.end_line + offset
             candidates.append(
                 BugCandidate(
-                    candidate_id=f"cand-taint-{i+1}-{t.start_line}",
+                    candidate_id=f"cand-taint-{i+1}-{s_line}",
                     rule_id=t.rule_id,
                     file_path=file_path,
-                    start_line=t.start_line,
-                    end_line=t.end_line,
+                    start_line=s_line,
+                    end_line=e_line,
                     category=t.category,
                     severity=t.severity,
                     evidence=t.evidence,
@@ -246,19 +254,23 @@ class BugCandidateDiscoveryService:
         code: str,
         file_path: str,
         language: str,
+        base_start_line: int = 1,
     ) -> list[BugCandidate]:
         """Extract security defect candidates using multi-language deterministic rules."""
         ml_findings = self.multilang_scanner.scan_code(code, file_path=file_path, language=language)
         candidates: list[BugCandidate] = []
+        offset = max(0, base_start_line - 1)
         for f in ml_findings:
             cand_dict = f.to_candidate_dict()
+            s_line = cand_dict["start_line"] + offset
+            e_line = cand_dict["end_line"] + offset
             candidates.append(
                 BugCandidate(
-                    candidate_id=cand_dict["candidate_id"],
+                    candidate_id=f"cand-ml-{cand_dict['rule_id'].lower()}-{s_line}",
                     rule_id=cand_dict["rule_id"],
                     file_path=cand_dict["file_path"],
-                    start_line=cand_dict["start_line"],
-                    end_line=cand_dict["end_line"],
+                    start_line=s_line,
+                    end_line=e_line,
                     category=cand_dict["category"],
                     severity=cand_dict["severity"],
                     evidence=cand_dict["evidence"],
@@ -275,6 +287,7 @@ class BugCandidateDiscoveryService:
         code: str,
         file_path: str,
         workspace_root: str | None = None,
+        base_start_line: int = 1,
     ) -> list[BugCandidate]:
         """Extract candidates using Semgrep CE engine when available."""
         if not self.semgrep_runner.is_available():
@@ -282,6 +295,7 @@ class BugCandidateDiscoveryService:
 
         suffix = Path(file_path).suffix or ".txt"
         base_name = Path(file_path).name or f"scan_target{suffix}"
+        offset = max(0, base_start_line - 1)
 
         candidates: list[BugCandidate] = []
         try:
@@ -295,13 +309,15 @@ class BugCandidateDiscoveryService:
 
                 for f in res.findings:
                     cand_dict = f.to_candidate_dict()
+                    s_line = cand_dict["start_line"] + offset
+                    e_line = cand_dict["end_line"] + offset
                     candidates.append(
                         BugCandidate(
-                            candidate_id=cand_dict["candidate_id"],
+                            candidate_id=f"cand-semgrep-{cand_dict['rule_id'].lower()}-{s_line}",
                             rule_id=cand_dict["rule_id"],
                             file_path=file_path,
-                            start_line=cand_dict["start_line"],
-                            end_line=cand_dict["end_line"],
+                            start_line=s_line,
+                            end_line=e_line,
                             category=cand_dict["category"],
                             severity=cand_dict["severity"],
                             evidence=cand_dict["evidence"],
@@ -340,19 +356,22 @@ class BugCandidateDiscoveryService:
             )
         return candidates
 
-    def _discover_secret_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
+    def _discover_secret_candidates(self, code: str, file_path: str, base_start_line: int = 1) -> list[BugCandidate]:
         """Extract hardcoded secrets using Gitleaks scanner with strict value redaction."""
         secret_findings = self.gitleaks_runner.scan_text(content=code, file_path=file_path)
         candidates: list[BugCandidate] = []
+        offset = max(0, base_start_line - 1)
         for f in secret_findings:
             cand_dict = f.to_candidate_dict()
+            s_line = cand_dict["start_line"] + offset
+            e_line = cand_dict["end_line"] + offset
             candidates.append(
                 BugCandidate(
-                    candidate_id=cand_dict["candidate_id"],
+                    candidate_id=f"cand-sec-{cand_dict['rule_id'].lower()}-{s_line}",
                     rule_id=cand_dict["rule_id"],
                     file_path=cand_dict["file_path"],
-                    start_line=cand_dict["start_line"],
-                    end_line=cand_dict["end_line"],
+                    start_line=s_line,
+                    end_line=e_line,
                     category=cand_dict["category"],
                     severity=cand_dict["severity"],
                     evidence=cand_dict["evidence"],
@@ -364,23 +383,25 @@ class BugCandidateDiscoveryService:
             )
         return candidates
 
-    def _discover_config_candidates(self, code: str, file_path: str) -> list[BugCandidate]:
+    def _discover_config_candidates(self, code: str, file_path: str, base_start_line: int = 1) -> list[BugCandidate]:
         """Detect common insecure configuration patterns in configs/routers."""
         candidates: list[BugCandidate] = []
         lines = code.splitlines()
+        offset = max(0, base_start_line - 1)
 
         debug_pattern = re.compile(r'^\s*(?:DEBUG|debug)\s*=\s*True\b')
         cors_pattern = re.compile(r'allow_origins\s*=\s*\[\s*["\']\*["\']\s*\]')
 
         for i, line in enumerate(lines, start=1):
+            actual_line = i + offset
             if debug_pattern.search(line):
                 candidates.append(
                     BugCandidate(
-                        candidate_id=f"cand-cfg-debug-{i}",
+                        candidate_id=f"cand-cfg-debug-{actual_line}",
                         rule_id="CFG-DEBUG-001",
                         file_path=file_path,
-                        start_line=i,
-                        end_line=i,
+                        start_line=actual_line,
+                        end_line=actual_line,
                         category="configuration",
                         severity="HIGH",
                         evidence="Application has `debug=True` hardcoded.",
@@ -392,11 +413,11 @@ class BugCandidateDiscoveryService:
             if cors_pattern.search(line):
                 candidates.append(
                     BugCandidate(
-                        candidate_id=f"cand-cfg-cors-{i}",
+                        candidate_id=f"cand-cfg-cors-{actual_line}",
                         rule_id="CFG-CORS-001",
                         file_path=file_path,
-                        start_line=i,
-                        end_line=i,
+                        start_line=actual_line,
+                        end_line=actual_line,
                         category="security",
                         severity="MEDIUM",
                         evidence="Wildcard CORS origins `allow_origins=['*']` detected.",
@@ -413,26 +434,29 @@ class BugCandidateDiscoveryService:
         code_content: str,
         file_path: str,
         changed_files: Sequence[str],
+        base_start_line: int = 1,
     ) -> list[BugCandidate]:
         """Analyze change risk heuristics on modified files."""
         candidates: list[BugCandidate] = []
         lines = code_content.splitlines()
+        offset = max(0, base_start_line - 1)
 
         # Check for modified critical signatures or breaking interface alterations
         todo_fixme_pattern = re.compile(r'#\s*(?:TODO|FIXME|BUG|HACK):\s*(.+)', re.IGNORECASE)
 
         for i, line in enumerate(lines, start=1):
+            actual_line = i + offset
             match = todo_fixme_pattern.search(line)
             if match:
                 comment = match.group(1).strip()
                 if any(w in comment.lower() for w in ("bug", "broken", "temporary", "fixme", "crash")):
                     candidates.append(
                         BugCandidate(
-                            candidate_id=f"cand-change-risk-{i}",
+                            candidate_id=f"cand-change-risk-{actual_line}",
                             rule_id="RISK-UNRESOLVED-001",
                             file_path=file_path,
-                            start_line=i,
-                            end_line=i,
+                            start_line=actual_line,
+                            end_line=actual_line,
                             category="logic_error",
                             severity="LOW",
                             evidence=f"Unresolved defect comment ({match.group(0).strip()}): '{comment}'",
