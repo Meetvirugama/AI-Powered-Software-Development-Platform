@@ -76,9 +76,6 @@ async def detect_bugs(
         resolved = resolve_bug_target_and_build_context(repository_id, repo, payload, db)
         payload.target = resolved.target
 
-    service = _get_service(request, "bug_detection_service", "Bug detection")
-    method = service.detect_bugs if hasattr(service, "detect_bugs") else service
-
     run_id = str(uuid4())
     try:
         if not payload.include_ai:
@@ -86,6 +83,8 @@ async def detect_bugs(
             # outage) for findings that filter_and_rank_findings drops anyway.
             raw_result: Any = []
         else:
+            service = _get_service(request, "bug_detection_service", "Bug detection")
+            method = service.detect_bugs if hasattr(service, "detect_bugs") else service
             with timer.measure("llm_inference"):
                 raw_result = await _invoke_service_method(
                     method,
@@ -154,6 +153,7 @@ async def detect_bugs(
                                 file_path=resolved.target.path,
                                 code_content=resolved.code_content,
                                 target=resolved.target,
+                                base_start_line=resolved.target.start_line or 1,
                             )
                         else:
                             ext_res = await asyncio.to_thread(
@@ -162,6 +162,7 @@ async def detect_bugs(
                                 file_path=resolved.target.path,
                                 code_content=resolved.code_content,
                                 target=resolved.target,
+                                base_start_line=resolved.target.start_line or 1,
                             )
                         if inspect.isawaitable(ext_res):
                             ext_res = await ext_res
@@ -199,6 +200,7 @@ async def detect_bugs(
                         scan_mode=getattr(payload, "scan_mode", "standard"),
                         changed_files=getattr(payload, "changed_files", []),
                         repository_id=repository_id,
+                        base_start_line=resolved.target.start_line or 1,
                     )
                     for cand in discovered_cands:
                         extra_static_raw.append(cand.to_dict())
