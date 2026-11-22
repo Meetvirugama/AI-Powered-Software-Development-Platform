@@ -434,7 +434,7 @@ async def process_sync_job(
                 api_keys=gemini_keys,
                 model=settings.gemini_embedding_model,
                 dimensions=settings.embedding_dimensions,
-                max_retries=max(len(gemini_keys) * 2, 6),
+                max_retries=min(max(len(gemini_keys) * 2, 2), 4),
                 profile_version=getattr(settings, "embedding_profile_version", "v2"),
                 document_task_type=getattr(
                     settings, "embedding_document_task_type", "RETRIEVAL_DOCUMENT"
@@ -477,17 +477,31 @@ async def process_sync_job(
             if lost_ownership_event.is_set():
                 raise RuntimeError(f"Sync worker {assigned_worker} lost lock ownership before indexing")
 
-            # Step 8: Run IncrementalIndexer
+            # Step 8: Run IncrementalIndexer with bounded timeout to prevent infinite hangs
             indexer = IncrementalIndexer(
                 db_session=AsyncSessionLocal,
                 embedding_service=embedding_service,
             )
 
-            stats = await indexer.sync(
-                repository_id=repository_id,
-                scanned_files=scanned_files,
-                root_path=str(clone_dir),
+            max_index_timeout = float(settings.sync_job_timeout_seconds)
+            stats = await asyncio.wait_for(
+                indexer.sync(
+                    repository_id=repository_id,
+                    scanned_files=scanned_files,
+                    root_path=str(clone_dir),
+                    job_id=job_id,
+                ),
+                timeout=max_index_timeout,
             )
+        except TimeoutError as timeout_exc:
+            logger.error(
+                "sync_worker_indexing_timeout",
+                extra={"job_id": str(job_id), "repo_id": str(repository_id), "timeout_s": max_index_timeout},
+            )
+            raise RuntimeError(
+                f"Indexing timed out after {int(max_index_timeout)}s while embedding code chunks. "
+                "Verify your GEMINI_API_KEY quota or click Sync to retry."
+            ) from timeout_exc
         finally:
             await embedding_service.aclose()
 
@@ -821,6 +835,24 @@ async def sync_worker_loop(
     except Exception as init_err:
         logger.warning("sync_worker_init_recovery_warning", extra={"error": str(init_err)})
 
+    # Launch periodic heartbeat task so operational health endpoints can verify worker liveness
+    hb_stop_event = asyncio.Event()
+    hb_task: asyncio.Task[None] | None = None
+    try:
+        from app.workers.sync_worker import _worker_heartbeat_loop
+
+        hb_task = asyncio.create_task(
+            _worker_heartbeat_loop(
+                redis=redis,
+                worker_id=assigned_worker,
+                stop_event=hb_stop_event,
+                interval=float(settings.sync_worker_heartbeat_interval_seconds),
+                ttl=int(settings.sync_worker_lease_ttl_seconds),
+            )
+        )
+    except Exception as hb_exc:
+        logger.debug("embedded_worker_heartbeat_init_warning", extra={"error": str(hb_exc)})
+
     while True:
         if stop_event is not None and stop_event.is_set():
             logger.info("sync_worker_loop_stopping_on_event", extra={"worker_id": assigned_worker})
@@ -833,13 +865,19 @@ async def sync_worker_loop(
                 last_sweep_time = now_mono
                 try:
                     with SessionLocal() as db_session:
-                        reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+                        reconciled = reconcile_stale_sync_jobs(
+                            db_session,
+                            timeout_seconds=int(settings.sync_job_timeout_seconds),
+                        )
                         if reconciled:
                             logger.info(
                                 "periodic_stale_sync_jobs_reconciled",
                                 extra={"count": len(reconciled), "job_ids": [str(j) for j in reconciled]},
                             )
-                    recovered = await recover_stale_processing_jobs(redis, timeout_seconds=600)
+                    recovered = await recover_stale_processing_jobs(
+                        redis,
+                        timeout_seconds=int(settings.sync_job_timeout_seconds),
+                    )
                     if recovered:
                         logger.info(
                             "periodic_processing_jobs_recovered",
@@ -1037,3 +1075,12 @@ async def sync_worker_loop(
                 extra={"error": str(exc), "worker_id": assigned_worker},
             )
             await asyncio.sleep(2.0)
+
+    # Teardown embedded worker heartbeat on loop exit
+    hb_stop_event.set()
+    if hb_task and not hb_task.done():
+        hb_task.cancel()
+        try:
+            await hb_task
+        except (asyncio.CancelledError, Exception):
+            pass

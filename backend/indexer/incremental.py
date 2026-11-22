@@ -345,6 +345,7 @@ class IncrementalIndexer:
         repository_id: UUID,
         scanned_files: list[Any],
         root_path: str = "",
+        job_id: UUID | None = None,
     ) -> dict[str, int]:
         """
         Incrementally index scanned repository files within a single atomic session transaction.
@@ -370,6 +371,7 @@ class IncrementalIndexer:
                 repository_id=repository_id,
                 scanned_files=scanned_files,
                 root_path=root_path,
+                job_id=job_id,
             )
         except Exception:
             if session is not None and hasattr(session, "rollback"):
@@ -391,6 +393,7 @@ class IncrementalIndexer:
         repository_id: UUID,
         scanned_files: list[Any],
         root_path: str = "",
+        job_id: UUID | None = None,
     ) -> dict[str, int]:
         """Internal worker executing indexing and deletion reconciliation inside the active transaction."""
         # Safeguard (Issue #183): Check repository existence before doing any work
@@ -461,7 +464,8 @@ class IncrementalIndexer:
         file_contents_by_id: dict[UUID, str] = {}
         file_id_to_path: dict[UUID, str] = {}
 
-        for file_info in scanned_files:
+        total_scanned = len(scanned_files)
+        for idx, file_info in enumerate(scanned_files, 1):
             raw_rel_path = getattr(file_info, "path", str(file_info))
             file_rel_path = raw_rel_path.replace("\\", "/")
             full_path = (
@@ -822,7 +826,24 @@ class IncrementalIndexer:
                 )
 
             indexed_count += 1
-            await asyncio.sleep(0.05)
+            if job_id and (indexed_count % 5 == 0 or idx == total_scanned):
+                try:
+                    from app.services.sync_worker import _set_job_progress
+                    from app.models.sync_job import SyncJobStage
+
+                    _set_job_progress(
+                        job_id,
+                        stage=SyncJobStage.INDEXING.value,
+                        stats={
+                            "files_scanned": total_scanned,
+                            "files_indexed": indexed_count,
+                            "files_skipped": skipped_count,
+                            "current_file_index": idx,
+                        },
+                    )
+                except Exception as prog_exc:
+                    logger.debug("Progress update skipped: %s", prog_exc)
+            await asyncio.sleep(0.01)
 
         # Reconcile removed/deleted files (task2.md §1.7, P0.2)
         scanned_rel_paths = {
