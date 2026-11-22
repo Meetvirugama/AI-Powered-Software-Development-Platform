@@ -170,8 +170,13 @@ class GeminiProvider(LLMProvider):
         ):
             return self._default_model
         bare = requested.removeprefix("models/")
-        if bare in ("gemini-2.0-flash-lite", "models/gemini-2.0-flash-lite"):
-            return "gemini-2.5-flash"
+        if bare in (
+            "gemini-2.0-flash-lite",
+            "models/gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "models/gemini-2.5-flash",
+        ):
+            return "gemini-3.8-flash"
         return bare
 
     @property
@@ -398,14 +403,14 @@ class GeminiProvider(LLMProvider):
                     if response.status_code == 404:
                         if (
                             attempt == 0
-                            and model != "gemini-2.5-flash"
+                            and model != "gemini-3.8-flash"
                             and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
                         ):
                             logger.warning(
                                 "gemini_model_retired_auto_migrating",
-                                extra={"old_model": model, "new_model": "gemini-2.5-flash"},
+                                extra={"old_model": model, "new_model": "gemini-3.8-flash"},
                             )
-                            model = "gemini-2.5-flash"
+                            model = "gemini-3.8-flash"
                             continue
                         raise LLMUnavailableError(
                             f"Gemini model unavailable (HTTP 404): {safe_body}",
@@ -460,14 +465,14 @@ class GeminiProvider(LLMProvider):
                             if (
                                 resp.status_code == 404
                                 and attempt == 0
-                                and model != "gemini-2.5-flash"
+                                and model != "gemini-3.8-flash"
                                 and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
                             ):
                                 logger.warning(
                                     "gemini_stream_model_retired_auto_migrating",
-                                    extra={"old_model": model, "new_model": "gemini-2.5-flash"},
+                                    extra={"old_model": model, "new_model": "gemini-3.8-flash"},
                                 )
-                                model = "gemini-2.5-flash"
+                                model = "gemini-3.8-flash"
                                 url = f"{_GEMINI_API_BASE}/{model}:streamGenerateContent?alt=sse"
                                 continue
                             raise LLMUnavailableError(

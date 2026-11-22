@@ -18,7 +18,7 @@ def test_dev_settings_permissive() -> None:
     assert dev_settings.app_env == "development"
     assert dev_settings.cookie_secure is False
     assert dev_settings.jwt_expire_minutes == 15
-    assert dev_settings.gemini_chat_model == "gemini-2.5-flash"
+    assert dev_settings.gemini_chat_model == "gemini-3.8-flash"
 
 
 def test_prod_settings_fail_closed_missing_secret() -> None:
@@ -85,9 +85,9 @@ def test_prod_settings_valid() -> None:
 
 
 def test_gemini_chat_model_default_is_flash() -> None:
-    """F-15: Model configuration default must be gemini-2.5-flash."""
+    """F-15: Model configuration default must be gemini-3.8-flash."""
     s = Settings(_env_file=None)
-    assert s.gemini_chat_model == "gemini-2.5-flash"
+    assert s.gemini_chat_model == "gemini-3.8-flash"
 
 
 def test_invalid_samesite_rejected() -> None:
