@@ -271,6 +271,31 @@ class GroqProvider(LLMProvider):
                             provider=self.provider_name,
                         )
 
+                    if resp.status_code == 413:
+                        curr_max = payload.get("max_tokens", 4096)
+                        if curr_max > 2048:
+                            logger.warning(
+                                "groq_413_payload_too_large_reducing_max_tokens",
+                                extra={"old_max_tokens": curr_max, "new_max_tokens": 2048},
+                            )
+                            payload["max_tokens"] = 2048
+                            retry_resp = await client.post(
+                                _GROQ_CHAT_URL,
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload,
+                            )
+                            if retry_resp.status_code == 200:
+                                latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+                                return self._parse_response(
+                                    retry_resp.json(),
+                                    latency_ms=latency_ms,
+                                    model=resolved_model,
+                                    schema=request.response_schema,
+                                )
+
                     if resp.status_code == 404:
                         if resolved_model != _DEFAULT_MODEL:
                             logger.warning(

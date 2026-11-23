@@ -569,7 +569,7 @@ def get_repository_metrics(
             func.coalesce(func.sum(RepositoryFile.size_bytes), 0),
         )
         .filter(RepositoryFile.repository_id == repository_id)
-        .group_by(func.coalesce(RepositoryFile.language, "unknown"))
+        .group_by(RepositoryFile.language)
         .all()
     )
     languages = sorted(
