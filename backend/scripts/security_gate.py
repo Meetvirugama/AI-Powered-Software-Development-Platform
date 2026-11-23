@@ -231,13 +231,13 @@ TEST_CHECKS = [
     ("4. Repository isolation (User A cannot access User B)",
      ["backend/tests/test_repository_isolation.py"], None),
     ("5. Prompt injection treated as data",
-     ["backend/tests/test_security_day5.py", "backend/tests/test_dev_day2.py"],
+     ["backend/tests/security/test_security_day5.py", "backend/tests/test_ai_output_schemas.py"],
      "PromptInjection or system_message_has_no_repo_content"),
     ("6. Path traversal / workspace confinement",
-     ["backend/tests/test_security_day5.py"],
+     ["backend/tests/security/test_security_day5.py"],
      "traversal or Traversal or symlink or malicious or safe_paths or resolve_within or 50mb"),
     ("7. API security (Day 6: rate limits, headers, CORS)",
-     ["backend/tests/test_security_day6.py"], None),
+     ["backend/tests/security/test_security_day6.py"], None),
 ]
 
 
