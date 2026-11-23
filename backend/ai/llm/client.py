@@ -44,11 +44,15 @@ logger = logging.getLogger(__name__)
 # Canonical cross-vendor model translations
 CROSS_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
     "groq": "openai/gpt-oss-120b",
-    "gemini": "gemini-flash-lite-latest",
+    "gemini": "gemini-3.8-flash",
 }
 
 EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
     # (exact_requested_model, target_provider_name) -> target_model_name
+    ("gemini-3.8-flash", "groq"): "openai/gpt-oss-120b",
+    ("gemini-3.8-flash-lite", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.5-flash", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.5-flash-lite", "groq"): "openai/gpt-oss-120b",
     ("gemini-flash-lite-latest", "groq"): "openai/gpt-oss-120b",
     ("gemini-flash-latest", "groq"): "openai/gpt-oss-120b",
     ("gemini-2.0-flash-lite", "groq"): "openai/gpt-oss-120b",
@@ -58,11 +62,11 @@ EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
     ("gemini-1.5-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-2.0-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-1.5-pro", "groq"): "openai/gpt-oss-120b",
-    ("openai/gpt-oss-120b", "gemini"): "gemini-flash-lite-latest",
-    ("openai/gpt-oss-20b", "gemini"): "gemini-flash-lite-latest",
-    ("llama-3.3-70b-versatile", "gemini"): "gemini-flash-lite-latest",
-    ("llama-3.1-70b-versatile", "gemini"): "gemini-flash-lite-latest",
-    ("qwen/qwen3.8-27b", "gemini"): "gemini-flash-lite-latest",
+    ("openai/gpt-oss-120b", "gemini"): "gemini-3.8-flash",
+    ("openai/gpt-oss-20b", "gemini"): "gemini-3.8-flash",
+    ("llama-3.3-70b-versatile", "gemini"): "gemini-3.8-flash",
+    ("llama-3.1-70b-versatile", "gemini"): "gemini-3.8-flash",
+    ("qwen/qwen3.8-27b", "gemini"): "gemini-3.8-flash",
 }
 
 

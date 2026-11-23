@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     ai_fallback_provider: str | None = "groq"
     gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
-    gemini_chat_model: str = "gemini-flash-lite-latest"
+    gemini_chat_model: str = "gemini-3.8-flash"
     groq_api_key: str | None = None
     groq_api_keys: str | None = None       # comma-separated list
     groq_chat_model: str = "openai/gpt-oss-120b"
@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     # --- Agentic Repository Chat Settings (task.md §8, §13) -----------------
     agentic_chat_enabled: bool = True
     agent_primary_provider: str = "gemini"
-    agent_model: str = "gemini-flash-lite-latest"
+    agent_model: str = "gemini-3.8-flash"
     agent_fallback_enabled: bool = True
     agent_fallback_provider: str | None = "groq"
     agent_max_rounds: int = 3

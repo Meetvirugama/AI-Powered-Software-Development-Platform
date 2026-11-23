@@ -176,8 +176,15 @@ class GeminiProvider(LLMProvider):
             or requested.startswith(("gpt-", "openai/"))
         ):
             return self._default_model
-        cleaned = requested.removeprefix("models/")
-        return _GEMINI_MODEL_ALIASES.get(cleaned, cleaned)
+        bare = requested.removeprefix("models/")
+        if bare in (
+            "gemini-2.0-flash-lite",
+            "models/gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "models/gemini-2.5-flash",
+        ):
+            return "gemini-3.8-flash"
+        return _GEMINI_MODEL_ALIASES.get(bare, bare)
 
     @property
     def default_model(self) -> str:
@@ -399,26 +406,25 @@ class GeminiProvider(LLMProvider):
                         await asyncio.sleep(1.0 * (attempt + 1))
                         continue
 
-                    if response.status_code == 404:
-                        if model != self._default_model:
-                            logger.warning(
-                                "gemini_model_not_found_retrying_default",
-                                extra={"requested_model": model, "fallback_model": self._default_model},
-                            )
-                            fallback_url = f"{_GEMINI_API_BASE}/{self._default_model}:generateContent"
-                            retry_resp = await client.post(fallback_url, json=payload, headers=headers)
-                            if retry_resp.status_code == 200:
-                                response = retry_resp
-                                model = self._default_model
-                        if response.status_code != 200:
-                            safe_body = _redact_key(response.text[:300], current_key)
-                            raise LLMUnavailableError(
-                                f"Gemini model '{model}' unavailable or not found (HTTP 404): {safe_body}",
-                                status_code=404,
-                                provider=self.provider_name,
-                            )
-
                     safe_body = _redact_key(response.text[:300], current_key)
+                    if response.status_code == 404:
+                        if (
+                            attempt == 0
+                            and model != "gemini-3.8-flash"
+                            and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
+                        ):
+                            logger.warning(
+                                "gemini_model_retired_auto_migrating",
+                                extra={"old_model": model, "new_model": "gemini-3.8-flash"},
+                            )
+                            model = "gemini-3.8-flash"
+                            continue
+                        raise LLMUnavailableError(
+                            f"Gemini model unavailable (HTTP 404): {safe_body}",
+                            status_code=404,
+                            provider=self.provider_name,
+                        )
+
                     raise LLMError(
                         f"Gemini API error (HTTP {response.status_code}): {safe_body}",
                         status_code=response.status_code,
@@ -463,6 +469,19 @@ class GeminiProvider(LLMProvider):
                                 continue
                             body = await resp.aread()
                             safe_body = _redact_key(body.decode("utf-8", errors="replace")[:300], current_key)
+                            if (
+                                resp.status_code == 404
+                                and attempt == 0
+                                and model != "gemini-3.8-flash"
+                                and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
+                            ):
+                                logger.warning(
+                                    "gemini_stream_model_retired_auto_migrating",
+                                    extra={"old_model": model, "new_model": "gemini-3.8-flash"},
+                                )
+                                model = "gemini-3.8-flash"
+                                url = f"{_GEMINI_API_BASE}/{model}:streamGenerateContent?alt=sse"
+                                continue
                             raise LLMUnavailableError(
                                 f"Gemini stream error (HTTP {resp.status_code}): {safe_body}",
                                 status_code=resp.status_code,
