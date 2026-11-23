@@ -681,8 +681,13 @@ def resolve_target_and_build_context(
     )
 
     effective_budget = payload.options.max_context_tokens
+    from app.core.config import settings
+    is_groq = (getattr(settings, "ai_primary_provider", "") or "").lower() == "groq"
     if deep_mode and effective_budget == 4_000:
-        effective_budget = 6_500
+        # On Groq on-demand tier, TPM limit is 8000 tokens/min; cap context at 3200 tokens
+        effective_budget = 3_200 if is_groq else 6_500
+    elif is_groq and effective_budget > 3_500:
+        effective_budget = 3_500
 
     intelligence_ctx = ContextBuilder().build_intelligence_context(
         target=target_snippet,
