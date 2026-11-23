@@ -366,7 +366,7 @@ def _headers(user_id: UUID) -> dict[str, str]:
 
 
 @pytest.fixture()
-def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_task_base_revision):
     from app.core.config import get_settings
 
     monkeypatch.setenv("JWT_SECRET", "test-secret-key-w3-sec-tools")
@@ -436,7 +436,7 @@ def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     fastapi_app.dependency_overrides[get_db] = _override_db
     client = TestClient(fastapi_app, raise_server_exceptions=False)
     try:
-        yield SimpleNamespace(client=client, tmp=tmp_path, orchestrator=orchestrator)
+        yield SimpleNamespace(client=client, tmp=tmp_path, orchestrator=orchestrator, base_revision=local_task_base_revision)
     finally:
         fastapi_app.dependency_overrides.pop(get_db, None)
         fastapi_app.state.task_execution_orchestrator = previous
@@ -445,7 +445,7 @@ def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         get_settings.cache_clear()
 
 
-def _running_task(client: TestClient) -> str:
+def _running_task(client: TestClient, base_revision: str) -> str:
     """Create, plan, approve and start a task so its workspace is IN_USE."""
     create = client.post(
         "/api/v1/tasks",
@@ -454,7 +454,7 @@ def _running_task(client: TestClient) -> str:
             "repository_id": str(REPO_A_ID),
             "title": "Add discount helper",
             "description": "Add apply_discount in src/discount.py.",
-            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": "a1b2c3d4"},
+            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": base_revision},
             "requirements": [
                 {
                     "id": "req-1",
@@ -490,14 +490,10 @@ def _running_task(client: TestClient) -> str:
     )
     assert approve.status_code == 200, approve.text
 
-    first_step = plan_data["steps"][0]["step_id"]
     execute = client.post(
         f"/api/v1/tasks/{task_id}/execute",
         headers=_headers(USER_A_ID),
-        json={
-            "run_steps": True,
-            "step_payloads": {first_step: {"content": "def apply_discount(p, pct):\n    return p\n"}},
-        },
+        json={"run_steps": False},
     )
     assert execute.status_code == 200, execute.text
 
@@ -516,7 +512,7 @@ def _call_tool(client: TestClient, task_id: str, tool: str, args: dict, user: UU
 
 
 def test_api_normal_tools_still_work(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
 
     write = _call_tool(api_env.client, task_id, "write_file", {"file_path": "src/extra.py", "content": "X = 1\n"})
     assert write.status_code == 200, write.text
@@ -528,7 +524,7 @@ def test_api_normal_tools_still_work(api_env):
 
 
 def test_api_blocks_publication_and_admin_tools_even_when_claiming_approval(api_env, tmp_path):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     marker = tmp_path / "pwned_marker"
 
     attempts = [
@@ -559,8 +555,8 @@ def test_api_blocks_publication_and_admin_tools_even_when_claiming_approval(api_
 
 
 def test_api_blocks_trusted_only_arguments(api_env):
-    task_id = _running_task(api_env.client)
-    other_task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
+    other_task_id = _running_task(api_env.client, api_env.base_revision)
 
     for tool, args in [
         ("read_file", {"file_path": "src/discount.py", "task_id": other_task_id}),
@@ -584,14 +580,14 @@ def test_api_blocks_trusted_only_arguments(api_env):
     ],
 )
 def test_api_blocks_commands_outside_approved_templates(api_env, command, arguments):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     resp = _call_tool(api_env.client, task_id, "execute_command", {"command": command, "arguments": arguments})
     assert resp.status_code == 403, resp.text
     assert resp.json()["error"]["code"] == "COMMAND_NOT_ALLOWED"
 
 
 def test_api_blocked_tool_call_is_audited_and_redacted(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     resp = _call_tool(
         api_env.client,
         task_id,
@@ -607,7 +603,7 @@ def test_api_blocked_tool_call_is_audited_and_redacted(api_env):
 
 
 def test_api_tools_other_user_gets_404(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     resp = _call_tool(api_env.client, task_id, "read_file", {"file_path": "src/discount.py"}, user=USER_B_ID)
     assert resp.status_code == 404
 
@@ -627,7 +623,7 @@ def test_api_tools_other_user_gets_404(api_env):
     ],
 )
 def test_api_tests_endpoint_refuses_unsafe_runner_arguments(api_env, arguments):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     resp = api_env.client.post(
         f"/api/v1/tasks/{task_id}/tests",
         headers=_headers(USER_A_ID),

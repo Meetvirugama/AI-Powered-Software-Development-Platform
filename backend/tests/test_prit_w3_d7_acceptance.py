@@ -68,7 +68,6 @@ from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceCommitRequest,
     WorkspaceCreateRequest,
-    WorkspaceDraftPRRequest,
     WorkspaceExecutionEventType,
     WorkspaceMetadata,
     WorkspacePushRequest,
@@ -325,18 +324,16 @@ class TestFullWorkflowScenarioA:
         assert push_res.branch == feature_branch
 
         # 17. Synthesize Draft PR
-        pr_res = workspace_manager.create_draft_pr(
-            WorkspaceDraftPRRequest(
-                task_id=task_id,
-                head_branch=feature_branch,
-                base_branch="main",
-                title="[W3-AUTO] Implement safe divide operation",
-                publication_authorized=True,
-            )
+        summary = workspace_manager.format_draft_pr_summary(
+            task_id=task_id,
+            title="feat: event test",
+            head_branch=feature_branch,
+            base_branch="main",
+            diff_result=workspace_manager.get_workspace_diff(task_id),
+            latest_test=None,
+            custom_body="Verified local workspace",
         )
-        assert pr_res.success is True
-        assert pr_res.is_draft is True
-        assert task_id in (pr_res.summary or "")
+        assert "Draft PR" in summary
 
         # Cleanup workspace idempotently
         clean_res = workspace_manager.cleanup_workspace(task_id)
@@ -1272,15 +1269,7 @@ class TestTimelineEventAuditTrail:
                 publication_authorized=True,
             )
         )
-        workspace_manager.create_draft_pr(
-            WorkspaceDraftPRRequest(
-                task_id=task_id,
-                head_branch=feature_branch,
-                base_branch="main",
-                title="feat: event test",
-                publication_authorized=True,
-            )
-        )
+
 
         events = workspace_manager.get_execution_timeline(task_id)
         event_types = [e.event_type for e in events]
@@ -1293,7 +1282,6 @@ class TestTimelineEventAuditTrail:
             WorkspaceExecutionEventType.CHANGES_COMMITTED,
             WorkspaceExecutionEventType.PUBLICATION_AUTHORIZED,
             WorkspaceExecutionEventType.BRANCH_PUSHED,
-            WorkspaceExecutionEventType.PR_CREATED,
         ]
         for exp in expected_types:
             assert exp in event_types

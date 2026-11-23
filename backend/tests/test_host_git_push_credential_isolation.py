@@ -39,7 +39,6 @@ from sandbox.exceptions import (
 from sandbox.workspace_manager import WorkspaceManager
 from app.schemas.workspace import (
     WorkspaceCreateRequest,
-    WorkspaceDraftPRRequest,
     WorkspacePushRequest,
 )
 
@@ -140,7 +139,7 @@ class TestHostSideGitPushExecution:
         expected_header = f"AUTHORIZATION: basic {expected_auth}"
         assert fake_token not in " ".join(push_cmd)
         assert push_env.get("GIT_CONFIG_COUNT") == "1"
-        assert push_env.get("GIT_CONFIG_KEY_0") == "http.extraheader"
+        assert push_env.get("GIT_CONFIG_KEY_0") == "http.https://github.com/.extraheader"
         assert push_env.get("GIT_CONFIG_VALUE_0") == expected_header
 
         # Verify credential was never persisted into .git/config on disk
@@ -210,36 +209,18 @@ class TestPublicationGovernanceGates:
             manager.push_task_branch(req)
         assert "forbidden" in str(exc_info.value).lower()
 
-    def test_create_draft_pr_without_publication_authorization_is_blocked(self, temp_workspace_env):
+    def test_draft_summary_does_not_claim_remote_publication(self, temp_workspace_env):
         manager, task_id, _ = temp_workspace_env
-        req = WorkspaceDraftPRRequest(
-            task_id=task_id,
-            title="feat: automated changes",
-            head_branch="agent/task-test-task-f26-001",
-            base_branch="main",
-            publication_authorized=False,
-        )
-        with pytest.raises(WorkspacePublicationUnauthorizedError) as exc_info:
-            manager.create_draft_pr(req)
-        assert "Explicit human authorization is required" in str(exc_info.value)
-
-    def test_create_draft_pr_is_always_draft_and_structured(self, temp_workspace_env):
-        manager, task_id, _ = temp_workspace_env
-        req = WorkspaceDraftPRRequest(
+        summary = manager.format_draft_pr_summary(
             task_id=task_id,
             title="feat: add secure credential isolation",
-            body="Implements host-side git push and credential boundary.",
+            custom_body="Implements host-side git push and credential boundary.",
             head_branch="agent/task-test-task-f26-001",
             base_branch="main",
-            publication_authorized=True,
-            repository_owner="Meetvirugama",
-            repository_name="AI-Powered-Software-Development-Platform",
+            diff_result=manager.get_workspace_diff(task_id),
+            latest_test=None,
         )
-        res = manager.create_draft_pr(req)
 
-        assert res.success is True
-        assert res.is_draft is True
-        assert "github.com/Meetvirugama/AI-Powered-Software-Development-Platform/pull/" in res.pr_url
-        assert "Implements host-side git push and credential boundary." in res.summary
-        assert "Draft PR" in res.summary
-        assert "draft pull request" in res.summary.lower()
+        assert "Implements host-side git push and credential boundary." in summary
+        assert "Draft PR" in summary
+        assert "github.com/" not in summary

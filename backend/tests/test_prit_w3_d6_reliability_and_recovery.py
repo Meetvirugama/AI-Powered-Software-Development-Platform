@@ -205,7 +205,7 @@ class TestWorkerCrashAndRestartRecovery:
         assert "Worker interrupted during creation" in record.reconciliation_action
 
         # Check metadata on disk was updated
-        updated_meta = json.loads((ws_dir / "metadata.json").read_text(encoding="utf-8"))
+        updated_meta = json.loads(workspace_manager._workspace_metadata_path(ws_dir).read_text(encoding="utf-8"))
         assert updated_meta["status"] == WorkspaceStatus.FAILED.value
 
     def test_recover_workspaces_marks_stale_in_use_as_stopped(

@@ -298,6 +298,7 @@ class Settings(BaseSettings):
 
     # --- Secure Sandbox & Runner Configuration (Issue #200 / F20) ---------
     sandbox_backend: str = "local"
+    task_workspace_root: str | None = None
     runner_base_url: str | None = None
     runner_auth_secret: str | None = None
     runner_request_timeout: float = 60.0

@@ -169,7 +169,7 @@ def test_api_run_workflow_returns_202_accepted(client, db_session, test_user, au
 
     # Mock task ownership, approved plan, and prevent background DBOS execution from trying live DB
     monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db, min_role=None: (task, test_user.id))
-    monkeypatch.setattr("app.repositories.task_repository.TaskRepository.get_approved_plan", lambda self, tid: MagicMock(plan_version=1))
+    monkeypatch.setattr("app.repositories.task_repository.TaskRepository.verify_execution_approval_gate", lambda self, candidate: MagicMock(plan_version=1))
     monkeypatch.setattr("ai.workflows.autonomous_task_workflow.run_autonomous_task_workflow", lambda *a, **kw: None)
 
     # Call run-workflow with async_execution=True

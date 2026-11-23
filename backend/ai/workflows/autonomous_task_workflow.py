@@ -138,9 +138,7 @@ def step_validate_approval(task_id: str, actor_id: str | None, plan_version: int
             raise ValueError(f"Task '{task_id}' not found.")
 
         # Ensure task has an approved plan
-        plan = repo.get_approved_plan(task.id)
-        if not plan:
-            raise ValueError(f"Task '{task_id}' has no approved plan. Approval gate violation (ADR-010).")
+        plan = repo.verify_execution_approval_gate(task)
 
         if plan_version is not None and plan.plan_version != plan_version:
             raise ValueError(f"Plan version mismatch: expected {plan_version}, found {plan.plan_version}.")
@@ -188,7 +186,7 @@ def step_execute_plan_and_synthesize(
         if not task:
             raise ValueError(f"Task '{task_id}' not found.")
 
-        orchestrator.start_task_execution(
+        _, _, result = orchestrator.start_task_execution(
             task=task,
             task_repo=repo,
             actor_id=actor_uuid,
@@ -201,6 +199,8 @@ def step_execute_plan_and_synthesize(
         orchestrator.save_task_checkpoint(task, repo, step_name="post_step_execution")
 
         db.commit()
+        if task.status == "FAILED" or result is None:
+            raise WorkspaceError(task.error_message or "Approved plan execution did not finish.")
         steps_attr = getattr(task, "executions", None)
         if steps_attr is None:
             steps_attr = getattr(task, "execution_steps", None) or []
@@ -227,11 +227,9 @@ def step_validate_plan_bound_diff(task_id: str) -> dict[str, Any]:
         allowed_files = list(getattr(plan, "expected_files", []) or [])
 
         # Extract git diff
-        diff_res = diff_verifier.extract_diff(
-            task_id=task_id,
-            workspace_path=orchestrator.workspace_manager.get_workspace_path(task_id),
-            base_revision=task.base_revision,
-        )
+        diff_res = orchestrator.workspace_manager.get_workspace_diff(task_id)
+        if diff_res.is_empty or diff_res.error:
+            raise WorkspaceError(diff_res.error or "Approved plan execution produced no code changes.")
         validation_res = diff_verifier.validate_diff(diff_res, allowed_files=allowed_files)
 
         if not validation_res.is_valid:
@@ -263,11 +261,18 @@ def step_run_tests_and_repair(
 
         test_res = orchestrator.execute_task_tests(task=task, task_repo=repo, actor_id=actor_uuid)
         repair_res = None
-        if test_res.status != "PASSED" and auto_repair:
-            repair_res = orchestrator.execute_bounded_repair(task=task, task_repo=repo, actor_id=actor_uuid)
+        if test_res.status != "PASSED" and auto_repair and test_res.is_repair_eligible:
+            repair_res = orchestrator.execute_bounded_repair(
+                task=task, task_repo=repo, actor_id=actor_uuid, framework=test_res.framework,
+            )
+            if repair_res.success:
+                test_res = orchestrator.execute_task_tests(task=task, task_repo=repo, actor_id=actor_uuid)
 
         orchestrator.save_task_checkpoint(task, repo, step_name="post_test_and_repair")
         db.commit()
+
+        if test_res.status != "PASSED" or test_res.passed_count == 0 or test_res.exit_code != 0:
+            raise WorkspaceError(f"Workspace tests did not pass ({test_res.status.value}). See the recorded test output.")
 
         repair_status = None
         if repair_res is not None:
@@ -312,6 +317,8 @@ def step_run_independent_verification(task_id: str, actor_id: str | None) -> dic
         )
         db.commit()
 
+        if not ver_schema.is_eligible_for_publication or task.status != "READY_FOR_PUBLICATION":
+            raise WorkspaceError("Independent verification blocked publication. See the recorded verification checks.")
         return ver_schema.model_dump(mode="json")
 
 

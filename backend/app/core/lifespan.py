@@ -18,6 +18,20 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
+class _LoopBoundGateway:
+    """Keep provider connections on the API loop when task steps run in worker threads."""
+
+    def __init__(self, gateway):
+        self.gateway = gateway
+        self.loop = asyncio.get_running_loop()
+
+    async def generate(self, request):
+        if asyncio.get_running_loop() is self.loop:
+            return await self.gateway.generate(request)
+        future = asyncio.run_coroutine_threadsafe(self.gateway.generate(request), self.loop)
+        return await asyncio.wrap_future(future)
+
+
 def init_llm_gateway(app: FastAPI) -> bool:
     """Initialize LLM Gateway with primary and fallback providers."""
     try:
@@ -372,7 +386,9 @@ def init_intelligence_services(app: FastAPI) -> bool:
     try:
         if getattr(app.state, "task_execution_orchestrator", None) is None:
             from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
-            app.state.task_execution_orchestrator = TaskExecutionOrchestrator()
+            app.state.task_execution_orchestrator = TaskExecutionOrchestrator(
+                llm_gateway=_LoopBoundGateway(llm_gateway) if llm_gateway else None,
+            )
             app.state.service_readiness["task_execution_orchestrator"] = True
             logger.info("task_execution_orchestrator_ready")
         else:

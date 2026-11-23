@@ -30,8 +30,6 @@ from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     WorkspaceCommandRequest,
     WorkspaceCommitRequest,
-    WorkspaceDraftPRRequest,
-    WorkspacePushRequest,
     WorkspaceStatus,
     WorkspaceTestExecutionRequest,
     WorkspaceToolPolicyResult,
@@ -487,49 +485,10 @@ class WorkspaceToolPolicyBridge:
                     error=commit_res.error,
                 )
 
-            elif tool_name == TOOL_PUSH_BRANCH:
-                push_req = WorkspacePushRequest(
-                    task_id=task_id,
-                    branch_name=args["branch_name"],
-                    remote_name=args.get("remote_name", "origin"),
-                    publication_authorized=args.get("publication_authorized", False),
-                    remote_url=args.get("remote_url"),
-                )
-                push_res = self._workspace_manager.push_task_branch(push_req)
+            elif tool_name in (TOOL_PUSH_BRANCH, TOOL_CREATE_DRAFT_PR):
                 return ToolResult(
-                    success=push_res.success,
-                    output={
-                        "branch": push_res.branch,
-                        "pushed_sha": push_res.pushed_sha,
-                        "remote_name": push_res.remote_name,
-                    },
-                    error=push_res.error,
-                )
-
-            elif tool_name == TOOL_CREATE_DRAFT_PR:
-                pr_req = WorkspaceDraftPRRequest(
-                    task_id=task_id,
-                    title=args["title"],
-                    body=args.get("body"),
-                    head_branch=args["head_branch"],
-                    base_branch=args.get("base_branch", "main"),
-                    draft=True,
-                    repository_owner=args.get("repository_owner"),
-                    repository_name=args.get("repository_name"),
-                    publication_authorized=args.get("publication_authorized", False),
-                )
-                pr_res = self._workspace_manager.create_draft_pr(pr_req)
-                return ToolResult(
-                    success=pr_res.success,
-                    output={
-                        "pr_number": pr_res.pr_number,
-                        "pr_url": pr_res.pr_url,
-                        "head_branch": pr_res.head_branch,
-                        "base_branch": pr_res.base_branch,
-                        "is_draft": pr_res.is_draft,
-                        "summary": pr_res.summary,
-                    },
-                    error=pr_res.error,
+                    success=False,
+                    error="Publication requires a human-authorized verified commit through the task publication API.",
                 )
 
             elif tool_name == TOOL_RECOVER_WORKSPACE:
