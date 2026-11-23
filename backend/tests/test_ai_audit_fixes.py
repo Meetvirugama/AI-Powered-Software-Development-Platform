@@ -179,9 +179,13 @@ async def test_retrieval_rag_pipeline_hybrid_and_grounding():
     mock_lex = MagicMock()
     mock_lex.retrieve = AsyncMock(return_value=[mock_chunk])
 
+    mock_reranker = MagicMock()
+    mock_reranker.rerank.return_value = [mock_chunk]
+
     pipeline = RetrievalRAGPipeline(
         vector_retriever=mock_vec,
         lexical_retriever=mock_lex,
+        reranker=mock_reranker,
     )
     repo_id = uuid4()
     chunks = await pipeline.retrieve("authenticate", repository_id=repo_id, top_k=5)
