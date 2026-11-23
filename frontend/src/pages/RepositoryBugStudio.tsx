@@ -18,6 +18,7 @@ import { CreateIssueModal, type FindingForIssue } from '../components/explorer/C
 import { StudioLayout } from '../components/studios/StudioLayout';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type { SourceReference, BugDetectionResponse } from '../types/analysis';
+import type { ApiError } from '../types/api';
 
 export function RepositoryBugStudio() {
   const { id } = useParams<{ id: string }>();
@@ -243,7 +244,8 @@ export function RepositoryBugStudio() {
             ) : bugMutation.isError ? (
               <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
                 <ErrorMessage
-                  message={bugMutation.error instanceof Error ? bugMutation.error.message : 'Bug scan failed.'}
+                  error={bugMutation.error as ApiError}
+                  message="Bug scan failed."
                 />
                 <button
                   onClick={handleRunScan}

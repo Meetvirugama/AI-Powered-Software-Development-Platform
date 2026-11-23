@@ -185,6 +185,20 @@ class GroqProvider(LLMProvider):
         resolved_model = self._resolve_model(request.model)
         payload = self._build_payload(request, resolved_model)
 
+        # Proactively calibrate max_tokens against Groq 8,000 TPM limit on free/starter tier
+        estimated_prompt_tokens = sum(
+            len(str(m.get("content", "") or "")) for m in payload.get("messages", [])
+        ) // 4
+        current_max = payload.get("max_tokens", 3200)
+        if estimated_prompt_tokens + current_max > 7200:
+            safe_max = max(1800, 7200 - estimated_prompt_tokens)
+            if safe_max < current_max:
+                logger.info(
+                    "groq_calibrating_max_tokens_for_tpm",
+                    extra={"old_max": current_max, "new_max": safe_max, "prompt_est": estimated_prompt_tokens},
+                )
+                payload["max_tokens"] = safe_max
+
         last_error: LLMError | None = None
 
         async with self._semaphore:
@@ -221,7 +235,10 @@ class GroqProvider(LLMProvider):
                             "groq_rate_limit_rotating_key",
                             extra={"attempt": attempt, "key_masked": f"{api_key[:4]}...{api_key[-4:]}"},
                         )
-                        await asyncio.sleep(0.1)
+                        # Groq rate limits are org-wide; back off so rolling TPM window advances
+                        retry_after_str = resp.headers.get("retry-after")
+                        sleep_time = float(retry_after_str) if retry_after_str and retry_after_str.replace(".", "", 1).isdigit() else (2.0 * attempt)
+                        await asyncio.sleep(min(sleep_time, 5.0))
                         continue
 
                     if resp.status_code == 400:
@@ -244,7 +261,7 @@ class GroqProvider(LLMProvider):
                             retry_resp = await client.post(
                                 _GROQ_CHAT_URL,
                                 headers={
-                                    "Authorization": f"Bearer {api_key}",
+                                    "Authorization": f"Bearer {self._next_key()}",
                                     "Content-Type": "application/json",
                                 },
                                 json=payload_copy,
@@ -272,17 +289,17 @@ class GroqProvider(LLMProvider):
                         )
 
                     if resp.status_code == 413:
-                        curr_max = payload.get("max_tokens", 4096)
-                        if curr_max > 2048:
+                        curr_max = payload.get("max_tokens", 3200)
+                        if curr_max > 1800:
                             logger.warning(
                                 "groq_413_payload_too_large_reducing_max_tokens",
-                                extra={"old_max_tokens": curr_max, "new_max_tokens": 2048},
+                                extra={"old_max_tokens": curr_max, "new_max_tokens": 1800},
                             )
-                            payload["max_tokens"] = 2048
+                            payload["max_tokens"] = 1800
                             retry_resp = await client.post(
                                 _GROQ_CHAT_URL,
                                 headers={
-                                    "Authorization": f"Bearer {api_key}",
+                                    "Authorization": f"Bearer {self._next_key()}",
                                     "Content-Type": "application/json",
                                 },
                                 json=payload,
