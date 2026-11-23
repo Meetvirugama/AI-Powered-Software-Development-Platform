@@ -18,11 +18,20 @@ Validates:
 """
 
 import json
+import subprocess
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from pathlib import Path
 from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+from ai.services.task_planner import TaskPlanner
+from app.integrations.github.client import GitHubAPIError, GitHubClient
+from app.services.git_branch import GitBranchService
+from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
+from sandbox.workspace_manager import WorkspaceManager
 
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
@@ -70,8 +79,9 @@ def _seed_audit_repo(db_session: Session, user: User, name: str = "audit-repo") 
 
 
 class TestPromptToPRRealAPIAudit:
-    """Rigorous audit certifying Prompt-to-PR via live HTTP endpoints."""
+    """Exercise local HTTP routes, real Git, and controlled model and GitHub responses."""
 
+    @pytest.mark.parametrize("repair_required", [False, True], ids=["passing", "repaired"])
     def test_e2e_prompt_to_pr_full_audit_lifecycle(
         self,
         client: TestClient,
@@ -79,15 +89,102 @@ class TestPromptToPRRealAPIAudit:
         test_user: User,
         auth_headers: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        repair_required: bool,
     ):
         """Audit Case 1: Complete Happy-Path Prompt-to-PR Audit Lifecycle."""
         repo = _seed_audit_repo(db_session, test_user, name="e2e-audit-repo")
 
-        # Bypass repo ownership check in router
-        monkeypatch.setattr(
-            "app.api.v1.tasks._owned_repository",
-            lambda r_id, u_id, db, min_role=None: repo,
+        def git(root: Path, *args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(root), *args], check=True, capture_output=True, text=True,
+            ).stdout.strip()
+
+        source = tmp_path / "source"
+        source.mkdir()
+        remote = tmp_path / "remote"
+        remote.mkdir()
+        git(remote, "init", "--bare")
+        git(source, "init", "-b", "main")
+        (source / "pytest.ini").write_text("[pytest]\ntestpaths = tests\n", encoding="utf-8")
+        (source / "src").mkdir()
+        (source / "src" / "stats.py").write_text(
+            "def calculate_average(scores: list[float]) -> float:\n"
+            "    return sum(scores) / len(scores)\n",
+            encoding="utf-8",
         )
+        git(source, "add", ".")
+        git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "commit", "-m", "Base")
+        base_sha = git(source, "rev-parse", "HEAD")
+        git(source, "push", str(remote), "main")
+        repo.active_commit_sha = base_sha
+        db_session.commit()
+
+        manager = WorkspaceManager(base_workspaces_dir=tmp_path / "workspaces")
+        source_before = (source / "src" / "stats.py").read_text()
+        source_after = (
+            "def calculate_average(scores: list[float]) -> float:\n"
+            "    if not scores:\n"
+            "        return 0.0\n"
+            "    return sum(scores) / len(scores)\n"
+        )
+        test_content = (
+            "from src.stats import calculate_average\n\n"
+            "def test_empty_list():\n"
+            "    assert calculate_average([]) == 0.0\n\n"
+            "def test_nonempty_list():\n"
+            "    assert calculate_average([10.0, 20.0]) == 15.0\n"
+        )
+
+        async def synthesize(request):
+            content = request.messages[-1].content
+            if "Task Step ID: step_3" in content:
+                edit = {"file": "tests/test_stats.py", "search": "", "replace": test_content}
+            elif "DIAGNOSED FAILURE:" in content:
+                edit = {"file": "src/stats.py", "search": "return -1.0", "replace": "return 0.0"}
+            else:
+                change = source_after.replace("return 0.0", "return -1.0") if repair_required else source_after
+                edit = {"file": "src/stats.py", "search": source_before, "replace": change}
+            return SimpleNamespace(content=json.dumps({"edits": [edit]}))
+
+        gateway = SimpleNamespace(generate=AsyncMock(side_effect=synthesize))
+        orchestrator = TaskExecutionOrchestrator(workspace_manager=manager, llm_gateway=gateway)
+        monkeypatch.setattr(client.app.state, "task_planner", TaskPlanner())
+        monkeypatch.setattr(client.app.state, "task_execution_orchestrator", orchestrator)
+        monkeypatch.setattr(GitBranchService, "get_installation_token_for_repo", AsyncMock(return_value="fixture-token"))
+
+        def checkout_fixture(workspace, url, revision, branch, token):
+            assert url == f"https://github.com/{repo.owner}/{repo.name}.git"
+            assert revision == base_sha
+            git(tmp_path, "clone", "--no-local", str(source), str(workspace))
+            git(workspace, "checkout", "-b", branch, revision)
+
+        monkeypatch.setattr(manager, "_checkout_repository_revision", checkout_fixture)
+        real_push = manager.push_task_branch
+
+        def local_push(request):
+            assert request.remote_url == f"https://github.com/{repo.owner}/{repo.name}.git"
+            return real_push(request.model_copy(update={"remote_url": str(remote), "installation_token": None}))
+
+        monkeypatch.setattr(manager, "push_task_branch", local_push)
+
+        monkeypatch.setattr(GitHubClient, "list_pull_requests", AsyncMock(return_value=[]))
+        create_attempts = []
+
+        async def create_github_pr(_client, **kwargs):
+            create_attempts.append(kwargs)
+            if len(create_attempts) == 1:
+                raise GitHubAPIError("Temporary GitHub failure", status_code=502)
+            assert kwargs["draft"] is True
+            return {
+                "number": 7,
+                "html_url": f"https://github.com/{repo.owner}/{repo.name}/pull/7",
+                "draft": True,
+                "head": {"ref": kwargs["head"], "sha": git(remote, "rev-parse", kwargs["head"])},
+                "base": {"ref": kwargs["base"]},
+            }
+
+        monkeypatch.setattr(GitHubClient, "create_pull_request", create_github_pr)
 
         # -------------------------------------------------------------------
         # Step 1: POST /api/v1/tasks/prompt-to-plan (Universal Prompt Intake)
@@ -143,84 +240,46 @@ class TestPromptToPRRealAPIAudit:
         assert res_approve.status_code == 200, res_approve.text
         assert res_approve.json()["status"] == TaskStatus.APPROVED.value
 
-        # -------------------------------------------------------------------
-        # Step 4: POST /api/v1/tasks/{task_id}/execute (Start Execution)
-        # -------------------------------------------------------------------
-        res_exec = client.post(f"/api/v1/tasks/{task_id}/execute", headers=auth_headers, json={"run_steps": False})
-        assert res_exec.status_code == 200, res_exec.text
-
-        # -------------------------------------------------------------------
-        # Step 5: AST-Aware File Modification & Safety Validation
-        # -------------------------------------------------------------------
-        # 5a. Block deletion of protected project manifest
-        res_del_manifest = client.post(
-            f"/api/v1/tasks/{task_id}/tools/delete_file",
+        # Execute the approved plan with controlled model responses and actual Git edits and pytest.
+        rejected_future_authorization = client.post(
+            f"/api/v1/tasks/{task_id}/run-workflow",
             headers=auth_headers,
-            json={"arguments": {"file_path": "pyproject.toml"}},
+            json={"publication_authorized": True},
         )
-        assert res_del_manifest.status_code in (400, 403, 500)
+        assert rejected_future_authorization.status_code == 400
+        result = client.post(f"/api/v1/tasks/{task_id}/run-workflow", headers=auth_headers, json={})
+        assert result.status_code == 200, result.text
+        assert result.json()["status"] == TaskStatus.READY_FOR_PUBLICATION.value, result.text
+        assert gateway.generate.await_count == (3 if repair_required else 2)
 
-        # 5b. Write clean, validated code
-        clean_code = (
-            "def calculate_average(scores: list[float]) -> float:\n"
-            "    if not scores:\n"
-            "        return 0.0\n"
-            "    return sum(scores) / len(scores)\n"
-        )
-        res_write_src = client.post(
-            f"/api/v1/tasks/{task_id}/tools/write_file",
-            headers=auth_headers,
-            json={"arguments": {"file_path": "src/stats.py", "content": clean_code}},
-        )
-        assert res_write_src.status_code == 200
+        workspace = manager.get_workspace_path(task_id)
+        assert (workspace / "src" / "stats.py").read_text() == source_after
+        assert (workspace / "tests" / "test_stats.py").read_text() == test_content
+        assert (source / "src" / "stats.py").read_text() == source_before
+        assert git(workspace, "rev-parse", "HEAD^") == base_sha
 
-        # 5c. Write clean, validated test
-        clean_test = (
-            "from src.stats import calculate_average\n\n"
-            "def test_calculate_average_empty():\n"
-            "    assert calculate_average([]) == 0.0\n\n"
-            "def test_calculate_average_values():\n"
-            "    assert calculate_average([10.0, 20.0]) == 15.0\n"
-        )
-        res_write_test = client.post(
-            f"/api/v1/tasks/{task_id}/tools/write_file",
-            headers=auth_headers,
-            json={"arguments": {"file_path": "tests/test_stats.py", "content": clean_test}},
-        )
-        assert res_write_test.status_code == 200
+        diff = client.get(f"/api/v1/tasks/{task_id}/diff", headers=auth_headers)
+        assert diff.status_code == 200, diff.text
+        assert {file["file_path"] for file in diff.json()["files"]} == {"src/stats.py", "tests/test_stats.py"}
 
-        # -------------------------------------------------------------------
-        # Step 6: GET /api/v1/tasks/{task_id}/diff (Diff Extraction & Audit)
-        # -------------------------------------------------------------------
-        res_diff = client.get(f"/api/v1/tasks/{task_id}/diff", headers=auth_headers)
-        assert res_diff.status_code == 200
-        diff_data = res_diff.json()
-        assert "files" in diff_data and len(diff_data["files"]) > 0
-
-        # -------------------------------------------------------------------
-        # Step 7: POST /api/v1/tasks/{task_id}/tests (Diff-Targeted Test Run)
-        # -------------------------------------------------------------------
-        res_test_run = client.post(
-            f"/api/v1/tasks/{task_id}/tests",
-            headers=auth_headers,
-            json={"test_path": "tests/test_stats.py", "framework": "pytest"},
-        )
-        assert res_test_run.status_code == 200
-        test_data = res_test_run.json()
-        assert test_data["status"] == "PASSED"
-
-        # -------------------------------------------------------------------
-        # Step 8: POST /api/v1/tasks/{task_id}/verify (Independent Verification)
-        # -------------------------------------------------------------------
-        res_verify = client.post(f"/api/v1/tasks/{task_id}/verify", headers=auth_headers, json={})
-        assert res_verify.status_code == 200, res_verify.text
-        ver_data = res_verify.json()
-        assert ver_data["status"] == "PASS", f"Verification failed with: {ver_data.get('blocking_findings')} and checks: {ver_data.get('checks')}"
-        assert ver_data["is_eligible_for_publication"] is True
-        assert ver_data["task_status"] == TaskStatus.READY_FOR_PUBLICATION.value
+        ver_data = result.json()["verification"]
+        assert ver_data["status"] == "PASS", ver_data
 
         verified_sha = ver_data["verified_revision"]
-        assert verified_sha is not None
+        assert verified_sha == git(workspace, "rev-parse", "HEAD")
+        assert verified_sha != base_sha
+        assert git(workspace, "status", "--porcelain") == ""
+        assert git(source, "rev-parse", "HEAD") == base_sha
+
+        blocked_push = client.post(
+            f"/api/v1/tasks/{task_id}/push", headers=auth_headers, json={"publication_authorized": True},
+        )
+        assert blocked_push.status_code == 409, blocked_push.text
+
+        wrong_sha = client.post(
+            f"/api/v1/tasks/{task_id}/authorize-publication", headers=auth_headers, json={"head_sha": base_sha},
+        )
+        assert wrong_sha.status_code == 409, wrong_sha.text
 
         # -------------------------------------------------------------------
         # Step 9: Human Gate 2 Enforcement Checks
@@ -266,12 +325,19 @@ class TestPromptToPRRealAPIAudit:
             "title": "fix(stats): prevent ZeroDivisionError on empty score lists",
             "body": "## Summary of Changes\n- Guard against empty list in calculate_average\n- Added pytest regression suite",
         }
+        failed_pr = client.post(f"/api/v1/tasks/{task_id}/create-pr", json=pr_payload, headers=auth_headers)
+        assert failed_pr.status_code == 502, failed_pr.text
+        assert db_session.query(TaskPullRequest).filter_by(task_id=UUID(task_id)).count() == 0
         res_pr = client.post(f"/api/v1/tasks/{task_id}/create-pr", json=pr_payload, headers=auth_headers)
         assert res_pr.status_code == 200, res_pr.text
+        repeated_pr = client.post(f"/api/v1/tasks/{task_id}/create-pr", json=pr_payload, headers=auth_headers)
+        assert repeated_pr.json() == res_pr.json()
+        assert len(create_attempts) == 2
         pr_data = res_pr.json()
 
         assert pr_data["is_draft"] is True
-        assert pr_data["pr_number"] is not None
+        assert pr_data["pr_number"] == 7
+        assert pr_data["head_sha"] == verified_sha
         assert "pull" in pr_data["pr_url"].lower()
 
         # -------------------------------------------------------------------
@@ -300,10 +366,7 @@ class TestPromptToPRRealAPIAudit:
     ):
         """Audit Case 2: Ambiguous Prompt triggers safe scoping proposals."""
         repo = _seed_audit_repo(db_session, test_user, name="ambig-audit-repo")
-        monkeypatch.setattr(
-            "app.api.v1.tasks._owned_repository",
-            lambda r_id, u_id, db, min_role=None: repo,
-        )
+
 
         ambig_payload = {
             "repository_id": str(repo.id),

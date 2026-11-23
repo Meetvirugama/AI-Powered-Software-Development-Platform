@@ -251,6 +251,9 @@ class ContainerBackend(SandboxBackend):
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
         ]
+        git_metadata = ws_path / ".git"
+        if git_metadata.exists():
+            docker_cmd.extend(["-v", f"{git_metadata}:/workspace/.git:ro"])
 
         # Non-root user if not disabled
         # Use UID 10001 (standard unprivileged sandbox UID) or default

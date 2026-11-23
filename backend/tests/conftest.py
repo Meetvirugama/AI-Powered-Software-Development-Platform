@@ -304,3 +304,38 @@ def vcr_llm_cassette():
     from tests.fixtures.vcr_llm_cassette import VCRLLMCassette
     cassette_path = Path(__file__).resolve().parent / "fixtures" / "cassettes" / "platform_llm_vcr.json"
     return VCRLLMCassette(cassette_path=cassette_path, mode="replay")
+
+
+@pytest.fixture
+def local_task_base_revision(tmp_path, monkeypatch):
+    """Use real Git objects while replacing authenticated GitHub transport in API tests."""
+    import subprocess
+
+    from app.services.git_branch import GitBranchService
+    from sandbox.workspace_manager import WorkspaceManager
+
+    source = tmp_path / "task-source"
+    source.mkdir()
+
+    def git(root, *args):
+        return subprocess.run(
+            ["git", "-C", str(root), *args],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    git(source, "init")
+    git(source, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+        "commit", "--allow-empty", "-m", "Task base")
+    base_revision = git(source, "rev-parse", "HEAD")
+
+    async def fixture_token(self, repository):
+        return "fixture-token"
+
+    def checkout(self, workspace, url, revision, branch, token):
+        assert revision == base_revision
+        git(tmp_path, "clone", "--no-local", str(source), str(workspace))
+        git(workspace, "checkout", "-b", branch, revision)
+
+    monkeypatch.setattr(GitBranchService, "get_installation_token_for_repo", fixture_token)
+    monkeypatch.setattr(WorkspaceManager, "_checkout_repository_revision", checkout)
+    return base_revision

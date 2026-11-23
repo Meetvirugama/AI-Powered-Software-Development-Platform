@@ -437,7 +437,7 @@ def test_test_output_truncation_and_secret_redaction(tmp_path: Path) -> None:
     req = WorkspaceTestExecutionRequest(task_id="task-trunc-secret")
     res = mock_runner.run_tests(ws, req)
 
-    assert res.success is True
+    assert res.status == TestOutcomeStatus.NO_TESTS_FOUND
     assert "ghp_1234567890" not in res.stdout
     assert "ghp_1234567890" not in res.stderr
     assert "[REDACTED]" in res.stdout or "[REDACTED]" in res.stderr

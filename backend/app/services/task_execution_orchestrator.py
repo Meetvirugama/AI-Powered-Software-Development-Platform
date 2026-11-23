@@ -15,18 +15,17 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
-import json
 import logging
 import re
+import shlex
 import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 from uuid import UUID
-
-from sqlalchemy import select
 
 from agent.tools.router import ToolRequest, ToolResult, ToolRouter
 from ai.services.agent_execution_loop import (
@@ -75,7 +74,7 @@ from app.schemas.workspace import (
     WorkspaceCommitRequest,
     WorkspaceCommitResult,
     WorkspaceCreateRequest,
-    WorkspaceDraftPRRequest,
+    WorkspaceDiffResult,
     WorkspaceMetadata,
     WorkspacePushRequest,
     WorkspacePushResult,
@@ -85,7 +84,9 @@ from app.schemas.workspace import (
     WorkspaceTestExecutionResult,
 )
 from app.services.bug_detection_orchestrator import BuiltinStaticBugScanner
-from app.services.git_branch import format_agent_branch_name
+from app.services.git_branch import GitBranchService, format_agent_branch_name
+from app.integrations.github.client import GitHubAPIError
+from app.integrations.github.exceptions import GitHubError
 from sandbox.constants import PROTECTED_BRANCHES
 from sandbox.exceptions import (
     WorkspaceCommitError,
@@ -102,6 +103,7 @@ from sandbox.workspace_manager import WorkspaceManager
 logger = logging.getLogger(__name__)
 
 _HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+_COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 DEFAULT_COMMAND_ALLOWLIST: dict[str, list[list[str]]] = {
     "execute_command": [
@@ -179,11 +181,12 @@ class TaskExecutionOrchestrator:
         self,
         workspace_manager: WorkspaceManager | None = None,
         tool_router: ToolRouter | None = None,
+        llm_gateway: Any = None,
     ) -> None:
         self.workspace_manager = workspace_manager or WorkspaceManager()
         self.tool_router = tool_router or ToolRouter(command_allowlist=DEFAULT_COMMAND_ALLOWLIST)
         self.policy_bridge = self._ensure_tools_registered(self.tool_router, self.workspace_manager)
-        self.edit_synthesizer = EditSynthesizer()
+        self.edit_synthesizer = EditSynthesizer(llm_gateway=llm_gateway, model=get_settings().active_chat_model)
         self.execution_loop = AgentExecutionLoop(
             workspace_manager=self.workspace_manager,
             tool_router=self.tool_router,
@@ -193,6 +196,7 @@ class TaskExecutionOrchestrator:
             workspace_manager=self.workspace_manager,
             test_runner=self.workspace_manager.test_runner,
             edit_synthesizer=self.edit_synthesizer,
+            llm_gateway=llm_gateway,
         )
         self.requirement_verifier = RequirementToCodeVerifier()
         self.static_scanner = BuiltinStaticBugScanner()
@@ -228,16 +232,6 @@ class TaskExecutionOrchestrator:
         task_id_str = str(task.id)
         meta = self.workspace_manager.get_workspace(task_id_str)
         if meta is not None:
-            if not meta.verification_diff_hash and meta.workspace_path:
-                ws_path = Path(meta.workspace_path)
-                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
-                if m_path.exists():
-                    try:
-                        m_data = json.loads(m_path.read_text(encoding="utf-8"))
-                        if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
-                            meta.verification_diff_hash = m_data["verification_diff_hash"]
-                    except Exception as exc:
-                        logger.debug("Failed to parse workspace metadata verification_diff_hash: %s", exc)
             return meta
         if task_repo is None:
             return None
@@ -248,8 +242,8 @@ class TaskExecutionOrchestrator:
 
         branch_name = db_ws.task_branch or format_agent_branch_name(task.id)
         ws_path = Path(db_ws.workspace_path)
-        if not ws_path.exists():
-            ws_path.mkdir(parents=True, exist_ok=True)
+        if not (ws_path / ".git").exists():
+            return None
 
         ws_base_rev = self._normalize_workspace_base_revision(
             task.repository_id,
@@ -275,41 +269,6 @@ class TaskExecutionOrchestrator:
                     isolation_type="directory_copy",
                 )
                 self.workspace_manager._workspaces[task_id_str] = meta
-        else:
-            create_req = WorkspaceCreateRequest(
-                task_id=task_id_str,
-                repository_id=str(task.repository_id),
-                base_revision=ws_base_rev,
-                branch_name=branch_name,
-                isolation_type="directory_copy",
-            )
-            meta = self.workspace_manager.create_workspace(create_req)
-
-        # Recover verification_diff_hash if available
-        saved_diff_hash = None
-        if meta.verification_diff_hash:
-            saved_diff_hash = meta.verification_diff_hash
-        else:
-            m_path = ws_path / "metadata.json"
-            if not m_path.exists():
-                m_path = ws_path / "workspace_metadata.json"
-            if m_path.exists():
-                try:
-                    m_data = json.loads(m_path.read_text(encoding="utf-8"))
-                    if isinstance(m_data, dict):
-                        saved_diff_hash = m_data.get("verification_diff_hash")
-                except (OSError, json.JSONDecodeError, AttributeError):
-                    pass
-            if not saved_diff_hash:
-                ver_rec = task_repo.get_latest_verification_result(task.id)
-                if ver_rec and getattr(ver_rec, "checks", None):
-                    for chk in ver_rec.checks:
-                        if isinstance(chk, dict) and chk.get("details", {}).get("diff_hash"):
-                            saved_diff_hash = chk["details"]["diff_hash"]
-                            break
-        if saved_diff_hash:
-            meta.verification_diff_hash = saved_diff_hash
-            self.workspace_manager._save_metadata_file(meta)
 
         target_status_str = (db_ws.status or "READY").upper()
         try:
@@ -345,7 +304,11 @@ class TaskExecutionOrchestrator:
         task_id_str = str(task.id)
         branch_name = format_agent_branch_name(task.id)
         base_rev = verified_plan.base_revision or task.base_revision or "main"
-        ws_base_rev = self._normalize_workspace_base_revision(task.repository_id, base_rev)
+        if not _COMMIT_SHA_RE.fullmatch(base_rev):
+            raise APIError(409, ErrorCode.PLAN_VERSION_MISMATCH, "Regenerate the plan against a full indexed commit SHA, then approve the new version.")
+        settings = get_settings()
+        if settings.sandbox_backend == "runner" and not settings.task_workspace_root:
+            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Configure TASK_WORKSPACE_ROOT on the API and runner before executing repository tasks.")
 
         # 1. Transition APPROVED -> WORKSPACE_SETUP if not already past it
         if TaskStatus(task.status) == TaskStatus.APPROVED:
@@ -373,11 +336,17 @@ class TaskExecutionOrchestrator:
                 create_req = WorkspaceCreateRequest(
                     task_id=task_id_str,
                     repository_id=str(task.repository_id),
-                    base_revision=ws_base_rev,
+                    base_revision=base_rev,
                     branch_name=branch_name,
                     isolation_type="directory_copy",
                 )
-                meta = self.workspace_manager.create_workspace(create_req)
+                repo = self._publication_repository(task)
+                token = asyncio.run(GitBranchService(task_repo.session).get_installation_token_for_repo(repo))
+                meta = self.workspace_manager.create_workspace(
+                    create_req, repository_url=f"https://github.com/{repo.owner}/{repo.name}.git", installation_token=token,
+                )
+            if meta.base_revision != base_rev or meta.branch_name != branch_name:
+                raise WorkspaceCommitError("Workspace is bound to a different approved commit or branch.")
 
             task_repo.record_workspace(
                 task_id=task.id,
@@ -764,6 +733,7 @@ class TaskExecutionOrchestrator:
             junit_xml=junit_xml,
             sandbox_backend=sandbox_backend,
         )
+        tested_diff = self.workspace_manager.compute_verification_diff_hash(str(task.id), record=False)
         result = self.workspace_manager.run_tests(test_req)
 
         db_status = TestRunStatus.PASSED.value
@@ -772,24 +742,29 @@ class TaskExecutionOrchestrator:
         elif result.status in (TestOutcomeStatus.ERROR, TestOutcomeStatus.UNSUPPORTED_FRAMEWORK):
             db_status = TestRunStatus.ERROR.value
         elif result.status == TestOutcomeStatus.NO_TESTS_FOUND:
-            db_status = TestRunStatus.PASSED.value
+            db_status = TestRunStatus.FAILED.value
         elif result.status != TestOutcomeStatus.PASSED:
             db_status = TestRunStatus.FAILED.value
+        if self.workspace_manager.compute_verification_diff_hash(str(task.id), record=False) != tested_diff:
+            db_status = TestRunStatus.FAILED.value
+            result.status = TestOutcomeStatus.ERROR
+            result.success = False
+            result.stderr = f"{result.stderr}\nWorkspace changes differ from the input to the test run.".strip()
 
-        cmd_str = f"{result.framework or 'pytest'} {test_path or ''}".strip()
+        cmd_str = shlex.join([result.command, *result.arguments])
         combined_output = f"{result.stdout}\n{result.stderr}".strip()
         task_repo.record_test_run(
             task_id=task.id,
             repository_id=task.repository_id,
             command=cmd_str,
             status=db_status,
-            exit_code=0 if (result.status in (TestOutcomeStatus.PASSED, TestOutcomeStatus.NO_TESTS_FOUND) and result.failed_count == 0) else 1,
+            exit_code=result.exit_code,
             duration_ms=int(result.duration_ms),
             tests_total=result.total_count,
             tests_passed=result.passed_count,
             tests_failed=result.failed_count,
             sanitized_output=combined_output[:10_000],
-            target_revision=meta.base_revision,
+            target_revision=f"diff-sha256:{tested_diff}",
         )
         return result
 
@@ -832,7 +807,7 @@ class TaskExecutionOrchestrator:
             task_repo.transition_status(task, TaskStatus.REPAIRING, actor_id=actor_id)
 
         remaining = max(1, task.repair_attempts_max - task.repair_attempts_used)
-        self.repair_loop.max_repair_attempts = remaining
+        approved_plan = task_repo.get_approved_plan(task.id)
 
         def _custom_synthesizer(t_id: str, attempt_num: int, diag: Any) -> RepairPatchPayload:
             if patch_diff:
@@ -844,16 +819,18 @@ class TaskExecutionOrchestrator:
                     attempt_number=attempt_num,
                     diff=patch_diff,
                     explanation=patch_explanation or f"Targeted repair attempt {attempt_num}",
-                    target_files=files or ["src/main.py"],
+                    target_files=files,
                 )
             return self.repair_loop._synthesize_patch(t_id, attempt_num, diag)
 
         outcome = self.repair_loop.run_repair_cycle(
             task_id=str(task.id),
-            framework="pytest" if framework == "pytest" else "jest",
+            framework=framework,
             test_path=test_path,
             patch_synthesizer=_custom_synthesizer if patch_diff else None,
             forbidden_files=forbidden_files,
+            plan_scope_files=approved_plan.expected_files if approved_plan else None,
+            attempt_limit=remaining,
         )
 
         # Persist each repair record in DB
@@ -947,6 +924,36 @@ class TaskExecutionOrchestrator:
             return meta.base_revision.strip()
         return diff_hash[:40]
 
+    def _commit_verified_diff(
+        self, task: AgentTask, task_repo: TaskRepository, diff: WorkspaceDiffResult, diff_hash: str,
+    ) -> str:
+        task_id = str(task.id)
+        if self.workspace_manager.compute_verification_diff_hash(task_id, record=False) != diff_hash:
+            raise WorkspaceCommitError("Workspace changed while verification was running.")
+        commit = self.commit_workspace_changes(task, task_repo, files=[file.file_path for file in diff.files])
+        self._require_workspace_commit(task_id, commit.branch, commit.commit_sha)
+        if self.workspace_manager.compute_verification_diff_hash(task_id, record=False) != diff_hash:
+            raise WorkspaceCommitError("The commit diff differs from the reviewed working tree.")
+        return commit.commit_sha
+
+    def _require_workspace_commit(self, task_id: str, branch: str, revision: str) -> None:
+        workspace = self.workspace_manager.get_workspace_path(task_id)
+
+        def git(*args: str) -> str:
+            result = subprocess.run(
+                ["git", "-c", "core.fsmonitor=false", "-C", str(workspace), *args],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
+            return result.stdout.strip()
+
+        if (
+            not _COMMIT_SHA_RE.fullmatch(revision or "")
+            or git("symbolic-ref", "--quiet", "--short", "HEAD") != branch
+            or git("rev-parse", "HEAD") != revision
+            or git("status", "--porcelain", "--untracked-files=all")
+        ):
+            raise WorkspaceCommitError("The workspace must be clean and checked out at the verified task commit.")
+
     def run_independent_verification(
         self,
         task: AgentTask,
@@ -1010,129 +1017,54 @@ class TaskExecutionOrchestrator:
         # ── Check 1: Test Suite Execution Outcome (`tests`) ─────────────────
         t0 = time.perf_counter()
         db_runs = task_repo.list_test_runs(task.id)
-        mem_runs = self.workspace_manager.get_test_history(task_id_str)
+        tested_diff = self.workspace_manager.compute_verification_diff_hash(task_id_str, record=False)
+        target_revision = f"diff-sha256:{tested_diff}"
+        if run_tests_if_missing and (not db_runs or db_runs[-1].target_revision != target_revision):
+            self.execute_task_tests(task=task, task_repo=task_repo, actor_id=actor_id)
+            db_runs = task_repo.list_test_runs(task.id)
 
-        if not db_runs and not mem_runs and run_tests_if_missing:
-            try:
-                self.execute_task_tests(task=task, task_repo=task_repo, actor_id=actor_id)
-                if TaskStatus(task.status) == TaskStatus.TESTING:
-                    task_repo.transition_status(task, TaskStatus.VERIFYING, actor_id=actor_id)
-                db_runs = task_repo.list_test_runs(task.id)
-                mem_runs = self.workspace_manager.get_test_history(task_id_str)
-            except Exception as exc:
-                logger.warning("Auto test run during verification failed: %s", exc)
-
-        test_check_ms = int((time.perf_counter() - t0) * 1000)
-        if db_runs:
-            latest_run = db_runs[-1]
-            if latest_run.status == TestRunStatus.PASSED.value or (
-                latest_run.tests_failed == 0 and latest_run.tests_total == 0
-            ):
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="PASSED",
-                        duration_ms=latest_run.duration_ms or test_check_ms,
-                        message=(
-                            f"Test suite passed ({latest_run.tests_passed}/{latest_run.tests_total} tests passed)."
-                            if latest_run.tests_total > 0
-                            else "No test suite detected; 0 test failures."
-                        ),
-                        findings_count=0,
-                        details={
-                            "command": latest_run.command,
-                            "tests_total": latest_run.tests_total,
-                            "tests_passed": latest_run.tests_passed,
-                            "tests_failed": latest_run.tests_failed,
-                        },
-                    )
+        latest_run = db_runs[-1] if db_runs else None
+        tests_passed = bool(
+            latest_run
+            and latest_run.target_revision == target_revision
+            and latest_run.status == TestRunStatus.PASSED.value
+            and latest_run.exit_code == 0
+            and latest_run.tests_passed > 0
+            and latest_run.tests_failed == 0
+        )
+        if tests_passed:
+            test_status = "PASSED"
+            test_message = f"Test suite passed ({latest_run.tests_passed}/{latest_run.tests_total} tests passed)."
+        elif require_passing_tests or latest_run:
+            test_status = "FAILED"
+            test_message = (
+                f"Latest test run: {latest_run.status}, {latest_run.tests_passed} passed, "
+                f"{latest_run.tests_failed} failed. A passing run for this diff is required."
+                if latest_run else "No test run is recorded for this diff."
+            )
+            blocking_findings.append(
+                VerificationFinding(
+                    id="ver-test-fail-1",
+                    severity="HIGH",
+                    category="test_failure",
+                    title="Passing tests for the current changes are required",
+                    message=test_message,
+                    blocking=True,
                 )
-            else:
-                fail_msg = (
-                    f"Test suite status is '{latest_run.status}' "
-                    f"({latest_run.tests_failed} failed, {latest_run.tests_passed} passed)."
-                )
-                blocking_findings.append(
-                    VerificationFinding(
-                        id="ver-test-fail-1",
-                        severity="HIGH",
-                        category="test_failure",
-                        title="Workspace test suite did not pass",
-                        message=fail_msg,
-                        blocking=True,
-                    )
-                )
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="FAILED",
-                        duration_ms=latest_run.duration_ms or test_check_ms,
-                        message=fail_msg,
-                        findings_count=1,
-                        details={
-                            "command": latest_run.command,
-                            "status": latest_run.status,
-                            "tests_failed": latest_run.tests_failed,
-                        },
-                    )
-                )
-        elif mem_runs:
-            latest_mem = mem_runs[-1]
-            if latest_mem.status == TestOutcomeStatus.PASSED:
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="PASSED",
-                        duration_ms=int(latest_mem.duration_ms),
-                        message=f"Test suite passed ({latest_mem.passed_count} passed).",
-                        findings_count=0,
-                        details={"passed_count": latest_mem.passed_count},
-                    )
-                )
-            else:
-                fail_msg = f"Workspace test run failed with status '{latest_mem.status.value}'."
-                blocking_findings.append(
-                    VerificationFinding(
-                        id="ver-test-fail-1",
-                        severity="HIGH",
-                        category="test_failure",
-                        title="Workspace test suite did not pass",
-                        message=fail_msg,
-                        blocking=True,
-                    )
-                )
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="FAILED",
-                        duration_ms=int(latest_mem.duration_ms),
-                        message=fail_msg,
-                        findings_count=1,
-                    )
-                )
+            )
         else:
-            # Per Docs/week3.md §6 F36: unavailable/skipped test check cannot be counted as PASSED when required
-            if require_passing_tests:
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="PASSED",
-                        duration_ms=test_check_ms,
-                        message="No failing test runs recorded; baseline workspace verification active.",
-                        findings_count=0,
-                        details={"note": "No separate test run required or baseline tests clean."},
-                    )
-                )
-            else:
-                checks.append(
-                    VerificationCheckItem(
-                        name="tests",
-                        status="SKIPPED",
-                        duration_ms=test_check_ms,
-                        message="Test execution was skipped for this verification run.",
-                        findings_count=0,
-                    )
-                )
+            test_status = "SKIPPED"
+            test_message = "No test run is recorded for this diff."
+        checks.append(
+            VerificationCheckItem(
+                name="tests",
+                status=test_status,
+                duration_ms=int((time.perf_counter() - t0) * 1000),
+                message=test_message,
+                findings_count=int(test_status == "FAILED"),
+                details={"target_revision": latest_run.target_revision} if latest_run else {},
+            )
+        )
 
         # ── Check 2 & 3: Diff Scope & Secret Scan (`diff_scope`, `secret_scan`) ─
         t1 = time.perf_counter()
@@ -1363,16 +1295,6 @@ class TaskExecutionOrchestrator:
                 "failed": latest_run.tests_failed,
                 "passed": latest_run.tests_passed,
             }
-        elif mem_runs:
-            latest_mem = mem_runs[-1]
-            mem_passed = latest_mem.status == TestRunStatus.PASSED
-            test_info = {
-                "status": latest_mem.status.value,
-                "total": 1,
-                "failed": 0 if mem_passed else 1,
-                "passed": 1 if mem_passed else 0,
-            }
-
         req_ver = self.requirement_verifier.verify_requirements_against_diff(
             task_id=task_id_str,
             requirements=reqs,
@@ -1411,14 +1333,47 @@ class TaskExecutionOrchestrator:
             )
         )
 
-        # Compute cryptographic diff fingerprint and bind verification result to revision
-        diff_hash = self.workspace_manager.compute_verification_diff_hash(task_id_str)
-        meta.verification_diff_hash = diff_hash
-        try:
-            self.workspace_manager.save_workspace_metadata(meta)
-        except Exception as exc:
-            logger.debug("Failed to persist workspace metadata: %s", exc)
+        # Verification and publication both use the exact commit containing the reviewed diff.
+        diff_hash = hashlib.sha256((diff_res.raw_diff or "").encode("utf-8")).hexdigest()
         verified_rev_sha = self._resolve_verified_revision_sha(task_id_str, meta, diff_hash)
+        if diff_res.is_empty or diff_res.error or diff_hash != tested_diff:
+            blocking_findings.append(
+                VerificationFinding(
+                    id="ver-diff-integrity",
+                    severity="HIGH",
+                    category="diff_scope",
+                    title="A complete, stable workspace diff is required",
+                    message=diff_res.error or "The workspace diff is empty or changed during verification.",
+                    blocking=True,
+                )
+            )
+        if not blocking_findings and all(c.status == "PASSED" for c in checks):
+            try:
+                verified_rev_sha = self._commit_verified_diff(task, task_repo, diff_res, diff_hash)
+                meta.verification_diff_hash = diff_hash
+                self.workspace_manager._save_metadata_file(meta)
+            except (WorkspaceCommitError, APIError, OSError, subprocess.SubprocessError) as exc:
+                blocking_findings.append(
+                    VerificationFinding(
+                        id="ver-commit-integrity",
+                        severity="HIGH",
+                        category="diff_scope",
+                        title="Unable to bind verification to a Git commit",
+                        message=redact(str(exc)),
+                        blocking=True,
+                    )
+                )
+        elif not blocking_findings:
+            blocking_findings.append(
+                VerificationFinding(
+                    id="ver-required-checks",
+                    severity="HIGH",
+                    category="diff_scope",
+                    title="Required verification evidence is missing",
+                    message="Every required check must pass before the workspace can be committed for publication.",
+                    blocking=True,
+                )
+            )
 
         overall_status: VerificationOverallStatus = VerificationResultSchema.evaluate_status(
             checks=checks,
@@ -1442,10 +1397,10 @@ class TaskExecutionOrchestrator:
                 current_plan_version=task.plan_version,
                 allowed_files=effective_allowed,
                 forbidden_files=list(forbidden_map.values()) if forbidden_map else None,
-                tests_completed=True,
-                tests_passed=not any(c.name == "tests" and c.status == "FAILED" for c in checks),
-                test_revision=verified_rev_sha,
-                test_count=db_runs[-1].tests_total if db_runs else 1,
+                tests_completed=latest_run is not None,
+                tests_passed=tests_passed,
+                test_revision=verified_rev_sha if tests_passed else None,
+                test_count=latest_run.tests_total if latest_run else 0,
                 failed_test_count=db_runs[-1].tests_failed if db_runs else 0,
                 static_analysis_completed=True,
                 ai_review_completed=True,
@@ -1664,7 +1619,7 @@ class TaskExecutionOrchestrator:
         try:
             # Preserve pre-commit diff hash so committing an already-verified working tree stays valid
             pre_commit_hash = meta.verification_diff_hash
-            current_pre_hash = self.workspace_manager.compute_verification_diff_hash(str(task.id))
+            current_pre_hash = self.workspace_manager.compute_verification_diff_hash(str(task.id), record=False)
             was_immutably_verified = bool(pre_commit_hash and pre_commit_hash == current_pre_hash)
 
             commit_req = WorkspaceCommitRequest(
@@ -1679,7 +1634,9 @@ class TaskExecutionOrchestrator:
 
             if was_immutably_verified:
                 # Re-bind diff hash after git commit so post-commit push/PR recognizes the verified commit
-                self.workspace_manager.compute_verification_diff_hash(str(task.id))
+                post_commit_hash = self.workspace_manager.compute_verification_diff_hash(str(task.id), record=False)
+                if post_commit_hash != pre_commit_hash:
+                    logger.warning("verified_workspace_changed_during_commit", extra={"task_id": str(task.id)})
 
             db_ws = task_repo.get_workspace_record(task.id)
             if db_ws is not None:
@@ -1721,66 +1678,38 @@ class TaskExecutionOrchestrator:
                 "Task cannot be published before independent verification has been executed.",
             )
 
-        if ver.status not in (
-            VerificationStatus.PASSED.value,
-            VerificationStatus.REQUIRES_HUMAN_REVIEW.value,
-            "PASS",
-            "PASSED",
-            "REQUIRES_HUMAN_REVIEW",
-        ) or len(ver.blocking_findings or []) > 0:
-            raise APIError(
-                409,
-                ErrorCode.VERIFICATION_FAILED,
-                f"Task verification status is '{ver.status}' with {len(ver.blocking_findings or [])} blocking finding(s). Publication is blocked.",
-            )
+        if ver.status not in {VerificationStatus.PASSED.value, "PASS"} or ver.blocking_findings:
+            raise APIError(409, ErrorCode.VERIFICATION_FAILED, "Publication requires passing independent verification.")
 
-        # Enforce authorized_head_sha matches ver.verified_revision if publication authorized (B4)
-        latest_auth_event = None
-        for ev in reversed(task_repo.list_events(task.id)):
-            if ev.event_type == TaskEventType.PUBLICATION_AUTHORIZED.value:
-                latest_auth_event = ev
-                break
-        if latest_auth_event and isinstance(latest_auth_event.event_data, dict):
-            auth_sha = latest_auth_event.event_data.get("authorized_head_sha")
-            if auth_sha and auth_sha.strip().lower() != (ver.verified_revision or "").strip().lower():
-                raise APIError(
-                    409,
-                    ErrorCode.VERIFICATION_FAILED,
-                    f"Publication authorization head SHA '{auth_sha[:8]}' does not match verified revision '{(ver.verified_revision or '')[:8]}'. Re-authorization required.",
-                )
+        try:
+            self._require_workspace_commit(str(task.id), meta.branch_name, ver.verified_revision)
+        except (WorkspaceCommitError, subprocess.SubprocessError, OSError) as exc:
+            raise APIError(409, ErrorCode.VERIFICATION_FAILED, redact(str(exc))) from exc
 
-        # Post-verification diff immutability check (Docs/week3.md §9 & §10)
-        expected_hash = meta.verification_diff_hash
-        if not expected_hash:
-            # 1. Attempt to resolve from workspace metadata.json on disk
-            try:
-                ws_path = Path(meta.workspace_path)
-                m_path = ws_path / "metadata.json" if (ws_path / "metadata.json").exists() else ws_path / "workspace_metadata.json"
-                if m_path.exists():
-                    m_data = json.loads(m_path.read_text(encoding="utf-8"))
-                    if isinstance(m_data, dict) and m_data.get("verification_diff_hash"):
-                        expected_hash = m_data["verification_diff_hash"]
-                        meta.verification_diff_hash = expected_hash
-            except Exception as exc:
-                logger.debug("Failed to read metadata file %s for verification hash: %s", m_path, exc)
-
-        if not expected_hash:
-            # 2. Attempt to resolve from latest verification event payload if present
-            events = task_repo.list_events(task.id)
-            for evt in events:
-                if evt.event_type in ("VERIFICATION_PASSED", "VERIFICATION_RECORDED", TaskEventType.VERIFICATION_COMPLETED.value):
-                    evt_payload = evt.event_data or {}
-                    if evt_payload.get("diff_hash"):
-                        expected_hash = evt_payload["diff_hash"]
-                        meta.verification_diff_hash = expected_hash
-                        break
-
+        expected_hash = next(
+            (
+                event.event_data.get("diff_hash")
+                for event in reversed(task_repo.list_events(task.id))
+                if event.event_type == TaskEventType.VERIFICATION_COMPLETED.value
+                and isinstance(event.event_data, dict)
+                and event.event_data.get("verified_revision") == ver.verified_revision
+            ),
+            None,
+        )
         if not expected_hash:
             raise APIError(
                 409,
                 ErrorCode.VERIFICATION_FAILED,
                 "Verification diff hash is missing or unrecorded. Independent verification must be re-executed before publishing.",
             )
+        has_current_test_evidence = any(
+            check.get("name") == "tests"
+            and check.get("status") == "PASSED"
+            and (check.get("details") or {}).get("target_revision") == f"diff-sha256:{expected_hash}"
+            for check in (ver.checks or [])
+        )
+        if not has_current_test_evidence:
+            raise APIError(409, ErrorCode.VERIFICATION_FAILED, "Re-run tests and verification for this commit before publishing.")
 
         imm_check = self.workspace_manager.verify_diff_immutability(
             str(task.id),
@@ -1805,6 +1734,35 @@ class TaskExecutionOrchestrator:
 
         return ver
 
+    def _require_publication_authorization(
+        self, task: AgentTask, task_repo: TaskRepository, verified_revision: str,
+    ) -> None:
+        authorization = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
+        if not authorization or not authorization.get("user_id") or authorization.get("authorized_head_sha") != verified_revision:
+            raise APIError(
+                409,
+                ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
+                "A human must authorize this verified commit before publication.",
+            )
+
+    def authorize_verified_publication(
+        self, task: AgentTask, task_repo: TaskRepository, actor_id: UUID, head_sha: str, notes: str | None,
+    ) -> AgentTask:
+        meta = self.ensure_workspace_loaded(task, task_repo)
+        if meta is None:
+            raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace not found for task.")
+        verification = self._assert_verified_and_immutable_for_publication(task, task_repo, meta)
+        if head_sha != verification.verified_revision:
+            raise APIError(409, ErrorCode.VERIFICATION_FAILED, "The requested SHA differs from the verified commit.")
+        return task_repo.authorize_publication(task.id, task.repository_id, head_sha, actor_id, notes)
+
+    @staticmethod
+    def _publication_repository(task: AgentTask) -> Any:
+        repo = task.repository
+        if not repo or not repo.owner or not repo.name or not repo.installation_id:
+            raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "A connected GitHub App repository is required.")
+        return repo
+
     def push_verified_branch(
         self,
         task: AgentTask,
@@ -1817,131 +1775,50 @@ class TaskExecutionOrchestrator:
         current_remote_head_sha: str | None = None,
         strict_remote: bool = False,
     ) -> WorkspacePushResult:
-        """Push verified task branch after checking human publication authorization, diff immutability, and stale base."""
+        """Push exactly the authorized commit to the connected GitHub repository."""
         if not publication_authorized:
-            raise APIError(
-                403,
-                ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
-                "Publication not authorized: Explicit human publication authorization (`publication_authorized=True`) is required before pushing changes (ADR-010).",
-            )
+            raise APIError(403, ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED, "Explicit publication authorization is required.")
         _require_safe_git_ref(branch_name, "branch name")
         _require_safe_remote_name(remote_name)
-
         meta = self.ensure_workspace_loaded(task, task_repo)
         if meta is None:
             raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace not found for task.")
+        branch = branch_name or meta.branch_name
+        if branch != format_agent_branch_name(task.id) or remote_name != "origin":
+            raise APIError(403, ErrorCode.POLICY_VIOLATION, "Publication requires the task branch and connected origin.")
 
-        target_branch = (branch_name or meta.branch_name or format_agent_branch_name(task.id)).strip()
-        clean_branch = target_branch.removeprefix("refs/heads/").lower()
-        if clean_branch in PROTECTED_BRANCHES:
-            raise APIError(
-                403,
-                ErrorCode.POLICY_VIOLATION,
-                f"Cannot push directly to protected branch '{target_branch}' (ADR-010).",
-            )
-
-        self._assert_verified_and_immutable_for_publication(task, task_repo, meta)
-
-        # Stale base revision check if caller supplies current_remote_head_sha
+        verification = self._assert_verified_and_immutable_for_publication(task, task_repo, meta)
+        self._require_publication_authorization(task, task_repo, verification.verified_revision)
+        if task.status != TaskStatus.PUBLISHING.value:
+            raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Task is not awaiting publication.")
         if current_remote_head_sha:
-            stale_res = self.workspace_manager.detect_stale_base_revision(
-                str(task.id),
-                current_remote_head_sha=current_remote_head_sha,
-                remote_name=remote_name,
-            )
-            if stale_res.is_stale:
-                raise APIError(
-                    409,
-                    ErrorCode.PLAN_VERSION_MISMATCH,
-                    stale_res.message or "Workspace base revision is stale relative to remote HEAD.",
-                )
+            self.workspace_manager.assert_not_stale(str(task.id), current_remote_head_sha=current_remote_head_sha)
 
-        # Resolve installation token host-side for authenticated remote push (F26 credential isolation)
-        host_installation_token: str | None = None
+        repo = self._publication_repository(task)
         try:
-            from app.models.repository import Repository
-            from app.models.github_installation import GitHubInstallation
-            repo_obj = task.repository or (task_repo.session.get(Repository, task.repository_id) if task.repository_id else None)
-            if repo_obj and getattr(repo_obj, "installation_id", None):
-                inst = task_repo.session.scalars(
-                    select(GitHubInstallation).where(
-                        GitHubInstallation.installation_id == str(repo_obj.installation_id)
-                    )
-                ).first()
-                if inst and getattr(inst, "access_token", None):
-                    host_installation_token = inst.access_token
-        except Exception:
-            host_installation_token = None
-
-        push_req = WorkspacePushRequest(
-            task_id=str(task.id),
-            branch_name=target_branch,
-            remote_name=remote_name,
-            publication_authorized=True,
-            installation_token=host_installation_token,
-        )
-
-        ws_path = Path(meta.workspace_path)
-        has_remote = False
-        if (ws_path / ".git").exists():
-            proc_rem = subprocess.run(
-                ["git", "-C", str(ws_path), "remote", "get-url", "--", remote_name],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            has_remote = (proc_rem.returncode == 0 and bool(proc_rem.stdout.strip()))
-
-        try:
-            push_res = self.workspace_manager.push_task_branch(push_req)
-        except WorkspacePushError as exc:
-            settings = get_settings()
-            # ISS-018: In production, failed git push must NEVER be treated as successful.
-            # Simulation is only allowed when not production AND settings.allow_mock_git_push is True AND not has_remote
-            if settings.is_production or not getattr(settings, "allow_mock_git_push", False) or strict_remote or has_remote:
-                raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, redact(str(exc))) from exc
-            # In local/sandbox environments with allow_mock_git_push=True and no configured remote 'origin', record simulated push
-            pushed_sha = meta.base_revision
-            if (ws_path / ".git").exists():
-                proc = subprocess.run(
-                    ["git", "-C", str(ws_path), "rev-parse", "HEAD"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=5,
+            git = GitBranchService(task_repo.session)
+            token = asyncio.run(git.get_installation_token_for_repo(repo))
+            push_res = self.workspace_manager.push_task_branch(
+                WorkspacePushRequest(
+                    task_id=str(task.id),
+                    branch_name=branch,
+                    remote_name=remote_name,
+                    remote_url=f"https://github.com/{repo.owner}/{repo.name}.git",
+                    publication_authorized=True,
+                    installation_token=token,
+                    expected_revision=verification.verified_revision,
                 )
-                if proc.stdout.strip():
-                    pushed_sha = proc.stdout.strip()
-            push_res = WorkspacePushResult(
-                success=True,
-                task_id=str(task.id),
-                branch=target_branch,
-                pushed_sha=pushed_sha,
-                remote_name=remote_name,
-                simulated=True,
             )
+        except (GitHubError, GitHubAPIError, WorkspacePushError) as exc:
+            raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, redact(str(exc))) from exc
 
-        task_repo.record_event(
-            task_id=task.id,
-            repository_id=task.repository_id,
-            event_type=TaskEventType.PUBLICATION_AUTHORIZED.value,
-            event_data={"branch": target_branch, "remote": remote_name},
-            user_id=actor_id,
-            summary=f"Human publication authorization verified for branch '{target_branch}'.",
-        )
         task_repo.record_event(
             task_id=task.id,
             repository_id=task.repository_id,
             event_type=TaskEventType.BRANCH_PUSHED.value,
-            event_data={
-                "branch": push_res.branch,
-                "pushed_sha": push_res.pushed_sha,
-                "remote_name": push_res.remote_name,
-                "simulated": not has_remote,
-            },
+            event_data={"branch": branch, "pushed_sha": push_res.pushed_sha, "remote_name": remote_name},
             user_id=actor_id,
-            summary=f"Pushed verified branch '{push_res.branch}' ({push_res.pushed_sha[:8]}) to '{push_res.remote_name}'.",
+            summary=f"Pushed verified branch '{branch}' ({push_res.pushed_sha[:8]}).",
         )
         task_repo.session.commit()
         return push_res
@@ -1968,6 +1845,8 @@ class TaskExecutionOrchestrator:
             )
         _require_safe_git_ref(head_branch, "head branch")
         _require_safe_git_ref(base_branch, "base branch")
+        if head_branch and head_branch != format_agent_branch_name(task.id):
+            raise APIError(403, ErrorCode.POLICY_VIOLATION, "Draft publication requires the task branch.")
 
         lock = self.workspace_manager.get_task_lock(str(task.id))
         if not lock.acquire(timeout=10):
@@ -1983,204 +1862,73 @@ class TaskExecutionOrchestrator:
             if meta is None:
                 raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Workspace not found for task.")
 
-            effective_head = (head_branch or meta.branch_name or format_agent_branch_name(task.id)).strip()
-            clean_head = effective_head.removeprefix("refs/heads/").lower()
-            if clean_head in PROTECTED_BRANCHES:
-                raise APIError(
-                    403,
-                    ErrorCode.POLICY_VIOLATION,
-                    f"Head branch '{effective_head}' cannot be a protected branch (ADR-010).",
-                )
-
-            from app.models.repository import Repository
-
-            repo_obj = task.repository or task_repo.session.get(Repository, task.repository_id)
-            effective_base = (
-                base_branch
-                or (getattr(repo_obj, "default_branch", None) if repo_obj else None)
-                or "main"
-            ).strip()
-
-            # 2. Verify independent verification status and diff immutability
+            effective_head = head_branch or meta.branch_name
+            repo = self._publication_repository(task)
+            effective_base = base_branch or repo.default_branch or "main"
             ver = self._assert_verified_and_immutable_for_publication(task, task_repo, meta)
+            self._require_publication_authorization(task, task_repo, ver.verified_revision)
+            self.push_verified_branch(
+                task, task_repo, actor_id,
+                publication_authorized=True,
+                branch_name=effective_head,
+                current_remote_head_sha=current_remote_head_sha,
+            )
 
-            # 3. Stale base revision check if remote SHA provided
-            if current_remote_head_sha:
-                stale_res = self.workspace_manager.detect_stale_base_revision(
-                    str(task.id),
-                    current_remote_head_sha=current_remote_head_sha,
-                    base_branch=effective_base,
-                )
-                if stale_res.is_stale:
-                    raise APIError(
-                        409,
-                        ErrorCode.PLAN_VERSION_MISMATCH,
-                        stale_res.message or "Base revision is stale relative to remote HEAD.",
-                    )
-
-            # 4. Persisted publication authorization check (ISS-004)
-            auth_record = task_repo.get_latest_publication_authorization(task.id, task.repository_id)
-            settings = get_settings()
-            if not auth_record and not getattr(settings, "allow_mock_git_push", False):
-                raise APIError(
-                    409,
-                    ErrorCode.PUBLICATION_AUTHORIZATION_REQUIRED,
-                    f"Draft PR publication not authorized: Task '{task.id}' has no recorded publication authorization (call POST /tasks/{task.id}/authorize-publication first).",
-                )
-
-            # Check that authorized revision matches the latest verified revision (ISS-004)
-            if auth_record:
-                auth_sha = auth_record.get("authorized_head_sha")
-                if auth_sha and ver.verified_revision and auth_sha != ver.verified_revision:
-                    raise APIError(
-                        409,
-                        ErrorCode.PLAN_VERSION_MISMATCH,
-                        f"Publication authorization mismatch: authorized revision '{auth_sha}' does not match current verified revision '{ver.verified_revision}'. Re-authorization is required.",
-                    )
-
-            # 5. Transition task READY_FOR_PUBLICATION -> PUBLISHING
-            curr_status = TaskStatus(task.status)
-            if curr_status == TaskStatus.VERIFYING:
-                task_repo.transition_status(task, TaskStatus.READY_FOR_PUBLICATION, actor_id=actor_id)
-                curr_status = TaskStatus.READY_FOR_PUBLICATION
-            if curr_status != TaskStatus.READY_FOR_PUBLICATION and curr_status != TaskStatus.PUBLISHING:
-                raise APIError(
-                    409,
-                    ErrorCode.INVALID_STATE_TRANSITION,
-                    f"Task must be in READY_FOR_PUBLICATION state before creating a Draft PR (current: {curr_status.value}).",
-                )
-            if curr_status == TaskStatus.READY_FOR_PUBLICATION:
-                task_repo.transition_status(
-                    task,
-                    TaskStatus.PUBLISHING,
-                    actor_id=actor_id,
-                    event_type=TaskEventType.PUBLICATION_AUTHORIZED.value,
-                    summary=f"Human authorized Draft PR publication on branch '{effective_head}'.",
-                )
-
-            # 5. Ensure workspace changes are committed on the task branch
-            commit_title = (title or f"feat: {task.title}").strip()
-            try:
-                commit_req = WorkspaceCommitRequest(
-                    task_id=str(task.id),
-                    message=commit_title,
-                    branch_name=effective_head,
-                )
-                commit_res = self.workspace_manager.commit_task_changes(commit_req)
-                head_sha = commit_res.commit_sha
-                # Refresh verification diff hash after commit
-                self.workspace_manager.compute_verification_diff_hash(str(task.id), record_baseline=True)
-            except Exception:
-                head_sha = ver.verified_revision
-
-            if not _HEX_SHA_RE.match(head_sha or ""):
-                head_sha = hashlib.sha256(f"{task.id}:{effective_head}".encode("utf-8")).hexdigest()[:40]
-
-            # 6. Synthesize Draft PR via WorkspaceManager (strictly draft=True, zero auto-merge)
-            repo_owner = getattr(repo_obj, "owner", None)
-            repo_name = getattr(repo_obj, "name", None)
-            if not repo_owner or not repo_name:
-                full_n = getattr(repo_obj, "full_name", None) or ""
-                if "/" in full_n:
-                    parts = full_n.split("/", 1)
-                    repo_owner = repo_owner or parts[0]
-                    repo_name = repo_name or parts[1]
-            repo_owner = repo_owner or "local"
-            repo_name = repo_name or "repository"
-
-            custom_body = body or ver.summary or ""
-            if task.finding_id:
-                custom_body += f"\n\n**Originating Finding ID:** `{task.finding_id}`"
-            if task.source_id:
-                custom_body += f"\n**Source Reference:** `#{task.source_id}` ({task.source_type})"
-
-            pr_req = WorkspaceDraftPRRequest(
+            pr_title = redact(title or f"feat: {task.title}")
+            summary = self.workspace_manager.format_draft_pr_summary(
                 task_id=str(task.id),
-                title=commit_title,
-                body=redact(custom_body.strip()),
+                title=pr_title,
                 head_branch=effective_head,
                 base_branch=effective_base,
-                draft=True,
-                repository_owner=repo_owner,
-                repository_name=repo_name,
-                publication_authorized=True,
+                diff_result=self.workspace_manager.get_workspace_diff(str(task.id)),
+                latest_test=(self.workspace_manager.get_test_history(str(task.id)) or [None])[-1],
+                custom_body="\n\n".join(part for part in (body, ver.summary) if part),
             )
-            pr_res = self.workspace_manager.create_draft_pr(pr_req)
 
-            final_pr_number = pr_res.pr_number
-            final_pr_url = pr_res.pr_url
+            async def publish() -> dict[str, Any]:
+                git = GitBranchService(task_repo.session)
+                client = await git._get_client_for_repo(repo)
+                existing = await client.list_pull_requests(
+                    repo.owner, repo.name, head=f"{repo.owner}:{effective_head}", base=effective_base,
+                )
+                result = existing[0] if existing else await client.create_pull_request(
+                    owner=repo.owner,
+                    repo=repo.name,
+                    head=effective_head,
+                    base=effective_base,
+                    title=pr_title,
+                    body=redact(summary),
+                    draft=True,
+                )
+                return result
+
             try:
-                from app.services.git_branch import GitBranchService
-                import asyncio
-                import concurrent.futures
+                remote_pr = asyncio.run(publish())
+            except (GitHubError, GitHubAPIError) as exc:
+                raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, redact(str(exc))) from exc
 
-                def _resolve_real_gh():
-                    async def _coro():
-                        svc = GitBranchService(task_repo.session)
-                        gh_cl = await svc._get_client_for_repo(repo_obj)
-                        if gh_cl and repo_owner != "local":
-                            gh_prs = await gh_cl.list_pull_requests(repo_owner, repo_name, state="all")
-                            for p in gh_prs:
-                                hr = p.get("head", {}).get("ref")
-                                if hr in (effective_head, f"refs/heads/{effective_head}"):
-                                    return p.get("number"), p.get("html_url")
-                        return None, None
+            if (
+                not remote_pr.get("number") or not remote_pr.get("html_url")
+                or remote_pr.get("draft") is not True
+                or (remote_pr.get("head") or {}).get("sha") != ver.verified_revision
+                or (remote_pr.get("head") or {}).get("ref") != effective_head
+                or (remote_pr.get("base") or {}).get("ref") != effective_base
+            ):
+                raise APIError(502, ErrorCode.EXTERNAL_SERVICE_ERROR, "GitHub did not return a draft PR for the verified commit.")
 
-                    try:
-                        return asyncio.run(_coro())
-                    except Exception:
-                        return None, None
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    real_num, real_url = pool.submit(_resolve_real_gh).result(timeout=5)
-                    if real_num and real_url:
-                        final_pr_number = real_num
-                        final_pr_url = real_url
-            except Exception as exc:
-                logger.debug("Failed to resolve live GitHub PR URL/number: %s", exc)
-
-            # 7. Persist TaskPullRequest in PostgreSQL & advance task to DRAFT_PR_CREATED
             task_pr = task_repo.record_pull_request(
                 task_id=task.id,
                 repository_id=task.repository_id,
-                pr_url=final_pr_url,
-                base_branch=pr_res.base_branch,
-                head_branch=pr_res.head_branch,
-                head_sha=head_sha,
-                title=commit_title,
-                body=pr_res.summary,
-                pr_number=final_pr_number,
-                github_pr_id=final_pr_number,
+                pr_url=remote_pr["html_url"],
+                base_branch=effective_base,
+                head_branch=effective_head,
+                head_sha=ver.verified_revision,
+                title=pr_title,
+                body=redact(summary),
+                pr_number=remote_pr["number"],
+                github_pr_id=remote_pr["number"],
                 is_draft=True,
             )
-
-            # 8. Synchronize Week 2/3 PullRequest metadata table for cross-route compatibility
-            try:
-                diff_res = self.workspace_manager.get_workspace_diff(str(task.id))
-                changed_files = [f.file_path for f in diff_res.files] or [
-                    f for req_d in (task.requirements or []) for f in (req_d.get("target_files") or [])
-                ]
-                db_runs = task_repo.list_test_runs(task.id)
-                test_summary = (
-                    f"{db_runs[-1].status}: {db_runs[-1].tests_passed}/{db_runs[-1].tests_total} passed"
-                    if db_runs
-                    else "Tests verified in isolated sandbox"
-                )
-                git_branch_svc = GitBranchService(task_repo.session)
-                git_branch_svc.prepare_pr_metadata(
-                    task_id=task.id,
-                    repository_id=task.repository_id,
-                    branch=effective_head,
-                    base_branch=effective_base,
-                    changed_files=changed_files,
-                    commit_message=commit_title,
-                    test_summary=test_summary,
-                    verification_summary=f"Independent verification {ver.status} at {ver.verified_revision[:12]}",
-                    user_id=actor_id or task.user_id,
-                    status="draft_pr_created",
-                )
-            except Exception as meta_exc:
-                logger.debug("Optional PullRequest metadata sync skipped: %s", meta_exc)
 
             return task_pr
         finally:
@@ -2452,6 +2200,8 @@ class TaskExecutionOrchestrator:
         pr_body: str | None = None,
     ) -> dict[str, Any]:
         """Execute the complete post-approval pipeline with zero manual steps between Approval and Verification/Draft PR."""
+        if publication_authorized:
+            raise APIError(400, ErrorCode.INVALID_REQUEST, "Publication requires authorization of the verified commit.")
         # 1. Start workspace & execute approved plan steps
         self.start_task_execution(
             task=task,
@@ -2476,8 +2226,12 @@ class TaskExecutionOrchestrator:
         # 2. Run workspace tests & bounded self-repair if needed
         if run_tests:
             test_res = self.execute_task_tests(task=task, task_repo=task_repo, actor_id=actor_id)
-            if test_res.status != TestOutcomeStatus.PASSED and auto_repair:
-                self.execute_bounded_repair(task=task, task_repo=task_repo, actor_id=actor_id)
+            if test_res.status != TestOutcomeStatus.PASSED and auto_repair and test_res.is_repair_eligible:
+                repair = self.execute_bounded_repair(
+                    task=task, task_repo=task_repo, actor_id=actor_id, framework=test_res.framework,
+                )
+                if repair.success:
+                    self.execute_task_tests(task=task, task_repo=task_repo, actor_id=actor_id)
             self.save_task_checkpoint(task, task_repo, step_name="post_test_and_repair")
 
         if TaskStatus(task.status) == TaskStatus.FAILED:
@@ -2502,45 +2256,12 @@ class TaskExecutionOrchestrator:
             state_data={"verified_revision": ver_schema.verified_revision, "verification_status": ver_schema.status},
         )
 
-        # 4. If verification passed and human authorized publication, record authorization and create Draft PR
-        pr_dict: dict[str, Any] | None = None
-        if ver_schema.is_eligible_for_publication and publication_authorized:
-            task_repo.authorize_publication(
-                task_id=task.id,
-                repository_id=task.repository_id,
-                head_sha=ver_schema.verified_revision,
-                user_id=actor_id,
-                notes="Authorized via autonomous workflow parameter",
-            )
-            pr_rec = self.create_draft_pull_request(
-                task=task,
-                task_repo=task_repo,
-                actor_id=actor_id,
-                publication_authorized=True,
-                title=pr_title,
-                body=pr_body,
-            )
-            pr_dict = {
-                "pr_id": str(pr_rec.id),
-                "task_id": str(pr_rec.task_id),
-                "repository_id": str(pr_rec.repository_id),
-                "pr_number": pr_rec.pr_number,
-                "pr_url": pr_rec.pr_url,
-                "base_branch": pr_rec.base_branch,
-                "head_branch": pr_rec.head_branch,
-                "head_sha": pr_rec.head_sha,
-                "is_draft": pr_rec.is_draft,
-                "title": pr_rec.title,
-                "body": redact(pr_rec.body or ""),
-                "created_at": pr_rec.created_at.isoformat() if pr_rec.created_at else "",
-            }
-
         return redact_obj(
             {
                 "task_id": str(task.id),
                 "status": task.status,
                 "verification": ver_schema.model_dump(mode="json"),
-                "pull_request": pr_dict,
+                "pull_request": None,
             }
         )
 
@@ -2551,6 +2272,10 @@ _default_orchestrator: TaskExecutionOrchestrator | None = None
 def get_task_execution_orchestrator(app_state: Any = None) -> TaskExecutionOrchestrator:
     """Resolve the singleton TaskExecutionOrchestrator from app.state or module fallback."""
     global _default_orchestrator
+    if app_state is None:
+        from app.main import app
+
+        app_state = app.state
     if app_state is not None:
         orch = getattr(app_state, "task_execution_orchestrator", None)
         if orch is not None:

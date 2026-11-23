@@ -20,6 +20,8 @@ import logging
 import re
 from typing import Any
 
+from sqlalchemy import func
+
 from app.core.input_security import UnsafePathError, validate_repo_relative_path
 from app.models.analysis_finding import AnalysisFinding
 from app.models.code_chunk import CodeChunk
@@ -159,11 +161,11 @@ class HierarchicalLocalizer:
 
         if db is not None and hasattr(db, "query") and getattr(db, "_is_mock_db", None) is not True and repo_id is not None:  # ISS-041: test-aware branch; pending DI refactor
             try:
-                f_rows: list[RepositoryFile] = (
+                f_rows = (
                     db.query(RepositoryFile)
                     .filter(RepositoryFile.repository_id == repo_id)
-                    .limit(200)
-                    .all()
+                    .order_by(RepositoryFile.path)
+                    .yield_per(500)
                 )
                 id_to_path: dict[Any, str] = {}
                 for fr in f_rows:
@@ -175,16 +177,15 @@ class HierarchicalLocalizer:
                     except UnsafePathError:
                         continue
 
-                s_rows: list[CodeSymbol] = (
-                    db.query(CodeSymbol)
-                    .filter(CodeSymbol.repository_id == repo_id)
-                    .limit(400)
-                    .all()
-                )
-                for sr in s_rows:
-                    p = id_to_path.get(sr.file_id) or str(getattr(sr, "file_path", "") or "")
-                    if p and p.lower() not in forbidden_lower:
-                        db_symbols_by_file[p].append(sr)
+                if query_tokens:
+                    matching_symbols = db.query(CodeSymbol).filter(
+                        CodeSymbol.repository_id == repo_id,
+                        func.lower(CodeSymbol.name).in_(query_tokens),
+                    ).yield_per(500)
+                    for symbol in matching_symbols:
+                        path = id_to_path.get(symbol.file_id)
+                        if path:
+                            db_symbols_by_file[path].append(symbol)
 
                 if getattr(task, "origin_finding_id", None):
                     origin_finding = db.get(AnalysisFinding, task.origin_finding_id)
@@ -244,6 +245,12 @@ class HierarchicalLocalizer:
         targets: list[LocalizationTarget] = []
         for f_path, file_score, file_reason, file_imp in ranked_files[: self.max_candidate_files]:
             file_syms = list(db_symbols_by_file.get(f_path, []))
+            file_rec = db_file_map.get(f_path)
+            if file_rec is not None:
+                file_syms = db.query(CodeSymbol).filter(
+                    CodeSymbol.repository_id == repo_id,
+                    CodeSymbol.file_id == file_rec.id,
+                ).order_by(CodeSymbol.importance_score.desc(), CodeSymbol.start_line).all()
             if not file_syms and snapshot is not None:
                 # Fallback to snapshot GraphNodes for this file
                 file_syms = [
@@ -259,7 +266,6 @@ class HierarchicalLocalizer:
             )
 
             # Fetch code chunks for snippet preview if DB is available
-            file_rec = db_file_map.get(f_path)
             if file_rec is not None and db is not None and f_path not in db_chunks_by_file:
                 try:
                     db_chunks_by_file[f_path] = (

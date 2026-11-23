@@ -192,7 +192,7 @@ class AgentExecutionLoop:
     ) -> None:
         self.workspace_manager = workspace_manager
         self.max_iterations = max_iterations
-        self.loop_detector = LoopDetector(max_cycle_repetitions=max_cycle_repetitions)
+        self.max_cycle_repetitions = max_cycle_repetitions
         self.tool_router = tool_router
         self.execution_verifier = execution_verifier or ExecutionVerifier()
         self.forbidden_files = list(forbidden_files or [])
@@ -290,22 +290,16 @@ class AgentExecutionLoop:
                 if isinstance(item, PlanStep):
                     raw_steps.append(item)
                 elif isinstance(item, dict):
-                    raw_steps.append(
-                        PlanStep(
-                            step_id=str(item.get("step_id", f"step-{len(raw_steps)+1}")),
-                            title=item.get("title", ""),
-                            description=item.get("description", ""),
-                            action_type=item.get("action_type") or item.get("step_type", "edit"),
-                            expected_files=item.get("expected_files", []),
-                            dependencies=item.get("dependencies", []) or item.get("depends_on", []),
-                            verification=item.get("verification", []),
-                        )
-                    )
+                    raw_steps.append(PlanStep.model_validate({
+                        **item,
+                        "step_id": str(item.get("step_id", f"step-{len(raw_steps)+1}")),
+                        "action_type": item.get("action_type") or item.get("step_type", "edit"),
+                    }))
         else:
             raise ValueError(f"Unsupported plan format: {type(plan)}")
 
         ordered_steps = self._resolve_step_dependencies(raw_steps)
-        self.loop_detector.reset()
+        loop_detector = LoopDetector(max_cycle_repetitions=self.max_cycle_repetitions)
 
         step_records: list[StepExecutionRecord] = []
         payload_map = step_payloads or {}
@@ -338,13 +332,13 @@ class AgentExecutionLoop:
             step_input = dict(payload_map.get(step_id, {}) or {})
 
             # 1. Anti-Cyclic Loop Check
-            fingerprint = self.loop_detector.fingerprint_action(
+            fingerprint = loop_detector.fingerprint_action(
                 step_id=step_id,
                 action_type=action_type,
                 target_files=expected_files,
                 content_or_args=step_input,
             )
-            is_loop, cycle_len = self.loop_detector.record_and_check(fingerprint)
+            is_loop, cycle_len = loop_detector.record_and_check(fingerprint)
             if is_loop:
                 error_msg = (
                     f"Repetitive execution cycle detected (cycle length: {cycle_len}). "
@@ -543,7 +537,6 @@ class AgentExecutionLoop:
                     "write_file",
                 )
                 or any(action_type.startswith(p) for p in ("edit", "create", "write", "modify", "add", "update", "patch", "implement", "refactor", "code"))
-                or (expected_files and action_type not in ("delete", "remove", "rm", "unlink", "inspect", "read", "view", "browse", "check", "examine", "search", "find", "analyze", "explore"))
             ):
                 content = step_input.get("content")
                 if content is not None:
@@ -554,6 +547,8 @@ class AgentExecutionLoop:
                             content=content,
                             create_parents=True,
                         )
+                        if not res.success:
+                            raise WorkspaceError(res.error or f"Failed to write '{target_file}'.")
                         output = {"written_bytes": getattr(res, "bytes_written", len(content))}
                 elif self.edit_synthesizer is not None:
                     synth_res = self.edit_synthesizer.synthesize_sync(
@@ -583,7 +578,8 @@ class AgentExecutionLoop:
             elif action_type in ("delete", "remove", "rm", "unlink", "delete_file", "remove_file"):
                 deleted_files: list[str] = []
                 for target_file in expected_files:
-                    self.workspace_manager.delete_file(task_id=task_id, file_path=target_file, safe_check=True)
+                    if not self.workspace_manager.delete_file(task_id=task_id, file_path=target_file, safe_check=True):
+                        raise WorkspaceError(f"No file was deleted at '{target_file}'.")
                     deleted_files.append(target_file)
                 output = {"deleted_files": deleted_files}
 
@@ -662,7 +658,7 @@ class AgentExecutionLoop:
                             timeout_seconds=60,
                         )
                         test_res = self.workspace_manager.run_tests(test_req)
-                        if test_res.status in (TestOutcomeStatus.PASSED, TestOutcomeStatus.NO_TESTS_FOUND):
+                        if test_res.status == TestOutcomeStatus.PASSED and test_res.passed_count > 0:
                             output = {
                                 "status": "tests_completed",
                                 "test_outcome": test_res.status.value,

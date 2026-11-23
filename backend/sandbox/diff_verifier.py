@@ -665,8 +665,10 @@ class WorkspaceDiffVerifier:
             exclude_file = workspace_path / ".git" / "info" / "exclude"
             if exclude_file.parent.exists():
                 curr = exclude_file.read_text(encoding="utf-8") if exclude_file.exists() else ""
-                if "metadata.json" not in curr:
-                    exclude_file.write_text(curr + "\nmetadata.json\nworkspace_metadata.json\n", encoding="utf-8")
+                workspace_excludes = ("/.test_reports/", "/.coverage", "__pycache__/", "*.pyc", ".pytest_cache/")
+                missing = [pattern for pattern in workspace_excludes if pattern not in curr.splitlines()]
+                if missing:
+                    exclude_file.write_text(curr + "\n" + "\n".join(missing) + "\n", encoding="utf-8")
         except Exception as exc:
             logger.debug("Failed updating .git/info/exclude in workspace: %s", exc)
 
@@ -681,20 +683,8 @@ class WorkspaceDiffVerifier:
         except Exception as exc:
             logger.debug("Failed git add -N in workspace: %s", exc)
 
-        excludes = [
-            "--",
-            ".",
-            ":(exclude)*metadata.json",
-            ":(exclude)*__pycache__*",
-            ":(exclude)*.pyc",
-            ":(exclude)*.pytest_cache*",
-        ]
-
-        candidate_cmds = [
-            ["git", "-C", str(workspace_path), "diff", base_revision] + excludes,
-            ["git", "-C", str(workspace_path), "diff", "HEAD"] + excludes,
-            ["git", "-C", str(workspace_path), "diff", "--cached"] + excludes,
-        ]
+        git_diff = ["git", "-C", str(workspace_path), "diff", "--full-index", "--no-ext-diff", "--no-textconv", "--no-renames"]
+        candidate_cmds = [git_diff + [revision, "--", "."] for revision in (base_revision, "HEAD", "--cached")]
 
         total_bytes = 0
 

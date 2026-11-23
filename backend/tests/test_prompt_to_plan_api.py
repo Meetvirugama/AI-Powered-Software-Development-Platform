@@ -40,17 +40,12 @@ def _seed_repo(db_session, user_id, name="test-repo", lang="python"):
     return repo
 
 
-def test_prompt_to_plan_happy_path(client, db_session, test_user, auth_headers, monkeypatch):
+def test_prompt_to_plan_happy_path(client, db_session, test_user, auth_headers):
     repo = _seed_repo(db_session, test_user.id, name="test-repo-happy", lang="python")
-
-    monkeypatch.setattr(
-        "app.api.v1.tasks._owned_repository",
-        lambda r_id, u_id, db, min_role=None: repo,
-    )
 
     payload = {
         "repository_id": str(repo.id),
-        "prompt": "Fix critical SQL injection vulnerability in user profile endpoint and add regression tests",
+        "prompt": "Fix critical SQL injection vulnerability in src/profile.py and add regression tests",
         "auto_create_task": True,
     }
 
@@ -81,18 +76,13 @@ def test_prompt_to_plan_happy_path(client, db_session, test_user, auth_headers, 
     assert critic["score"] >= 0.70
 
 
-def test_prompt_to_plan_detects_ambiguity(client, db_session, test_user, auth_headers, monkeypatch):
+def test_prompt_to_plan_detects_ambiguity(client, db_session, test_user, auth_headers):
     repo = _seed_repo(db_session, test_user.id, name="test-repo-ambig", lang="typescript")
-
-    monkeypatch.setattr(
-        "app.api.v1.tasks._owned_repository",
-        lambda r_id, u_id, db, min_role=None: repo,
-    )
 
     payload = {
         "repository_id": str(repo.id),
         "prompt": "make it better",
-        "auto_create_task": False,
+        "auto_create_task": True,
     }
 
     resp = client.post(

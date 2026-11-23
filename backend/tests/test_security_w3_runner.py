@@ -396,7 +396,7 @@ def _headers(user_id: UUID) -> dict[str, str]:
 
 
 @pytest.fixture()
-def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, local_task_base_revision):
     from app.core.config import get_settings
 
     monkeypatch.setenv("JWT_SECRET", "test-secret-key-w3-sec-runner")
@@ -461,7 +461,7 @@ def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     fastapi_app.dependency_overrides[get_db] = _override_db
     client = TestClient(fastapi_app, raise_server_exceptions=False)
     try:
-        yield SimpleNamespace(client=client, session=session, orchestrator=orchestrator, tmp=tmp_path)
+        yield SimpleNamespace(client=client, session=session, orchestrator=orchestrator, tmp=tmp_path, base_revision=local_task_base_revision)
     finally:
         fastapi_app.dependency_overrides.pop(get_db, None)
         fastapi_app.state.task_execution_orchestrator = previous
@@ -470,7 +470,7 @@ def api_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         get_settings.cache_clear()
 
 
-def _running_task(client: TestClient) -> str:
+def _running_task(client: TestClient, base_revision: str) -> str:
     """Create, plan, approve and start a task so its workspace is IN_USE."""
     create = client.post(
         "/api/v1/tasks",
@@ -479,7 +479,7 @@ def _running_task(client: TestClient) -> str:
             "repository_id": str(REPO_A_ID),
             "title": "Add discount helper",
             "description": "Add apply_discount in src/discount.py.",
-            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": "a1b2c3d4"},
+            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": base_revision},
             "requirements": [
                 {
                     "id": "req-1",
@@ -515,21 +515,17 @@ def _running_task(client: TestClient) -> str:
     )
     assert approve.status_code == 200, approve.text
 
-    first_step = plan_data["steps"][0]["step_id"]
     execute = client.post(
         f"/api/v1/tasks/{task_id}/execute",
         headers=_headers(USER_A_ID),
-        json={
-            "run_steps": True,
-            "step_payloads": {first_step: {"content": "def apply_discount(p, pct):\n    return p\n"}},
-        },
+        json={"run_steps": False},
     )
     assert execute.status_code == 200, execute.text
     return task_id
 
 
 def test_api_test_output_secrets_are_redacted(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     manager = api_env.orchestrator.workspace_manager
     write = manager.write_file(
         task_id,
@@ -556,7 +552,7 @@ def test_api_test_output_secrets_are_redacted(api_env):
 
 
 def test_api_slow_tests_are_stopped_by_timeout(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     api_env.orchestrator.workspace_manager.write_file(
         task_id,
         "tests/test_slow.py",
@@ -577,7 +573,7 @@ def test_api_slow_tests_are_stopped_by_timeout(api_env):
 
 
 def test_api_repair_budget_cannot_be_exceeded_or_reset_by_restart(api_env):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
 
     task = api_env.session.get(AgentTask, UUID(task_id))
     task.repair_attempts_used = task.repair_attempts_max
@@ -605,7 +601,7 @@ def test_api_repair_budget_cannot_be_exceeded_or_reset_by_restart(api_env):
     [["config/secrets.yml"], ["Config/Secrets.yml"], ["../../outside.py"]],
 )
 def test_api_repair_cannot_write_forbidden_or_outside_files(api_env, target_files):
-    task_id = _running_task(api_env.client)
+    task_id = _running_task(api_env.client, api_env.base_revision)
     manager = api_env.orchestrator.workspace_manager
     root = manager.get_workspace_path(task_id)
     manager.write_file(

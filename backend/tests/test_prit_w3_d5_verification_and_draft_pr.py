@@ -38,7 +38,6 @@ from app.schemas.workspace import (
     WorkspaceCommitRequest,
     WorkspaceCommitResult,
     WorkspaceCreateRequest,
-    WorkspaceDraftPRRequest,
     WorkspaceDraftPRResult,
     WorkspaceExecutionEventType,
     WorkspaceMetadata,
@@ -509,94 +508,30 @@ class TestWorkspacePushBranch:
 class TestDraftPRCreation:
     """Tests for draft PR synthesis, draft=True guarantee, and ADR-010 compliance."""
 
-    def test_create_draft_pr_unauthorized_fails_gate(
-        self,
-        workspace_manager: WorkspaceManager,
-        running_workspace: str,
-    ):
-        task_id = running_workspace
-        pr_req = WorkspaceDraftPRRequest(
-            task_id=task_id,
-            title="feat: autonomous enhancement",
-            head_branch=f"feat/test-{task_id}",
-            publication_authorized=False,
-        )
-        with pytest.raises(WorkspacePublicationUnauthorizedError) as exc_info:
-            workspace_manager.create_draft_pr(pr_req)
-        assert "human authorization is required" in str(exc_info.value).lower()
-
-    def test_create_draft_pr_protected_head_fails(
-        self,
-        workspace_manager: WorkspaceManager,
-        running_workspace: str,
-    ):
-        task_id = running_workspace
-        pr_req = WorkspaceDraftPRRequest(
-            task_id=task_id,
-            title="feat: autonomous enhancement",
-            head_branch="main",
-            publication_authorized=True,
-        )
-        with pytest.raises(WorkspaceProtectedBranchError) as exc_info:
-            workspace_manager.create_draft_pr(pr_req)
-        assert "protected branch" in str(exc_info.value)
-
-    def test_create_draft_pr_always_draft_and_generates_summary(
-        self,
-        workspace_manager: WorkspaceManager,
-        running_workspace: str,
+    def test_draft_summary_lists_modified_files_and_custom_details(
+        self, workspace_manager: WorkspaceManager, running_workspace: str,
     ):
         task_id = running_workspace
         workspace_manager.write_file(task_id, "src/main.py", "def hello(): return 'pr_ready'\n")
-
-        pr_req = WorkspaceDraftPRRequest(
+        summary = workspace_manager.format_draft_pr_summary(
             task_id=task_id,
             title="feat(core): implement workspace diff verifier",
             head_branch=f"feat/test-{task_id}",
             base_branch="main",
-            draft=True,
-            repository_owner="Meetvirugama",
-            repository_name="AI-Powered-Software-Development-Platform",
-            publication_authorized=True,
+            diff_result=workspace_manager.get_workspace_diff(task_id),
+            latest_test=None,
+            custom_body="### Custom Developer Notes",
         )
-        pr_res = workspace_manager.create_draft_pr(pr_req)
 
-        assert pr_res.success is True
-        assert pr_res.is_draft is True  # ADR-010 invariant: strictly Draft PR
-        assert pr_res.head_branch == f"feat/test-{task_id}"
-        assert pr_res.base_branch == "main"
-        assert pr_res.pr_number is not None
-        assert "Meetvirugama/AI-Powered-Software-Development-Platform" in pr_res.pr_url
-
-        # Check structured summary content
-        summary = pr_res.summary
         assert "Draft PR" in summary
         assert "Task ID" in summary
         assert "ADR-010" in summary
         assert "Automated merging is strictly prohibited" in summary
         assert "src/main.py" in summary
-
-        timeline = workspace_manager.get_execution_timeline(task_id)
-        event_types = [e.event_type for e in timeline]
-        assert WorkspaceExecutionEventType.PR_CREATED in event_types
-
-    def test_create_draft_pr_custom_body_preserved(
-        self,
-        workspace_manager: WorkspaceManager,
-        running_workspace: str,
-    ):
-        task_id = running_workspace
-        pr_req = WorkspaceDraftPRRequest(
-            task_id=task_id,
-            title="feat: custom pr",
-            head_branch=f"feat/test-{task_id}",
-            body="### Custom Developer Notes\nAll tests verified.",
-            publication_authorized=True,
-        )
-        pr_res = workspace_manager.create_draft_pr(pr_req)
-        assert pr_res.success is True
-        assert "### Custom Developer Notes" in pr_res.summary
-        assert "Draft PR Notice" in pr_res.summary
+        assert "### Custom Developer Notes" in summary
+        assert WorkspaceExecutionEventType.PR_CREATED not in {
+            event.event_type for event in workspace_manager.get_execution_timeline(task_id)
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -689,7 +624,7 @@ class TestToolRouterDay5Dispatch:
         assert push_res.success is False
         assert "publication authorization is required" in push_res.error.lower()
 
-    def test_tool_create_draft_pr_authorized_success_via_router(
+    def test_tool_cannot_authorize_draft_pr(
         self,
         workspace_manager: WorkspaceManager,
         running_workspace: str,
@@ -708,6 +643,5 @@ class TestToolRouterDay5Dispatch:
             },
         )
         pr_res = router.route(pr_req, agent_state={"task_id": task_id}, policy_engine=bridge)
-        assert pr_res.success is True
-        assert pr_res.output["is_draft"] is True
-        assert pr_res.output["pr_number"] is not None
+        assert pr_res.success is False
+        assert "verified commit" in pr_res.error.lower()
