@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+_GEMINI_MODEL_ALIASES: dict[str, str] = {
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview-02-05": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-exp": "gemini-flash-lite-latest",
+}
+
 _ALLOWED_GEMINI_SCHEMA_KEYS: frozenset[str] = frozenset(
     {
         "type",
@@ -149,7 +156,7 @@ class GeminiProvider(LLMProvider):
 
         self._api_keys = valid_keys
         self._key_cycle = cycle(self._api_keys)
-        self._default_model = default_model
+        self._default_model = _GEMINI_MODEL_ALIASES.get(default_model, default_model)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._external_client = client
@@ -177,7 +184,7 @@ class GeminiProvider(LLMProvider):
             "models/gemini-2.5-flash",
         ):
             return "gemini-3.8-flash"
-        return bare
+        return _GEMINI_MODEL_ALIASES.get(bare, bare)
 
     @property
     def default_model(self) -> str:

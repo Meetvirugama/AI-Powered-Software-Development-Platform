@@ -68,9 +68,16 @@ _MODEL_MAP: dict[str, str] = {
     "gemini-3.5-flash-lite": "openai/gpt-oss-120b",
     "gemini-flash-lite-latest": "openai/gpt-oss-120b",
     "gemini-flash-latest": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite-preview-02-05": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite-preview": "openai/gpt-oss-120b",
+    "gemini-2.0-flash": "openai/gpt-oss-120b",
+    "gemini-1.5-flash": "openai/gpt-oss-120b",
+    "gemini-1.5-pro": "openai/gpt-oss-120b",
     # Legacy and fallback mappings to active Groq models
     "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
     "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-120b",
     "llama3-70b-8192": "openai/gpt-oss-120b",
     "llama3-8b-8192": "openai/gpt-oss-20b",
     "mixtral-8x7b-32768": "qwen/qwen3.8-27b",
@@ -142,7 +149,7 @@ class GroqProvider(LLMProvider):
 
         self._key_cycle = cycle(self._api_keys)
         self._timeout = timeout
-        self._default_model = model
+        self._default_model = _MODEL_MAP.get(model, _DEFAULT_MODEL)
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
         self._semaphore = asyncio.Semaphore(concurrency_limit)
@@ -261,6 +268,36 @@ class GroqProvider(LLMProvider):
                         raise LLMAuthenticationError(
                             f"Groq authentication failure (HTTP {resp.status_code}).",
                             status_code=resp.status_code,
+                            provider=self.provider_name,
+                        )
+
+                    if resp.status_code == 404:
+                        if resolved_model != _DEFAULT_MODEL:
+                            logger.warning(
+                                "groq_model_not_found_retrying_default",
+                                extra={"model": resolved_model, "default": _DEFAULT_MODEL},
+                            )
+                            resolved_model = _DEFAULT_MODEL
+                            payload["model"] = _DEFAULT_MODEL
+                            retry_resp = await client.post(
+                                _GROQ_CHAT_URL,
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload,
+                            )
+                            if retry_resp.status_code == 200:
+                                latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+                                return self._parse_response(
+                                    retry_resp.json(),
+                                    latency_ms=latency_ms,
+                                    model=resolved_model,
+                                    schema=request.response_schema,
+                                )
+                        raise LLMUnavailableError(
+                            f"Groq model '{resolved_model}' not found (HTTP 404): {resp.text[:200]}",
+                            status_code=404,
                             provider=self.provider_name,
                         )
 

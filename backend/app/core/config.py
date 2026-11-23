@@ -14,6 +14,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ALLOWED_CHAT_PROVIDERS: frozenset[str] = frozenset({"gemini", "groq"})
 _ALLOWED_EMBEDDING_PROVIDERS: frozenset[str] = frozenset({"gemini"})
 
+_GEMINI_DEPRECATED_MODEL_MAP: dict[str, str] = {
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview-02-05": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-exp": "gemini-flash-lite-latest",
+}
+
+_GROQ_DEPRECATED_MODEL_MAP: dict[str, str] = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-120b",
+    "llama3-70b-8192": "openai/gpt-oss-120b",
+    "llama3-8b-8192": "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768": "qwen/qwen3.8-27b",
+}
+
 
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and an optional .env."""
@@ -203,6 +219,22 @@ class Settings(BaseSettings):
                 "OpenAI is explicitly prohibited."
             )
         return v.lower()
+
+    @field_validator("gemini_chat_model")
+    @classmethod
+    def normalize_gemini_chat_model(cls, v: str) -> str:
+        if not v or not v.strip():
+            return "gemini-flash-lite-latest"
+        cleaned = v.strip().removeprefix("models/")
+        return _GEMINI_DEPRECATED_MODEL_MAP.get(cleaned, cleaned)
+
+    @field_validator("groq_chat_model")
+    @classmethod
+    def normalize_groq_chat_model(cls, v: str) -> str:
+        if not v or not v.strip():
+            return "openai/gpt-oss-120b"
+        cleaned = v.strip()
+        return _GROQ_DEPRECATED_MODEL_MAP.get(cleaned, cleaned)
 
     @field_validator("ai_embedding_provider")
     @classmethod
