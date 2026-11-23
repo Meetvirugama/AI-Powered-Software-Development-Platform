@@ -557,8 +557,15 @@ class CodeExplanation(BaseModel):
             if "outputs" in io and io["outputs"]:
                 parts.append(f"Outputs: {io['outputs']}")
             d["inputs_and_outputs"] = " | ".join(parts) if parts else "; ".join(f"{k}: {v}" for k, v in io.items())
+        elif isinstance(io, list):
+            d["inputs_and_outputs"] = "; ".join(str(x) for x in io if str(x).strip())
         elif isinstance(io, str):
             d["inputs_and_outputs"] = io.strip()
+        elif io is not None:
+            d["inputs_and_outputs"] = str(io).strip()
+
+        if not d.get("inputs_and_outputs"):
+            d["inputs_and_outputs"] = "No specific inputs or outputs defined for this document or code target."
 
         # 4. dependencies
         deps = d.get("dependencies")

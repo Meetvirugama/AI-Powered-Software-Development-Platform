@@ -112,9 +112,9 @@ _LEVEL_REQUIREMENTS: dict[str, str] = {
 }
 
 _LEVEL_MAX_TOKENS: dict[str, int] = {
-    "concise": 3072,
-    "detailed": 5120,
-    "deep": 8192,
+    "concise": 2048,
+    "detailed": 3072,
+    "deep": 4096,
 }
 
 
