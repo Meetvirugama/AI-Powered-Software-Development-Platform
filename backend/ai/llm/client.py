@@ -51,12 +51,17 @@ EXPLICIT_MODEL_TRANSLATION_MAP: dict[tuple[str, str], str] = {
     # (exact_requested_model, target_provider_name) -> target_model_name
     ("gemini-flash-lite-latest", "groq"): "openai/gpt-oss-120b",
     ("gemini-flash-latest", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.0-flash-lite", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.0-flash-lite-preview", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.0-flash-lite-preview-02-05", "groq"): "openai/gpt-oss-120b",
+    ("gemini-2.0-flash-exp", "groq"): "openai/gpt-oss-120b",
     ("gemini-1.5-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-2.0-flash", "groq"): "openai/gpt-oss-120b",
     ("gemini-1.5-pro", "groq"): "openai/gpt-oss-120b",
     ("openai/gpt-oss-120b", "gemini"): "gemini-flash-lite-latest",
     ("openai/gpt-oss-20b", "gemini"): "gemini-flash-lite-latest",
     ("llama-3.3-70b-versatile", "gemini"): "gemini-flash-lite-latest",
+    ("llama-3.1-70b-versatile", "gemini"): "gemini-flash-lite-latest",
     ("qwen/qwen3.8-27b", "gemini"): "gemini-flash-lite-latest",
 }
 

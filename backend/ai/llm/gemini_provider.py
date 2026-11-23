@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+_GEMINI_MODEL_ALIASES: dict[str, str] = {
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview-02-05": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-exp": "gemini-flash-lite-latest",
+}
+
 _ALLOWED_GEMINI_SCHEMA_KEYS: frozenset[str] = frozenset(
     {
         "type",
@@ -149,7 +156,7 @@ class GeminiProvider(LLMProvider):
 
         self._api_keys = valid_keys
         self._key_cycle = cycle(self._api_keys)
-        self._default_model = default_model
+        self._default_model = _GEMINI_MODEL_ALIASES.get(default_model, default_model)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._external_client = client
@@ -169,7 +176,8 @@ class GeminiProvider(LLMProvider):
             or requested.startswith(("gpt-", "openai/"))
         ):
             return self._default_model
-        return requested.removeprefix("models/")
+        cleaned = requested.removeprefix("models/")
+        return _GEMINI_MODEL_ALIASES.get(cleaned, cleaned)
 
     @property
     def default_model(self) -> str:
@@ -390,6 +398,25 @@ class GeminiProvider(LLMProvider):
                         )
                         await asyncio.sleep(1.0 * (attempt + 1))
                         continue
+
+                    if response.status_code == 404:
+                        if model != self._default_model:
+                            logger.warning(
+                                "gemini_model_not_found_retrying_default",
+                                extra={"requested_model": model, "fallback_model": self._default_model},
+                            )
+                            fallback_url = f"{_GEMINI_API_BASE}/{self._default_model}:generateContent"
+                            retry_resp = await client.post(fallback_url, json=payload, headers=headers)
+                            if retry_resp.status_code == 200:
+                                response = retry_resp
+                                model = self._default_model
+                        if response.status_code != 200:
+                            safe_body = _redact_key(response.text[:300], current_key)
+                            raise LLMUnavailableError(
+                                f"Gemini model '{model}' unavailable or not found (HTTP 404): {safe_body}",
+                                status_code=404,
+                                provider=self.provider_name,
+                            )
 
                     safe_body = _redact_key(response.text[:300], current_key)
                     raise LLMError(
