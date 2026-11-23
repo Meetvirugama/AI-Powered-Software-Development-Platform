@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 _GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
+_GEMINI_MODEL_ALIASES: dict[str, str] = {
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview-02-05": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-exp": "gemini-flash-lite-latest",
+}
+
 _ALLOWED_GEMINI_SCHEMA_KEYS: frozenset[str] = frozenset(
     {
         "type",
@@ -149,7 +156,7 @@ class GeminiProvider(LLMProvider):
 
         self._api_keys = valid_keys
         self._key_cycle = cycle(self._api_keys)
-        self._default_model = default_model
+        self._default_model = _GEMINI_MODEL_ALIASES.get(default_model, default_model)
         self._timeout_seconds = timeout_seconds
         self._max_retries = max_retries
         self._external_client = client
@@ -169,7 +176,15 @@ class GeminiProvider(LLMProvider):
             or requested.startswith(("gpt-", "openai/"))
         ):
             return self._default_model
-        return requested.removeprefix("models/")
+        bare = requested.removeprefix("models/")
+        if bare in (
+            "gemini-2.0-flash-lite",
+            "models/gemini-2.0-flash-lite",
+            "gemini-2.5-flash",
+            "models/gemini-2.5-flash",
+        ):
+            return "gemini-3.8-flash"
+        return _GEMINI_MODEL_ALIASES.get(bare, bare)
 
     @property
     def default_model(self) -> str:
@@ -392,6 +407,24 @@ class GeminiProvider(LLMProvider):
                         continue
 
                     safe_body = _redact_key(response.text[:300], current_key)
+                    if response.status_code == 404:
+                        if (
+                            attempt == 0
+                            and model != "gemini-3.8-flash"
+                            and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
+                        ):
+                            logger.warning(
+                                "gemini_model_retired_auto_migrating",
+                                extra={"old_model": model, "new_model": "gemini-3.8-flash"},
+                            )
+                            model = "gemini-3.8-flash"
+                            continue
+                        raise LLMUnavailableError(
+                            f"Gemini model unavailable (HTTP 404): {safe_body}",
+                            status_code=404,
+                            provider=self.provider_name,
+                        )
+
                     raise LLMError(
                         f"Gemini API error (HTTP {response.status_code}): {safe_body}",
                         status_code=response.status_code,
@@ -436,6 +469,19 @@ class GeminiProvider(LLMProvider):
                                 continue
                             body = await resp.aread()
                             safe_body = _redact_key(body.decode("utf-8", errors="replace")[:300], current_key)
+                            if (
+                                resp.status_code == 404
+                                and attempt == 0
+                                and model != "gemini-3.8-flash"
+                                and ("no longer available" in safe_body.lower() or "not found" in safe_body.lower())
+                            ):
+                                logger.warning(
+                                    "gemini_stream_model_retired_auto_migrating",
+                                    extra={"old_model": model, "new_model": "gemini-3.8-flash"},
+                                )
+                                model = "gemini-3.8-flash"
+                                url = f"{_GEMINI_API_BASE}/{model}:streamGenerateContent?alt=sse"
+                                continue
                             raise LLMUnavailableError(
                                 f"Gemini stream error (HTTP {resp.status_code}): {safe_body}",
                                 status_code=resp.status_code,

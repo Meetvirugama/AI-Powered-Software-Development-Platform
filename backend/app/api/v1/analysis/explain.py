@@ -55,8 +55,8 @@ router = APIRouter(tags=["analysis"])
 def get_related_files(
     repository_id: UUID,
     path: str,
+    request: Request,
     symbol: str | None = None,
-    request: Request = None,  # type: ignore[assignment]
     db: Session = Depends(get_db),
 ) -> RelatedFilesDiscoveryResponse:
     """Discover related files and graph neighbors for a selected target file or symbol."""

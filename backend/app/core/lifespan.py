@@ -47,6 +47,11 @@ def init_llm_gateway(app: FastAPI) -> bool:
                 api_keys=groq_keys,
                 model=settings.groq_chat_model,
             )
+        elif settings.ai_fallback_provider == "gemini" and gemini_keys and (not primary_provider or primary_provider.provider_name != "gemini"):
+            fallback_provider = GeminiProvider(
+                api_keys=gemini_keys,
+                default_model=settings.gemini_chat_model,
+            )
 
         if primary_provider:
             app.state.llm_gateway = LLMGateway(

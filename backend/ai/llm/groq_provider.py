@@ -61,11 +61,23 @@ _MODEL_MAP: dict[str, str] = {
     "openai/gpt-oss-20b": "openai/gpt-oss-20b",
     "qwen/qwen3.8-27b": "qwen/qwen3.8-27b",
     "allam-2-7b": "allam-2-7b",
+    "gemini-3.8-flash": "openai/gpt-oss-120b",
+    "gemini-3.8-flash-lite": "openai/gpt-oss-120b",
+    "gemini-2.5-flash": "openai/gpt-oss-120b",
+    "gemini-2.5-flash-lite": "openai/gpt-oss-120b",
+    "gemini-3.5-flash-lite": "openai/gpt-oss-120b",
     "gemini-flash-lite-latest": "openai/gpt-oss-120b",
     "gemini-flash-latest": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite-preview-02-05": "openai/gpt-oss-120b",
+    "gemini-2.0-flash-lite-preview": "openai/gpt-oss-120b",
+    "gemini-2.0-flash": "openai/gpt-oss-120b",
+    "gemini-1.5-flash": "openai/gpt-oss-120b",
+    "gemini-1.5-pro": "openai/gpt-oss-120b",
     # Legacy and fallback mappings to active Groq models
     "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
     "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-120b",
     "llama3-70b-8192": "openai/gpt-oss-120b",
     "llama3-8b-8192": "openai/gpt-oss-20b",
     "mixtral-8x7b-32768": "qwen/qwen3.8-27b",
@@ -137,7 +149,7 @@ class GroqProvider(LLMProvider):
 
         self._key_cycle = cycle(self._api_keys)
         self._timeout = timeout
-        self._default_model = model
+        self._default_model = _MODEL_MAP.get(model, _DEFAULT_MODEL)
         self._external_client = client
         self._client: httpx.AsyncClient | None = None
         self._semaphore = asyncio.Semaphore(concurrency_limit)
@@ -172,6 +184,20 @@ class GroqProvider(LLMProvider):
         """Execute chat completion on Groq with key rotation, strict json_schema, and backoff."""
         resolved_model = self._resolve_model(request.model)
         payload = self._build_payload(request, resolved_model)
+
+        # Proactively calibrate max_tokens against Groq 8,000 TPM limit on free/starter tier
+        estimated_prompt_tokens = sum(
+            len(str(m.get("content", "") or "")) for m in payload.get("messages", [])
+        ) // 4
+        current_max = payload.get("max_tokens", 3200)
+        if estimated_prompt_tokens + current_max > 7200:
+            safe_max = max(1800, 7200 - estimated_prompt_tokens)
+            if safe_max < current_max:
+                logger.info(
+                    "groq_calibrating_max_tokens_for_tpm",
+                    extra={"old_max": current_max, "new_max": safe_max, "prompt_est": estimated_prompt_tokens},
+                )
+                payload["max_tokens"] = safe_max
 
         last_error: LLMError | None = None
 
@@ -209,7 +235,10 @@ class GroqProvider(LLMProvider):
                             "groq_rate_limit_rotating_key",
                             extra={"attempt": attempt, "key_masked": f"{api_key[:4]}...{api_key[-4:]}"},
                         )
-                        await asyncio.sleep(0.1)
+                        # Groq rate limits are org-wide; back off so rolling TPM window advances
+                        retry_after_str = resp.headers.get("retry-after")
+                        sleep_time = float(retry_after_str) if retry_after_str and retry_after_str.replace(".", "", 1).isdigit() else (2.0 * attempt)
+                        await asyncio.sleep(min(sleep_time, 5.0))
                         continue
 
                     if resp.status_code == 400:
@@ -232,7 +261,7 @@ class GroqProvider(LLMProvider):
                             retry_resp = await client.post(
                                 _GROQ_CHAT_URL,
                                 headers={
-                                    "Authorization": f"Bearer {api_key}",
+                                    "Authorization": f"Bearer {self._next_key()}",
                                     "Content-Type": "application/json",
                                 },
                                 json=payload_copy,
@@ -256,6 +285,61 @@ class GroqProvider(LLMProvider):
                         raise LLMAuthenticationError(
                             f"Groq authentication failure (HTTP {resp.status_code}).",
                             status_code=resp.status_code,
+                            provider=self.provider_name,
+                        )
+
+                    if resp.status_code == 413:
+                        curr_max = payload.get("max_tokens", 3200)
+                        if curr_max > 1800:
+                            logger.warning(
+                                "groq_413_payload_too_large_reducing_max_tokens",
+                                extra={"old_max_tokens": curr_max, "new_max_tokens": 1800},
+                            )
+                            payload["max_tokens"] = 1800
+                            retry_resp = await client.post(
+                                _GROQ_CHAT_URL,
+                                headers={
+                                    "Authorization": f"Bearer {self._next_key()}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload,
+                            )
+                            if retry_resp.status_code == 200:
+                                latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+                                return self._parse_response(
+                                    retry_resp.json(),
+                                    latency_ms=latency_ms,
+                                    model=resolved_model,
+                                    schema=request.response_schema,
+                                )
+
+                    if resp.status_code == 404:
+                        if resolved_model != _DEFAULT_MODEL:
+                            logger.warning(
+                                "groq_model_not_found_retrying_default",
+                                extra={"model": resolved_model, "default": _DEFAULT_MODEL},
+                            )
+                            resolved_model = _DEFAULT_MODEL
+                            payload["model"] = _DEFAULT_MODEL
+                            retry_resp = await client.post(
+                                _GROQ_CHAT_URL,
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json=payload,
+                            )
+                            if retry_resp.status_code == 200:
+                                latency_ms = (time.monotonic_ns() - start_ns) / 1_000_000
+                                return self._parse_response(
+                                    retry_resp.json(),
+                                    latency_ms=latency_ms,
+                                    model=resolved_model,
+                                    schema=request.response_schema,
+                                )
+                        raise LLMUnavailableError(
+                            f"Groq model '{resolved_model}' not found (HTTP 404): {resp.text[:200]}",
+                            status_code=404,
                             provider=self.provider_name,
                         )
 

@@ -71,6 +71,14 @@ class OutputValidator:
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             s = "\n".join(lines).strip()
+        first_brace = s.find("{")
+        last_brace = s.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            return s[first_brace : last_brace + 1]
+        first_bracket = s.find("[")
+        last_bracket = s.rfind("]")
+        if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
+            return s[first_bracket : last_bracket + 1]
         return s
 
     def validate(
@@ -194,7 +202,7 @@ class OutputValidator:
                 from app.core.config import settings
                 repair_model = settings.active_chat_model
             except Exception:  # noqa: BLE001
-                repair_model = "gemini-flash-lite-latest"
+                repair_model = "gemini-3.8-flash"
 
         for attempt in range(1, _MAX_REPAIR_ATTEMPTS + 1):
             bounded_raw = current_raw[:4000] if current_raw else ""

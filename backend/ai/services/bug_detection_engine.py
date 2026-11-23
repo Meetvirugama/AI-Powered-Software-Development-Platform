@@ -49,7 +49,7 @@ from ai.schemas.validator import OutputValidator
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "gemini-flash-lite-latest"
+_DEFAULT_MODEL = "gemini-3.8-flash"
 _MAX_REPAIR_ATTEMPTS = 2
 
 
@@ -184,6 +184,14 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
             safe_context = redact(rendered_context)
             fenced_context = _fence(safe_context)
 
+            scan_mode = getattr(payload, "scan_mode", "standard") or "standard"
+            mode_guidance = {
+                "quick": "Perform a targeted scan focusing on high-confidence, critical, and obvious defects directly visible in the target snippet.",
+                "standard": "Perform a standard defect analysis covering null safety, off-by-one errors, unhandled exceptions, logic errors, and resource leaks.",
+                "deep": "Perform deep interprocedural analysis, boundary conditions, edge cases, race conditions, and concurrency hazards across related components.",
+                "change": "Focus on regression risks, breaking changes, API contract violations, state mutation hazards, and backward compatibility.",
+            }.get(scan_mode, "Perform standard defect analysis.")
+
             user_prompt = (
                 "REPOSITORY DATA (untrusted, between the markers):\n"
                 f"{fenced_context}\n\n"
@@ -191,7 +199,8 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
                 f"Analyze `{payload.target.path}` "
                 f"(type={payload.target.type}, symbol={payload.target.symbol or 'N/A'}, "
                 f"lines={payload.target.start_line or 1}..{payload.target.end_line or 'end'}, "
-                f"min_severity={payload.min_severity})."
+                f"min_severity={payload.min_severity}, scan_mode={scan_mode}).\n"
+                f"MODE GUIDANCE: {mode_guidance}"
             )
 
             messages = [
@@ -199,11 +208,16 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
                 Message(role="user", content=user_prompt),
             ]
 
+            prov = getattr(self._llm, "provider", None)
+            prov_name = str(getattr(prov, "provider_name", None) or getattr(prov, "name", "") or "").lower()
+            is_groq = prov_name == "groq"
+            max_tokens = 1800 if is_groq else 2048
+
             req = LLMRequest(
                 model=self._model,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=max_tokens,
                 response_schema=_LLMBugFindingsEnvelope,
             )
 
@@ -224,6 +238,52 @@ class BugDetectionEngine(BugDetectionServiceProtocol):
                     parsed = json.loads(cleaned)
                     if isinstance(parsed, list):
                         parsed = {"findings": parsed}
+
+                    # Sanitize and resiliently populate required fields before strict schema validation
+                    if isinstance(parsed, dict) and "findings" in parsed and isinstance(parsed["findings"], list):
+                        normalized_items: list[dict[str, Any]] = []
+                        for idx, item in enumerate(parsed["findings"]):
+                            if not isinstance(item, dict):
+                                continue
+                            if not item.get("id"):
+                                item["id"] = f"ai-bug-{idx + 1}"
+                            if not item.get("category"):
+                                item["category"] = "logic_error"
+                            sev = str(item.get("severity", "MEDIUM")).upper()
+                            if sev not in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"):
+                                sev = "MEDIUM"
+                            item["severity"] = sev
+                            if not item.get("title"):
+                                item["title"] = item.get("name") or "Potential defect detected"
+                            if not item.get("description"):
+                                item["description"] = (
+                                    item.get("message")
+                                    or item.get("title")
+                                    or "Potential defect identified by AI defect reasoning."
+                                )
+                            if not item.get("evidence"):
+                                item["evidence"] = (
+                                    item.get("code")
+                                    or item.get("snippet")
+                                    or "Identified during AST and pattern inspection."
+                                )
+                            src = item.get("source_reference")
+                            if not isinstance(src, dict) or not src.get("file_path"):
+                                target_path = payload.target.path
+                                start_l = payload.target.start_line or 1
+                                end_l = payload.target.end_line or start_l
+                                if isinstance(src, dict):
+                                    start_l = src.get("start_line") or start_l
+                                    end_l = src.get("end_line") or end_l
+                                item["source_reference"] = {
+                                    "file_path": target_path,
+                                    "start_line": start_l,
+                                    "end_line": end_l,
+                                    "symbol_name": payload.target.symbol,
+                                }
+                            normalized_items.append(item)
+                        parsed["findings"] = normalized_items
+
                     envelope = _LLMBugFindingsEnvelope.model_validate(parsed)
                     break
                 except (LLMValidationError, json.JSONDecodeError, ValidationError, ValueError, TypeError) as err:

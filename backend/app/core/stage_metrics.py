@@ -34,6 +34,12 @@ logger = logging.getLogger(__name__)
 # Model-aware pricing estimates (USD per 1M tokens: input_price, output_price)
 MODEL_TOKEN_PRICING: dict[str, tuple[float, float]] = {
     # Gemini models
+    "gemini-3.8-flash": (0.075, 0.30),
+    "gemini-3.8-flash-lite": (0.075, 0.30),
+    "gemini-2.5-flash": (0.075, 0.30),
+    "gemini-2.5-flash-lite": (0.075, 0.30),
+    "gemini-3.5-flash-lite": (0.075, 0.30),
+    "gemini-3.5-flash": (0.075, 0.30),
     "gemini-flash-lite-latest": (0.075, 0.30),
     "gemini-flash-lite": (0.075, 0.30),
     "gemini-2.0-flash-lite": (0.075, 0.30),

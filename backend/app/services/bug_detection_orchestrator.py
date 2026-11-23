@@ -390,7 +390,9 @@ def resolve_bug_target_and_build_context(
     related_types: list[SymbolContext] = []
     related_file_paths: list[str] = []
 
-    if resolved_symbol:
+    scan_mode = getattr(payload, "scan_mode", "standard") or "standard"
+
+    if scan_mode != "quick" and resolved_symbol:
         try:
             caller_edges = (
                 db.query(SymbolEdge)
@@ -449,38 +451,43 @@ def resolve_bug_target_and_build_context(
     if defensive_guards:
         project_rules.extend(defensive_guards[:5])
 
-    # Also extract related files from snapshot if available
-    try:
-        snap_mgr = RepositoryIntelligenceSnapshotManager()
-        snapshot = snap_mgr.load_latest_snapshot(repository_id)
-        if snapshot:
-            discovery_svc = RelatedFileDiscoveryService(snapshot=snapshot)
-            discovered = discovery_svc.discover_related_files(
-                target_path=safe_path,
-                target_symbol=target.symbol,
-                snapshot=snapshot,
-                all_repo_files=list(indexed_paths.keys()),
-            )
-            for d in discovered:
-                if d.path not in related_file_paths and d.path != safe_path:
-                    related_file_paths.append(d.path)
-    except Exception as exc:
-        logger.debug("Failed discovering related files for bug detection: %s", exc)
+    # Also extract related files from snapshot if available (skip in quick mode)
+    if scan_mode != "quick":
+        try:
+            snap_mgr = RepositoryIntelligenceSnapshotManager()
+            snapshot = snap_mgr.load_latest_snapshot(repository_id)
+            if snapshot:
+                discovery_svc = RelatedFileDiscoveryService(snapshot=snapshot)
+                discovered = discovery_svc.discover_related_files(
+                    target_path=safe_path,
+                    target_symbol=target.symbol,
+                    snapshot=snapshot,
+                    all_repo_files=list(indexed_paths.keys()),
+                )
+                for d in discovered:
+                    if d.path not in related_file_paths and d.path != safe_path:
+                        related_file_paths.append(d.path)
+        except Exception as exc:
+            logger.debug("Failed discovering related files for bug detection: %s", exc)
 
     # -------------------------------------------------------------------------
     # Bounded query for context assembly:
     # Instead of slicing all repo files, fetch at most 50 files with LIMIT 50.
+    # In quick mode, only retain the target file to maximize performance.
     # -------------------------------------------------------------------------
     sample_repo_files: list[RepositoryFile] = []
-    try:
-        sample_repo_files = (
-            db.query(RepositoryFile)
-            .filter(RepositoryFile.repository_id == repository_id)
-            .order_by(RepositoryFile.path)
-            .limit(50)
-            .all()
-        )
-    except Exception:
+    if scan_mode != "quick":
+        try:
+            sample_repo_files = (
+                db.query(RepositoryFile)
+                .filter(RepositoryFile.repository_id == repository_id)
+                .order_by(RepositoryFile.path)
+                .limit(50)
+                .all()
+            )
+        except Exception:
+            sample_repo_files = [file_record] if file_record else []
+    else:
         sample_repo_files = [file_record] if file_record else []
 
     context_repo_files = [
@@ -504,6 +511,19 @@ def resolve_bug_target_and_build_context(
         revision=revision,
     )
 
+    from app.core.config import settings
+    is_groq = (getattr(settings, "ai_primary_provider", "") or "").lower() == "groq"
+
+    effective_budget = payload.options.max_context_tokens or 6_000
+    if scan_mode == "quick":
+        effective_budget = min(effective_budget, 2_000)
+    elif scan_mode in ("standard", "change"):
+        if is_groq and effective_budget > 3_000:
+            effective_budget = 3_000
+    elif scan_mode == "deep":
+        if is_groq and effective_budget > 3_200:
+            effective_budget = 3_200
+
     # Invoke specialized bug context extraction
     intelligence_context = extract_bug_context(
         target=target_snippet,
@@ -512,7 +532,7 @@ def resolve_bug_target_and_build_context(
         related_types=related_types,
         repository_files=context_repo_files,
         project_rules=project_rules,
-        token_budget=payload.options.max_context_tokens,
+        token_budget=effective_budget,
         revision=revision,
     )
 

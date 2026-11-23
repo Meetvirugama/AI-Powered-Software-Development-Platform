@@ -14,6 +14,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _ALLOWED_CHAT_PROVIDERS: frozenset[str] = frozenset({"gemini", "groq"})
 _ALLOWED_EMBEDDING_PROVIDERS: frozenset[str] = frozenset({"gemini"})
 
+_GEMINI_DEPRECATED_MODEL_MAP: dict[str, str] = {
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview-02-05": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-preview": "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite-exp": "gemini-flash-lite-latest",
+}
+
+_GROQ_DEPRECATED_MODEL_MAP: dict[str, str] = {
+    "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+    "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+    "llama-3.1-70b-versatile": "openai/gpt-oss-120b",
+    "llama3-70b-8192": "openai/gpt-oss-120b",
+    "llama3-8b-8192": "openai/gpt-oss-20b",
+    "mixtral-8x7b-32768": "qwen/qwen3.8-27b",
+}
+
 
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and an optional .env."""
@@ -80,7 +96,7 @@ class Settings(BaseSettings):
     ai_fallback_provider: str | None = "groq"
     gemini_api_key: str | None = None
     gemini_api_keys: str | None = None     # comma-separated list
-    gemini_chat_model: str = "gemini-flash-lite-latest"
+    gemini_chat_model: str = "gemini-3.8-flash"
     groq_api_key: str | None = None
     groq_api_keys: str | None = None       # comma-separated list
     groq_chat_model: str = "openai/gpt-oss-120b"
@@ -102,7 +118,7 @@ class Settings(BaseSettings):
     # --- Agentic Repository Chat Settings (task.md §8, §13) -----------------
     agentic_chat_enabled: bool = True
     agent_primary_provider: str = "gemini"
-    agent_model: str = "gemini-flash-lite-latest"
+    agent_model: str = "gemini-3.8-flash"
     agent_fallback_enabled: bool = True
     agent_fallback_provider: str | None = "groq"
     agent_max_rounds: int = 3
@@ -204,6 +220,22 @@ class Settings(BaseSettings):
             )
         return v.lower()
 
+    @field_validator("gemini_chat_model")
+    @classmethod
+    def normalize_gemini_chat_model(cls, v: str) -> str:
+        if not v or not v.strip():
+            return "gemini-flash-lite-latest"
+        cleaned = v.strip().removeprefix("models/")
+        return _GEMINI_DEPRECATED_MODEL_MAP.get(cleaned, cleaned)
+
+    @field_validator("groq_chat_model")
+    @classmethod
+    def normalize_groq_chat_model(cls, v: str) -> str:
+        if not v or not v.strip():
+            return "openai/gpt-oss-120b"
+        cleaned = v.strip()
+        return _GROQ_DEPRECATED_MODEL_MAP.get(cleaned, cleaned)
+
     @field_validator("ai_embedding_provider")
     @classmethod
     def validate_embedding_provider(cls, v: str) -> str:
@@ -258,6 +290,7 @@ class Settings(BaseSettings):
     sync_worker_max_retries: int = 3
     sync_worker_retry_base_delay_seconds: float = 2.0
     sync_worker_repo_lock_ttl_seconds: int = 120
+    sync_job_timeout_seconds: int = 600
     retention_purge_interval_seconds: float = 3600.0
     retention_days: int = 30
     embedding_max_requests_per_minute: int = 120

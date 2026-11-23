@@ -38,7 +38,7 @@ from app.schemas.analysis import CodeExplanation, ExplainCodeRequest
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MODEL = "gemini-flash-lite-latest"
+_DEFAULT_MODEL = "gemini-3.8-flash"
 _MAX_REPAIR_ATTEMPTS = 2
 
 # ---------------------------------------------------------------------------
@@ -113,8 +113,8 @@ _LEVEL_REQUIREMENTS: dict[str, str] = {
 
 _LEVEL_MAX_TOKENS: dict[str, int] = {
     "concise": 1536,
-    "detailed": 4096,
-    "deep": 8192,
+    "detailed": 2500,
+    "deep": 3200,
 }
 
 
@@ -136,7 +136,8 @@ _REDACTED_RE = re.compile(r"\[REDACTED(?:_[A-Z0-9_]+)?\]")
 def _resolve_engine_model(model: str | None, llm: Any) -> str:
     """Resolve active model from gateway provider default or central settings."""
     if model and model != _DEFAULT_MODEL:
-        return model
+        from ai.llm.gemini_provider import _GEMINI_MODEL_ALIASES
+        return _GEMINI_MODEL_ALIASES.get(model, model)
     try:
         prov_model = getattr(getattr(llm, "provider", None), "default_model", None)
         if isinstance(prov_model, str) and prov_model.strip():
