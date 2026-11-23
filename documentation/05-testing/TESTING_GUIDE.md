@@ -4,11 +4,10 @@
 
 | Suite | Location | Runner | Scope |
 |---|---|---|---|
-| Backend unit/integration | `backend/tests` (260 modules) | pytest | Services, AI pipeline (mock providers), retrieval, scanner, sandbox, API (FastAPI TestClient), persistence |
-| Backend security | `backend/tests/security`, `backend/tests/security/provenance`, `test_security_*` | pytest | Auth, RBAC, CSRF/CSP, SSRF, redaction, webhook guard, git argv, taint tracking |
+| Backend unit/integration | `backend/tests` | pytest | Services, AI pipeline (mock providers), retrieval, scanner, sandbox, API (FastAPI TestClient), persistence |
+| Backend security | `backend/tests/security` | pytest | Auth, RBAC, CSRF/CSP, SSRF, redaction, webhook guard, git argv, taint tracking |
 | End-to-end (API) | `tests/e2e/test_tier{1..4}_*.py` | pytest | Feature, boundary, combination and scenario tiers |
-| End-to-end (browser) | `tests/e2e/playwright` | Playwright | Compose-based UI flows (not executed in CI) |
-| Frontend | `frontend/src/test` (33 files) | Vitest + Testing Library + jsdom | Components, hooks, services, error handling, workflows |
+| Frontend | `frontend/src/test` | Vitest + Testing Library + jsdom | Components, hooks, services, error handling, workflows |
 | Load / soak | `loadtests/locustfile.py`, `loadtests/run_load_soak.py` | Locust / Python | Health latency, SSE fan-out, retention purge |
 | AI quality | `backend/scripts/benchmark_quality_suite.py`, `backend/ai/evaluation` | Python | Retrieval, bug detection, review grounding, test generation gates; Mini SWE-bench |
 
@@ -44,12 +43,12 @@ python backend/scripts/benchmark_quality_suite.py
 
 | Workflow | Gates |
 |---|---|
-| `main_ai-powered-dev-platform-api.yml` | Python syntax, ruff, bandit; `pytest backend/tests tests/e2e --cov=app --cov-fail-under=71`; oxlint, `tsc -b`; Vitest; Vite build; migrations on Postgres + pgvector; security scan; package and deploy |
+| `main_ai-powered-dev-platform-api.yml` | Python syntax, Ruff, Bandit; backend pytest with a 50% combined `app` and `ai` coverage gate; oxlint, `tsc -b`, Vitest, and Vite; migrations on PostgreSQL with pgvector; security scan; package and deploy |
 | `security-ci.yml` | Gitleaks, ruff/bandit, pip-audit, security gate and RBAC suites |
-| `postgres-persistence-ci.yml` | Alembic upgrade + single head, migration lifecycle and persistence tests on Postgres 16 + pgvector |
+| `postgres-persistence-ci.yml` | Alembic upgrade and single-head check on PostgreSQL 16 with pgvector, followed by the cases in `backend/tests/postgres-persistence-selectors.txt` |
 | `nightly-quality-evaluation.yml` | Quality evaluation suite on fixtures + gate evaluator tests (daily 18:30 UTC) |
 
-> Coverage thresholds differ by entry point: CI enforces ≥71% on `app`; local `pytest.ini` enforces ≥40% across all backend packages.
+The CI gate measures `app` and `ai` at 50%. The local default in `pytest.ini` measures seven backend packages at 40%. Run `pytest tests/e2e` for API end-to-end scenarios.
 
 ## Benchmarks
 

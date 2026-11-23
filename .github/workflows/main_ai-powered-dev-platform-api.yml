@@ -250,7 +250,7 @@ jobs:
         run: |
           pytest --no-cov -v -k "not test_clean_schema_migration_lifecycle" \
                  backend/tests/test_migration_smoke.py \
-                 backend/tests/test_om_day7.py \
+                 backend/tests/test_analysis_persistence.py::test_complete_data_pipeline_end_to_end \
                  backend/tests/test_project_memory_service.py \
                  backend/tests/test_embedding_service.py \
                  backend/tests/test_vector_retrieval.py \
