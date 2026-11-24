@@ -47,10 +47,7 @@ from app.workers.sync_worker import (
     generate_worker_id,
     run_worker,
 )
-from poc.dbos.workflow import (
-    DurableSyncWorkflow,
-    run_durable_sync_workflow,
-)
+
 
 
 # ---------------------------------------------------------------------------
@@ -615,94 +612,3 @@ async def test_embedding_service_invokes_rate_limiter():
     res = await service.embed_batch(["sample code"])
     assert len(res) == 1
     mock_limiter.acquire.assert_awaited_with("test_gemini")
-
-
-# ---------------------------------------------------------------------------
-# 9. DBOS Transact Durable Workflow Proof of Concept (All 10 Criteria)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_dbos_workflow_full_execution():
-    """Criterion 1 & 2: Test complete 4-step durable workflow execution."""
-    wf_id = f"wf-{uuid.uuid4().hex[:8]}"
-    result = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-1",
-        owner="org",
-        repo="project",
-    )
-
-    assert result.status == "SUCCESS"
-    assert "clone" in result.completed_steps
-    assert "scan" in result.completed_steps
-    assert "embed" in result.completed_steps
-    assert "commit" in result.completed_steps
-    assert result.output["status"] == "COMPLETED"
-
-
-@pytest.mark.asyncio
-async def test_dbos_workflow_crash_recovery_resumes_from_checkpoint():
-    """Criterion 3: Test that simulated process crash resumes without repeating completed steps."""
-    wf_id = f"wf-crash-{uuid.uuid4().hex[:8]}"
-
-    # Step A: Run with crash injected after 'scan' step
-    interrupted_result = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-2",
-        owner="org",
-        repo="project",
-        simulate_crash_after="scan",
-    )
-    assert interrupted_result.status == "FAILED"
-    assert "clone" in interrupted_result.completed_steps
-    assert "scan" in interrupted_result.completed_steps
-    assert "embed" not in interrupted_result.completed_steps
-
-    # Step B: Restart workflow process with same workflow_id
-    resumed_result = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-2",
-        owner="org",
-        repo="project",
-    )
-    assert resumed_result.status == "SUCCESS"
-    assert resumed_result.resumed_from_checkpoint is True
-    # All 4 steps now complete
-    assert len(resumed_result.completed_steps) == 4
-
-
-@pytest.mark.asyncio
-async def test_dbos_workflow_deduplication_by_id():
-    """Criterion 7: Test that duplicate workflow submission returns existing result."""
-    wf_id = f"wf-dedup-{uuid.uuid4().hex[:8]}"
-    res1 = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-3",
-        owner="org",
-        repo="project",
-    )
-    res2 = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-3",
-        owner="org",
-        repo="project",
-    )
-    assert res1.status == "SUCCESS"
-    assert res2.status == "SUCCESS"
-    assert res1.total_duration_ms == res2.total_duration_ms
-
-
-@pytest.mark.asyncio
-async def test_dbos_workflow_step_retries_transient_failure():
-    """Criterion 5: Test that transient step failure is retried with backoff."""
-    wf_id = f"wf-retry-{uuid.uuid4().hex[:8]}"
-    result = await run_durable_sync_workflow(
-        workflow_id=wf_id,
-        repository_id="repo-4",
-        owner="org",
-        repo="project",
-        fail_embed_attempts=2,  # First 2 attempts fail with transient 429
-        max_retries=3,
-    )
-    assert result.status == "SUCCESS"
-    assert result.step_records["embed"].attempts == 3

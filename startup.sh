@@ -20,12 +20,6 @@ if [ ! -f "$ALEMBIC_CONFIG" ] && [ -f "alembic.ini" ]; then
     ALEMBIC_CONFIG="alembic.ini"
 fi
 
-# In single-process web app deployment (API role), ensure the embedded sync worker
-# is active so background indexing jobs are actively processed without requiring ARM CLI mutations.
-if [ "${SERVICE_ROLE:-${1:-api}}" = "api" ]; then
-    export DISABLE_EMBEDDED_SYNC_WORKER="false"
-fi
-
 ROLE="${SERVICE_ROLE:-${1:-api}}"
 
 if [ "$ROLE" = "migrate" ]; then
@@ -36,6 +30,11 @@ fi
 if [ "$ROLE" = "worker" ] || [ "$ROLE" = "sync_worker" ]; then
     echo "Starting standalone background sync worker process..."
     exec $PY_BIN -m app.workers.sync_worker
+fi
+
+if [ "$ROLE" = "sync_worker_web" ]; then
+    exec $PY_BIN -m uvicorn app.workers.sync_worker:worker_app \
+        --host 0.0.0.0 --port "${WEBSITES_PORT:-${PORT:-8000}}"
 fi
 
 if [ "$ROLE" = "webhook_worker" ]; then

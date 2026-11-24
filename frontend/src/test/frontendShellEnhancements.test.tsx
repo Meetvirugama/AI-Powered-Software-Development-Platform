@@ -12,6 +12,13 @@ import {
   TaskPublicationPhasePanel,
 } from '../components/taskStudio/TaskPhasePanels';
 import { ToolsIntegrationsAdminPage } from '../pages/ToolsIntegrationsAdminPage';
+import { listMCPServers, pingMCPServer } from '../services/mcp';
+import type { MCPServerRegistration } from '../services/mcp';
+
+vi.mock('../services/mcp', () => ({
+  listMCPServers: vi.fn(),
+  pingMCPServer: vi.fn(),
+}));
 
 describe('Issue 2 Frontend Shell: Virtualization, Syntax Highlighting, TaskPhasePanels & Tools Admin UI', () => {
   it('computes bounded virtual windows and tokenizes long/normal code lines safely', () => {
@@ -87,24 +94,43 @@ describe('Issue 2 Frontend Shell: Virtualization, Syntax Highlighting, TaskPhase
     expect(onPublishPR).toHaveBeenCalledOnce();
   });
 
-  it('renders ToolsIntegrationsAdminPage, inspects schemas, toggles policies, and registers MCP servers', () => {
+  it('shows actual MCP tools and displays latency only after a server response', async () => {
+    const server: MCPServerRegistration = {
+      id: 'mcp-platform-core',
+      name: 'Platform Repository Intelligence MCP',
+      transport: 'in_process',
+      endpointOrCommand: 'Built-in dispatcher',
+      enabled: true,
+      status: 'connected',
+      protocolVersion: '2024-11-05',
+      lastLatencyMs: null,
+      tools: [{
+        name: 'repo_read_file',
+        description: 'Read a repository file',
+        riskTier: 'low',
+        requiresApproval: false,
+        inputSchemaJson: '{"additionalProperties":false}',
+      }],
+    };
+    vi.mocked(listMCPServers).mockResolvedValue([server]);
+    vi.mocked(pingMCPServer).mockResolvedValue({ ...server, lastLatencyMs: 7 });
+
     render(<ToolsIntegrationsAdminPage />);
+    expect(await screen.findByText(server.name)).toBeInTheDocument();
+    expect(screen.queryByText(/7ms/)).not.toBeInTheDocument();
 
-    expect(screen.getByRole('heading', { name: /Tools & MCP Integrations/i })).toBeInTheDocument();
-    expect(screen.getByText('Platform Repository Intelligence MCP')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Inspect Schema' }));
+    expect(screen.getByText(/additionalProperties/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Ping dispatcher' }));
+    expect(await screen.findByText(/7ms/)).toBeInTheDocument();
+    expect(pingMCPServer).toHaveBeenCalledWith(server.id);
+    expect(screen.queryByRole('button', { name: /Register|Disable Server/ })).not.toBeInTheDocument();
+  });
 
-    const inspectButtons = screen.getAllByRole('button', { name: /Inspect Schema/i });
-    fireEvent.click(inspectButtons[0]);
-    expect(screen.getByText(/additionalProperties/i)).toBeInTheDocument();
-
-    fireEvent.change(screen.getByPlaceholderText('Server display name'), {
-      target: { value: 'Custom Inspector MCP' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('Command or endpoint URL'), {
-      target: { value: 'npx @modelcontextprotocol/inspector' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Register MCP Server/i }));
-
-    expect(screen.getByText('Custom Inspector MCP')).toBeInTheDocument();
+  it('reports MCP API errors without fabricating catalog entries', async () => {
+    vi.mocked(listMCPServers).mockRejectedValue(new Error('unavailable'));
+    render(<ToolsIntegrationsAdminPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load the MCP tool catalog.');
+    expect(screen.queryByText('Platform Repository Intelligence MCP')).not.toBeInTheDocument();
   });
 });

@@ -3034,7 +3034,12 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
     publication_db_session: Session,
     local_task_base_revision,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.core.config import get_settings
+
+    # This scenario intentionally exercises more task operations than one API rate window permits.
+    monkeypatch.setattr(get_settings(), "rate_limit_enabled", False)
     _, repo, token = _seed_user_and_repo(publication_db_session, suffix="3")
     headers = {"Authorization": f"Bearer {token}"}
     task_id, _ = _create_approved_task(publication_client, str(repo.id), headers, local_task_base_revision)
@@ -3179,7 +3184,7 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
         headers=headers,
         json={"publication_authorized": True},
     )
-    assert dup_pr.status_code == 200
+    assert dup_pr.status_code == 200, dup_pr.text
     assert dup_pr.json()["pr_id"] == pr_data["pr_id"]
     assert dup_pr.json()["pr_number"] == pr_data["pr_number"]
 

@@ -93,7 +93,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
         icon: PlusCircle,
         to: repoId ? `/app/tasks/new?repository_id=${encodeURIComponent(repoId)}` : '/app/tasks/new',
       },
-      { id: 'nav-tools', type: 'navigation', title: 'Tools & MCP Integrations', subtitle: 'Manage MCP server registry, tool JSON schemas, and approval gates', icon: Wrench, to: '/app/tools' },
+      { id: 'nav-tools', type: 'navigation', title: 'Tools & MCP Integrations', subtitle: 'Inspect built-in MCP tool schemas and approval requirements', icon: Wrench, to: '/app/tools' },
     ],
     [repoId]
   );

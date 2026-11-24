@@ -179,11 +179,8 @@ Generated from `openapi.json` (version 1.0.0, 129 operations, 168 component sche
 
 | Method | Path | Summary | Body | Query | Responses |
 |---|---|---|---|---|---|
-| GET | `/mcp/servers` | List registered MCP servers and tool schemas |  |  | 200:MCPServerSchema[] |
-| POST | `/mcp/servers` | Register an MCP server | `RegisterMCPServerRequest` |  | 201:MCPServerSchema, 422:HTTPValidationError |
-| POST | `/mcp/servers/{server_id}/ping` | Ping an MCP server |  |  | 200:MCPServerSchema, 422:HTTPValidationError |
-| PATCH | `/mcp/servers/{server_id}/toggle` | Enable or disable an MCP server |  |  | 200:MCPServerSchema, 422:HTTPValidationError |
-| PATCH | `/mcp/servers/{server_id}/tools/{tool_name}/policy` | Update approval gate policy for an MCP tool | `UpdateToolApprovalPolicyRequest` |  | 200:MCPServerSchema, 422:HTTPValidationError |
+| GET | `/mcp/servers` | List built-in MCP tools |  |  | 200:MCPServerSchema[] |
+| POST | `/mcp/servers/{server_id}/ping` | Ping the built-in MCP dispatcher |  |  | 200:MCPServerSchema, 422:HTTPValidationError |
 
 ## Real-time events
 

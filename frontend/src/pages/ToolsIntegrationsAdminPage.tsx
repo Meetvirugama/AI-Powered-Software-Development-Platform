@@ -1,104 +1,22 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import {
-  listMCPServers,
-  registerMCPServer,
-  pingMCPServer,
-  toggleMCPServer,
-  updateMCPToolPolicy,
-} from '../services/mcp';
-import type {
-  MCPServerRegistration,
-  MCPToolSchemaItem,
-  ToolRiskTier,
-} from '../services/mcp';
-
-export type { ToolRiskTier, MCPToolSchemaItem, MCPServerRegistration };
-
-const INITIAL_SERVERS: MCPServerRegistration[] = [
-  {
-    id: 'mcp-platform-core',
-    name: 'Platform Repository Intelligence MCP',
-    transport: 'stdio',
-    endpointOrCommand: 'python -m backend.mcp.server',
-    enabled: true,
-    status: 'connected',
-    protocolVersion: '2024-11-05',
-    lastLatencyMs: 4,
-    tools: [
-      {
-        name: 'repo_read_file',
-        description: 'Read repository file with workspace boundary and secret-redaction guards.',
-        riskTier: 'low',
-        requiresApproval: false,
-        inputSchemaJson: JSON.stringify(
-          {
-            type: 'object',
-            properties: { path: { type: 'string' } },
-            required: ['path'],
-            additionalProperties: false,
-          },
-          null,
-          2,
-        ),
-      },
-      {
-        name: 'repo_search_symbols',
-        description: 'Query Tree-sitter + PageRank + Co-Change symbol intelligence graph.',
-        riskTier: 'low',
-        requiresApproval: false,
-        inputSchemaJson: JSON.stringify(
-          {
-            type: 'object',
-            properties: { query: { type: 'string' }, limit: { type: 'integer' } },
-            required: ['query'],
-            additionalProperties: false,
-          },
-          null,
-          2,
-        ),
-      },
-      {
-        name: 'sandbox_execute_patch',
-        description: 'Apply synthesized unified diff inside isolated sandbox worktree.',
-        riskTier: 'high',
-        requiresApproval: true,
-        inputSchemaJson: JSON.stringify(
-          {
-            type: 'object',
-            properties: { unified_diff: { type: 'string' } },
-            required: ['unified_diff'],
-            additionalProperties: false,
-          },
-          null,
-          2,
-        ),
-      },
-    ],
-  },
-];
+import { listMCPServers, pingMCPServer } from '../services/mcp';
+import type { MCPServerRegistration } from '../services/mcp';
 
 export const ToolsIntegrationsAdminPage: React.FC = () => {
-  const [servers, setServers] = useState<MCPServerRegistration[]>(INITIAL_SERVERS);
+  const [servers, setServers] = useState<MCPServerRegistration[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedToolKey, setExpandedToolKey] = useState<string | null>(null);
-  const [newServerName, setNewServerName] = useState('');
-  const [newServerEndpoint, setNewServerEndpoint] = useState('');
-  const [newServerTransport, setNewServerTransport] = useState<'stdio' | 'sse' | 'streamable_http'>('stdio');
+  const [loading, setLoading] = useState(true);
+  const [pinging, setPinging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
     listMCPServers()
-      .then((data) => {
-        if (mounted && data && data.length > 0) {
-          setServers(data);
-        }
-      })
-      .catch(() => {
-        // Fall back gracefully to initial demo servers if API offline
-      });
-    return () => {
-      mounted = false;
-    };
+      .then((data) => { if (mounted) setServers(data); })
+      .catch(() => { if (mounted) setError('Unable to load the MCP tool catalog.'); })
+      .finally(() => { if (mounted) setLoading(false); });
+    return () => { mounted = false; };
   }, []);
 
   const filteredServers = useMemo(() => {
@@ -111,78 +29,17 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
     );
   }, [servers, searchQuery]);
 
-  const toggleServer = (id: string) => {
-    setServers((prev) =>
-      prev.map((srv) =>
-        srv.id === id
-          ? {
-              ...srv,
-              enabled: !srv.enabled,
-              status: !srv.enabled ? 'connected' : 'offline',
-              lastLatencyMs: !srv.enabled ? 5 : null,
-            }
-          : srv,
-      ),
-    );
-    toggleMCPServer(id).catch(() => {});
-  };
-
-  const pingServer = (id: string) => {
-    setServers((prev) =>
-      prev.map((srv) =>
-        srv.id === id && srv.enabled
-          ? { ...srv, status: 'connected', lastLatencyMs: Math.max(1, Math.floor(Math.random() * 8) + 2) }
-          : srv,
-      ),
-    );
-    pingMCPServer(id).catch(() => {});
-  };
-
-  const toggleToolApprovalPolicy = (serverId: string, toolName: string) => {
-    const target = servers.find((s) => s.id === serverId);
-    const tool = target?.tools.find((t) => t.name === toolName);
-    const nextVal = tool ? !tool.requiresApproval : true;
-    setServers((prev) =>
-      prev.map((srv) =>
-        srv.id !== serverId
-          ? srv
-          : {
-              ...srv,
-              tools: srv.tools.map((t) =>
-                t.name === toolName ? { ...t, requiresApproval: !t.requiresApproval } : t,
-              ),
-            },
-      ),
-    );
-    updateMCPToolPolicy(serverId, toolName, nextVal).catch(() => {});
-  };
-
-  const handleRegisterServer = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newServerName.trim() || !newServerEndpoint.trim()) return;
-    const name = newServerName.trim();
-    const endpoint = newServerEndpoint.trim();
-    const transport = newServerTransport;
-    const created: MCPServerRegistration = {
-      id: `mcp-${Date.now()}`,
-      name,
-      transport,
-      endpointOrCommand: endpoint,
-      enabled: true,
-      status: 'connected',
-      protocolVersion: '2024-11-05',
-      lastLatencyMs: 3,
-      tools: [],
-    };
-    setServers((prev) => [...prev, created]);
-    setNewServerName('');
-    setNewServerEndpoint('');
-
-    registerMCPServer({
-      name,
-      transport,
-      endpointOrCommand: endpoint,
-    }).catch(() => {});
+  const pingServer = async (id: string) => {
+    setError(null);
+    setPinging(true);
+    try {
+      const result = await pingMCPServer(id);
+      setServers((servers) => servers.map((server) => server.id === id ? result : server));
+    } catch {
+      setError('Unable to ping the MCP dispatcher.');
+    } finally {
+      setPinging(false);
+    }
   };
 
   return (
@@ -191,7 +48,7 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Tools &amp; MCP Integrations</h1>
           <p className="text-sm text-slate-400">
-            Manage Model Context Protocol (MCP) servers, inspect JSON Schema tool contracts, and configure approval gates.
+            Inspect built-in MCP tool schemas and approval requirements.
           </p>
         </div>
         <input
@@ -204,40 +61,9 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
         />
       </header>
 
-      <form
-        onSubmit={handleRegisterServer}
-        className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-slate-900/70 border border-slate-800 rounded-lg p-4"
-      >
-        <input
-          type="text"
-          value={newServerName}
-          onChange={(e) => setNewServerName(e.target.value)}
-          placeholder="Server display name"
-          className="px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm"
-        />
-        <select
-          value={newServerTransport}
-          onChange={(e) => setNewServerTransport(e.target.value as 'stdio' | 'sse' | 'streamable_http')}
-          className="px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm"
-        >
-          <option value="stdio">stdio</option>
-          <option value="sse">SSE</option>
-          <option value="streamable_http">Streamable HTTP</option>
-        </select>
-        <input
-          type="text"
-          value={newServerEndpoint}
-          onChange={(e) => setNewServerEndpoint(e.target.value)}
-          placeholder="Command or endpoint URL"
-          className="px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm"
-        />
-        <button
-          type="submit"
-          className="px-4 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-sm font-medium"
-        >
-          Register MCP Server
-        </button>
-      </form>
+      {loading && <p role="status">Loading MCP tools…</p>}
+      {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+      {!loading && !error && filteredServers.length === 0 && <p className="text-sm text-slate-400">No matching tools.</p>}
 
       <div className="space-y-4">
         {filteredServers.map((server) => (
@@ -250,7 +76,7 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-medium">{server.name}</h2>
                   <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                    {server.transport} · MCP {server.protocolVersion}
+                    Built-in · MCP {server.protocolVersion}
                   </span>
                   <span
                     className={`text-xs px-2 py-0.5 rounded ${
@@ -268,17 +94,11 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={() => pingServer(server.id)}
+                  onClick={() => void pingServer(server.id)}
+                  disabled={pinging}
                   className="px-3 py-1.5 rounded text-xs font-medium border border-slate-700 hover:bg-slate-800"
                 >
-                  Ping Handshake
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleServer(server.id)}
-                  className="px-3 py-1.5 rounded text-xs font-medium border border-slate-700 hover:bg-slate-800"
-                >
-                  {server.enabled ? 'Disable Server' : 'Enable Server'}
+                  {pinging ? 'Pinging…' : 'Ping dispatcher'}
                 </button>
               </div>
             </div>
@@ -318,17 +138,15 @@ export const ToolsIntegrationsAdminPage: React.FC = () => {
                               </button>
                             </td>
                             <td className="py-2">
-                              <button
-                                type="button"
-                                onClick={() => toggleToolApprovalPolicy(server.id, tool.name)}
+                              <span
                                 className={`text-xs px-2.5 py-1 rounded border ${
                                   tool.requiresApproval
                                     ? 'bg-amber-950/60 border-amber-700 text-amber-200'
                                     : 'bg-slate-800 border-slate-700 text-slate-300'
                                 }`}
                               >
-                                {tool.requiresApproval ? 'Approval Required' : 'Auto-Approve'}
-                              </button>
+                                {tool.requiresApproval ? 'Approval Required' : 'No additional approval'}
+                              </span>
                             </td>
                           </tr>
                           {expandedToolKey === rowKey && (

@@ -786,7 +786,7 @@ export interface MCPMemoryResourcesListResponse {
 export interface MCPServerSchema {
   id: string;
   name: string;
-  transport?: "stdio" | "sse" | "streamable_http";
+  transport?: string;
   endpointOrCommand: string;
   enabled?: boolean;
   status?: "connected" | "degraded" | "offline";
@@ -842,7 +842,7 @@ export type MemoryType = "project" | "decision" | "rule" | "task_summary" | "fai
 
 export interface OperationalReadinessMetrics {
   sync_worker_heartbeat_age_s?: number | null;
-  webhook_backlog?: number;
+  webhook_backlog?: number | null;
   scanner_availability?: Record<string, boolean>;
   sandbox_backend_ok?: boolean;
 }
@@ -1117,12 +1117,6 @@ export interface ReadinessResponse {
   rag_pipeline: ComponentHealth;
   services: Record<string, string>;
   operations?: OperationalReadinessMetrics | null;
-}
-
-export interface RegisterMCPServerRequest {
-  name: string;
-  transport?: "stdio" | "sse" | "streamable_http";
-  endpointOrCommand: string;
 }
 
 /**
@@ -2240,10 +2234,6 @@ export interface UpdateReviewSettingsRequest {
   min_confidence?: "high" | "medium" | "low" | null;
   max_comments?: number | null;
   changed_lines_only?: boolean | null;
-}
-
-export interface UpdateToolApprovalPolicyRequest {
-  requiresApproval: boolean;
 }
 
 export interface ValidationError {

@@ -12,7 +12,7 @@ import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 
 from app.core.config import settings
 from app.core.secret_redaction import redact
@@ -28,7 +28,7 @@ from runner.schemas import (
     RunnerStatusResponse,
 )
 from sandbox.backend import SandboxBackend
-from sandbox.container_backend import ContainerBackend
+from sandbox.container_backend import ContainerBackend, container_runtime_available
 from sandbox.exceptions import (
     SandboxSecurityError,
     WorkspaceError,
@@ -147,15 +147,24 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
                 raise
 
     @runner_app.get("/health")
-    def health_check() -> dict[str, Any]:
+    def health_check(response: Response) -> dict[str, Any]:
         """Health check endpoint reporting runner readiness and gVisor status."""
+        ready = not isinstance(exec_backend, ContainerBackend) or container_runtime_available()
+        if not ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        workspace_root = getattr(settings, "task_workspace_root", None)
+        path = Path(workspace_root) if workspace_root else None
+        shared_workspace_ready = bool(
+            path and path.is_absolute() and path.is_dir() and os.access(path, os.R_OK | os.W_OK | os.X_OK)
+        )
         gvisor = getattr(exec_backend, "gvisor_available", False)
         return {
-            "status": "healthy",
+            "status": "healthy" if ready else "unhealthy",
             "service": "secure-runner-service",
             "backend": exec_backend.backend_type,
             "gvisor_verified": gvisor,
             "environment": getattr(settings, "app_env", "development"),
+            "shared_workspace_ready": shared_workspace_ready,
         }
 
     @runner_app.post(
