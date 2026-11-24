@@ -1,6 +1,7 @@
-import { type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { FolderOpen, History, Hash } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { resolveFileType } from '../../lib/fileLanguage';
 import type { RepositoryFile } from '../../types/api';
 import type { AnalysisTarget } from '../../types/analysis';
 import { TargetFilePicker } from './TargetFilePicker';
@@ -71,22 +72,41 @@ export function StudioToolbar({
   actionButton,
   extraControls,
 }: StudioToolbarProps) {
+  useEffect(() => {
+    if (!showFilePicker) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onToggleFilePicker(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showFilePicker, onToggleFilePicker]);
+
+  const selectedFileLabel = selectedFile
+    ? resolveFileType(selectedFile.path, selectedFile.language).label
+    : null;
+
   return (
-    <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2.5 flex items-center justify-between gap-3 min-w-0">
-      <div className="flex items-center gap-2.5 min-w-0">
+    <div className="flex-shrink-0 bg-card border-b border-border px-4 py-2 flex items-center justify-between gap-2 sm:gap-3 min-w-0 flex-wrap">
+      <div className="flex items-center gap-2 min-w-0 flex-wrap">
         {/* Anchored Target File Picker (F-09) */}
         <div className="relative">
           <button
+            type="button"
             onClick={() => onToggleFilePicker(!showFilePicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors shadow-xs"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-accent text-xs font-medium text-foreground transition-colors cursor-pointer"
             title="Switch target file"
             aria-expanded={showFilePicker}
             aria-haspopup="dialog"
           >
-            <FolderOpen className="h-3.5 w-3.5 text-primary" />
+            <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <span className="truncate max-w-[140px] sm:max-w-[200px]">
               {selectedFile?.path ?? 'Select File'}
             </span>
+            {selectedFileLabel && (
+              <span className="hidden md:inline-block px-1.5 py-0.5 rounded bg-muted text-muted-foreground text-[10px] font-mono shrink-0">
+                {selectedFileLabel}
+              </span>
+            )}
           </button>
 
           {showFilePicker && (
@@ -96,7 +116,7 @@ export function StudioToolbar({
                 onClick={() => onToggleFilePicker(false)}
                 aria-hidden="true"
               />
-              <div className="absolute left-0 top-full mt-1.5 z-30 w-80 sm:w-96 shadow-xl animate-in fade-in-50 zoom-in-95">
+              <div className="absolute left-0 top-full mt-1.5 z-30 w-[calc(100vw-2rem)] max-w-sm sm:w-96 shadow-xl">
                 <TargetFilePicker
                   files={files}
                   isLoading={filesLoading}

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileCode, Check, Copy, MessageSquare, X } from 'lucide-react';
 import { useRepositoryFileContent } from '../../hooks/useRepositories';
+import { resolveFileType } from '../../lib/fileLanguage';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import type { RepositoryFile } from '../../types/api';
 
@@ -47,25 +48,30 @@ export function FilePreviewModal({
     }
   }
 
+  const resolvedFileType = resolveFileType(file.path, file.language);
+
   return (
     <div
       role="dialog"
       aria-modal="true"
       aria-labelledby="file-preview-title"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-in fade-in duration-200"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 dark:bg-black/70 backdrop-blur-[2px] p-4"
     >
-      <div className="relative flex flex-col w-full max-w-5xl max-h-[90vh] rounded-xl border border-border bg-card shadow-2xl overflow-hidden">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative flex flex-col w-full max-w-5xl max-h-[90vh] rounded-xl border border-border bg-card shadow-2xl overflow-hidden"
+      >
         {/* Modal Header */}
-        <div className="flex items-center justify-between border-b border-border px-5 py-3 bg-muted/20">
+        <div className="flex items-center justify-between border-b border-border px-5 py-3 bg-muted/20 gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <FileCode className="h-5 w-5 text-primary shrink-0" />
+            <FileCode className="h-5 w-5 text-muted-foreground shrink-0" />
             <div className="min-w-0">
               <h3 id="file-preview-title" className="font-mono text-sm font-semibold text-foreground truncate">
                 {file.path}
               </h3>
               <p className="text-xs text-muted-foreground">
-                {file.line_count} lines · {(file.size_bytes / 1024).toFixed(1)} KB
-                {file.language && ` · ${file.language}`}
+                {file.line_count} lines · {(file.size_bytes / 1024).toFixed(1)} KB · {resolvedFileType.label}
               </p>
             </div>
           </div>
@@ -74,10 +80,14 @@ export function FilePreviewModal({
             {fileData?.content && (
               <button
                 onClick={handleCopy}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-mono text-foreground hover:bg-accent transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-background text-xs font-mono text-foreground hover:bg-accent transition-colors cursor-pointer"
                 title="Copy code"
               >
-                {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
                 <span>{copied ? 'Copied' : 'Copy'}</span>
               </button>
             )}

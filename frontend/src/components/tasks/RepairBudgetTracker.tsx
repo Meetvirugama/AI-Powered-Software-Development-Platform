@@ -156,9 +156,9 @@ export function RepairBudgetTracker({
       )}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
         <div className="flex items-center gap-2">
-          <Wrench className="h-4 w-4 text-primary" />
+          <Wrench className="h-4 w-4 text-primary shrink-0" />
           <h3 className="text-base font-semibold text-foreground">Bounded Repair Budget</h3>
         </div>
 
@@ -168,10 +168,10 @@ export function RepairBudgetTracker({
             className={cn(
               'font-mono text-xs font-semibold px-2 py-0.5 rounded border',
               isExhausted
-                ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30'
                 : used > 0
-                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
             )}
           >
             {used} / {max} Attempts Used
@@ -181,7 +181,7 @@ export function RepairBudgetTracker({
 
       {/* Visual Attempt Slots */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>Attempt Allocation (Max {max}):</span>
           <span className="font-mono text-[11px]">
             {remaining} attempt{remaining === 1 ? '' : 's'} remaining
@@ -191,13 +191,12 @@ export function RepairBudgetTracker({
         <div
           className={cn(
             'grid gap-2.5',
-            max === 1 && 'grid-cols-1',
-            max === 2 && 'grid-cols-2',
-            max === 3 && 'grid-cols-3',
-            max === 4 && 'grid-cols-4',
-            max >= 5 && 'grid-cols-5'
+            slotCount <= 1
+              ? 'grid-cols-1'
+              : slotCount === 2
+              ? 'grid-cols-2'
+              : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-[repeat(auto-fit,minmax(105px,1fr))]'
           )}
-          style={{ gridTemplateColumns: `repeat(${Math.max(1, slotCount)}, minmax(0, 1fr))` }}
         >
           {slots.map((slotNum) => {
             const isUsedSlot = slotNum <= used;
@@ -208,23 +207,23 @@ export function RepairBudgetTracker({
                 key={slotNum}
                 data-testid={`repair-slot-${slotNum}`}
                 className={cn(
-                  'rounded-md border p-3 flex flex-col items-center justify-center text-center space-y-1 transition-colors',
+                  'min-w-0 rounded-md border p-3 flex flex-col items-center justify-center text-center space-y-1 transition-colors',
                   isUsedSlot
                     ? isExhausted
-                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                      : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-800 dark:text-rose-300'
+                      : 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
                     : 'bg-background/60 border-border/80 text-muted-foreground'
                 )}
               >
                 <div className="flex items-center gap-1 font-mono text-xs font-bold">
                   {isUsedSlot ? (
                     slotHistory?.success ? (
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" />
                     ) : (
-                      <XCircle className="h-3.5 w-3.5 text-rose-400" />
+                      <XCircle className="h-3.5 w-3.5 text-rose-700 dark:text-rose-400 shrink-0" />
                     )
                   ) : (
-                    <Clock className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    <Clock className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0" />
                   )}
                   <span>Attempt {slotNum}</span>
                 </div>
@@ -246,13 +245,13 @@ export function RepairBudgetTracker({
       {isExhausted && (
         <div
           data-testid="repair-budget-exhausted-banner"
-          className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-200 space-y-1.5"
+          className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 space-y-1.5"
         >
-          <div className="flex items-center gap-1.5 font-semibold text-rose-400">
+          <div className="flex items-center gap-1.5 font-semibold text-rose-700 dark:text-rose-400">
             <ShieldAlert className="h-4 w-4 shrink-0" />
             <span>Repair Budget Exhausted — Auto-Repair Terminated</span>
           </div>
-          <p className="pl-5.5 text-rose-200/90 leading-relaxed">
+          <p className="pl-5.5 text-rose-800 dark:text-rose-200/90 leading-relaxed">
             Maximum repair budget limit reached ({max}/{max}). Automatic repair cannot continue. The hard limit of {max} task-level repair attempts has been exhausted in accordance with platform safety constraints. Review test failures and inspect diffs manually.
           </p>
         </div>
@@ -260,8 +259,8 @@ export function RepairBudgetTracker({
 
       {/* Repair Eligibility Note */}
       {!isEligibleForRepair && !isExhausted && (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300 flex items-start gap-2">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400 mt-0.5" />
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400 mt-0.5" />
           <p className="leading-relaxed">
             The latest test failure was classified as non-repairable (e.g. infrastructure error, timeout, or security policy violation). Auto-repair will not consume budget for this run.
           </p>
@@ -282,7 +281,7 @@ export function RepairBudgetTracker({
                 data-testid={`repair-history-item-${record.attempt_number}`}
                 className="rounded-md border border-border/80 bg-background/50 p-3 text-xs space-y-1.5"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-mono font-bold text-foreground">
                     Attempt #{record.attempt_number}
                   </span>
@@ -291,12 +290,12 @@ export function RepairBudgetTracker({
                   </span>
                 </div>
 
-                <p className="text-foreground/90 font-medium">{record.patch_summary}</p>
+                <p className="text-foreground/90 font-medium break-words">{record.patch_summary}</p>
 
                 <div className="flex items-center gap-3 font-mono text-[11px] text-muted-foreground flex-wrap pt-0.5">
                   {record.workspace_revision && (
                     <span className="flex items-center gap-1">
-                      <GitCommit className="h-3 w-3 text-purple-400" />
+                      <GitCommit className="h-3 w-3 text-muted-foreground" />
                       Revision: {record.workspace_revision.substring(0, 8)}
                     </span>
                   )}
@@ -307,10 +306,10 @@ export function RepairBudgetTracker({
                   )}
                   <span
                     className={cn(
-                      'px-1.5 py-0.2 rounded text-[10px] font-semibold',
+                      'px-1.5 py-0.5 rounded text-[10px] font-semibold',
                       record.success
-                        ? 'bg-emerald-500/10 text-emerald-400'
-                        : 'bg-rose-500/10 text-rose-400'
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                     )}
                   >
                     {record.success ? 'Resolved' : 'Failed'}

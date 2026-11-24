@@ -81,15 +81,15 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
       )}
     >
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-amber-500/20 pb-3">
-        <div className="flex items-center gap-2.5">
-          <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
-          <div>
-            <h4 className="font-semibold text-amber-300">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
+          <div className="min-w-0">
+            <h4 className="font-semibold text-amber-900 dark:text-amber-300">
               {task.status === TaskStatus.RECOVERY_REQUIRED && 'State Recovery Required'}
               {task.status === TaskStatus.FAILED && 'Task Execution Halted — Recovery Available'}
               {task.status === TaskStatus.BLOCKED && 'Task Operation Blocked — Intervention Required'}
             </h4>
-            <p className="text-[11px] text-amber-200/80">
+            <p className="text-[11px] text-amber-800 dark:text-amber-200/80">
               {task.status === TaskStatus.RECOVERY_REQUIRED &&
                 'A worker crash or process interruption was detected. Reconcile workspace state to resume safely.'}
               {task.status === TaskStatus.FAILED &&
@@ -100,7 +100,7 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
           </div>
         </div>
 
-        <span className="font-mono text-[10px] bg-amber-500/20 text-amber-200 border border-amber-500/30 px-2 py-0.5 rounded uppercase font-bold shrink-0 self-start sm:self-auto">
+        <span className="font-mono text-[10px] bg-amber-500/20 text-amber-900 dark:text-amber-200 border border-amber-500/30 px-2 py-0.5 rounded uppercase font-bold shrink-0 self-start sm:self-auto">
           {task.status}
         </span>
       </div>
@@ -108,23 +108,24 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
       {isBudgetExhausted && task.status === TaskStatus.FAILED && (
         <div
           data-testid="recovery-budget-exhausted-banner"
-          className="rounded border border-rose-500/30 bg-rose-500/10 p-2.5 text-rose-300 text-[11px] flex items-center gap-2"
+          className="rounded border border-rose-500/30 bg-rose-500/10 p-2.5 text-rose-800 dark:text-rose-300 text-[11px] flex items-center gap-2"
         >
-          <AlertTriangle className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+          <AlertTriangle className="h-3.5 w-3.5 text-rose-700 dark:text-rose-400 shrink-0" />
           <span>Automated repair attempts limit reached ({attemptsUsed}/{attemptsMax}). Retrying is unavailable.</span>
         </div>
       )}
 
       {error && (
         <div
+          role="alert"
           data-testid="recovery-error-alert"
-          className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-rose-200 text-xs flex items-center justify-between"
+          className="rounded border border-rose-500/30 bg-rose-500/10 p-3 text-rose-900 dark:text-rose-200 text-xs flex flex-wrap items-center justify-between gap-2"
         >
-          <span>{error.message || 'Recovery operation failed.'}</span>
+          <span className="break-words">{error.message || 'Recovery operation failed.'}</span>
           <button
             type="button"
             onClick={() => setError(null)}
-            className="text-xs text-rose-400 hover:text-rose-200 underline ml-2 cursor-pointer"
+            className="text-xs text-rose-700 hover:text-rose-950 dark:text-rose-400 dark:hover:text-rose-200 underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             Dismiss
           </button>
@@ -134,26 +135,26 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
       {successMessage && (
         <div
           data-testid="recovery-success-alert"
-          className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-200 text-xs flex items-center gap-2"
+          className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-900 dark:text-emerald-200 text-xs flex items-center gap-2"
         >
-          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          <CheckCircle2 className="h-4 w-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
           <span>{successMessage}</span>
         </div>
       )}
 
       <div className="flex items-center justify-between flex-wrap gap-3 pt-1">
-        <span className="text-[11px] text-amber-200/70">
+        <span className="text-[11px] text-amber-800/90 dark:text-amber-200/70">
           Only backend-authorized lifecycle state reconciliations are permitted.
         </span>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {allowReconcile && (
             <button
               type="button"
               data-testid="reconcile-state-button"
               disabled={isPending}
               onClick={() => handleAction('reconcile')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-500/40 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 transition-colors disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-amber-500/40 bg-amber-500/20 text-amber-900 dark:text-amber-200 hover:bg-amber-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {isPending ? (
                 <LoadingSpinner size="sm" label="Reconciling..." />
@@ -170,7 +171,7 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
               data-testid="retry-execution-button"
               disabled={isPending}
               onClick={() => handleAction('retry')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-600 text-white hover:bg-amber-500 transition-colors disabled:opacity-50 cursor-pointer shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md bg-amber-700 text-white hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shadow-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {isPending ? (
                 <LoadingSpinner size="sm" label="Retrying..." />
@@ -187,7 +188,7 @@ export function RecoveryPanel({ task, className, onRecovered }: RecoveryPanelPro
               data-testid="reset-plan-button"
               disabled={isPending}
               onClick={() => handleAction('reset_to_plan')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50 cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RotateCcw className="h-3 w-3" />
               <span>Reset to Plan</span>

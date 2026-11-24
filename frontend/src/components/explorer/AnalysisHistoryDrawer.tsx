@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   History,
@@ -82,8 +82,8 @@ const FEATURE_CONFIG: Record<
   review: {
     label: 'Review',
     icon: FileCheck,
-    color: 'text-purple-400',
-    badge: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+    color: 'text-teal-700 dark:text-teal-400',
+    badge: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
   },
 };
 
@@ -192,6 +192,18 @@ export function AnalysisHistoryDrawer({
   const totalRuns = historyData?.total || 0;
   const error = queryError instanceof Error ? queryError.message : queryError ? 'Failed to fetch analysis history runs.' : null;
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const totalPages = Math.max(1, Math.ceil(totalRuns / pageSize));
@@ -231,8 +243,17 @@ export function AnalysisHistoryDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-xs animate-in fade-in">
-      <div className="w-full max-w-2xl max-h-[85vh] rounded-xl border border-border bg-card shadow-2xl flex flex-col overflow-hidden">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Analysis History"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 dark:bg-black/65 backdrop-blur-[2px]"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[85vh] rounded-xl border border-border bg-card shadow-2xl flex flex-col overflow-hidden"
+      >
         {/* Drawer Header */}
         <div className="px-4 py-3 border-b border-border bg-muted/20 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">

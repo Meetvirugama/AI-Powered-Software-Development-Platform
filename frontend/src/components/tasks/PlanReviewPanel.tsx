@@ -153,7 +153,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
   if (isError || !plan) {
     return (
       <div className={cn('rounded-lg border border-border bg-card p-6 space-y-4', className)}>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-foreground font-semibold">
             <Brain className="h-5 w-5 text-primary" />
             <span>Implementation Plan</span>
@@ -185,7 +185,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                   generatePlanMutation.mutate({ regenerate: false });
                 }}
                 disabled={generatePlanMutation.isPending}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {generatePlanMutation.isPending ? (
                   <>
@@ -227,10 +227,10 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
               className={cn(
                 'inline-flex items-center gap-1 font-mono text-xs px-2.5 py-0.5 rounded-full border',
                 plan.status === 'APPROVED'
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                  ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20'
                   : plan.status === 'REJECTED'
-                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                  : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                  ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/20'
+                  : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
               )}
             >
               {plan.status === 'APPROVED' && <CheckCircle2 className="h-3 w-3" />}
@@ -255,7 +255,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
             type="button"
             onClick={handleRefreshPlan}
             disabled={isFetching}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Refresh plan"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
@@ -270,7 +270,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
       {versionMismatchAlert && (
         <div
           role="alert"
-          className="m-5 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-400 space-y-2"
+          className="m-5 rounded-md border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-800 dark:text-amber-400 space-y-2"
         >
           <div className="flex items-start gap-2">
             <AlertCircle className="h-5 w-5 shrink-0 mt-0.5" />
@@ -283,7 +283,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
             <button
               type="button"
               onClick={handleRefreshPlan}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-amber-500 text-black hover:bg-amber-400 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded bg-amber-500 text-black hover:bg-amber-400 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RefreshCw className="h-3 w-3" />
               Refresh Plan to Current Version
@@ -363,7 +363,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                         className={cn(
                           'text-[10px] uppercase font-mono px-1.5 py-0.5 rounded border',
                           step.risk_level === 'high' || step.risk_level === 'critical'
-                            ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                            ? 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/20'
                             : 'bg-muted text-muted-foreground border-border'
                         )}
                       >
@@ -373,7 +373,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                   </div>
                 </div>
 
-                <p className="text-xs text-foreground/90 leading-relaxed">{step.description}</p>
+                <p className="text-xs text-foreground/90 leading-relaxed break-words">{step.description}</p>
 
                 {/* Expected files */}
                 {step.expected_files && step.expected_files.length > 0 && (
@@ -384,7 +384,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                     {step.expected_files.map((file) => (
                       <span
                         key={file}
-                        className="font-mono text-[11px] bg-background px-1.5 py-0.5 rounded border border-border/80 text-foreground"
+                        className="font-mono text-[11px] bg-background px-1.5 py-0.5 rounded border border-border/80 text-foreground break-all"
                       >
                         {file}
                       </span>
@@ -395,7 +395,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                 {/* Verification criteria */}
                 {step.verification && step.verification.length > 0 && (
                   <div className="flex items-start gap-1.5 text-xs text-muted-foreground pt-1">
-                    <FileCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    <FileCheck className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
                     <span>Verification: {step.verification.join('; ')}</span>
                   </div>
                 )}
@@ -409,7 +409,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
           {/* Validation Strategy */}
           <div className="rounded-md border border-border/80 bg-background/40 p-4 space-y-2">
             <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider flex items-center gap-1.5">
-              <FileCheck className="h-4 w-4 text-emerald-400" />
+              <FileCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
               Validation Strategy
             </h4>
             <div className="text-xs text-foreground/90 leading-relaxed">
@@ -440,7 +440,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
           {/* Risks & Mitigations */}
           <div className="rounded-md border border-border/80 bg-background/40 p-4 space-y-2">
             <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider flex items-center gap-1.5">
-              <ShieldAlert className="h-4 w-4 text-amber-400" />
+              <ShieldAlert className="h-4 w-4 text-amber-700 dark:text-amber-400" />
               Identified Risks
             </h4>
             {Array.isArray(plan.risks) && plan.risks.length > 0 ? (
@@ -496,12 +496,12 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
 
         {/* Action Buttons Bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Revise / Regenerate Toggle */}
             <button
               type="button"
               onClick={() => setIsReviseOpen(!isReviseOpen)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span>Revise Plan</span>
@@ -513,7 +513,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
               <button
                 type="button"
                 onClick={() => setIsRejectOpen(!isRejectOpen)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-rose-500/30 text-rose-400 hover:bg-rose-500/10 transition-colors"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-rose-500/30 text-rose-700 dark:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <XCircle className="h-3.5 w-3.5" />
                 <span>Reject Plan</span>
@@ -529,9 +529,9 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
               disabled={!canApproveOrReject || approveMutation.isPending}
               onClick={handleApprove}
               className={cn(
-                'inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md shadow-xs transition-colors',
+                'inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 canApproveOrReject
-                  ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  ? 'bg-emerald-700 text-white hover:bg-emerald-600 cursor-pointer'
                   : 'bg-muted text-muted-foreground cursor-not-allowed opacity-50'
               )}
             >
@@ -553,12 +553,12 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
         {/* Rejection Form Dropdown */}
         {isRejectOpen && canApproveOrReject && (
           <div className="rounded-md border border-rose-500/30 bg-rose-500/5 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-rose-400">Specify Rejection Reason</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-rose-700 dark:text-rose-400">Specify Rejection Reason</span>
               <button
                 type="button"
                 onClick={() => setIsRejectOpen(false)}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
                 Cancel
               </button>
@@ -568,7 +568,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
               placeholder="e.g. Plan steps target forbidden grammar.py parser file."
               value={rejectionReason}
               onChange={(e) => setRejectionReason(e.target.value)}
-              className="w-full py-1.5 px-3 text-xs bg-background border border-border rounded-md text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full py-1.5 px-3 text-xs bg-background border border-border rounded-md text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
             <div className="flex justify-end">
               <button
@@ -576,7 +576,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                 data-testid="reject-button"
                 disabled={rejectMutation.isPending}
                 onClick={handleReject}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md bg-rose-600 text-white hover:bg-rose-500 transition-colors"
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md bg-rose-700 text-white hover:bg-rose-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {rejectMutation.isPending ? (
                   <>
@@ -597,14 +597,14 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
         {/* Revise / Regenerate Form Dropdown */}
         {isReviseOpen && (
           <div className="rounded-md border border-primary/30 bg-primary/5 p-4 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-semibold text-primary">
                 Revise Plan Instructions (Increments Plan to v{plan.plan_version + 1})
               </span>
               <button
                 type="button"
                 onClick={() => setIsReviseOpen(false)}
-                className="text-xs text-muted-foreground hover:text-foreground"
+                className="text-xs text-muted-foreground hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
                 Cancel
               </button>
@@ -614,9 +614,9 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
               placeholder="e.g. Add explicit unit tests for negative token depth limits and summarize private helper exports."
               value={reviseInstructions}
               onChange={(e) => setReviseInstructions(e.target.value)}
-              className="w-full py-1.5 px-3 text-xs bg-background border border-border rounded-md text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="w-full py-1.5 px-3 text-xs bg-background border border-border rounded-md text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
-            <div className="flex items-center justify-between pt-1">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
               <p className="text-[11px] text-muted-foreground">
                 Revising increments plan_version and invalidates any previous approval.
               </p>
@@ -624,7 +624,7 @@ export function PlanReviewPanel({ task, className }: PlanReviewPanelProps) {
                 type="button"
                 disabled={generatePlanMutation.isPending}
                 onClick={handleRevise}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {generatePlanMutation.isPending ? (
                   <>

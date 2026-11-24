@@ -46,7 +46,7 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
       to: `/app/repositories/${repoId}/chat`,
       label: 'Chat',
       icon: MessageSquare,
-      badge: 'RAG',
+      badge: undefined,
     },
     {
       to: `/app/repositories/${repoId}/explain`,
@@ -76,7 +76,7 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
       to: `/app/repositories/${repoId}/tasks`,
       label: 'Task Planner',
       icon: ListChecks,
-      badge: 'W3',
+      badge: undefined,
     },
   ];
 
@@ -131,7 +131,7 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
           {/* Canonical Index / Sync Status & Action */}
           {isSyncing ? (
             <div
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs font-medium"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-700 dark:text-amber-400 text-xs font-medium"
               title="Repository synchronization in progress"
             >
               <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -139,13 +139,13 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
             </div>
           ) : syncStatus === 'SYNCED' ? (
             <div className="flex items-center gap-1.5">
-              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 text-[11px] font-mono font-medium">
+              <span className="hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-700 dark:text-emerald-400 text-[11px] font-medium">
                 <CheckCircle2 className="h-3 w-3" />
                 Indexed
               </span>
               <button
                 onClick={() => syncMutation.mutate(repoId)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors shadow-2xs"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-foreground transition-colors cursor-pointer"
                 title="Trigger repository re-index"
                 aria-label="Re-index repository"
               >

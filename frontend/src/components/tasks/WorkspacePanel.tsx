@@ -50,43 +50,43 @@ function getWorkspaceStatusBadge(status: WorkspaceStatus | string) {
     case WorkspaceStatus.CREATING:
       return {
         label: 'CREATING',
-        className: 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse',
+        className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 animate-pulse',
       };
     case WorkspaceStatus.READY:
       return {
         label: 'READY',
-        className: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+        className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30',
       };
     case WorkspaceStatus.IN_USE:
       return {
         label: 'IN USE',
-        className: 'bg-blue-500/10 text-blue-400 border-blue-500/30 animate-pulse',
+        className: 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30 animate-pulse',
       };
     case WorkspaceStatus.STOPPED:
       return {
         label: 'STOPPED',
-        className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+        className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
       };
     case WorkspaceStatus.FAILED:
       return {
         label: 'FAILED',
-        className: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+        className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30',
       };
     case WorkspaceStatus.CLEANUP_PENDING:
       return {
         label: 'CLEANUP PENDING',
-        className: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+        className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30',
       };
     case WorkspaceStatus.CLEANED:
       return {
         label: 'CLEANED',
-        className: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+        className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
       };
     case WorkspaceStatus.NOT_CREATED:
     default:
       return {
         label: 'NOT CREATED',
-        className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+        className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
       };
   }
 }
@@ -131,9 +131,9 @@ export function WorkspacePanel({
         className
       )}
     >
-      <div className="flex items-center justify-between border-b border-border pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
         <div className="flex items-center gap-2">
-          <Box className="h-4 w-4 text-primary" />
+          <Box className="h-4 w-4 text-primary shrink-0" />
           <h3 className="text-base font-semibold text-foreground">Isolated Workspace Sandbox</h3>
         </div>
 
@@ -154,7 +154,8 @@ export function WorkspacePanel({
             type="button"
             onClick={handleRefresh}
             disabled={isFetching || isLoading}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50"
+            aria-label="Refresh workspace status"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Refresh workspace status"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', (isFetching || isLoading) && 'animate-spin')} />
@@ -185,13 +186,13 @@ export function WorkspacePanel({
           {(workspace.status === WorkspaceStatus.FAILED || workspace.error_message) && (
             <div
               data-testid="workspace-error-banner"
-              className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-300 space-y-1"
+              className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-800 dark:text-rose-300 space-y-1"
             >
-              <div className="flex items-center gap-1.5 font-semibold text-rose-400">
+              <div className="flex items-center gap-1.5 font-semibold text-rose-700 dark:text-rose-400">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>Workspace Allocation or Execution Failed</span>
               </div>
-              <p className="text-rose-200/90 pl-5.5">
+              <p className="text-rose-900 dark:text-rose-200/90 pl-5.5 break-words">
                 {workspace.error_message || 'Sandbox creation or execution encountered an unrecoverable failure.'}
               </p>
             </div>
@@ -212,7 +213,7 @@ export function WorkspacePanel({
             {/* Task Branch */}
             <div className="rounded-md border border-border/80 bg-background/50 p-3 space-y-1">
               <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-                <GitBranch className="h-3 w-3 text-sky-400" /> Task Branch
+                <GitBranch className="h-3 w-3 text-sky-700 dark:text-sky-400" /> Task Branch
               </span>
               <p className="font-mono text-xs text-foreground font-semibold truncate" title={workspace.branch_name}>
                 {workspace.branch_name || 'Not assigned'}
@@ -222,7 +223,7 @@ export function WorkspacePanel({
             {/* Base Revision */}
             <div className="rounded-md border border-border/80 bg-background/50 p-3 space-y-1">
               <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-                <GitCommit className="h-3 w-3 text-purple-400" /> Base Revision
+                <GitCommit className="h-3 w-3 text-muted-foreground" /> Base Revision
               </span>
               <p className="font-mono text-xs text-foreground font-semibold truncate" title={workspace.base_revision}>
                 {workspace.base_revision ? workspace.base_revision.substring(0, 12) : 'Not available'}
@@ -233,7 +234,7 @@ export function WorkspacePanel({
             {workspace.isolation_type && (
               <div className="rounded-md border border-border/80 bg-background/50 p-3 space-y-1">
                 <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-                  <Shield className="h-3 w-3 text-emerald-400" /> Isolation Mode
+                  <Shield className="h-3 w-3 text-emerald-700 dark:text-emerald-400" /> Isolation Mode
                 </span>
                 <p className="font-mono text-xs text-foreground font-semibold">
                   {workspace.isolation_type}
@@ -258,7 +259,7 @@ export function WorkspacePanel({
             {(workspace.stopped_at || workspace.cleaned_at) && (
               <div className="rounded-md border border-border/80 bg-background/50 p-3 space-y-1">
                 <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-                  <Clock className="h-3 w-3 text-amber-400" />
+                  <Clock className="h-3 w-3 text-amber-700 dark:text-amber-400" />
                   {workspace.stopped_at ? 'Stopped At' : 'Cleaned At'}
                 </span>
                 <p className="font-mono text-[11px] text-foreground">
@@ -272,7 +273,7 @@ export function WorkspacePanel({
           {workspace.workspace_path && (
             <div className="rounded-md border border-border/80 bg-background/50 p-3 space-y-1">
               <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
-                <Folder className="h-3 w-3 text-amber-400" /> Workspace Filesystem Path
+                <Folder className="h-3 w-3 text-amber-700 dark:text-amber-400" /> Workspace Filesystem Path
               </span>
               <p className="font-mono text-xs text-foreground/90 break-all select-all">
                 {workspace.workspace_path}
@@ -325,10 +326,10 @@ export function WorkspacePanel({
                     <span className="text-muted-foreground">Network Egress:</span>
                     <span
                       className={cn(
-                        'px-1.5 py-0.2 rounded text-[10px] font-semibold',
+                        'px-1.5 py-0.5 rounded text-[10px] font-semibold',
                         workspace.resource_limits.network_egress_allowed
-                          ? 'bg-amber-500/10 text-amber-400'
-                          : 'bg-emerald-500/10 text-emerald-400'
+                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                          : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                       )}
                     >
                       {workspace.resource_limits.network_egress_allowed ? 'Allowed' : 'Strictly Blocked'}

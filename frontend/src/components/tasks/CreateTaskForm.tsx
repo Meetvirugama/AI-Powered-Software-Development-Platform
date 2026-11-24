@@ -583,10 +583,10 @@ export function CreateTaskForm() {
       {/* Section 2: Segregated Requirements (min 1)                         */}
       {/* ------------------------------------------------------------------ */}
       <div className="rounded-lg border border-border bg-card p-5 space-y-4 shadow-xs">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-              <FileCode className="h-4 w-4 text-primary" />
+              <FileCode className="h-4 w-4 text-primary shrink-0" />
               Requirements
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -596,7 +596,7 @@ export function CreateTaskForm() {
           <button
             type="button"
             onClick={addRequirement}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Requirement
@@ -620,8 +620,9 @@ export function CreateTaskForm() {
                 {requirements.length > 1 && (
                   <button
                     type="button"
+                    aria-label={`Remove requirement ${idx + 1}`}
                     onClick={() => removeRequirement(idx)}
-                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                    className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
                     title="Remove requirement"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -699,10 +700,10 @@ export function CreateTaskForm() {
       {/* Section 3: Assumptions (Dynamic)                                   */}
       {/* ------------------------------------------------------------------ */}
       <div className="rounded-lg border border-border bg-card p-5 space-y-4 shadow-xs">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-              <HelpCircle className="h-4 w-4 text-purple-400" />
+              <HelpCircle className="h-4 w-4 text-muted-foreground shrink-0" />
               Assumptions (Optional)
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -712,7 +713,7 @@ export function CreateTaskForm() {
           <button
             type="button"
             onClick={addAssumption}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Assumption
@@ -728,21 +729,22 @@ export function CreateTaskForm() {
                 key={asm.id || idx}
                 className="p-3 rounded-md border border-border/80 bg-background/50 flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
               >
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <input
                     type="text"
                     placeholder="e.g. Existing symbol table format remains backward-compatible"
                     value={asm.description}
                     onChange={(e) => updateAssumption(idx, 'description', e.target.value)}
-                    className="w-full py-1.5 px-2.5 text-xs bg-background border border-border rounded-md text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="w-full py-1.5 px-2.5 text-xs bg-background border border-border rounded-md text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   />
                 </div>
 
-                <div className="flex items-center gap-3 shrink-0">
+                <div className="flex flex-wrap items-center gap-3 shrink-0">
                   <select
+                    aria-label={`Assumption ${idx + 1} risk level`}
                     value={asm.risk_level}
                     onChange={(e) => updateAssumption(idx, 'risk_level', e.target.value)}
-                    className="py-1.5 px-2 text-xs bg-background border border-border rounded-md text-foreground focus:outline-none"
+                    className="py-1.5 px-2 text-xs bg-background border border-border rounded-md text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {RISK_LEVELS.map((rl) => (
                       <option key={rl} value={rl}>
@@ -756,15 +758,16 @@ export function CreateTaskForm() {
                       type="checkbox"
                       checked={asm.unresolved}
                       onChange={(e) => updateAssumption(idx, 'unresolved', e.target.checked)}
-                      className="rounded border-border text-primary focus:ring-primary"
+                      className="rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
                     />
                     <span>Unresolved</span>
                   </label>
 
                   <button
                     type="button"
+                    aria-label={`Remove assumption ${idx + 1}`}
                     onClick={() => removeAssumption(idx)}
-                    className="text-muted-foreground hover:text-destructive p-1"
+                    className="text-muted-foreground hover:text-destructive p-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
                     title="Remove assumption"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -780,10 +783,10 @@ export function CreateTaskForm() {
       {/* Section 4: Constraints (Dynamic)                                   */}
       {/* ------------------------------------------------------------------ */}
       <div className="rounded-lg border border-border bg-card p-5 space-y-4 shadow-xs">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-              <ShieldAlert className="h-4 w-4 text-amber-400" />
+              <ShieldAlert className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
               Constraints (Optional)
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
@@ -793,7 +796,7 @@ export function CreateTaskForm() {
           <button
             type="button"
             onClick={addConstraint}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus className="h-3.5 w-3.5" />
             Add Constraint
@@ -810,13 +813,14 @@ export function CreateTaskForm() {
                 className="p-4 rounded-md border border-border/80 bg-background/50 space-y-3"
               >
                 <div className="flex items-center justify-between border-b border-border/50 pb-2">
-                  <span className="font-mono text-xs font-semibold text-amber-400">
+                  <span className="font-mono text-xs font-semibold text-amber-700 dark:text-amber-400">
                     {cst.id || `cst-${idx + 1}`}
                   </span>
                   <button
                     type="button"
+                    aria-label={`Remove constraint ${idx + 1}`}
                     onClick={() => removeConstraint(idx)}
-                    className="text-muted-foreground hover:text-destructive transition-colors p-1"
+                    className="text-muted-foreground hover:text-destructive transition-colors p-1 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
                     title="Remove constraint"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -904,11 +908,11 @@ export function CreateTaskForm() {
       {/* ------------------------------------------------------------------ */}
       {/* Submit Action                                                      */}
       {/* ------------------------------------------------------------------ */}
-      <div className="flex items-center justify-end gap-3 pt-4 border-t border-border">
+      <div className="flex flex-wrap items-center justify-end gap-3 pt-4 border-t border-border">
         <button
           type="button"
           onClick={() => navigate('/app/tasks')}
-          className="px-4 py-2 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+          className="px-4 py-2 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Cancel
         </button>
@@ -916,7 +920,7 @@ export function CreateTaskForm() {
         <button
           type="submit"
           disabled={createTaskMutation.isPending}
-          className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs disabled:opacity-50"
+          className="inline-flex items-center gap-2 px-5 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {createTaskMutation.isPending ? (
             <>

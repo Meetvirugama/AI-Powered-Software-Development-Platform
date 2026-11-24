@@ -127,7 +127,7 @@ export function TaskDetail() {
       <div className="flex flex-col h-full min-h-0 overflow-y-auto max-w-4xl mx-auto py-12 space-y-6">
         <Link
           to="/app/tasks"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded self-start"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
           <span>Back to Tasks</span>
@@ -138,17 +138,18 @@ export function TaskDetail() {
             error={error}
             message={`Task with ID '${taskId}' could not be loaded.`}
           />
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
+              type="button"
               onClick={() => refetch()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
             </button>
             <Link
               to="/app/tasks"
-              className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-foreground hover:bg-accent transition-colors"
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-foreground hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               Go to Task List
             </Link>
@@ -159,7 +160,7 @@ export function TaskDetail() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-y-auto space-y-8 max-w-6xl mx-auto w-full pb-12">
+    <div className="flex flex-col h-full min-h-0 min-w-0 overflow-y-auto space-y-8 max-w-6xl mx-auto w-full pb-12">
       {/* ------------------------------------------------------------------ */}
       {/* 1. Header & Navigation                                              */}
       {/* ------------------------------------------------------------------ */}
@@ -167,7 +168,7 @@ export function TaskDetail() {
         <div className="flex items-center justify-between gap-4 mb-2">
           <Link
             to="/app/tasks"
-            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             <ChevronLeft className="h-3.5 w-3.5" />
             <span>Back to Tasks</span>
@@ -177,7 +178,7 @@ export function TaskDetail() {
             type="button"
             onClick={handleManualRefresh}
             disabled={isFetching}
-            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Refresh task"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} />
@@ -186,7 +187,7 @@ export function TaskDetail() {
         </div>
 
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
               <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded border border-border">
                 {task.task_id}
@@ -198,7 +199,7 @@ export function TaskDetail() {
                   href={task.source.issue_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline bg-primary/10 border border-primary/20 px-2 py-0.5 rounded-full"
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline bg-primary/10 border border-primary/20 px-2 py-0.5 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <span>Issue #{task.source.issue_number}</span>
                   <ExternalLink className="h-3 w-3" />
@@ -206,7 +207,9 @@ export function TaskDetail() {
               )}
             </div>
 
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">{task.title}</h1>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground break-words">
+              {task.title}
+            </h1>
 
             <p className="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
               <span className="inline-flex items-center gap-1 font-mono">
@@ -224,7 +227,7 @@ export function TaskDetail() {
               {task.repair_attempts_used > 0 && (
                 <>
                   <span>•</span>
-                  <span className="inline-flex items-center gap-1 text-amber-400 font-mono">
+                  <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400 font-mono">
                     <Wrench className="h-3 w-3" />
                     Repair attempts: {task.repair_attempts_used}/{task.repair_attempts_max}
                   </span>
@@ -241,7 +244,7 @@ export function TaskDetail() {
                 data-testid="start-execution-button"
                 disabled={executeMutation.isPending}
                 onClick={handleStartExecution}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-emerald-600 text-white hover:bg-emerald-500 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-emerald-700 text-white hover:bg-emerald-600 transition-colors shadow-xs disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {executeMutation.isPending ? (
                   <>
@@ -263,7 +266,7 @@ export function TaskDetail() {
                 data-testid="cancel-task-button"
                 disabled={cancelMutation.isPending}
                 onClick={handleCancelTask}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-md border border-rose-500/40 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-md border border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-400 hover:bg-rose-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {cancelMutation.isPending ? (
                   <>
@@ -284,12 +287,13 @@ export function TaskDetail() {
         {/* Server Error Alert for Execution or Cancellation */}
         {(executionError || cancelError) && (
           <div
+            role="alert"
             data-testid="execution-error-alert"
-            className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center justify-between"
+            className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2"
           >
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
-              <span>
+            <div className="flex items-center gap-2 min-w-0">
+              <AlertTriangle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
+              <span className="break-words">
                 {executionError?.message ||
                   cancelError?.message ||
                   'Action could not be executed due to server error.'}
@@ -301,7 +305,7 @@ export function TaskDetail() {
                 setExecutionError(null);
                 setCancelError(null);
               }}
-              className="text-xs text-rose-400 hover:text-rose-200 font-medium underline ml-3"
+              className="text-xs text-rose-700 hover:text-rose-950 dark:text-rose-400 dark:hover:text-rose-200 font-medium underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
             >
               Dismiss
             </button>
@@ -312,23 +316,23 @@ export function TaskDetail() {
         {isExecutionActive(task.status) && (
           <div
             data-testid="active-execution-indicator"
-            className="rounded-md border border-sky-500/30 bg-sky-500/10 p-3.5 text-xs text-sky-200 flex items-center justify-between"
+            className="rounded-md border border-sky-500/30 bg-sky-500/10 p-3.5 text-xs text-sky-900 dark:text-sky-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
           >
-            <div className="flex items-center gap-2.5">
-              <RefreshCw className="h-4 w-4 text-sky-400 animate-spin shrink-0" />
-              <div>
-                <span className="font-semibold text-sky-300">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <RefreshCw className="h-4 w-4 text-sky-700 dark:text-sky-400 animate-spin shrink-0" />
+              <div className="min-w-0">
+                <span className="font-semibold text-sky-800 dark:text-sky-300">
                   {task.status === TaskStatus.WORKSPACE_SETUP && 'Workspace Setup in Progress'}
                   {task.status === TaskStatus.EXECUTING && 'Task Execution Active'}
                   {task.status === TaskStatus.TESTING && 'Test Execution in Progress'}
                   {task.status === TaskStatus.REPAIRING && 'Bounded Self-Repair Active'}
                 </span>
-                <p className="text-[11px] text-sky-300/80">
+                <p className="text-[11px] text-sky-800/90 dark:text-sky-300/80">
                   Task execution is actively in progress. Task status and event timeline refresh automatically.
                 </p>
               </div>
             </div>
-            <span className="font-mono text-[11px] bg-sky-500/20 px-2.5 py-0.5 rounded text-sky-200 uppercase font-bold border border-sky-500/30">
+            <span className="font-mono text-[11px] bg-sky-500/20 px-2.5 py-0.5 rounded text-sky-900 dark:text-sky-200 uppercase font-bold border border-sky-500/30 self-start sm:self-auto shrink-0">
               {task.status.replace(/_/g, ' ')}
             </span>
           </div>
@@ -350,49 +354,49 @@ export function TaskDetail() {
       >
         <a
           href="#section-overview"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Overview
         </a>
         <a
           href="#section-plan"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Plan & Approvals
         </a>
         <a
           href="#section-workspace"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Workspace
         </a>
         <a
           href="#section-changes"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Changes
         </a>
         <a
           href="#section-tests"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Tests & Repairs
         </a>
         <a
           href="#section-verification"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Verification
         </a>
         <a
           href="#section-publication"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Publication & PR
         </a>
         <a
           href="#section-timeline"
-          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="px-3 py-1.5 rounded-md font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           Timeline
         </a>
@@ -423,9 +427,9 @@ export function TaskDetail() {
             {(task.requirements || []).map((req, idx) => (
               <div
                 key={req.id || idx}
-                className="p-4 rounded-md border border-border/80 bg-background/40 space-y-2.5"
+                className="p-4 rounded-md border border-border/80 bg-background/40 space-y-2.5 min-w-0"
               >
-                <div className="flex items-center justify-between border-b border-border/50 pb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2">
                   <span className="font-mono text-xs font-bold text-primary">
                     {req.id || `req-${idx + 1}`}
                   </span>
@@ -434,7 +438,7 @@ export function TaskDetail() {
                   </span>
                 </div>
 
-                <p className="text-xs text-foreground/90 leading-relaxed font-medium">
+                <p className="text-xs text-foreground/90 leading-relaxed font-medium break-words">
                   {req.description}
                 </p>
 
@@ -447,7 +451,7 @@ export function TaskDetail() {
                       {req.target_files.map((tf) => (
                         <span
                           key={tf}
-                          className="font-mono text-[11px] bg-background px-1.5 py-0.5 rounded border border-border/80 text-foreground"
+                          className="font-mono text-[11px] bg-background px-1.5 py-0.5 rounded border border-border/80 text-foreground break-all"
                         >
                           {tf}
                         </span>
@@ -474,9 +478,9 @@ export function TaskDetail() {
         {/* Assumptions & Constraints Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
           {/* Assumptions */}
-          <div>
+          <div className="min-w-0">
             <h2 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider mb-3 flex items-center gap-1.5">
-              <HelpCircle className="h-4 w-4 text-purple-400" />
+              <HelpCircle className="h-4 w-4 text-muted-foreground" />
               Assumptions ({task.assumptions?.length || 0})
             </h2>
 
@@ -487,8 +491,8 @@ export function TaskDetail() {
                     key={asm.id || idx}
                     className="p-3 rounded-md border border-border/80 bg-background/40 text-xs space-y-1.5"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-[11px] font-semibold text-purple-400">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] font-semibold text-foreground">
                         {asm.id || `asm-${idx + 1}`}
                       </span>
                       <div className="flex items-center gap-2">
@@ -496,13 +500,13 @@ export function TaskDetail() {
                           {asm.risk_level} risk
                         </span>
                         {asm.unresolved && (
-                          <span className="font-mono text-[10px] bg-amber-500/10 text-amber-400 px-1.5 py-0.2 rounded border border-amber-500/20">
+                          <span className="font-mono text-[10px] bg-amber-500/10 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/20">
                             Unresolved
                           </span>
                         )}
                       </div>
                     </div>
-                    <p className="text-foreground/90">{asm.description}</p>
+                    <p className="text-foreground/90 break-words">{asm.description}</p>
                   </div>
                 ))}
               </div>
@@ -512,9 +516,9 @@ export function TaskDetail() {
           </div>
 
           {/* Constraints */}
-          <div>
+          <div className="min-w-0">
             <h2 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider mb-3 flex items-center gap-1.5">
-              <ShieldAlert className="h-4 w-4 text-amber-400" />
+              <ShieldAlert className="h-4 w-4 text-amber-700 dark:text-amber-400" />
               Constraints ({task.constraints?.length || 0})
             </h2>
 
@@ -525,19 +529,19 @@ export function TaskDetail() {
                     key={cst.id || idx}
                     className="p-3 rounded-md border border-border/80 bg-background/40 text-xs space-y-1.5"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-[11px] font-semibold text-amber-400">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] font-semibold text-amber-700 dark:text-amber-400">
                         {cst.id || `cst-${idx + 1}`}
                       </span>
-                      <span className="font-mono text-[10px] uppercase bg-muted px-1.5 py-0.2 rounded">
+                      <span className="font-mono text-[10px] uppercase bg-muted px-1.5 py-0.5 rounded">
                         {cst.constraint_type}
                       </span>
                     </div>
 
-                    <p className="text-foreground/90">{cst.description}</p>
+                    <p className="text-foreground/90 break-words">{cst.description}</p>
 
                     {cst.forbidden_files && cst.forbidden_files.length > 0 && (
-                      <div className="text-[11px] text-muted-foreground font-mono">
+                      <div className="text-[11px] text-muted-foreground font-mono break-all">
                         Forbidden files: {cst.forbidden_files.join(', ')}
                       </div>
                     )}
@@ -575,7 +579,7 @@ export function TaskDetail() {
       {/* ------------------------------------------------------------------ */}
       {/* 5. Code Changes & Diff Telemetry Panel                             */}
       {/* ------------------------------------------------------------------ */}
-      <div id="section-changes">
+      <div id="section-changes" className="min-w-0">
         <CodeChangesPanel
           taskId={task.task_id}
           repositoryId={task.repository_id}

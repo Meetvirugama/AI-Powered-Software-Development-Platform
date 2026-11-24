@@ -32,15 +32,15 @@ import type {
 } from '../types/analysis';
 
 const BADGE_COLOR_MAP: Record<string, string> = {
-  imported_dependency: 'bg-blue-500/10 text-blue-400 border-blue-500/30',
-  called_dependency: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30',
-  caller: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
-  type_definition: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
-  database_model: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-  associated_test: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30',
-  co_change_coupled: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
-  indirect_dependency: 'bg-slate-500/10 text-slate-300 border-slate-500/30',
-  semantic_match: 'bg-teal-500/10 text-teal-300 border-teal-500/30',
+  imported_dependency: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
+  called_dependency: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
+  caller: 'bg-muted text-foreground border-border',
+  type_definition: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
+  database_model: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
+  associated_test: 'bg-cyan-500/10 text-cyan-700 dark:text-cyan-400 border-cyan-500/25',
+  co_change_coupled: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
+  indirect_dependency: 'bg-muted text-muted-foreground border-border',
+  semantic_match: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
 };
 
 export function RepositoryExplainStudio() {
@@ -64,7 +64,7 @@ export function RepositoryExplainStudio() {
   const [customSelectedFiles, setCustomSelectedFiles] = useState<string[]>([]);
   const [fileSearchQuery, setFileSearchQuery] = useState('');
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
-  const [contextPanelExpanded, setContextPanelExpanded] = useState(true);
+  const [contextPanelExpanded, setContextPanelExpanded] = useState(false);
 
   const {
     selectedFile,
@@ -313,7 +313,7 @@ export function RepositoryExplainStudio() {
                   <span className="font-semibold text-xs text-foreground truncate">
                     Repository Intelligence Context
                   </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shrink-0">
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25 shrink-0">
                     Indexed
                   </span>
                 </div>
@@ -341,12 +341,12 @@ export function RepositoryExplainStudio() {
                       {selectedFile.path}
                     </span>
                     {activeTarget.symbol && (
-                      <span className="font-mono text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">
+                      <span className="font-mono text-foreground bg-muted px-1.5 py-0.5 rounded border border-border">
                         ::{activeTarget.symbol}
                       </span>
                     )}
                     {activeTarget.start_line && activeTarget.end_line && (
-                      <span className="font-mono text-slate-400 bg-slate-500/10 px-1 py-0.5 rounded">
+                      <span className="font-mono text-muted-foreground bg-muted px-1 py-0.5 rounded">
                         L{activeTarget.start_line}–{activeTarget.end_line}
                       </span>
                     )}
@@ -370,7 +370,7 @@ export function RepositoryExplainStudio() {
                           const isChecked = selectedRelatedPaths.has(df.path);
                           const badgeColor =
                             BADGE_COLOR_MAP[df.relation] ||
-                            'bg-slate-500/10 text-slate-300 border-slate-500/30';
+                            'bg-muted text-muted-foreground border-border';
                           return (
                             <label
                               key={df.path}

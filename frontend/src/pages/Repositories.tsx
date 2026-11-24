@@ -1,12 +1,14 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAvailableRepositories } from '../hooks/useAvailableRepositories';
 import { useConnectRepository } from '../hooks/useConnectRepository';
+import { useRepositories } from '../hooks/useRepositories';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { GitHubInstallButton } from '../components/shared/GitHubInstallButton';
+import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { linkGitHubInstallation } from '../services/repositoryDiscovery';
-import type { AvailableRepository, ApiError } from '../types/api';
+import type { AvailableRepository, ApiError, Repository } from '../types/api';
 import {
   Search,
   GitBranch,
@@ -17,6 +19,7 @@ import {
   RefreshCw,
   X,
   AlertCircle,
+  FolderOpen,
 } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
@@ -84,7 +87,7 @@ export function Repositories() {
   const [connectErrors, setConnectErrors] = useState<Record<string, string>>({});
 
   // ------------------------------------------------------------------
-  // Discovery query
+  // Discovery query + connected repositories index (for R1 opening)
   // ------------------------------------------------------------------
   const { data, isLoading, isFetching, isError, error, refetch } =
     useAvailableRepositories({
@@ -93,6 +96,32 @@ export function Repositories() {
       search: debouncedSearch,
       installationId: urlInstallationId,
     });
+
+  const { data: connectedData, isLoading: isLoadingConnected } = useRepositories(1, 100);
+
+  const connectedRepoIndex = useMemo(() => {
+    const byGithubId = new Map<string, Repository>();
+    const byFullName = new Map<string, Repository>();
+    for (const item of connectedData?.items ?? []) {
+      if (item.github_repo_id) {
+        byGithubId.set(String(item.github_repo_id), item);
+      }
+      if (item.full_name) {
+        byFullName.set(item.full_name.toLowerCase(), item);
+      }
+    }
+    return { byGithubId, byFullName };
+  }, [connectedData]);
+
+  const resolveConnectedRepo = useCallback(
+    (repo: AvailableRepository): Repository | undefined => {
+      return (
+        connectedRepoIndex.byGithubId.get(String(repo.github_repo_id)) ??
+        connectedRepoIndex.byFullName.get(repo.full_name.toLowerCase())
+      );
+    },
+    [connectedRepoIndex]
+  );
 
   // ------------------------------------------------------------------
   // Connect mutation
@@ -130,21 +159,20 @@ export function Repositories() {
   const totalPages = data ? Math.max(1, data.total_pages) : 1;
   const hasPrev = page > 1;
   const hasNext = page < totalPages;
+  const connectedRepos = connectedData?.items ?? [];
 
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
-      {/* ---------------------------------------------------------------- */}
-      {/* Pinned Page Header & Controls                                     */}
-      {/* ---------------------------------------------------------------- */}
-      <div className="shrink-0 space-y-3 pb-3 border-b border-border/60">
+      {/* Pinned Page Header & Controls */}
+      <div className="shrink-0 space-y-4 pb-5 border-b border-border">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex flex-col gap-0.5">
-            <h1 className="text-xl sm:text-2xl font-bold text-foreground tracking-tight">Connect a Repository</h1>
-            <p className="text-xs text-muted-foreground">
-              GitHub repositories available through your GitHub App installation.
+            <h1 className="text-xl font-semibold text-foreground tracking-tight">Connect a Repository</h1>
+            <p className="text-sm text-muted-foreground">
+              Repositories accessible through your GitHub App installation.
             </p>
           </div>
           <GitHubInstallButton
@@ -157,20 +185,21 @@ export function Repositories() {
         {/* Search input & repo count row */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="relative w-full max-w-md">
-            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <input
               id="repository-search"
               type="search"
               placeholder="Search repositories…"
               value={searchInput}
               onChange={(e) => handleSearchChange(e.target.value)}
-              className="w-full rounded-lg border border-border bg-background py-1.5 pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
+              className="w-full rounded-lg border border-border bg-card py-2 pl-9 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring transition-colors"
               aria-label="Search repositories"
             />
             {searchInput && (
               <button
+                type="button"
                 onClick={() => handleSearchChange('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Clear search"
               >
                 <X className="h-3.5 w-3.5" />
@@ -186,7 +215,7 @@ export function Repositories() {
               </div>
             )}
             {data && (
-              <span className="font-medium text-foreground">
+              <span className="font-medium text-foreground tabular-nums">
                 {debouncedSearch
                   ? `${data.total} result${data.total !== 1 ? 's' : ''}`
                   : `${data.total} repositories available`}
@@ -194,6 +223,33 @@ export function Repositories() {
             )}
           </div>
         </div>
+
+        {/* Connected quick-open bar for instant 1-click navigation */}
+        {connectedRepos.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1" aria-label="Connected quick open">
+            <span className="text-[11px] font-medium text-muted-foreground mr-1">
+              Connected:
+            </span>
+            {connectedRepos.slice(0, 8).map((connected) => (
+              <Link
+                key={connected.id}
+                to={`/app/repositories/${connected.id}`}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[11px] font-medium text-foreground hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+              >
+                <FolderOpen className="h-3 w-3 text-muted-foreground" />
+                <span className="truncate max-w-[180px]">{connected.full_name}</span>
+              </Link>
+            ))}
+            {(connectedData?.total ?? 0) > 8 && (
+              <Link
+                to="/app/dashboard"
+                className="text-[11px] font-medium text-muted-foreground hover:text-foreground underline-offset-2 hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+              >
+                View all on Dashboard
+              </Link>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ---------------------------------------------------------------- */}
@@ -219,8 +275,9 @@ export function Repositories() {
               className="max-w-md"
             />
             <button
+              type="button"
               onClick={() => refetch()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
               aria-label="Retry loading repositories"
             >
               <RefreshCw className="h-3.5 w-3.5" />
@@ -233,6 +290,22 @@ export function Repositories() {
         {!isLoading && !isError && data && data.items.length === 0 && !debouncedSearch && (
           <EmptyNoRepositories onRefresh={() => refetch()} />
         )}
+
+        {/* Fallback connected repositories grid when discovery is empty or failed */}
+        {!isLoading &&
+          (isError || (data && data.items.length === 0 && !debouncedSearch)) &&
+          connectedRepos.length > 0 && (
+            <section aria-label="Connected repositories" className="space-y-3 pt-2">
+              <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Connected Repositories
+              </h2>
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
+                {connectedRepos.map((connected) => (
+                  <RepositoryCard key={connected.id} repo={connected} />
+                ))}
+              </div>
+            </section>
+          )}
 
         {/* Empty — search returned no results */}
         {!isLoading && !isError && data && data.items.length === 0 && debouncedSearch && (
@@ -252,6 +325,8 @@ export function Repositories() {
               <AvailableRepositoryCard
                 key={repo.github_repo_id}
                 repo={repo}
+                connectedRepo={resolveConnectedRepo(repo)}
+                isResolvingConnected={isLoadingConnected}
                 isConnecting={isConnecting && connectingId === repo.github_repo_id}
                 connectError={connectErrors[repo.github_repo_id]}
                 onConnect={handleConnect}
@@ -266,7 +341,7 @@ export function Repositories() {
       {/* Pinned Pagination Footer                                          */}
       {/* ---------------------------------------------------------------- */}
       {!isLoading && !isError && data && data.items.length > 0 && totalPages > 1 && (
-        <div className="shrink-0 pt-2.5 border-t border-border/60">
+        <div className="shrink-0 pt-3 border-t border-border">
           <DiscoveryPagination
             page={page}
             totalPages={totalPages}
@@ -288,11 +363,15 @@ export function Repositories() {
 //
 // Displays a single GitHub-App-accessible repository.
 // Matches the visual style of RepositoryCard (connected repos on Dashboard)
-// but uses AvailableRepository data and a Connect action instead of View/Ask.
+// and supports direct opening via name click or explicit Open link when connected.
 // ---------------------------------------------------------------------------
 
 interface AvailableRepositoryCardProps {
   repo: AvailableRepository;
+  /** Resolved connected platform repository (provides UUID for /app/repositories/:id). */
+  connectedRepo?: Repository;
+  /** True while connected repositories list is still loading. */
+  isResolvingConnected?: boolean;
   /** True when THIS card's Connect is in-flight. */
   isConnecting: boolean;
   /** Per-card connect error message, or undefined if none. */
@@ -303,38 +382,64 @@ interface AvailableRepositoryCardProps {
 
 function AvailableRepositoryCard({
   repo,
+  connectedRepo,
+  isResolvingConnected,
   isConnecting,
   connectError,
   onConnect,
   onRetry,
 }: AvailableRepositoryCardProps) {
+  const repoDetailPath =
+    repo.is_connected && connectedRepo?.id ? `/app/repositories/${connectedRepo.id}` : null;
+
   return (
     <article
-      className="flex flex-col gap-4 rounded-xl border border-border bg-card p-5 shadow-sm transition-shadow hover:shadow-md"
+      className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-4 transition-colors hover:border-foreground/20"
       aria-label={`Repository ${repo.full_name}`}
     >
       {/* Header: name + language badge */}
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3
-            className="truncate text-sm font-semibold text-foreground"
-            title={repo.full_name}
-          >
-            {repo.name}
-          </h3>
-          <p className="truncate text-xs text-muted-foreground">{repo.owner}</p>
+        <div className="min-w-0 flex-1">
+          {repoDetailPath ? (
+            <Link
+              to={repoDetailPath}
+              className="block max-w-full text-left font-semibold text-foreground hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded cursor-pointer"
+              title={`Open ${repo.full_name}`}
+            >
+              <h3 className="truncate text-sm">{repo.name}</h3>
+            </Link>
+          ) : (
+            <h3
+              className="truncate text-sm font-semibold text-foreground"
+              title={repo.full_name}
+            >
+              {repo.name}
+            </h3>
+          )}
+          <p className="truncate text-xs text-muted-foreground mt-0.5">{repo.owner}</p>
         </div>
         {repo.language && (
-          <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+          <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
             {repo.language}
           </span>
         )}
       </div>
 
-      {/* Branch info */}
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <GitBranch className="h-3.5 w-3.5 flex-shrink-0" />
-        <span className="truncate">{repo.default_branch}</span>
+      {/* Branch info + Connected status badge */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground min-w-0">
+          <GitBranch className="h-3.5 w-3.5 flex-shrink-0" />
+          <span className="truncate">{repo.default_branch}</span>
+        </div>
+        {repo.is_connected && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
+            aria-label={`${repo.name} is connected`}
+          >
+            <CheckCircle2 className="h-3 w-3" />
+            Connected
+          </span>
+        )}
       </div>
 
       {/* Per-card connect error */}
@@ -351,20 +456,33 @@ function AvailableRepositoryCard({
       {/* Action area */}
       <div className="mt-auto">
         {repo.is_connected ? (
-          // Already connected — show a clear non-interactive badge
-          <div
-            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700"
-            aria-label={`${repo.name} is already connected`}
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Connected
-          </div>
+          repoDetailPath ? (
+            <Link
+              to={repoDetailPath}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+              aria-label={`Open ${repo.name}`}
+            >
+              <FolderOpen className="h-3.5 w-3.5" />
+              Open
+            </Link>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-700 dark:text-emerald-400 cursor-not-allowed opacity-80"
+              aria-label={`${repo.name} is already connected`}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {isResolvingConnected ? 'Loading…' : 'Connected'}
+            </button>
+          )
         ) : connectError ? (
           // Error state — allow retry
           <button
+            type="button"
             onClick={onRetry}
             disabled={isConnecting}
-            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             aria-label={`Retry connecting ${repo.name}`}
           >
             {isConnecting ? (
@@ -382,9 +500,10 @@ function AvailableRepositoryCard({
         ) : (
           // Normal unconnected state — Connect button
           <button
+            type="button"
             onClick={() => onConnect(repo)}
             disabled={isConnecting}
-            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
             aria-label={`Connect ${repo.name}`}
           >
             {isConnecting ? (
@@ -439,7 +558,7 @@ function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
       <div className="max-w-md">
         <p className="font-semibold text-lg text-foreground">No repositories found</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          No repositories are available because the <strong>AI Dev Platform</strong> GitHub App is not yet installed on your GitHub account or organizations.
+          No repositories are available because the <strong>Code Intelligence</strong> GitHub App is not yet installed on your GitHub account or organizations.
         </p>
       </div>
       <div className="flex flex-wrap items-center justify-center gap-3">
@@ -450,7 +569,7 @@ function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
         {onRefresh && (
           <button
             onClick={onRefresh}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
             type="button"
           >
             <RefreshCw className="h-4 w-4" />
@@ -463,9 +582,10 @@ function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
         <p className="text-xs text-muted-foreground">
           Already installed? Link your GitHub Installation ID:
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <input
             type="text"
+            aria-label="GitHub Installation ID"
             placeholder="e.g. 171308854"
             value={manualId}
             onChange={(e) => setManualId(e.target.value)}
@@ -474,12 +594,12 @@ function EmptyNoRepositories({ onRefresh }: { onRefresh?: () => void }) {
           <button
             type="submit"
             disabled={isLinking || !manualId.trim()}
-            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           >
             {isLinking ? 'Linking...' : 'Link'}
           </button>
         </div>
-        {linkError && <p className="text-xs text-destructive">{linkError}</p>}
+        {linkError && <p role="alert" className="text-xs text-destructive">{linkError}</p>}
       </form>
     </div>
   );
@@ -500,10 +620,11 @@ function EmptySearchResults({ search, onClear }: { search: string; onClear: () =
           If your repository isn't listed, ensure it was selected during the GitHub App installation.
         </p>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-center gap-3">
         <button
+          type="button"
           onClick={onClear}
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
         >
           <X className="h-4 w-4" />
           Clear search
@@ -519,7 +640,7 @@ function EmptySearchResults({ search, onClear }: { search: string; onClear: () =
 }
 
 // ---------------------------------------------------------------------------
-// Pagination — mirrors the Pagination component in Dashboard.tsx exactly
+// Pagination — mirrors the Pagination component in Dashboard.tsx
 // so the UX is consistent across both paginated views.
 // ---------------------------------------------------------------------------
 
@@ -549,33 +670,35 @@ function DiscoveryPagination({
 
   return (
     <nav
-      className="flex items-center justify-between border-t border-border pt-4"
+      className="flex flex-wrap items-center justify-between gap-2"
       aria-label="Repository pagination"
     >
-      <p className="text-sm text-muted-foreground">
+      <p className="text-xs text-muted-foreground tabular-nums">
         Showing {from}–{to} of {total}
       </p>
       <div className="flex items-center gap-2">
         <button
+          type="button"
           onClick={onPrev}
           disabled={!hasPrev}
-          className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           aria-label="Previous page"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft className="h-3.5 w-3.5" />
           Previous
         </button>
-        <span className="text-sm text-muted-foreground" aria-current="page">
+        <span className="text-xs text-muted-foreground tabular-nums px-1" aria-current="page">
           {page} / {totalPages}
         </span>
         <button
+          type="button"
           onClick={onNext}
           disabled={!hasNext}
-          className="inline-flex items-center gap-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="inline-flex items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
           aria-label="Next page"
         >
           Next
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRight className="h-3.5 w-3.5" />
         </button>
       </div>
     </nav>

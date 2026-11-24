@@ -99,9 +99,9 @@ export function ApprovalHistoryPanel({
         className
       )}
     >
-      <div className="flex items-center justify-between border-b border-border pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
         <h3 className="text-base font-semibold text-foreground flex items-center gap-2">
-          <Shield className="h-4 w-4 text-primary" />
+          <Shield className="h-4 w-4 text-primary shrink-0" />
           Approval & Rejection History
         </h3>
         <span className="text-xs font-mono text-muted-foreground">
@@ -111,12 +111,13 @@ export function ApprovalHistoryPanel({
 
       {/* Category Filter Tabs when multiple types present */}
       {(toolApprovals.length > 0 || mcpElicitations.length > 0) && !isError && (
-        <div className="flex items-center gap-1.5 border-b border-border/60 pb-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border/60 pb-2 text-xs">
           <button
             type="button"
+            aria-pressed={activeTab === 'all'}
             onClick={() => setActiveTab('all')}
             className={cn(
-              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer',
+              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               activeTab === 'all'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -126,9 +127,10 @@ export function ApprovalHistoryPanel({
           </button>
           <button
             type="button"
+            aria-pressed={activeTab === 'execution'}
             onClick={() => setActiveTab('execution')}
             className={cn(
-              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer',
+              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               activeTab === 'execution'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -138,9 +140,10 @@ export function ApprovalHistoryPanel({
           </button>
           <button
             type="button"
+            aria-pressed={activeTab === 'tools'}
             onClick={() => setActiveTab('tools')}
             className={cn(
-              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer',
+              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               activeTab === 'tools'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -150,9 +153,10 @@ export function ApprovalHistoryPanel({
           </button>
           <button
             type="button"
+            aria-pressed={activeTab === 'mcp'}
             onClick={() => setActiveTab('mcp')}
             className={cn(
-              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer',
+              'px-2.5 py-1 rounded font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               activeTab === 'mcp'
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -170,7 +174,7 @@ export function ApprovalHistoryPanel({
             <button
               type="button"
               onClick={refetch}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span>Retry</span>
@@ -185,7 +189,7 @@ export function ApprovalHistoryPanel({
         <div className="py-6 text-center text-muted-foreground space-y-1">
           <p className="text-xs italic">No approval or rejection decisions recorded yet.</p>
           {task.status === 'PENDING_APPROVAL' && (
-            <p className="text-[11px] text-amber-400">
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
               Awaiting human sign-off on implementation plan v{task.plan_version}.
             </p>
           )}
@@ -213,7 +217,7 @@ export function ApprovalHistoryPanel({
                   )}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary border border-primary/20">
                         EXECUTION APPROVAL
                       </span>
@@ -221,8 +225,8 @@ export function ApprovalHistoryPanel({
                         className={cn(
                           'inline-flex items-center gap-1 font-mono font-bold px-2 py-0.5 rounded text-[11px]',
                           isApproved
-                            ? 'bg-emerald-500/10 text-emerald-400'
-                            : 'bg-rose-500/10 text-rose-400'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+                            : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                         )}
                       >
                         {isApproved ? (
@@ -282,17 +286,17 @@ export function ApprovalHistoryPanel({
                     isPending
                       ? 'border-amber-500/30 bg-amber-500/5'
                       : isApproved
-                      ? 'border-indigo-500/20 bg-indigo-500/5'
+                      ? 'border-emerald-500/25 bg-emerald-500/5'
                       : 'border-rose-500/20 bg-rose-500/5'
                   )}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-muted text-foreground border border-border">
                         <Wrench className="h-3 w-3" />
                         TOOL APPROVAL
                       </span>
-                      <span className="font-mono font-semibold text-foreground text-xs">
+                      <span className="font-mono font-semibold text-foreground text-xs break-all">
                         {appr.tool_name}
                       </span>
                       {appr.risk_level && (
@@ -300,8 +304,8 @@ export function ApprovalHistoryPanel({
                           className={cn(
                             'px-1.5 py-0.5 rounded text-[10px] font-mono uppercase',
                             appr.risk_level === 'critical' || appr.risk_level === 'high'
-                              ? 'bg-rose-500/15 text-rose-400'
-                              : 'bg-amber-500/15 text-amber-400'
+                              ? 'bg-rose-500/15 text-rose-700 dark:text-rose-400'
+                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
                           )}
                         >
                           {appr.risk_level}
@@ -311,10 +315,10 @@ export function ApprovalHistoryPanel({
                         className={cn(
                           'px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-bold',
                           isApproved
-                            ? 'bg-emerald-500/10 text-emerald-400'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                             : isPending
-                            ? 'bg-amber-500/10 text-amber-400 animate-pulse'
-                            : 'bg-rose-500/10 text-rose-400'
+                            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 animate-pulse'
+                            : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                         )}
                       >
                         {appr.status}
@@ -329,9 +333,9 @@ export function ApprovalHistoryPanel({
 
                   {/* Canonical Argument Hash */}
                   {appr.argument_hash && (
-                    <div className="text-[11px] font-mono text-muted-foreground flex items-center gap-1">
+                    <div className="text-[11px] font-mono text-muted-foreground flex flex-wrap items-center gap-1">
                       <span className="text-foreground/70 font-semibold">Arg Hash:</span>
-                      <code className="bg-muted px-1 rounded text-[10px]">{appr.argument_hash}</code>
+                      <code className="bg-muted px-1 rounded text-[10px] break-all">{appr.argument_hash}</code>
                     </div>
                   )}
 
@@ -349,12 +353,12 @@ export function ApprovalHistoryPanel({
 
                   {/* Pending Action Controls */}
                   {isPending && appr.id && (
-                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-border/50">
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1 border-t border-border/50">
                       <button
                         type="button"
                         disabled={rejectToolMutation.isPending}
                         onClick={() => rejectToolMutation.mutate({ approvalId: appr.id! })}
-                        className="px-2.5 py-1 text-xs font-medium rounded border border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer"
+                        className="px-2.5 py-1 text-xs font-medium rounded border border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-400 hover:bg-rose-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         Reject Tool
                       </button>
@@ -362,7 +366,7 @@ export function ApprovalHistoryPanel({
                         type="button"
                         disabled={approveToolMutation.isPending}
                         onClick={() => approveToolMutation.mutate({ approvalId: appr.id! })}
-                        className="px-2.5 py-1 text-xs font-medium rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors cursor-pointer"
+                        className="px-2.5 py-1 text-xs font-medium rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         Approve Tool
                       </button>
@@ -391,8 +395,8 @@ export function ApprovalHistoryPanel({
                   )}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/20">
                         {elic.elicitation_type === 'url' ? (
                           <ExternalLink className="h-3 w-3" />
                         ) : (
@@ -407,10 +411,10 @@ export function ApprovalHistoryPanel({
                         className={cn(
                           'px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-bold',
                           isSubmitted
-                            ? 'bg-emerald-500/10 text-emerald-400'
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
                             : isPending
-                            ? 'bg-sky-500/10 text-sky-400 animate-pulse'
-                            : 'bg-rose-500/10 text-rose-400'
+                            ? 'bg-sky-500/10 text-sky-700 dark:text-sky-400 animate-pulse'
+                            : 'bg-rose-500/10 text-rose-700 dark:text-rose-400'
                         )}
                       >
                         {elic.status}
@@ -438,10 +442,10 @@ export function ApprovalHistoryPanel({
                   {/* Response Summary if responded */}
                   {elic.elicitation_response && Object.keys(elic.elicitation_response).length > 0 && (
                     <div className="space-y-1">
-                      <span className="text-[10px] font-semibold text-emerald-400 uppercase">
+                      <span className="text-[10px] font-semibold text-emerald-700 dark:text-emerald-400 uppercase">
                         Submitted Response
                       </span>
-                      <pre className="p-2 rounded bg-background/80 border border-emerald-500/20 text-[11px] font-mono text-emerald-300 overflow-x-auto max-h-32">
+                      <pre className="p-2 rounded bg-background/80 border border-emerald-500/20 text-[11px] font-mono text-emerald-800 dark:text-emerald-300 overflow-x-auto max-h-32">
                         {JSON.stringify(elic.elicitation_response, null, 2)}
                       </pre>
                     </div>
@@ -449,7 +453,7 @@ export function ApprovalHistoryPanel({
 
                   {/* Non-equivalence Notice */}
                   {isPending && (
-                    <div className="flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                    <div className="flex items-center gap-1 text-[11px] text-amber-800 dark:text-amber-400 bg-amber-500/10 p-2 rounded border border-amber-500/20">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                       <span>
                         An elicitation response provides required parameters only. It does not authorize tool execution.

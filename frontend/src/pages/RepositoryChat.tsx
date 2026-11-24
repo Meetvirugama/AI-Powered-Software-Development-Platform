@@ -129,6 +129,18 @@ export function RepositoryChat() {
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [draft]);
 
+  useEffect(() => {
+    if (!activeSource) return;
+    const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setActiveSource(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeSource]);
+
   const handleSend = useCallback(() => {
     const trimmed = draft.trim();
     if (!trimmed || isPending) return;
@@ -272,22 +284,28 @@ export function RepositoryChat() {
         })()}
       </div>
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Messages area                                                     */}
-      {/* ---------------------------------------------------------------- */}
+      {/* Messages area */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto px-4 py-6 space-y-6"
+        className="flex-1 overflow-y-auto px-4 py-6"
         role="log"
         aria-live="off"
         aria-label="Chat conversation"
       >
+        <div className="max-w-3xl mx-auto w-full space-y-6 h-full">
         {isLoadingHistory && messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
             <LoadingSpinner size="sm" label="Loading conversation…" />
           </div>
         ) : messages.length === 0 && !isPending ? (
-          <EmptyState repoName={repoName} repoLoading={repoLoading} />
+          <EmptyState
+            repoName={repoName}
+            repoLoading={repoLoading}
+            onSelectPrompt={(prompt) => {
+              setDraft(prompt);
+              textareaRef.current?.focus();
+            }}
+          />
         ) : (
           <>
             {messages.map((msg) => (
@@ -319,13 +337,17 @@ export function RepositoryChat() {
 
         {/* Sentinel element for auto-scroll */}
         <div ref={bottomRef} aria-hidden="true" />
+        </div>
       </div>
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Evidence Side Drawer / Inspector                                  */}
-      {/* ---------------------------------------------------------------- */}
+      {/* Evidence Side Drawer / Inspector */}
       {activeSource && (
-        <div className="absolute right-0 top-14 bottom-0 w-80 sm:w-96 bg-card border-l border-border shadow-2xl z-30 flex flex-col animate-in slide-in-from-right duration-200">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cited Evidence"
+          className="absolute right-0 top-14 bottom-0 w-full sm:w-96 bg-card border-l border-border shadow-2xl z-30 flex flex-col"
+        >
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <div className="flex items-center gap-2">
               <Layers className="h-4 w-4 text-primary" />
@@ -378,11 +400,9 @@ export function RepositoryChat() {
         </div>
       )}
 
-      {/* ---------------------------------------------------------------- */}
-      {/* Composer                                                          */}
-      {/* ---------------------------------------------------------------- */}
-      <div className="flex-shrink-0 bg-card border-t border-border px-4 py-3">
-        <div className="max-w-4xl mx-auto flex items-end gap-3">
+      {/* Composer */}
+      <div className="flex-shrink-0 bg-card/80 backdrop-blur-sm border-t border-border px-4 py-3">
+        <div className="max-w-3xl mx-auto flex items-end gap-2.5">
           <div className="flex-1 relative">
             <label htmlFor="chat-input" className="sr-only">
               Ask a question about {repoName}
@@ -443,17 +463,25 @@ export function RepositoryChat() {
 // EmptyState
 // ---------------------------------------------------------------------------
 
+const CHAT_STARTER_PROMPTS = [
+  'Summarize the overall architecture of this repository',
+  'Where are the main entry points and API routes defined?',
+  'How does authentication and session management work here?',
+];
+
 function EmptyState({
   repoName,
   repoLoading,
+  onSelectPrompt,
 }: {
   repoName: string;
   repoLoading: boolean;
+  onSelectPrompt?: (prompt: string) => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-[40vh] text-center gap-4 select-none px-4">
-      <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
-        <MessageSquare className="h-6 w-6" aria-hidden="true" />
+    <div className="flex flex-col items-center justify-center h-full min-h-[40vh] text-center gap-5 select-none px-4">
+      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-muted border border-border text-foreground">
+        <MessageSquare className="h-5 w-5" aria-hidden="true" />
       </div>
       <div className="space-y-1.5">
         <h2 className="text-base font-semibold text-foreground">
@@ -468,6 +496,20 @@ function EmptyState({
           or symbols. Answers are grounded in the indexed source files.
         </p>
       </div>
+      {onSelectPrompt && (
+        <div className="flex flex-wrap items-center justify-center gap-2 max-w-lg">
+          {CHAT_STARTER_PROMPTS.map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => onSelectPrompt(prompt)}
+              className="px-3 py-1.5 rounded-lg border border-border bg-card hover:bg-accent text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer text-left"
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -599,21 +641,28 @@ function ConversationMenu({
   onDelete: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onPointer = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setConfirmDeleteId(null);
+      }
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        setConfirmDeleteId(null);
+      }
     };
     document.addEventListener('mousedown', onPointer);
-    document.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onPointer);
-      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
@@ -621,10 +670,13 @@ function ConversationMenu({
     <div className="relative" ref={menuRef}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          setOpen((v) => !v);
+          setConfirmDeleteId(null);
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded border border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded border border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
         title="Saved conversations"
       >
         <History className="h-3.5 w-3.5" />
@@ -633,43 +685,69 @@ function ConversationMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-y-auto rounded-lg border border-border bg-card shadow-xl z-40 p-1"
+          className="absolute right-0 top-full mt-1 w-72 max-h-80 overflow-y-auto rounded-lg border border-border bg-popover text-popover-foreground shadow-xl z-40 p-1"
         >
-          {conversations.map((conv) => (
-            <div
-              key={conv.id}
-              className={cn(
-                'group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs',
-                conv.id === activeId ? 'bg-primary/10 text-primary' : 'hover:bg-accent text-foreground',
-              )}
-            >
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  onSelect(conv.id);
-                  setOpen(false);
-                }}
-                className="flex-1 min-w-0 text-left"
+          {conversations.map((conv) => {
+            const isConfirming = confirmDeleteId === conv.id;
+            return (
+              <div
+                key={conv.id}
+                className={cn(
+                  'group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs',
+                  conv.id === activeId ? 'bg-accent text-foreground' : 'hover:bg-accent/60 text-foreground',
+                )}
               >
-                <div className="truncate font-medium">{conv.title}</div>
-                <div className="text-[10px] text-muted-foreground">
-                  {conv.message_count} messages
-                  {conv.updated_at ? ` · ${new Date(conv.updated_at).toLocaleDateString()}` : ''}
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`Delete "${conv.title}"?`)) onDelete(conv.id);
-                }}
-                className="p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-destructive"
-                aria-label={`Delete conversation ${conv.title}`}
-              >
-                <Trash2 className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    onSelect(conv.id);
+                    setOpen(false);
+                    setConfirmDeleteId(null);
+                  }}
+                  className="flex-1 min-w-0 text-left cursor-pointer"
+                >
+                  <div className="truncate font-medium">{conv.title}</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {conv.message_count} messages
+                    {conv.updated_at ? ` · ${new Date(conv.updated_at).toLocaleDateString()}` : ''}
+                  </div>
+                </button>
+                {isConfirming ? (
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDelete(conv.id);
+                        setConfirmDeleteId(null);
+                      }}
+                      className="px-1.5 py-0.5 rounded bg-destructive text-destructive-foreground text-[10px] font-medium hover:bg-destructive/90 cursor-pointer"
+                      aria-label={`Confirm delete ${conv.title}`}
+                    >
+                      Delete
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-1.5 py-0.5 rounded border border-border text-[10px] text-muted-foreground hover:text-foreground cursor-pointer"
+                      aria-label="Cancel delete"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(conv.id)}
+                    className="p-1 rounded text-muted-foreground opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-destructive cursor-pointer"
+                    aria-label={`Delete conversation ${conv.title}`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -751,8 +829,8 @@ function CodeBlock({ code }: { code: string }) {
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
+              <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+              <span className="text-emerald-600 dark:text-emerald-400">Copied</span>
             </>
           ) : copyFailed ? (
             <>
@@ -780,8 +858,8 @@ function CodeBlock({ code }: { code: string }) {
 // ---------------------------------------------------------------------------
 
 const confidenceConfig: Record<ChatConfidence, { label: string; className: string }> = {
-  high:   { label: 'High confidence',   className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-  medium: { label: 'Medium confidence', className: 'bg-amber-500/10  text-amber-400  border-amber-500/30'  },
+  high:   { label: 'High confidence',   className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25' },
+  medium: { label: 'Medium confidence', className: 'bg-amber-500/10  text-amber-700 dark:text-amber-400  border-amber-500/25'  },
   low:    { label: 'Low confidence',    className: 'bg-muted         text-muted-foreground border-border'   },
 };
 

@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { FileCode, Sparkles, History, MessageSquare, Maximize2, Brain } from 'lucide-react';
+import { resolveFileType } from '../../lib/fileLanguage';
 import type { RepositoryFile } from '../../types/api';
 
 export interface WorkbenchHeaderProps {
@@ -25,8 +26,8 @@ export function WorkbenchHeader({
           {selectedFile ? selectedFile.path : 'Code Intelligence Explorer'}
         </span>
         {selectedFile && (
-          <span className="hidden sm:inline-block text-[10px] text-muted-foreground font-mono bg-muted/40 px-1.5 py-0.5 rounded border border-border/40 shrink-0">
-            {selectedFile.line_count} lines · {(selectedFile.size_bytes / 1024).toFixed(1)} KB
+          <span className="hidden sm:inline-block text-[10px] text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded border border-border/60 shrink-0">
+            {resolveFileType(selectedFile.path, selectedFile.language).label} · {selectedFile.line_count} lines · {(selectedFile.size_bytes / 1024).toFixed(1)} KB
           </span>
         )}
       </div>
@@ -37,8 +38,8 @@ export function WorkbenchHeader({
           <button
             type="button"
             onClick={onOpenMemory}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 border border-purple-500/30 transition-colors"
-            title="Project Memory & Knowledge (F36)"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+            title="Project Memory & Knowledge"
           >
             <Brain className="h-3 w-3" />
             <span className="hidden sm:inline">Memory</span>
@@ -49,10 +50,10 @@ export function WorkbenchHeader({
         <button
           type="button"
           onClick={onOpenHistory}
-          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
           title="View Analysis History & Reopen Past Runs"
         >
-          <History className="h-3 w-3 text-primary" />
+          <History className="h-3 w-3" />
           <span className="hidden sm:inline">History</span>
         </button>
 
@@ -60,8 +61,8 @@ export function WorkbenchHeader({
           <>
             {/* Quick Open in Explain Studio */}
             <Link
-              to={`/app/repositories/${repositoryId}/explain`}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-primary/10 text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+              to={`/app/repositories/${repositoryId}/explain?file=${encodeURIComponent(selectedFile.path)}`}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
               title="Open in Explain Studio"
             >
               <Sparkles className="h-3 w-3" />
@@ -70,7 +71,7 @@ export function WorkbenchHeader({
 
             <Link
               to={`/app/repositories/${repositoryId}/chat?file=${encodeURIComponent(selectedFile.path)}`}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-muted text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               title="Ask AI about this file"
             >
               <MessageSquare className="h-3 w-3" />
@@ -79,7 +80,7 @@ export function WorkbenchHeader({
 
             <button
               onClick={onOpenFullscreen}
-              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
               title="Fullscreen preview"
               aria-label="Fullscreen preview"
             >

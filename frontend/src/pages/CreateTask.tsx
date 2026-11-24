@@ -9,12 +9,12 @@ export function CreateTask() {
   const [activeTab, setActiveTab] = useState<'manual' | 'github'>('manual');
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-y-auto space-y-6 max-w-5xl mx-auto w-full">
+    <div className="flex flex-col h-full min-h-0 min-w-0 overflow-y-auto space-y-6 max-w-5xl mx-auto w-full pb-8">
       {/* Top Navigation & Breadcrumbs */}
       <div>
         <Link
           to="/app/tasks"
-          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors mb-2"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors mb-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
         >
           <ChevronLeft className="h-3.5 w-3.5" />
           <span>Back to Tasks</span>
@@ -25,13 +25,18 @@ export function CreateTask() {
         </p>
       </div>
 
-      {/* Tabs Selector */}
-      <div className="flex items-center gap-2 border-b border-border pb-px">
+      {/* Mode Selector */}
+      <div
+        role="group"
+        aria-label="Task creation mode"
+        className="flex items-center gap-2 border-b border-border pb-px overflow-x-auto scrollbar-none"
+      >
         <button
           type="button"
+          aria-pressed={activeTab === 'manual'}
           onClick={() => setActiveTab('manual')}
           className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors focus:outline-none',
+            'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             activeTab === 'manual'
               ? 'border-primary text-primary font-semibold'
               : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
@@ -43,9 +48,10 @@ export function CreateTask() {
 
         <button
           type="button"
+          aria-pressed={activeTab === 'github'}
           onClick={() => setActiveTab('github')}
           className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors focus:outline-none',
+            'inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             activeTab === 'github'
               ? 'border-primary text-primary font-semibold'
               : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'

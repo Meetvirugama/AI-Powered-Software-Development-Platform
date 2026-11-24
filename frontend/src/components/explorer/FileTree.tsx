@@ -5,6 +5,11 @@ import {
   FileText,
   FileCode,
   File,
+  Image as ImageIcon,
+  Film,
+  Archive,
+  FileJson,
+  Settings,
   ChevronRight,
   ChevronDown,
   Search,
@@ -12,6 +17,7 @@ import {
 } from 'lucide-react';
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { cn } from '../../lib/utils';
+import { resolveFileType } from '../../lib/fileLanguage';
 import { useVirtualRange } from '../../utils/virtualizationAndSyntax';
 import type { RepositoryFile } from '../../types/api';
 
@@ -36,18 +42,34 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-function getFileIcon(filename: string) {
-  if (filename.endsWith('.md')) {
+function getFileIcon(filename: string, apiLanguage?: string | null) {
+  const resolved = resolveFileType(filename, apiLanguage);
+  if (resolved.category === 'image') {
+    return <ImageIcon className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400 shrink-0" />;
+  }
+  if (resolved.category === 'media') {
+    return <Film className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400 shrink-0" />;
+  }
+  if (resolved.category === 'archive') {
+    return <Archive className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />;
+  }
+  if (resolved.category === 'document' || resolved.category === 'documentation') {
     return <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
   }
-  if (filename.match(/\.(js|jsx|ts|tsx)$/)) {
-    return <FileCode className="h-3.5 w-3.5 text-blue-400 shrink-0" />;
+  if (resolved.category === 'data') {
+    return <FileJson className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />;
   }
-  if (filename.match(/\.(py)$/)) {
-    return <FileCode className="h-3.5 w-3.5 text-amber-400 shrink-0" />;
+  if (resolved.category === 'config') {
+    return <Settings className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
   }
-  if (filename.match(/\.(json|yaml|yml|toml)$/)) {
-    return <FileCode className="h-3.5 w-3.5 text-emerald-400 shrink-0" />;
+  if (resolved.id === 'typescript' || resolved.id === 'tsx' || resolved.id === 'javascript' || resolved.id === 'jsx') {
+    return <FileCode className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400 shrink-0" />;
+  }
+  if (resolved.id === 'python' || resolved.id === 'rust') {
+    return <FileCode className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 shrink-0" />;
+  }
+  if (resolved.category === 'code' || resolved.category === 'markup' || resolved.category === 'stylesheet') {
+    return <FileCode className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />;
   }
   return <File className="h-3.5 w-3.5 text-muted-foreground shrink-0" />;
 }
@@ -227,8 +249,8 @@ export function FileTree({
             : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
         )}
       >
-        {getFileIcon(node.name)}
-        <span className="truncate flex-1" title={node.path}>
+        {getFileIcon(node.name, node.file?.language)}
+        <span className="truncate flex-1" title={`${node.path} · ${resolveFileType(node.path, node.file?.language).label}`}>
           {node.name}
         </span>
       </button>
@@ -288,8 +310,8 @@ export function FileTree({
             : 'text-muted-foreground hover:text-foreground hover:bg-accent/50'
         )}
       >
-        {getFileIcon(node.name)}
-        <span className="truncate flex-1" title={node.path}>
+        {getFileIcon(node.name, node.file?.language)}
+        <span className="truncate flex-1" title={`${node.path} · ${resolveFileType(node.path, node.file?.language).label}`}>
           {node.name}
         </span>
       </button>

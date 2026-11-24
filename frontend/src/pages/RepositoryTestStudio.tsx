@@ -127,7 +127,7 @@ export function RepositoryTestStudio() {
             </button>
           </div>
           {testResult?.result?.quality_report?.quality_score !== undefined && (
-            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-mono">
+            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25 text-[11px] font-mono">
               <span>Score: {testResult.result.quality_report.quality_score}/100</span>
             </div>
           )}

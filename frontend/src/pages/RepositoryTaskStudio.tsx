@@ -19,7 +19,6 @@ import {
   ExternalLink,
   FileDiff,
   FlaskConical,
-  FolderGit2,
   GitBranch,
   GitPullRequest,
   History,
@@ -99,87 +98,87 @@ const STATUS_BADGE_MAP: Record<
 > = {
   CREATED: {
     label: 'Created',
-    className: 'bg-slate-500/15 text-slate-300 border-slate-500/30',
+    className: 'bg-muted text-muted-foreground border-border',
     icon: Clock,
   },
   PLANNING: {
     label: 'Planning…',
-    className: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+    className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     icon: Bot,
   },
   PENDING_APPROVAL: {
     label: 'Pending Approval',
-    className: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+    className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
     icon: Clock,
   },
   APPROVED: {
     label: 'Plan Approved',
-    className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+    className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
     icon: CheckCircle2,
   },
   REJECTED: {
     label: 'Plan Rejected',
-    className: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+    className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
     icon: XCircle,
   },
   WORKSPACE_SETUP: {
     label: 'Setting Up Sandbox',
-    className: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40',
+    className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     icon: Terminal,
   },
   EXECUTING: {
     label: 'Agent Executing',
-    className: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40',
+    className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     icon: Zap,
   },
   TESTING: {
     label: 'Running Tests',
-    className: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
     icon: FlaskConical,
   },
   REPAIRING: {
     label: 'Self-Repairing',
-    className: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+    className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
     icon: Wrench,
   },
   VERIFYING: {
     label: 'Verifying Quality',
-    className: 'bg-teal-500/15 text-teal-300 border-teal-500/40',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
     icon: ShieldCheck,
   },
   READY_FOR_PUBLICATION: {
     label: 'Ready to Ship',
-    className: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+    className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
     icon: CheckCircle2,
   },
   PUBLISHING: {
     label: 'Publishing PR…',
-    className: 'bg-purple-500/15 text-purple-300 border-purple-500/40',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
     icon: GitPullRequest,
   },
   DRAFT_PR_CREATED: {
     label: 'Draft PR Created',
-    className: 'bg-purple-500/15 text-purple-300 border-purple-500/40',
+    className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25',
     icon: GitPullRequest,
   },
   RECOVERY_REQUIRED: {
     label: 'Recovery Needed',
-    className: 'bg-orange-500/15 text-orange-300 border-orange-500/40',
+    className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
     icon: AlertTriangle,
   },
   BLOCKED: {
     label: 'Blocked',
-    className: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+    className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
     icon: XCircle,
   },
   FAILED: {
     label: 'Failed',
-    className: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+    className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/25',
     icon: XCircle,
   },
   CANCELLED: {
     label: 'Cancelled',
-    className: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/40',
+    className: 'bg-muted text-muted-foreground border-border',
     icon: Slash,
   },
 };
@@ -197,11 +196,54 @@ function getRecommendedTabForStatus(status?: string): StudioTab {
 }
 
 const STARTER_PROMPTS = [
-  { label: '🎨 Change CSS Theme / Colors', text: 'Change page background color to white and refine dark mode theme' },
-  { label: '🐛 Fix Negative Amount Bug', text: 'Fix negative amount validation in checkout and add unit test coverage' },
-  { label: '⚡ Add API Rate Limiter', text: 'Add token bucket rate limiting middleware for public endpoints' },
-  { label: '🧪 Generate Pytest Suite', text: 'Generate comprehensive unit tests for core validation services' },
+  { label: 'Refine theme & styling', text: 'Update page background colors and refine light/dark mode styling' },
+  { label: 'Fix validation bug', text: 'Fix negative amount validation in checkout and add unit test coverage' },
+  { label: 'Add rate limiting', text: 'Add token bucket rate limiting middleware for public endpoints' },
+  { label: 'Generate unit tests', text: 'Generate comprehensive unit tests for core validation services' },
 ];
+
+function resolveTestRunner(
+  language?: string | null,
+  fallbackFramework?: string | null
+): {
+  apiFramework: string | undefined;
+  repairFramework: string;
+  runLabel: string;
+  runningName: string;
+} {
+  const lang = (language ?? '').trim().toLowerCase();
+  if (lang === 'python' || lang === 'py') {
+    return { apiFramework: 'pytest', repairFramework: 'pytest', runLabel: 'Run Pytest', runningName: 'pytest' };
+  }
+  if (lang === 'typescript' || lang === 'javascript' || lang === 'tsx' || lang === 'jsx' || lang === 'ts' || lang === 'js') {
+    return { apiFramework: 'vitest', repairFramework: 'jest', runLabel: 'Run Vitest', runningName: 'vitest' };
+  }
+  if (lang === 'rust' || lang === 'rs') {
+    return { apiFramework: 'cargo test', repairFramework: 'pytest', runLabel: 'Run Cargo Test', runningName: 'cargo test' };
+  }
+  if (lang === 'go' || lang === 'golang') {
+    return { apiFramework: 'go test', repairFramework: 'pytest', runLabel: 'Run Go Test', runningName: 'go test' };
+  }
+  if (lang === 'java' || lang === 'kotlin') {
+    return { apiFramework: 'junit', repairFramework: 'pytest', runLabel: 'Run Tests', runningName: 'test suite' };
+  }
+
+  const fb = (fallbackFramework ?? '').trim().toLowerCase();
+  if (fb === 'pytest' || fb === 'unittest') {
+    return { apiFramework: fb, repairFramework: 'pytest', runLabel: 'Run Pytest', runningName: fb };
+  }
+  if (fb === 'vitest' || fb === 'jest') {
+    return { apiFramework: fb, repairFramework: 'jest', runLabel: fb === 'vitest' ? 'Run Vitest' : 'Run Jest', runningName: fb };
+  }
+  if (fb === 'cargo test' || fb === 'cargo') {
+    return { apiFramework: 'cargo test', repairFramework: 'pytest', runLabel: 'Run Cargo Test', runningName: 'cargo test' };
+  }
+  if (fb === 'go test' || fb === 'go') {
+    return { apiFramework: 'go test', repairFramework: 'pytest', runLabel: 'Run Go Test', runningName: 'go test' };
+  }
+
+  return { apiFramework: undefined, repairFramework: 'pytest', runLabel: 'Run Tests', runningName: 'automated test' };
+}
 
 export function RepositoryTaskStudio() {
   const { id } = useParams<{ id: string }>();
@@ -209,14 +251,16 @@ export function RepositoryTaskStudio() {
   const repoId = id ?? '';
 
   const queryClient = useQueryClient();
-  const { data: repository } = useRepository(id);
+  const { data: repository } = useRepository(repoId);
   const planPanel = useRef<HTMLDivElement>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
 
-  // Active studio tab
+  // Active studio tab & mobile drawers
   const [userSelectedTab, setUserSelectedTab] = useState<StudioTab | null>(null);
   const [taskSearchFilter, setTaskSearchFilter] = useState('');
+  const [showActivityFeed, setShowActivityFeed] = useState(false);
+  const [mobileTaskListOpen, setMobileTaskListOpen] = useState(false);
 
   // New Task Modal State
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
@@ -252,6 +296,14 @@ export function RepositoryTaskStudio() {
   if (urlTaskId !== prevUrlTaskId) {
     setPrevUrlTaskId(urlTaskId);
     setSelectedTaskId(urlTaskId);
+    setUserSelectedTab(null);
+    setPublicationApproval(null);
+    setPromptReview(null);
+    setShowRevisionInput(false);
+    setShowRejectionInput(false);
+    setApprovalComment('');
+    setRevisionNotes('');
+    setRejectionReason('');
   }
 
   const activeTaskId = selectedTaskId || (tasks.length > 0 ? tasks[0].task_id : null);
@@ -261,11 +313,39 @@ export function RepositoryTaskStudio() {
     (taskId: string) => {
       setUserSelectedTab(null);
       setSelectedTaskId(taskId);
-      setSearchParams({ taskId });
+      setPublicationApproval(null);
+      setShowRevisionInput(false);
+      setShowRejectionInput(false);
+      setApprovalComment('');
+      setRevisionNotes('');
+      setRejectionReason('');
+      setMobileTaskListOpen(false);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set('taskId', taskId);
+        return next;
+      });
       setErrorBanner(null);
     },
     [setSearchParams]
   );
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (showNewTaskModal) {
+        setShowNewTaskModal(false);
+      } else if (showImportIssueModal) {
+        setShowImportIssueModal(false);
+      } else if (mobileTaskListOpen) {
+        setMobileTaskListOpen(false);
+      } else if (showActivityFeed) {
+        setShowActivityFeed(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showNewTaskModal, showImportIssueModal, mobileTaskListOpen, showActivityFeed]);
 
   // Query: Active Task Detail
   const {
@@ -298,6 +378,10 @@ export function RepositoryTaskStudio() {
     enabled: isTaskActive,
   });
   const testResults = isTaskActive ? (testResultsData ?? null) : null;
+  const testRunner = useMemo(
+    () => resolveTestRunner(repository?.language, testResults?.runs?.[0]?.framework),
+    [repository?.language, testResults?.runs]
+  );
 
   const { data: repairBudgetData } = useTaskRepairBudget(activeTaskId ?? undefined, {
     enabled: isTaskActive,
@@ -577,7 +661,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       setActiveTab('tests');
-      await triggerTaskTests(tid, { framework: 'pytest' });
+      await triggerTaskTests(tid, testRunner.apiFramework ? { framework: testRunner.apiFramework } : {});
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to run workspace tests.');
     } finally {
@@ -593,7 +677,7 @@ export function RepositoryTaskStudio() {
     setErrorBanner(null);
     try {
       setActiveTab('tests');
-      await triggerTaskRepair(tid, { framework: 'pytest' });
+      await triggerTaskRepair(tid, { framework: testRunner.repairFramework });
     } catch (err: any) {
       setErrorBanner(err?.message || 'Bounded self-repair failed or budget exhausted.');
     } finally {
@@ -732,7 +816,7 @@ export function RepositoryTaskStudio() {
       return {
         stage: 'Testing',
         headline: 'Executing Automated Test Suite & Self-Healing',
-        description: 'Running pytest verification to ensure zero regressions.',
+        description: `Running ${testRunner.runningName} verification to ensure zero regressions.`,
         actionLabel: 'View Test Results',
         actionIcon: FlaskConical,
         actionType: 'tab_tests',
@@ -760,7 +844,7 @@ export function RepositoryTaskStudio() {
         actionLabel: 'Review & Open GitHub PR',
         actionIcon: GitPullRequest,
         actionType: 'tab_pr',
-        color: 'purple',
+        color: 'emerald',
       };
     }
     if (st === 'DRAFT_PR_CREATED') {
@@ -771,7 +855,7 @@ export function RepositoryTaskStudio() {
         actionLabel: 'View Pull Request on GitHub',
         actionIcon: ExternalLink,
         actionType: 'open_pr',
-        color: 'purple',
+        color: 'emerald',
       };
     }
     if (st === 'RECOVERY_REQUIRED' || st === 'FAILED') {
@@ -800,6 +884,7 @@ export function RepositoryTaskStudio() {
     latestPlan?.plan_version,
     workspaceMeta?.branch_name,
     draftPR?.pr_number,
+    testRunner.runningName,
   ]);
 
   const handlePrimaryStepAction = () => {
@@ -829,7 +914,7 @@ export function RepositoryTaskStudio() {
         setActiveTab('pr');
         break;
       case 'open_pr':
-        if (draftPR?.pr_url) window.open(draftPR.pr_url, '_blank');
+        if (draftPR?.pr_url) window.open(draftPR.pr_url, '_blank', 'noopener,noreferrer');
         break;
       case 'recover':
         handleRecoverTask();
@@ -841,51 +926,83 @@ export function RepositoryTaskStudio() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden font-sans select-none">
-      {/* -------------------------------------------------------------------- */}
-      {/* 1. Autonomous Studio Topbar                                          */}
-      {/* -------------------------------------------------------------------- */}
-      <header className="h-13 shrink-0 border-b border-border bg-card/60 px-4 flex items-center justify-between gap-3 backdrop-blur-md">
-        <div className="flex items-center gap-2.5">
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-indigo-600 flex items-center justify-center text-primary-foreground shadow-sm">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-              <span>Autonomous AI Developer Studio</span>
-              <span className="px-1.5 py-0.2 rounded text-[10px] font-mono bg-primary/10 text-primary border border-primary/20">
-                PRO
-              </span>
-            </div>
-            <div className="text-[10px] text-muted-foreground flex items-center gap-1 font-mono">
-              <FolderGit2 className="h-3 w-3 text-primary/70" />
-              <span>{repository?.name ?? 'Repository'}</span>
-              {repository?.default_branch && (
-                <>
-                  <span>/</span>
-                  <GitBranch className="h-3 w-3 text-muted-foreground/70" />
-                  <span>{repository.default_branch}</span>
-                </>
-              )}
-            </div>
-          </div>
+    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden font-sans">
+      {/* Studio Toolbar */}
+      <header className="min-h-12 py-2 shrink-0 border-b border-border bg-card px-3 sm:px-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-semibold text-foreground min-w-0">
+          <button
+            type="button"
+            onClick={() =>
+              setMobileTaskListOpen((v) => {
+                const next = !v;
+                if (next) setShowActivityFeed(false);
+                return next;
+              })
+            }
+            aria-expanded={mobileTaskListOpen}
+            aria-controls="task-studio-sidebar"
+            aria-label="Toggle task list"
+            className="lg:hidden inline-flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+            <span>Tasks</span>
+          </button>
+          <ListChecks className="hidden lg:block h-4 w-4 text-muted-foreground shrink-0" />
+          <span className="truncate">Task Planner</span>
+          {repository?.name && (
+            <span className="hidden sm:inline text-[11px] font-mono text-muted-foreground font-normal truncate">
+              · {repository.name}
+              {repository.default_branch ? ` (${repository.default_branch})` : ''}
+            </span>
+          )}
+          <span className="text-[11px] font-mono text-muted-foreground font-normal shrink-0">
+            {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+          </span>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() =>
+              setShowActivityFeed((v) => {
+                const next = !v;
+                if (next) setMobileTaskListOpen(false);
+                return next;
+              })
+            }
+            aria-pressed={showActivityFeed}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              showActivityFeed
+                ? 'bg-accent text-foreground border-border'
+                : 'border-border bg-background text-muted-foreground hover:text-foreground hover:bg-accent'
+            )}
+            title="Toggle Activity Feed"
+          >
+            <History className="h-3.5 w-3.5" />
+            <span>Activity</span>
+            {events.length > 0 && (
+              <span className="font-mono text-[10px] text-muted-foreground">{events.length}</span>
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => setShowImportIssueModal(true)}
-            className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-border bg-background hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            aria-label="Import GitHub Issue"
+            className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 text-xs font-medium rounded-md border border-border bg-background hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
-            <GitPullRequest className="h-3.5 w-3.5 text-primary" />
-            <span>Import Issue</span>
+            <GitPullRequest className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Import Issue</span>
+            <span className="sm:hidden">Import</span>
           </button>
 
           <button
             type="button"
             onClick={() => refreshTasksAndCurrentDetail()}
             disabled={actionBusy !== null}
-            className="p-1.5 rounded-lg border border-border bg-background hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            aria-label="Refresh Studio State"
+            className="p-1.5 rounded-md border border-border bg-background hover:bg-accent text-muted-foreground hover:text-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             title="Refresh Studio State"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', actionBusy && 'animate-spin')} />
@@ -894,7 +1011,7 @@ export function RepositoryTaskStudio() {
           <button
             type="button"
             onClick={() => setShowNewTaskModal(true)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-sm shadow-primary/20 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <Plus className="h-3.5 w-3.5" />
             <span>New Task</span>
@@ -902,21 +1019,25 @@ export function RepositoryTaskStudio() {
         </div>
       </header>
 
-      {/* -------------------------------------------------------------------- */}
-      {/* Error Alert Banner                                                   */}
-      {/* -------------------------------------------------------------------- */}
+      {/* Error Alert Banner */}
       {(errorBanner || taskListError || taskDetailError) && (
-        <div role="alert" className="shrink-0 bg-rose-500/10 border-b border-rose-500/30 px-4 py-2.5 text-xs text-rose-300 flex items-center justify-between gap-3 animate-in fade-in duration-200">
+        <div
+          role="alert"
+          className="shrink-0 bg-destructive/10 border-b border-destructive/25 px-4 py-2.5 text-xs text-destructive flex items-center justify-between gap-3"
+        >
           <div className="flex items-center gap-2 min-w-0">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-rose-400" />
-            <span>{errorBanner ?? (taskDetailError
-              ? `Could not load the task. ${taskDetailError.message}`
-              : `Could not load repository tasks. ${taskListError?.message ?? ''}`)}</span>
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span className="break-words">
+              {errorBanner ??
+                (taskDetailError
+                  ? `Could not load the task. ${taskDetailError.message}`
+                  : `Could not load repository tasks. ${taskListError?.message ?? ''}`)}
+            </span>
           </div>
           <button
             type="button"
-            onClick={() => errorBanner ? setErrorBanner(null) : refreshTasksAndCurrentDetail()}
-            className="text-xs text-rose-400 hover:text-rose-200 font-semibold underline shrink-0 cursor-pointer"
+            onClick={() => (errorBanner ? setErrorBanner(null) : refreshTasksAndCurrentDetail())}
+            className="text-xs font-medium underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             {errorBanner ? 'Dismiss' : 'Retry'}
           </button>
@@ -926,18 +1047,45 @@ export function RepositoryTaskStudio() {
       {/* -------------------------------------------------------------------- */}
       {/* 2. Main Studio Workspace Layout                                      */}
       {/* -------------------------------------------------------------------- */}
-      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
+      <div className="flex-1 min-h-0 flex relative overflow-hidden">
+        {mobileTaskListOpen && (
+          <div
+            className="absolute inset-0 z-30 bg-background/80 backdrop-blur-sm lg:hidden"
+            aria-hidden="true"
+            onClick={() => setMobileTaskListOpen(false)}
+          />
+        )}
+
         {/* Left Sidebar: Task List */}
-        <aside className="h-36 lg:h-auto w-full lg:w-64 2xl:w-80 shrink-0 border-b lg:border-b-0 lg:border-r border-border bg-card/30 flex flex-col min-h-0">
+        <aside
+          id="task-studio-sidebar"
+          className={cn(
+            'absolute inset-y-0 left-0 z-40 w-72 sm:w-80 shrink-0 border-r border-border bg-card flex flex-col min-h-0 transition-transform duration-200 ease-out shadow-xl',
+            'lg:static lg:z-auto lg:translate-x-0 lg:bg-card/30 lg:shadow-none',
+            mobileTaskListOpen ? 'translate-x-0' : '-translate-x-full'
+          )}
+        >
+          <div className="lg:hidden px-3 py-2 border-b border-border flex items-center justify-between">
+            <span className="text-xs font-semibold text-foreground">Tasks</span>
+            <button
+              type="button"
+              onClick={() => setMobileTaskListOpen(false)}
+              aria-label="Close task list"
+              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
           <div className="p-3 border-b border-border/60 flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
+                aria-label="Search tasks"
                 placeholder="Search tasks..."
                 value={taskSearchFilter}
                 onChange={(e) => setTaskSearchFilter(e.target.value)}
-                className="w-full pl-8 pr-2.5 py-1 text-xs rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                className="w-full pl-8 pr-2.5 py-1 text-xs rounded-md border border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               />
             </div>
             <span className="text-[10px] font-mono text-muted-foreground px-1.5 py-0.5 rounded bg-muted">
@@ -958,7 +1106,7 @@ export function RepositoryTaskStudio() {
                 <button
                   type="button"
                   onClick={() => setShowNewTaskModal(true)}
-                  className="px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-xs font-medium transition-colors cursor-pointer"
+                  className="px-3 py-1.5 rounded-md bg-primary/10 hover:bg-primary/20 text-primary text-xs font-medium transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Create First Task
                 </button>
@@ -974,7 +1122,7 @@ export function RepositoryTaskStudio() {
                     type="button"
                     onClick={() => handleSelectTask(t.task_id)}
                     className={cn(
-                      'w-full text-left p-2.5 rounded-lg border transition-all cursor-pointer space-y-1.5',
+                      'w-full text-left p-2.5 rounded-lg border transition-all cursor-pointer space-y-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       isSelected
                         ? 'bg-primary/10 border-primary/50 shadow-xs'
                         : 'bg-card/40 border-border/50 hover:bg-muted/40 hover:border-border'
@@ -1026,7 +1174,7 @@ export function RepositoryTaskStudio() {
               <button
                 type="button"
                 onClick={() => setShowNewTaskModal(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold shadow-md shadow-primary/20 hover:bg-primary/90 transition-all cursor-pointer"
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold shadow-md shadow-primary/20 hover:bg-primary/90 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Plus className="h-4 w-4" />
                 <span>Launch New Task</span>
@@ -1054,8 +1202,8 @@ export function RepositoryTaskStudio() {
                     </span>
 
                     {workspaceMeta?.branch_name && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/30">
-                        <GitBranch className="h-3 w-3" />
+                      <span className="inline-flex items-center gap-1 text-[11px] font-mono text-foreground bg-muted px-2 py-0.5 rounded border border-border">
+                        <GitBranch className="h-3 w-3 text-muted-foreground" />
                         <span>{workspaceMeta.branch_name}</span>
                       </span>
                     )}
@@ -1065,7 +1213,7 @@ export function RepositoryTaskStudio() {
                         href={draftPR.pr_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-500/15 border border-purple-500/40 text-xs font-mono text-purple-300 hover:underline"
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-xs font-mono text-emerald-700 dark:text-emerald-400 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <GitPullRequest className="h-3 w-3" />
                         <span>Draft PR #{draftPR.pr_number}</span>
@@ -1075,7 +1223,7 @@ export function RepositoryTaskStudio() {
                   </div>
 
                   {/* Secondary control actions */}
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {taskDetail.status !== 'CANCELLED' &&
                       taskDetail.status !== 'FAILED' &&
                       taskDetail.status !== 'DRAFT_PR_CREATED' && (
@@ -1083,7 +1231,7 @@ export function RepositoryTaskStudio() {
                           type="button"
                           disabled={actionBusy !== null}
                           onClick={handleCancelTask}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border hover:bg-rose-500/10 hover:border-rose-500/40 text-muted-foreground hover:text-rose-300 text-xs font-medium transition-colors cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-border hover:bg-destructive/10 hover:border-destructive/30 text-muted-foreground hover:text-destructive text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <Slash className="h-3 w-3" />
                           <span>Cancel Task</span>
@@ -1095,7 +1243,7 @@ export function RepositoryTaskStudio() {
                         type="button"
                         disabled={actionBusy !== null}
                         onClick={handleRecoverTask}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-orange-500/40 bg-orange-500/10 text-orange-300 text-xs font-semibold hover:bg-orange-500/20 cursor-pointer"
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs font-medium hover:bg-amber-500/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       >
                         <RotateCcw className="h-3 w-3" />
                         <span>Recover</span>
@@ -1105,89 +1253,33 @@ export function RepositoryTaskStudio() {
                 </div>
 
                 {loadingDetail && (
-                  <div className="flex items-center gap-2 text-xs text-primary font-mono">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground font-mono">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     <span>Synchronizing task details...</span>
                   </div>
                 )}
 
-                <h2 className="text-lg sm:text-xl font-bold tracking-tight text-foreground break-words leading-tight">
+                <h2 className="text-lg font-semibold tracking-tight text-foreground break-words leading-snug">
                   {taskDetail.title}
                 </h2>
               </div>
 
-              {/* ------------------------------------------------------------ */}
-              {/* Visual Interactive Workflow Stepper (Pipeline)               */}
-              {/* ------------------------------------------------------------ */}
-              <div className="rounded-xl border border-border bg-card/60 p-3.5 backdrop-blur-xs">
-                <div className="flex items-center justify-between gap-1 overflow-x-auto pb-1 scrollbar-none">
-                  {[
-                    { key: 'plan', label: '1. Plan & Scope', icon: ListChecks, activeStages: ['CREATED', 'PLANNING', 'PENDING_APPROVAL', 'APPROVED'] },
-                    { key: 'workspace', label: '2. Sandbox Execution', icon: Zap, activeStages: ['WORKSPACE_SETUP', 'EXECUTING'] },
-                    { key: 'tests', label: '3. Tests & Self-Repair', icon: FlaskConical, activeStages: ['TESTING', 'REPAIRING'] },
-                    { key: 'changes', label: '4. Code Diff', icon: FileDiff, activeStages: [] },
-                    { key: 'verification', label: '5. Quality Gates', icon: ShieldCheck, activeStages: ['VERIFYING'] },
-                    { key: 'pr', label: '6. GitHub PR', icon: GitPullRequest, activeStages: ['READY_FOR_PUBLICATION', 'PUBLISHING', 'DRAFT_PR_CREATED'] },
-                  ].map((step) => {
-                    const isSelected = activeTab === step.key;
-                    const isCurrentStage = step.activeStages.includes(taskDetail.status);
-                    const StepIcon = step.icon;
-
-                    return (
-                      <button
-                        key={step.key}
-                        type="button"
-                        onClick={() => setActiveTab(step.key as StudioTab)}
-                        className={cn(
-                          'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all shrink-0 cursor-pointer',
-                          isSelected
-                            ? 'bg-primary text-primary-foreground shadow-sm'
-                            : isCurrentStage
-                            ? 'bg-primary/10 text-primary border border-primary/30'
-                            : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-                        )}
-                      >
-                        <StepIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span>{step.label}</span>
-                        {isCurrentStage && (
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ------------------------------------------------------------ */}
-              {/* Hero "Mission Control" Next-Step Action Banner               */}
-              {/* ------------------------------------------------------------ */}
+              {/* Next-Step Action Card */}
               {nextStepInfo && (
-                <div
-                  className={cn(
-                    'rounded-xl border p-4.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 transition-all shadow-sm',
-                    nextStepInfo.color === 'emerald' && 'bg-emerald-500/10 border-emerald-500/30',
-                    nextStepInfo.color === 'blue' && 'bg-blue-500/10 border-blue-500/30',
-                    nextStepInfo.color === 'cyan' && 'bg-cyan-500/10 border-cyan-500/30',
-                    nextStepInfo.color === 'sky' && 'bg-sky-500/10 border-sky-500/30',
-                    nextStepInfo.color === 'teal' && 'bg-teal-500/10 border-teal-500/30',
-                    nextStepInfo.color === 'purple' && 'bg-purple-500/10 border-purple-500/30',
-                    nextStepInfo.color === 'orange' && 'bg-orange-500/10 border-orange-500/30',
-                    nextStepInfo.color === 'slate' && 'bg-muted/40 border-border'
-                  )}
-                >
+                <div className="rounded-xl border border-border bg-card p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
                   <div className="space-y-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-[10px] font-mono uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-background/80 border border-border/60">
-                        Next Stage: {nextStepInfo.stage}
+                      <span className="text-[10px] font-mono uppercase font-semibold tracking-wider px-2 py-0.5 rounded bg-muted text-muted-foreground">
+                        Next: {nextStepInfo.stage}
                       </span>
                       {nextStepInfo.inProgress && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 dark:text-sky-400">
                           <Loader2 className="h-3 w-3 animate-spin" />
-                          <span>Active</span>
+                          <span>In progress</span>
                         </span>
                       )}
                     </div>
-                    <div className="text-sm font-bold text-foreground leading-snug">
+                    <div className="text-sm font-semibold text-foreground leading-snug">
                       {nextStepInfo.headline}
                     </div>
                     <div className="text-xs text-muted-foreground leading-relaxed">
@@ -1196,64 +1288,64 @@ export function RepositoryTaskStudio() {
                   </div>
 
                   {/* Primary CTA Button */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     <button
                       type="button"
                       disabled={nextStepInfo.actionType === 'review_plan'
                         ? planQuery.isFetching && !latestPlan
                         : actionBusy !== null || (nextStepInfo.actionType === 'execute' && Boolean(executionBlocker))}
                       onClick={handlePrimaryStepAction}
-                      className={cn(
-                        'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50',
-                        nextStepInfo.color === 'emerald' && 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/20',
-                        nextStepInfo.color === 'purple' && 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20',
-                        nextStepInfo.color === 'sky' && 'bg-sky-600 hover:bg-sky-500 text-white shadow-sky-600/20',
-                        nextStepInfo.color === 'teal' && 'bg-teal-600 hover:bg-teal-500 text-white shadow-teal-600/20',
-                        (nextStepInfo.color === 'blue' || nextStepInfo.color === 'cyan') && 'bg-primary hover:bg-primary/90 text-primary-foreground shadow-primary/20',
-                        nextStepInfo.color === 'orange' && 'bg-orange-600 hover:bg-orange-500 text-white shadow-orange-600/20',
-                        nextStepInfo.color === 'slate' && 'bg-card hover:bg-accent text-foreground border border-border'
-                      )}
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {(nextStepInfo.actionType === 'review_plan' ? planQuery.isFetching : actionBusy) ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
-                        <nextStepInfo.actionIcon className="h-4 w-4" />
+                        <nextStepInfo.actionIcon className="h-3.5 w-3.5" />
                       )}
                       <span>{nextStepInfo.actionLabel}</span>
                     </button>
-
                   </div>
                 </div>
               )}
 
-              {/* ------------------------------------------------------------ */}
-              {/* Tab Navigation Bar                                           */}
-              {/* ------------------------------------------------------------ */}
-              <div className="border-b border-border flex items-center gap-1 overflow-x-auto scrollbar-none">
+              {/* Unified Step & Tab Navigation Bar */}
+              <div
+                role="tablist"
+                aria-label="Task workflow phases"
+                className="border-b border-border flex items-center gap-1 overflow-x-auto scrollbar-none"
+              >
                 {[
-                  { id: 'plan', label: 'Plan & Scope', icon: ListChecks },
-                  { id: 'workspace', label: 'Workspace & Terminal', icon: Terminal },
-                  { id: 'tests', label: 'Tests & Self-Repair', icon: FlaskConical },
-                  { id: 'changes', label: 'Code Changes (Diff)', icon: FileDiff },
-                  { id: 'verification', label: 'Verification Gates', icon: ShieldCheck },
-                  { id: 'pr', label: 'GitHub Pull Request', icon: GitPullRequest },
+                  { id: 'plan', label: '1. Plan', icon: ListChecks, activeStages: ['CREATED', 'PLANNING', 'PENDING_APPROVAL', 'APPROVED'] },
+                  { id: 'workspace', label: '2. Sandbox', icon: Terminal, activeStages: ['WORKSPACE_SETUP', 'EXECUTING'] },
+                  { id: 'tests', label: '3. Tests', icon: FlaskConical, activeStages: ['TESTING', 'REPAIRING'] },
+                  { id: 'changes', label: '4. Diff', icon: FileDiff, activeStages: [] },
+                  { id: 'verification', label: '5. Verify', icon: ShieldCheck, activeStages: ['VERIFYING'] },
+                  { id: 'pr', label: '6. Pull Request', icon: GitPullRequest, activeStages: ['READY_FOR_PUBLICATION', 'PUBLISHING', 'DRAFT_PR_CREATED'] },
                 ].map((tab) => {
                   const isSelected = activeTab === tab.id;
+                  const isCurrentStage = tab.activeStages.includes(taskDetail.status);
                   const TabIcon = tab.icon;
                   return (
                     <button
                       key={tab.id}
+                      id={`studio-tab-${tab.id}`}
                       type="button"
+                      role="tab"
+                      aria-selected={isSelected}
+                      aria-controls={`studio-tabpanel-${tab.id}`}
                       onClick={() => setActiveTab(tab.id as StudioTab)}
                       className={cn(
-                        'flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border-b-2 transition-colors shrink-0 cursor-pointer',
+                        'flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                         isSelected
-                          ? 'border-primary text-primary font-semibold'
+                          ? 'border-foreground text-foreground font-semibold'
                           : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
                       )}
                     >
                       <TabIcon className="h-3.5 w-3.5" />
                       <span>{tab.label}</span>
+                      {isCurrentStage && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 ml-0.5" />
+                      )}
                     </button>
                   );
                 })}
@@ -1262,169 +1354,241 @@ export function RepositoryTaskStudio() {
               {/* ------------------------------------------------------------ */}
               {/* Decomposed Per-Phase Studio Subcomponents (Issue 2 — C.3)    */}
               {/* ------------------------------------------------------------ */}
-              {activeTab === 'plan' && promptReview?.task_id === taskDetail.task_id && latestPlan?.plan_version === 1 && (
-                <section aria-label="Prompt analysis" className="space-y-2 text-xs">
-                  <p>Detected intent: {[promptReview.intent_analysis.primary_intent, ...promptReview.intent_analysis.secondary_intents]
-                    .map((intent) => intent.replaceAll('_', ' ')).join(', ')}</p>
-                  {promptReview.critic_review.issues.map((issue, index) => (
-                    <p key={index}>{issue.message}</p>
-                  ))}
-                </section>
-              )}
-              {(needsPinnedPlan || taskDetail.status === 'APPROVED') && executionBlocker && (
-                <div role="status" className="rounded-lg border border-amber-500/40 p-3 text-xs">
-                  <p>{executionBlocker}</p>
-                  {needsPinnedPlan ? (
-                    <button type="button" className="underline" disabled={actionBusy !== null}
-                      onClick={() => void handleGenerateOrRevisePlan()}>Regenerate plan</button>
-                  ) : (
-                    <button type="button" className="underline" disabled={readinessQuery.isFetching}
-                      onClick={() => void readinessQuery.refetch()}>Check sandbox again</button>
-                  )}
-                </div>
-              )}
-              {activeTab === 'plan' && (
-                <div ref={planPanel}>
-                  {planQuery.isError && (
-                    <p role="alert" className="mb-3 text-xs text-rose-400">
-                      Could not refresh the saved plan. {planQuery.error.message}
+              <div
+                role="tabpanel"
+                id={`studio-tabpanel-${activeTab}`}
+                aria-labelledby={`studio-tab-${activeTab}`}
+                className="space-y-4"
+              >
+                {activeTab === 'plan' && promptReview?.task_id === taskDetail.task_id && latestPlan?.plan_version === 1 && (
+                  <section aria-label="Prompt analysis" className="rounded-lg border border-border bg-card p-3 space-y-1.5 text-xs text-muted-foreground">
+                    <p className="text-foreground">
+                      Detected intent:{' '}
+                      {[promptReview.intent_analysis.primary_intent, ...promptReview.intent_analysis.secondary_intents]
+                        .map((intent) => intent.replaceAll('_', ' '))
+                        .join(', ')}
                     </p>
-                  )}
-                  {planQuery.isFetching && !latestPlan ? (
-                    <p role="status" className="text-xs">Loading saved plan…</p>
-                  ) : (
-                    <RepositoryTaskPlanTab
-                      taskDetail={taskDetail}
-                      latestPlan={latestPlan}
-                      showRevisionInput={showRevisionInput}
-                      setShowRevisionInput={setShowRevisionInput}
-                      showRejectionInput={showRejectionInput}
-                      setShowRejectionInput={setShowRejectionInput}
-                      revisionNotes={revisionNotes}
-                      setRevisionNotes={setRevisionNotes}
-                      rejectionReason={rejectionReason}
-                      setRejectionReason={setRejectionReason}
-                      approvalComment={approvalComment}
-                      approvalBlocked={needsPinnedPlan}
-                      setApprovalComment={setApprovalComment}
-                      actionBusy={actionBusy}
-                      handleGenerateOrRevisePlan={handleGenerateOrRevisePlan}
-                      handleRejectPlan={handleRejectPlan}
-                      handleApprovePlan={handleApprovePlan}
-                    />
-                  )}
-                </div>
-              )}
+                    {promptReview.critic_review.issues.map((issue, index) => (
+                      <p key={index}>{issue.message}</p>
+                    ))}
+                  </section>
+                )}
 
-              {activeTab === 'workspace' && workflow?.status && workflow.status !== 'IDLE' && (
-                <section aria-label="Workflow status" className="space-y-1 text-xs" role="status">
-                  <p>{(workflow.current_step || workflow.status).replaceAll('_', ' ')}</p>
-                  <p>{workflow.durability_mode === 'DBOS_DURABLE' ? 'DBOS workflow' : 'Runs on the current API process'}</p>
-                  {workflow.error_summary && <p className="text-red-400">{workflow.error_summary}</p>}
-                </section>
-              )}
-              {activeTab === 'workspace' && (
-                <RepositoryTaskWorkspaceTab
-                  hasWorkspace={hasWorkspace}
-                  workspaceMeta={workspaceMeta}
-                  latestPlan={latestPlan}
-                  actionBusy={actionBusy}
-                  handlePauseTask={handlePauseTask}
-                  handleResumeTask={handleResumeTask}
-                  handleCommitChanges={handleCommitChanges}
-                  handleExecuteTask={handleExecuteTask}
-                  taskStatus={taskDetail.status}
-                  handleRecoverTask={handleRecoverTask}
-                />
-              )}
+                {(needsPinnedPlan || taskDetail.status === 'APPROVED') && executionBlocker && (
+                  <div
+                    role="status"
+                    className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300 space-y-1.5"
+                  >
+                    <p>{executionBlocker}</p>
+                    {needsPinnedPlan ? (
+                      <button
+                        type="button"
+                        className="font-medium underline cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                        disabled={actionBusy !== null}
+                        onClick={() => void handleGenerateOrRevisePlan()}
+                      >
+                        Regenerate plan
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="font-medium underline cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                        disabled={readinessQuery.isFetching}
+                        onClick={() => void readinessQuery.refetch()}
+                      >
+                        Check sandbox again
+                      </button>
+                    )}
+                  </div>
+                )}
 
-              {activeTab === 'tests' && (
-                <RepositoryTaskTestsTab
-                  taskId={taskDetail.task_id}
-                  testResults={testResults}
-                  actionBusy={actionBusy}
-                  repairAttemptsUsed={repairAttemptsUsed}
-                  repairAttemptsMax={repairAttemptsMax}
-                  handleRunTests={handleRunTests}
-                  handleRunRepair={handleRunRepair}
-                />
-              )}
+                {activeTab === 'plan' && (
+                  <div ref={planPanel}>
+                    {planQuery.isError && (
+                      <p role="alert" className="mb-3 text-xs text-destructive">
+                        Could not refresh the saved plan. {planQuery.error.message}
+                      </p>
+                    )}
+                    {planQuery.isFetching && !latestPlan ? (
+                      <p role="status" className="text-xs text-muted-foreground">
+                        Loading saved plan…
+                      </p>
+                    ) : (
+                      <RepositoryTaskPlanTab
+                        taskDetail={taskDetail}
+                        latestPlan={latestPlan}
+                        showRevisionInput={showRevisionInput}
+                        setShowRevisionInput={setShowRevisionInput}
+                        showRejectionInput={showRejectionInput}
+                        setShowRejectionInput={setShowRejectionInput}
+                        revisionNotes={revisionNotes}
+                        setRevisionNotes={setRevisionNotes}
+                        rejectionReason={rejectionReason}
+                        setRejectionReason={setRejectionReason}
+                        approvalComment={approvalComment}
+                        approvalBlocked={needsPinnedPlan}
+                        setApprovalComment={setApprovalComment}
+                        actionBusy={actionBusy}
+                        handleGenerateOrRevisePlan={handleGenerateOrRevisePlan}
+                        handleRejectPlan={handleRejectPlan}
+                        handleApprovePlan={handleApprovePlan}
+                      />
+                    )}
+                  </div>
+                )}
 
-              {activeTab === 'changes' && (
-                <RepositoryTaskChangesTab
-                  taskId={taskDetail.task_id}
-                  repositoryId={repoId}
-                  plannedTargetFiles={latestPlan?.expected_files ?? []}
-                />
-              )}
+                {activeTab === 'workspace' && workflow?.status && workflow.status !== 'IDLE' && (
+                  <section
+                    aria-label="Workflow status"
+                    role="status"
+                    className="rounded-lg border border-border bg-card p-3 space-y-1 text-xs text-muted-foreground"
+                  >
+                    <p className="font-medium text-foreground">
+                      {(workflow.current_step || workflow.status).replaceAll('_', ' ')}
+                    </p>
+                    <p>
+                      {workflow.durability_mode === 'DBOS_DURABLE'
+                        ? 'DBOS workflow'
+                        : 'Runs on the current API process'}
+                    </p>
+                    {workflow.error_summary && (
+                      <p className="text-destructive">{workflow.error_summary}</p>
+                    )}
+                  </section>
+                )}
 
-              {activeTab === 'verification' && (
-                <RepositoryTaskVerificationTab
-                  taskId={taskDetail.task_id}
-                  currentRevision={taskDetail.base_revision}
-                  actionBusy={actionBusy}
-                  handleRunVerification={handleRunVerification}
-                />
-              )}
+                {activeTab === 'workspace' && (
+                  <RepositoryTaskWorkspaceTab
+                    hasWorkspace={hasWorkspace}
+                    workspaceMeta={workspaceMeta}
+                    latestPlan={latestPlan}
+                    actionBusy={actionBusy}
+                    handlePauseTask={handlePauseTask}
+                    handleResumeTask={handleResumeTask}
+                    handleCommitChanges={handleCommitChanges}
+                    handleExecuteTask={handleExecuteTask}
+                    taskStatus={taskDetail.status}
+                    handleRecoverTask={handleRecoverTask}
+                  />
+                )}
 
-              {activeTab === 'pr' && (
-                <RepositoryTaskPrTab
-                  draftPR={draftPR}
-                  verificationResult={verificationResult}
-                  publicationAuthorized={publicationAuthorized}
-                  setPublicationAuthorized={setPublicationAuthorized}
-                  actionBusy={actionBusy}
-                  handleCreateDraftPR={handleCreateDraftPR}
-                />
-              )}
+                {activeTab === 'tests' && (
+                  <RepositoryTaskTestsTab
+                    taskId={taskDetail.task_id}
+                    testResults={testResults}
+                    actionBusy={actionBusy}
+                    repairAttemptsUsed={repairAttemptsUsed}
+                    repairAttemptsMax={repairAttemptsMax}
+                    handleRunTests={handleRunTests}
+                    handleRunRepair={handleRunRepair}
+                    testRunnerLabel={testRunner.runLabel}
+                  />
+                )}
+
+                {activeTab === 'changes' && (
+                  <RepositoryTaskChangesTab
+                    taskId={taskDetail.task_id}
+                    repositoryId={repoId}
+                    plannedTargetFiles={latestPlan?.expected_files ?? []}
+                  />
+                )}
+
+                {activeTab === 'verification' && (
+                  <RepositoryTaskVerificationTab
+                    taskId={taskDetail.task_id}
+                    currentRevision={taskDetail.base_revision}
+                    actionBusy={actionBusy}
+                    handleRunVerification={handleRunVerification}
+                  />
+                )}
+
+                {activeTab === 'pr' && (
+                  <RepositoryTaskPrTab
+                    draftPR={draftPR}
+                    verificationResult={verificationResult}
+                    publicationAuthorized={publicationAuthorized}
+                    setPublicationAuthorized={setPublicationAuthorized}
+                    actionBusy={actionBusy}
+                    handleCreateDraftPR={handleCreateDraftPR}
+                  />
+                )}
+              </div>
             </div>
           )}
         </main>
 
-        {/* Right Sidebar: Activity Timeline */}
-        <aside className="w-80 shrink-0 border-l border-border bg-card/20 flex flex-col min-h-0 hidden xl:flex">
-          <div className="p-3 border-b border-border/60 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-              <History className="h-3.5 w-3.5 text-primary" />
-              <span>Agent Activity Feed</span>
-            </div>
-            <span className="text-[10px] font-mono text-muted-foreground">
-              {events.length} events
-            </span>
-          </div>
-
-          <div className="flex-1 min-h-0 overflow-y-auto p-3">
-            {activeTaskId ? (
-              <ExecutionTimeline taskId={activeTaskId} events={events} />
-            ) : (
-              <div className="p-6 text-center text-xs text-muted-foreground">
-                Select a task to inspect timeline.
+        {/* Right Sidebar: Activity Timeline (collapsible) */}
+        {showActivityFeed && (
+          <>
+            <div
+              className="absolute inset-0 z-30 bg-background/80 backdrop-blur-sm lg:hidden"
+              aria-hidden="true"
+              onClick={() => setShowActivityFeed(false)}
+            />
+            <aside
+              aria-label="Activity Feed"
+              className="absolute inset-y-0 right-0 z-40 w-full max-w-xs sm:w-80 shrink-0 border-l border-border bg-card shadow-xl flex flex-col min-h-0 lg:static lg:z-auto lg:shadow-none lg:bg-card/40"
+            >
+              <div className="p-3 border-b border-border flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <History className="h-3.5 w-3.5 text-muted-foreground" />
+                  <span>Activity Feed</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowActivityFeed(false)}
+                  className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label="Close activity feed"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-            )}
-          </div>
-        </aside>
+
+              <div className="flex-1 min-h-0 overflow-y-auto p-3">
+                {activeTaskId ? (
+                  <ExecutionTimeline taskId={activeTaskId} events={events} />
+                ) : (
+                  <div className="p-6 text-center text-xs text-muted-foreground">
+                    Select a task to inspect timeline.
+                  </div>
+                )}
+              </div>
+            </aside>
+          </>
+        )}
       </div>
 
       {/* -------------------------------------------------------------------- */}
       {/* 3. Sleek "New Task" Creation Modal                                   */}
       {/* -------------------------------------------------------------------- */}
       {showNewTaskModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-task-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowNewTaskModal(false);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
                   <Bot className="h-4 w-4" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-foreground">Launch Autonomous AI Task</h3>
+                <div className="min-w-0">
+                  <h3 id="new-task-modal-title" className="text-sm font-bold text-foreground">
+                    Launch Autonomous AI Task
+                  </h3>
                   <p className="text-[11px] text-muted-foreground">Write only what you want done. The agent handles planning and execution.</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setShowNewTaskModal(false)}
-                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+                aria-label="Close new task modal"
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1432,10 +1596,11 @@ export function RepositoryTaskStudio() {
 
             <form onSubmit={handleCreateNewTask} className="space-y-4">
               <div>
-                <label className="text-xs font-semibold text-foreground block mb-1.5">
+                <label htmlFor="new-task-prompt" className="text-xs font-semibold text-foreground block mb-1.5">
                   What do you want the AI to build or fix?
                 </label>
                 <textarea
+                  id="new-task-prompt"
                   rows={4}
                   minLength={3}
                   maxLength={10000}
@@ -1444,7 +1609,7 @@ export function RepositoryTaskStudio() {
                   value={newTaskPrompt}
                   onChange={(e) => setNewTaskPrompt(e.target.value)}
                   placeholder="e.g. Change page background color to white and update CSS styling..."
-                  className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 leading-relaxed font-normal"
+                  className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring leading-relaxed font-normal"
                 />
               </div>
 
@@ -1465,7 +1630,7 @@ export function RepositoryTaskStudio() {
                       key={starter.label}
                       type="button"
                       onClick={() => setNewTaskPrompt(starter.text)}
-                      className="px-2 py-1 rounded-md bg-muted/40 hover:bg-primary/10 hover:text-primary text-[11px] text-muted-foreground border border-border/50 transition-colors cursor-pointer"
+                      className="px-2 py-1 rounded-md bg-muted/40 hover:bg-primary/10 hover:text-primary text-[11px] text-muted-foreground border border-border/50 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {starter.label}
                     </button>
@@ -1473,24 +1638,24 @@ export function RepositoryTaskStudio() {
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-3">
+              <div className="pt-2 border-t border-border/60 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                   <span>Mandatory Review: Plan will be presented for your approval</span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 ml-auto">
                   <button
                     type="button"
                     onClick={() => setShowNewTaskModal(false)}
-                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-accent cursor-pointer"
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-accent cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={actionBusy !== null || !newTaskPrompt.trim()}
-                    className="px-4 py-1.5 text-xs font-bold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-40"
+                    className="px-4 py-1.5 text-xs font-bold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
                     {actionBusy === 'create' ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1509,14 +1674,25 @@ export function RepositoryTaskStudio() {
       {/* 4. Import GitHub Issue Modal                                         */}
       {/* -------------------------------------------------------------------- */}
       {showImportIssueModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="import-issue-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowImportIssueModal(false);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150"
+        >
           <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-foreground">Import GitHub Issue</h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 id="import-issue-modal-title" className="text-sm font-bold text-foreground">
+                Import GitHub Issue
+              </h3>
               <button
                 type="button"
                 onClick={() => setShowImportIssueModal(false)}
-                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+                aria-label="Close import issue modal"
+                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -1524,10 +1700,11 @@ export function RepositoryTaskStudio() {
 
             <form onSubmit={handleImportIssue} className="space-y-3">
               <div>
-                <label className="text-xs font-semibold text-foreground block mb-1">
+                <label htmlFor="import-issue-number" className="text-xs font-semibold text-foreground block mb-1">
                   GitHub Issue Number
                 </label>
                 <input
+                  id="import-issue-number"
                   type="number"
                   min={1}
                   required
@@ -1535,7 +1712,7 @@ export function RepositoryTaskStudio() {
                   placeholder="e.g. 42"
                   value={issueNumberInput}
                   onChange={(e) => setIssueNumberInput(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground font-mono focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  className="w-full px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
 
@@ -1543,19 +1720,19 @@ export function RepositoryTaskStudio() {
                 <button
                   type="button"
                   onClick={() => setShowImportIssueModal(false)}
-                  className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-accent cursor-pointer"
+                  className="px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-accent cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={actionBusy !== null || !issueNumberInput.trim()}
-                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all cursor-pointer disabled:opacity-40"
+                  className="px-4 py-1.5 text-xs font-bold rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {actionBusy === 'import' ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
-                    <span>Import & Plan</span>
+                    <span>Import &amp; Plan</span>
                   )}
                 </button>
               </div>

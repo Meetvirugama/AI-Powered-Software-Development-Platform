@@ -100,7 +100,7 @@ export function RepositoryReviewStudio() {
         extraControls={
           reviewResult?.report ? (
             <div className="flex items-center gap-2">
-              <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[11px] font-mono">
+              <div className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25 text-[11px] font-mono">
                 <ShieldCheck className="h-3 w-3" />
                 <span>Risk: {reviewResult.report.risk_level}</span>
                 <span className="text-muted-foreground/60">·</span>

@@ -261,7 +261,7 @@ export function PublicationPanel({
         {isAlreadyPublished && (
           <span
             data-testid="published-badge"
-            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0 self-start sm:self-auto"
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 shrink-0 self-start sm:self-auto"
           >
             <CheckCircle2 className="h-3.5 w-3.5" />
             DRAFT PR PUBLISHED
@@ -278,16 +278,16 @@ export function PublicationPanel({
           className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-5 space-y-4"
         >
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            <div className="space-y-1">
+            <div className="space-y-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-mono text-xs bg-muted text-foreground px-2 py-0.5 rounded border border-border">
                   #{activePR.pr_number || 'Draft'}
                 </span>
-                <span className="font-mono text-[11px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase">
+                <span className="font-mono text-[11px] bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold uppercase">
                   Draft Pull Request
                 </span>
               </div>
-              <h4 className="text-base font-semibold text-foreground">{activePR.title}</h4>
+              <h4 className="text-base font-semibold text-foreground break-words">{activePR.title}</h4>
               {activePR.created_at && (
                 <p className="text-xs text-muted-foreground flex items-center gap-1">
                   <Clock className="h-3 w-3 text-muted-foreground/70" />
@@ -301,7 +301,7 @@ export function PublicationPanel({
               target="_blank"
               rel="noopener noreferrer"
               data-testid="open-pr-link"
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs shrink-0 self-start sm:self-auto"
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-xs shrink-0 self-start sm:self-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <span>View PR on GitHub</span>
               <ExternalLink className="h-3.5 w-3.5" />
@@ -310,25 +310,25 @@ export function PublicationPanel({
 
           {/* Git Branch Details */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
-            <div className="p-3 rounded bg-background/60 border border-border space-y-1">
+            <div className="p-3 rounded bg-background/60 border border-border space-y-1 min-w-0">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <FolderGit2 className="h-3 w-3" /> Target Repository
+                <FolderGit2 className="h-3 w-3 shrink-0" /> Target Repository
               </span>
-              <p className="font-mono font-medium text-foreground">{targetRepo}</p>
+              <p className="font-mono font-medium text-foreground break-all">{targetRepo}</p>
             </div>
 
-            <div className="p-3 rounded bg-background/60 border border-border space-y-1">
+            <div className="p-3 rounded bg-background/60 border border-border space-y-1 min-w-0">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <GitBranch className="h-3 w-3" /> Head Branch
+                <GitBranch className="h-3 w-3 shrink-0" /> Head Branch
               </span>
-              <p className="font-mono font-medium text-foreground">{activePR.head_branch || sourceBranch}</p>
+              <p className="font-mono font-medium text-foreground break-all">{activePR.head_branch || sourceBranch}</p>
             </div>
 
-            <div className="p-3 rounded bg-background/60 border border-border space-y-1">
+            <div className="p-3 rounded bg-background/60 border border-border space-y-1 min-w-0">
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
-                <GitBranch className="h-3 w-3" /> Base Branch
+                <GitBranch className="h-3 w-3 shrink-0" /> Base Branch
               </span>
-              <p className="font-mono font-medium text-foreground">{activePR.base_branch || baseBranch}</p>
+              <p className="font-mono font-medium text-foreground break-all">{activePR.base_branch || baseBranch}</p>
             </div>
           </div>
 
@@ -360,9 +360,9 @@ export function PublicationPanel({
           className="rounded-lg border border-sky-500/30 bg-sky-500/10 p-8 text-center space-y-3"
         >
           <LoadingSpinner size="md" label="Publishing to GitHub..." />
-          <h4 className="text-sm font-semibold text-sky-200">Publication in Progress</h4>
-          <p className="text-xs text-sky-300/80 max-w-md mx-auto">
-            Verifying commit signatures, pushing task branch <code className="font-mono text-sky-100">{sourceBranch}</code> to remote origin, and creating the GitHub Draft Pull Request...
+          <h4 className="text-sm font-semibold text-sky-900 dark:text-sky-200">Publication in Progress</h4>
+          <p className="text-xs text-sky-800 dark:text-sky-300/80 max-w-md mx-auto">
+            Verifying commit signatures, pushing task branch <code className="font-mono text-sky-950 dark:text-sky-100">{sourceBranch}</code> to remote origin, and creating the GitHub Draft Pull Request...
           </p>
         </div>
       ) : (
@@ -376,7 +376,7 @@ export function PublicationPanel({
               <span className="text-[11px] text-muted-foreground flex items-center gap-1">
                 <FolderGit2 className="h-3 w-3" /> Target Repo
               </span>
-              <p className="font-mono font-medium text-foreground truncate" data-testid="target-repo-display">
+              <div className="font-mono font-medium text-foreground truncate" data-testid="target-repo-display">
                 {isRepoLoading ? (
                   <span className="text-muted-foreground italic font-sans flex items-center gap-1">
                     <LoadingSpinner size="sm" label="Loading repository metadata..." /> Loading...
@@ -384,9 +384,9 @@ export function PublicationPanel({
                 ) : targetRepo ? (
                   targetRepo
                 ) : (
-                  <span className="text-rose-400 italic font-sans">Unavailable</span>
+                  <span className="text-rose-700 dark:text-rose-400 italic font-sans">Unavailable</span>
                 )}
-              </p>
+              </div>
             </div>
 
             <div className="p-3 rounded-md border border-border/80 bg-background/40 space-y-1">
@@ -394,7 +394,7 @@ export function PublicationPanel({
                 <GitBranch className="h-3 w-3" /> Source Branch
               </span>
               <p className="font-mono font-medium text-foreground truncate">
-                {sourceBranch || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+                {sourceBranch || <span className="text-rose-700 dark:text-rose-400 italic font-sans">Unavailable</span>}
               </p>
             </div>
 
@@ -403,7 +403,7 @@ export function PublicationPanel({
                 <GitBranch className="h-3 w-3" /> Base Branch
               </span>
               <p className="font-mono font-medium text-foreground truncate">
-                {baseBranch || <span className="text-rose-400 italic font-sans">Unavailable</span>}
+                {baseBranch || <span className="text-rose-700 dark:text-rose-400 italic font-sans">Unavailable</span>}
               </p>
             </div>
 
@@ -412,7 +412,7 @@ export function PublicationPanel({
                 <GitCommit className="h-3 w-3" /> Verified Revision
               </span>
               <p className="font-mono font-medium text-foreground truncate">
-                {verifiedSha ? verifiedSha.slice(0, 10) : <span className="text-rose-400 italic font-sans">Unavailable</span>}
+                {verifiedSha ? verifiedSha.slice(0, 10) : <span className="text-rose-700 dark:text-rose-400 italic font-sans">Unavailable</span>}
               </p>
             </div>
           </div>
@@ -421,9 +421,9 @@ export function PublicationPanel({
           {!isMetadataAvailable && (
             <div
               data-testid="missing-metadata-alert"
-              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-center gap-2.5"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2.5"
             >
-              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+              <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
               <span>
                 Publication is blocked: Required repository, branch, or verified revision metadata is unavailable.
               </span>
@@ -434,9 +434,9 @@ export function PublicationPanel({
           {isStale && (
             <div
               data-testid="stale-revision-alert"
-              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-200 flex items-center gap-2.5"
+              className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-900 dark:text-amber-200 flex items-center gap-2.5"
             >
-              <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
+              <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
               <span>
                 {`Publication is blocked: Workspace revision has drifted from the verified revision. ${staleCheck?.message || 'Re-run verification above before publishing.'}`}
               </span>
@@ -447,9 +447,9 @@ export function PublicationPanel({
           {isStaleCheckError && (
             <div
               data-testid="stale-check-error-alert"
-              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex items-center gap-2.5"
             >
-              <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+              <AlertTriangle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
               <span>
                 Publication is blocked: Remote revision stale-check API failed. Server state cannot be verified.
               </span>
@@ -460,9 +460,9 @@ export function PublicationPanel({
           {isVerificationError && (
             <div
               data-testid="verification-error-alert"
-              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex items-center gap-2.5"
             >
-              <ShieldAlert className="h-4 w-4 text-rose-400 shrink-0" />
+              <ShieldAlert className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
               <span>
                 Publication is blocked: Verification outcome check failed or is unavailable.
               </span>
@@ -473,9 +473,9 @@ export function PublicationPanel({
           {verification?.blocking_findings && verification.blocking_findings.length > 0 && (
             <div
               data-testid="blocking-findings-alert"
-              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center gap-2.5"
+              className="rounded-md border border-rose-500/40 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex items-center gap-2.5"
             >
-              <ShieldAlert className="h-4 w-4 text-rose-400 shrink-0" />
+              <ShieldAlert className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
               <span>
                 Publication is blocked: {verification.blocking_findings.length} blocking finding(s) exist in the verification report. Resolve them before publishing.
               </span>
@@ -485,19 +485,20 @@ export function PublicationPanel({
           {/* Publication Error Banner */}
           {publishError && (
             <div
+              role="alert"
               data-testid="publication-error-alert"
-              className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center justify-between"
+              className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2"
             >
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
-                <span>
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
+                <span className="break-words">
                   {publishError.message || 'Failed to publish task branch to GitHub.'}
                 </span>
               </div>
               <button
                 type="button"
                 onClick={() => setPublishError(null)}
-                className="text-xs text-rose-400 hover:text-rose-200 underline ml-2 cursor-pointer"
+                className="text-xs text-rose-700 hover:text-rose-950 dark:text-rose-400 dark:hover:text-rose-200 underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
               >
                 Dismiss
               </button>
@@ -514,7 +515,7 @@ export function PublicationPanel({
                 checked={authorizedChecked}
                 onChange={(e) => setAuthorizedChecked(e.target.checked)}
                 disabled={!eligible || isPublishing || !isMetadataAvailable}
-                className="mt-1 h-4 w-4 rounded border-border text-primary focus:ring-primary disabled:opacity-50 cursor-pointer"
+                className="mt-1 h-4 w-4 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               />
               <label
                 htmlFor="authorize-publication-checkbox"
@@ -526,7 +527,7 @@ export function PublicationPanel({
                 <span className="font-semibold">Explicit Human Publication Authorization</span>
                 <p className="text-muted-foreground text-[11px] mt-0.5">
                   I have inspected the verified diff, test execution telemetry, and security checks. I explicitly authorize pushing branch{' '}
-                  <code className="font-mono text-foreground font-semibold">{sourceBranch || 'Not allocated'}</code> to GitHub and opening a Draft Pull Request. Server authorization enforcement is independently validated before publication.
+                  <code className="font-mono text-foreground font-semibold break-all">{sourceBranch || 'Not allocated'}</code> to GitHub and opening a Draft Pull Request. Server authorization enforcement is independently validated before publication.
                 </p>
               </label>
             </div>
@@ -534,14 +535,14 @@ export function PublicationPanel({
             <div className="flex items-center justify-between pt-2 border-t border-border/50 flex-wrap gap-3">
               <div className="text-[11px] text-muted-foreground">
                 {!eligible ? (
-                  <span className="text-rose-400 flex items-center gap-1 font-medium">
-                    <ShieldAlert className="h-3 w-3" /> Verification must pass before publication is unlocked.
+                  <span className="text-rose-700 dark:text-rose-400 flex items-center gap-1 font-medium">
+                    <ShieldAlert className="h-3 w-3 shrink-0" /> Verification must pass before publication is unlocked.
                   </span>
                 ) : !authorizedChecked ? (
                   <span>Check authorization above to unlock the publication trigger.</span>
                 ) : (
-                  <span className="text-emerald-400 flex items-center gap-1 font-medium">
-                    <CheckCircle2 className="h-3 w-3" /> Publication authorization ready.
+                  <span className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1 font-medium">
+                    <CheckCircle2 className="h-3 w-3 shrink-0" /> Publication authorization ready.
                   </span>
                 )}
               </div>
@@ -552,9 +553,9 @@ export function PublicationPanel({
                 disabled={!eligible || !authorizedChecked || isPublishing || !isMetadataAvailable}
                 onClick={handlePublish}
                 className={cn(
-                  'inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md shadow-xs transition-colors cursor-pointer',
+                  'inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-md shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                   eligible && authorizedChecked && !isPublishing && isMetadataAvailable
-                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer'
                     : 'bg-muted text-muted-foreground border border-border opacity-50 cursor-not-allowed'
                 )}
               >
