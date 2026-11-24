@@ -1,13 +1,13 @@
 import { useMemo, useState, useCallback, useEffect, type UIEvent } from 'react';
 
 export const TOKEN_COLOR_CLASS: Record<SyntaxTokenKind, string> = {
-  keyword: "text-purple-400 font-medium",
-  string: "text-emerald-400",
-  comment: "text-muted-foreground/70 italic",
-  number: "text-blue-400",
-  type: "text-amber-400",
-  function: "text-cyan-400",
-  operator: "text-pink-400",
+  keyword: "text-rose-700 dark:text-rose-400 font-medium",
+  string: "text-emerald-700 dark:text-emerald-400",
+  comment: "text-muted-foreground/75 italic",
+  number: "text-sky-700 dark:text-sky-400",
+  type: "text-amber-700 dark:text-amber-400",
+  function: "text-teal-700 dark:text-teal-400",
+  operator: "text-muted-foreground",
   plain: "text-foreground",
 };
 

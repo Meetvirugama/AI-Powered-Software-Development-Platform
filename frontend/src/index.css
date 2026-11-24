@@ -1,28 +1,56 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
+
 @layer base {
-  :root,
-  .dark {
-    --background: 220 18% 7%;
-    --foreground: 210 40% 98%;
-    --card: 220 16% 10%;
-    --card-foreground: 210 40% 98%;
-    --popover: 220 16% 10%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 24% 15%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 20% 14%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 217.2 24% 15%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 45%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 215 14% 20%;
-    --input: 215 14% 20%;
-    --ring: 217.2 91.2% 59.8%;
+  :root {
+    color-scheme: light;
+    --background: 0 0% 98.5%;
+    --foreground: 240 10% 9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 9%;
+    --primary: 240 6% 12%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 5% 95%;
+    --secondary-foreground: 240 6% 14%;
+    --muted: 240 5% 94.5%;
+    --muted-foreground: 240 4% 44%;
+    --accent: 240 5% 93%;
+    --accent-foreground: 240 6% 12%;
+    --destructive: 0 72% 48%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 89%;
+    --input: 240 6% 88%;
+    --ring: 240 6% 24%;
     --radius: 0.5rem;
+    --scrollbar-thumb: rgba(113, 113, 122, 0.25);
+    --scrollbar-thumb-hover: rgba(113, 113, 122, 0.45);
+  }
+
+  .dark {
+    color-scheme: dark;
+    --background: 240 6% 6.5%;
+    --foreground: 0 0% 95%;
+    --card: 240 5% 9.5%;
+    --card-foreground: 0 0% 95%;
+    --popover: 240 5% 10.5%;
+    --popover-foreground: 0 0% 95%;
+    --primary: 0 0% 95%;
+    --primary-foreground: 240 6% 8%;
+    --secondary: 240 4% 14.5%;
+    --secondary-foreground: 0 0% 94%;
+    --muted: 240 4% 13.5%;
+    --muted-foreground: 240 5% 59%;
+    --accent: 240 4% 16%;
+    --accent-foreground: 0 0% 96%;
+    --destructive: 0 66% 52%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 17.5%;
+    --input: 240 4% 19%;
+    --ring: 240 5% 74%;
+    --scrollbar-thumb: rgba(161, 161, 170, 0.2);
+    --scrollbar-thumb-hover: rgba(161, 161, 170, 0.38);
   }
 }
 
@@ -30,9 +58,25 @@
   * {
     border-color: hsl(var(--border));
   }
+
+  html {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  code,
+  pre,
+  kbd,
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+    transition: background-color 160ms ease, color 160ms ease;
   }
 }
 
@@ -42,7 +86,18 @@
   50%       { opacity: 0; }
 }
 
-/* Custom scrollbar styling for workbench panels */
+/* Hide scrollbars cleanly where horizontal tab rails are used */
+.no-scrollbar::-webkit-scrollbar,
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar,
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Subtle, theme-aware scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -51,10 +106,9 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.2);
+  background: var(--scrollbar-thumb);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: var(--scrollbar-thumb-hover);
 }
-
