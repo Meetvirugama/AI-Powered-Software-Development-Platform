@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import signal
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, AsyncGenerator, Generator
 import pytest
 
@@ -25,7 +26,7 @@ try:
     import responses
 except ImportError:
     responses = None  # type: ignore
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
@@ -44,9 +45,11 @@ except (ImportError, ModuleNotFoundError):
     register_github_mocks = None  # type: ignore
 
 # Determine test database URL before importing database module
-TEST_DB_PATH = Path(__file__).resolve().parent.parent / "test.db"
-DEFAULT_TEST_DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
-_RAW_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DATABASE_URL).strip()
+_RAW_TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "").strip()
+if not _RAW_TEST_DATABASE_URL:
+    # Keep the default database private to this process, including during app imports.
+    _test_database_dir = TemporaryDirectory(prefix="platform-pytest-")
+    _RAW_TEST_DATABASE_URL = f"sqlite:///{Path(_test_database_dir.name) / 'test.db'}"
 if _RAW_TEST_DATABASE_URL.startswith("postgres://"):
     TEST_DATABASE_URL = "postgresql+psycopg://" + _RAW_TEST_DATABASE_URL[len("postgres://"):]
 elif _RAW_TEST_DATABASE_URL.startswith("postgresql://") and not _RAW_TEST_DATABASE_URL.startswith("postgresql+"):
@@ -194,17 +197,13 @@ def test_engine():
         with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
+    owns_schema = not inspect(engine).get_table_names()
     Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine, checkfirst=True)
+    # A migrated database owns its tables, enum types and Alembic revision.
+    if owns_schema:
+        Base.metadata.drop_all(bind=engine, checkfirst=True)
     engine.dispose()
-
-    # Clean up local SQLite test file if one was created
-    if is_sqlite and TEST_DB_PATH.exists():
-        try:
-            TEST_DB_PATH.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 @pytest.fixture

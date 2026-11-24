@@ -1073,11 +1073,12 @@ class TestFeature30EngineeringDocsSync:
     """Validate that API documentation reflects actual endpoints."""
 
     def test_f30_engineering_api_docs_exist(self):
-        api_doc_path = Path(__file__).resolve().parent.parent.parent / "Docs" / "engineering" / "08_api_documentation.md"
+        api_doc_path = Path(__file__).resolve().parents[2] / "documentation/03-engineering/API_REFERENCE.md"
         assert api_doc_path.exists()
         content = api_doc_path.read_text()
-        assert "/api/v1/tasks" in content
-        assert "/api/v1/health" in content
+        assert "All paths are under `/api/v1`" in content
+        for endpoint in ("/tasks", "/health"):
+            assert f"| GET | `{endpoint}` |" in content
 
 
 # ===========================================================================

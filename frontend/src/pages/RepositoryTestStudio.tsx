@@ -72,9 +72,9 @@ export function RepositoryTestStudio() {
       files,
       filesLoading,
       filesError,
-      false
+      files.length === filesData?.total
     );
-  }, [testResult, files, filesLoading, filesError]);
+  }, [testResult, files, filesLoading, filesError, filesData?.total]);
 
   return (
     <StudioLayout
@@ -201,7 +201,6 @@ export function RepositoryTestStudio() {
               <TestGenerationView
                 result={testResult.result}
                 proposedPathStatus={proposedPathStatus}
-                proposedPathExists={proposedPathStatus === 'EXISTS'}
                 activeSourceReference={activeSourceReference}
                 onSelectSourceReference={(ref) => {
                   setActiveSourceReference(ref);

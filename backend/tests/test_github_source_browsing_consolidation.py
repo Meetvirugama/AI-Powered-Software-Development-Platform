@@ -284,6 +284,21 @@ def test_api_multi_tenant_repository_isolation(client, db_session: Session, repo
 
 
 
+def test_legacy_task_routes_have_distinct_openapi_operations():
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    operation_ids = set()
+    for surface in ("task", "task-workspace"):
+        operations = paths[f"/api/v1/repositories/{{repository_id}}/source/{surface}/{{action}}"]
+        assert set(operations) == {"get", "post", "put", "delete", "patch"}
+        for operation in operations.values():
+            assert operation["deprecated"]
+            assert "410" in operation["responses"]
+            operation_ids.add(operation["operationId"])
+    assert len(operation_ids) == 10
+
+
 def test_api_deprecated_duplicate_task_execution_surfaces(client, repo_setup: dict, monkeypatch):
     """Verify deprecated /repositories/{id}/source/task/* surfaces return 410 with X-Canonical-Endpoint."""
     monkeypatch.setenv("JWT_SECRET", "test-secret-key-12345-secure-32bytes!")

@@ -48,7 +48,7 @@ export function RepositoryStudioLayout() {
         onOpenCommandPalette={() => setCommandPaletteOpen(true)}
       />
       <div className="flex-1 min-h-0 overflow-hidden relative flex flex-col">
-        <Outlet context={{ repository: repo, id }} />
+        <Outlet key={id} context={{ repository: repo, id }} />
       </div>
     </div>
   );

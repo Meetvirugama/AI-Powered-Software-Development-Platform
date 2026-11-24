@@ -49,6 +49,14 @@ describe('Bounded Agentic Repository Chat UI (Issue #188 / F08)', () => {
     );
   });
 
+  it('keeps the source path in follow-ups and preserves text during IME composition', async () => {
+    renderRepositoryChat('/app/repositories/test-repo-123/chat?file=src%2Fmain.py&prompt=Why%20retry%3F');
+    const composer = await screen.findByRole('textbox', { name: /Ask a question about/i });
+    expect(composer).toHaveValue('src/main.py\n\nWhy retry?');
+    fireEvent.keyDown(composer, { key: 'Enter', isComposing: true });
+    expect(composer).toHaveValue('src/main.py\n\nWhy retry?');
+  });
+
   it('renders mode selector defaulting to Normal Chat', async () => {
     renderRepositoryChat();
 
