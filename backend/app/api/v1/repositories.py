@@ -157,11 +157,11 @@ def list_repositories(
         calc_skip = skip if skip is not None else ((page - 1) * page_size if page and page_size else 0)
         calc_limit = limit if limit is not None else (page_size if page_size else None)
         try:
-            repositories = repo_repo.list_by_user(_request_user_id(request), skip=calc_skip, limit=calc_limit)
+            repositories = repo_repo.list_by_user(user_id, skip=calc_skip, limit=calc_limit)
         except TypeError:
-            repositories = repo_repo.list_by_user(_request_user_id(request))
+            repositories = repo_repo.list_by_user(user_id)
     else:
-        repositories = repo_repo.list_by_user(_request_user_id(request))
+        repositories = repo_repo.list_by_user(user_id)
 
     if not repositories:
         return []

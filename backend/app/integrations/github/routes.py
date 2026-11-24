@@ -499,7 +499,7 @@ def _build_deprecated_task_source_response(request: Request) -> JSONResponse:
     deprecated=True,
     summary="Deprecated duplicate task execution surface",
     description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=True,
+    include_in_schema=False,
 )
 async def deprecated_task_source_endpoint(
     repository_id: UUID,
@@ -516,7 +516,7 @@ async def deprecated_task_source_endpoint(
     deprecated=True,
     summary="Deprecated duplicate task workspace execution surface",
     description="Deprecated duplicate task workspace endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=True,
+    include_in_schema=False,
 )
 async def deprecated_task_workspace_source_endpoint(
     repository_id: UUID,

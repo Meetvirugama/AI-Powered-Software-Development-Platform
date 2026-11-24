@@ -4,6 +4,7 @@ import { Cpu, ShieldCheck, AlertCircle, Wrench, Loader2 } from 'lucide-react';
 import { API_BASE_URL } from '../services/api';
 import { devLogin } from '../services/auth';
 import { useAuthStore } from '../stores/useAuthStore';
+import { getSafeRedirectPath } from '../lib/authRedirect';
 import { ThemeToggle } from '../components/shared/ThemeToggle';
 
 function getAuthErrorMessage(err: unknown, fallback: string): string {
@@ -47,11 +48,13 @@ export function Login() {
     try {
       const user = await devLogin(devLoginTarget);
       useAuthStore.getState().setUser(user);
-      const dest =
+      const rawDest =
         redirectParam ||
-        (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('auth_redirect') : null) ||
-        '/app/dashboard';
-      window.location.href = dest;
+        (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('auth_redirect') : null);
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('auth_redirect');
+      }
+      window.location.href = getSafeRedirectPath(rawDest);
     } catch (err) {
       setIsRedirecting(false);
       setAuthError(

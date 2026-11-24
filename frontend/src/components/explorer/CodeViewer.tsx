@@ -276,21 +276,25 @@ export function CodeViewer({
     virtualizeThreshold: 200,
   });
 
-  // Auto-scroll to cited reference when set
+  // Auto-scroll to cited reference when set (handles virtualized files where target line may not be mounted yet)
   useEffect(() => {
     if (
       highlightedSource &&
       highlightedSource.file_path === file.path &&
       typeof highlightedSource.start_line === 'number'
     ) {
-      const lineEl = codeContainerRef.current?.querySelector(
+      const container = codeContainerRef.current;
+      const lineEl = container?.querySelector(
         `[data-line="${highlightedSource.start_line}"]`
       );
       if (lineEl) {
         lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (container && lines.length > 200) {
+        const estimatedTop = Math.max(0, (highlightedSource.start_line - 1) * 20 - 200);
+        container.scrollTo?.({ top: estimatedTop, behavior: 'smooth' });
       }
     }
-  }, [highlightedSource, file.path]);
+  }, [highlightedSource, file.path, lines.length]);
 
   async function handleCopy() {
     if (!content) return;
@@ -560,7 +564,7 @@ export function CodeViewer({
                       isInTarget
                         ? 'bg-primary/20 text-primary font-bold'
                         : isInCited
-                        ? 'bg-cyan-500/20 text-cyan-300 font-bold border-r-2 border-cyan-400'
+                        ? 'bg-sky-500/20 text-sky-700 dark:text-sky-300 font-bold border-r-2 border-sky-500'
                         : undefined
                     )}
                     title={`Click to select line ${lineNum} (Shift+click for range)`}
@@ -598,7 +602,7 @@ export function CodeViewer({
                       isInTarget
                         ? 'bg-primary/10 border-l-2 border-primary text-foreground'
                         : isInCited
-                        ? 'bg-cyan-500/10 border-l-2 border-cyan-400 text-foreground'
+                        ? 'bg-sky-500/10 border-l-2 border-sky-500 text-foreground'
                         : 'hover:bg-accent/20'
                     )}
                   >
