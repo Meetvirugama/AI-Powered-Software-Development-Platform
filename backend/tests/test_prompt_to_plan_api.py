@@ -96,3 +96,22 @@ def test_prompt_to_plan_detects_ambiguity(client, db_session, test_user, auth_he
     assert data["task_id"] is None
     assert data["ambiguity_detected"] is True
     assert len(data["clarifications"]) > 0
+
+
+def test_regenerate_branch_plan_uses_last_indexed_commit(client, db_session, test_user, auth_headers):
+    repo = _seed_repo(db_session, test_user.id)
+    response = client.post(
+        "/api/v1/tasks/prompt-to-plan",
+        json={"repository_id": str(repo.id), "prompt": "Generate unit tests for validation services", "auto_create_task": True},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    task_id = response.json()["task_id"]
+    revision = "a" * 40
+    repo.last_indexed_commit_sha = revision
+    db_session.commit()
+
+    response = client.post(f"/api/v1/tasks/{task_id}/plan", json={}, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["base_revision"] == revision
+    assert response.json()["plan_version"] == 2

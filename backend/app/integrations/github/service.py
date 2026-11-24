@@ -561,6 +561,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         repo: str,
         branch: str,
         workspace_path: str,
+        *,
+        archive_revision: str | None = None,
     ) -> str:
         """Shallow-clone a repository using a short-lived installation token.
 
@@ -600,11 +602,14 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$", branch or "") or ".." in (branch or ""):
             raise ValueError(f"Invalid branch name: {branch!r}")
 
+        if archive_revision and not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", archive_revision):
+            raise ValueError("Archive revision must be a full commit SHA.")
+
         # Check if git CLI binary is present in runtime environment
         git_binary = shutil.which("git")
-        if not git_binary:
+        if archive_revision or not git_binary:
             logger.info(
-                "git binary not found in environment; using GitHub REST API archive download for %s/%s",
+                "Using GitHub REST API archive download for %s/%s",
                 owner,
                 repo,
             )
@@ -612,7 +617,7 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
                 installation_id=installation_id,
                 owner=owner,
                 repo=repo,
-                branch=branch,
+                branch=archive_revision or branch,
                 target=target,
             )
             return str(target)
@@ -686,7 +691,7 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
                 installation_id=installation_id,
                 owner=owner,
                 repo=repo,
-                branch=branch,
+                branch=archive_revision or branch,
                 target=target,
             )
             return str(target)

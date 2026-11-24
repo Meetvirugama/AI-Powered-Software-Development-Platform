@@ -335,6 +335,7 @@ export interface RepositoryTaskPlanTabProps {
   rejectionReason: string;
   setRejectionReason: (v: string) => void;
   approvalComment: string;
+  approvalBlocked: boolean;
   setApprovalComment: (v: string) => void;
   actionBusy: string | null;
   handleGenerateOrRevisePlan: () => void;
@@ -355,6 +356,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
     rejectionReason,
     setRejectionReason,
     approvalComment,
+    approvalBlocked,
     setApprovalComment,
     actionBusy,
     handleGenerateOrRevisePlan,
@@ -368,7 +370,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-400" />
               <span className="text-xs font-bold text-foreground">
-                Plan v{latestPlan.plan_version} Ready for Approval
+                Plan v{latestPlan.plan_version} {approvalBlocked ? 'Needs Attention' : 'Ready for Approval'}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -439,7 +441,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
             />
             <button
               type="button"
-              disabled={actionBusy !== null}
+              disabled={actionBusy !== null || approvalBlocked}
               onClick={handleApprovePlan}
               className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
             >
