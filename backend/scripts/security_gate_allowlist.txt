@@ -116,3 +116,5 @@ b00171bace  # frontend/src/services/api.ts TOKEN_STORAGE_KEY constant ("auth_tok
 
 f8e174cfdd  # backend/tests/test_module8_audit_fixes.py synthetic test aws key
 5cfc10c388  # backend/tests/test_module8_audit_fixes.py synthetic test github token
+
+d07f963c2b  # Synthetic token returned by the local Git checkout fixture
