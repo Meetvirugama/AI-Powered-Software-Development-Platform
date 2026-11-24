@@ -1598,6 +1598,7 @@ async def test_task_planner_bounded_repair_loop_and_forbidden_file_stripping(sql
     plan = await planner.generate_plan(task, db=sqlite_db)
 
     assert plan.summary == "Repaired validation plan"
+    assert "REQ-TEST-002" in plan.steps[0].requirement_ids
     assert ".env" not in plan.expected_files
     assert "src/validation.py" in plan.expected_files
     assert mock_gateway.generate.await_count == 2

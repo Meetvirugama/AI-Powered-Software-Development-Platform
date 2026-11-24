@@ -319,7 +319,7 @@ export function RepositoryTaskStudio() {
   };
 
   const { data: draftPRData } = useTaskPullRequest(activeTaskId ?? undefined, {
-    enabled: isTaskActive,
+    enabled: isTaskActive && taskDetail?.status === 'DRAFT_PR_CREATED',
   });
   const draftPR = (isTaskActive ? (draftPRData ?? null) : null) as TaskPullRequestResponse | null;
 
@@ -926,9 +926,9 @@ export function RepositoryTaskStudio() {
       {/* -------------------------------------------------------------------- */}
       {/* 2. Main Studio Workspace Layout                                      */}
       {/* -------------------------------------------------------------------- */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
         {/* Left Sidebar: Task List */}
-        <aside className="w-72 sm:w-80 shrink-0 border-r border-border bg-card/30 flex flex-col min-h-0">
+        <aside className="h-36 lg:h-auto w-full lg:w-64 2xl:w-80 shrink-0 border-b lg:border-b-0 lg:border-r border-border bg-card/30 flex flex-col min-h-0">
           <div className="p-3 border-b border-border/60 flex items-center gap-2">
             <div className="relative flex-1">
               <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -1011,7 +1011,7 @@ export function RepositoryTaskStudio() {
         </aside>
 
         {/* Center Canvas: Agent Studio Workbench */}
-        <main className="flex-1 min-h-0 flex flex-col overflow-hidden bg-background/50">
+        <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden bg-background/50">
           {!taskDetail ? (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center space-y-4">
               <div className="h-14 w-14 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shadow-inner">
