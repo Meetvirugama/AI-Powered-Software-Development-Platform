@@ -33,7 +33,7 @@ Provision Redis 7 (TLS `rediss://` for managed services). Size `REDIS_MAX_CONNEC
 1. Configure application settings from [Environment configuration](ENVIRONMENT_CONFIGURATION.md) with `APP_ENV=production`, `COOKIE_SECURE=true`, `CORS_ALLOWED_ORIGINS=https://<spa-domain>`, `FRONTEND_URL=https://<spa-domain>`, `GITHUB_OAUTH_REDIRECT_URI=https://<api-or-spa-domain>/api/v1/auth/github/callback`, `WEBSITES_PORT=8000`.
 2. Health check path: `/api/v1/health/ready`.
 3. CI (`.github/workflows/main_ai-powered-dev-platform-api.yml`) on push to `main`: lint/static → backend tests → frontend lint/types → frontend tests/build → migration validation → security scan → `build-and-package` → `deploy` (OIDC login, `azure/webapps-deploy`) → `post-deployment-verification` (polls health and `/docs`).
-4. Decide where sync work runs: deploy a `sync_worker` process **or** set `DISABLE_EMBEDDED_SYNC_WORKER=false` on the API. CI deploys only the API.
+4. For an embedded sync worker, set `DISABLE_EMBEDDED_SYNC_WORKER=false` on the API. For a dedicated Azure worker, run **Deploy Sync Worker to Azure Web App** with the successful `main` API release run ID. Use `bash startup.sh` as the worker's startup command. Once the workflow confirms the worker's Redis heartbeat, set `DISABLE_EMBEDDED_SYNC_WORKER=true` on the API.
 
 ## 4. Workers (container platforms)
 
@@ -49,8 +49,8 @@ docker run -e SERVICE_ROLE=webhook_worker <image>   # then DISABLE_EMBEDDED_WEBH
 ## 5. Runner host (isolated execution)
 
 1. Provision an Ubuntu 24.04 host and run `scripts/setup_runner_host.sh` (Docker CE, gVisor, daemon configuration, pinned sandbox images).
-2. Start `SERVICE_ROLE=runner` with `RUNNER_AUTH_SECRET`.
-3. On the API: `SANDBOX_BACKEND=runner`, `RUNNER_BASE_URL`, `RUNNER_AUTH_SECRET`. If the runner is unreachable, execution fails closed.
+2. Start `SERVICE_ROLE=runner` with `RUNNER_AUTH_SECRET`. Mount a private writable workspace share on the API and runner at the same absolute path. Set `TASK_WORKSPACE_ROOT` to that path on both hosts.
+3. On the API, set `SANDBOX_BACKEND=runner`, `RUNNER_BASE_URL`, and the matching `RUNNER_AUTH_SECRET`. Check that API readiness reports `operations.sandbox_backend_ok=true`, then run a task against a test repository to confirm both hosts see the same checkout.
 4. Without a runner (or Docker on the API host) task tests, repair verification and execution-verified test generation cannot run in production.
 
 ## 6. Frontend (Vercel)

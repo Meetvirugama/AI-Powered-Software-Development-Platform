@@ -14,7 +14,11 @@ import socket
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
+
+from fastapi import FastAPI, Response, status
+from redis.exceptions import RedisError
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -130,7 +134,7 @@ async def _worker_retention_maintenance_loop(
             continue
 
 
-async def run_worker(worker_id: str | None = None) -> None:
+async def run_worker(worker_id: str | None = None, *, stop_event: asyncio.Event | None = None) -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     if not worker_id:
@@ -150,17 +154,13 @@ async def run_worker(worker_id: str | None = None) -> None:
         )
 
     loop = asyncio.get_running_loop()
-    stop_event = asyncio.Event()
-
-    def _handle_signal():
-        logger.info("shutdown_signal_received", extra={"worker_id": worker_id})
-        stop_event.set()
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _handle_signal)
-        except NotImplementedError:
-            pass
+    if stop_event is None:
+        stop_event = asyncio.Event()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, stop_event.set)
+            except NotImplementedError:
+                pass
 
     # Start worker heartbeat loop
     heartbeat_task = asyncio.create_task(
@@ -234,6 +234,41 @@ async def run_worker(worker_id: str | None = None) -> None:
         logger.debug("Redis close notice: %s", exc)
 
     logger.info("standalone_sync_worker_stopped", extra={"worker_id": worker_id})
+    if not worker_task.cancelled():
+        worker_task.result()
+
+
+@asynccontextmanager
+async def _worker_lifespan(app: FastAPI):
+    stop_event = asyncio.Event()
+    app.state.worker_id = generate_worker_id()
+    app.state.worker = asyncio.create_task(run_worker(app.state.worker_id, stop_event=stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        try:
+            await app.state.worker
+        except Exception:
+            logger.exception("sync_worker_failed")
+
+
+worker_app = FastAPI(lifespan=_worker_lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+@worker_app.get("/health")
+async def worker_health(response: Response) -> dict[str, str]:
+    ready = False
+    if not worker_app.state.worker.done():
+        try:
+            async with asyncio.timeout(2):
+                redis = await get_redis_async()
+                ready = bool(await redis.exists(f"worker:heartbeat:{worker_app.state.worker_id}"))
+        except (OSError, TimeoutError, RuntimeError, RedisError):
+            logger.debug("sync_worker_health_check_failed")
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": "ready" if ready else "not_ready"}
 
 
 def main():
