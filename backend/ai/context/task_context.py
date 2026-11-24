@@ -234,18 +234,12 @@ class TaskContextBuilder:
                 non_test = [f for f in repo_files if "test" not in f.lower() and not f.endswith(".md")]
                 target_files = (non_test or repo_files)[:2]
 
-        if not target_files:
-            fallback = "src/main.py" if language.lower() == "python" else "src/index.ts"
-            if fallback.lower() in forbidden_lower:
-                fallback = "src/implementation.py"
-            target_files = [fallback]
-
         # 6. Format Grounded Markdown Prompt Text
         prompt_lines = [
             f"### Repository Intelligence Snapshot: `{snapshot_id}` (Commit: `{base_revision or 'HEAD'}`)",
             f"- **Primary Language**: {language}",
             f"- **Detected Test Command**: `{test_command}`",
-            f"- **Target Files**: {', '.join(f'`{f}`' for f in target_files)}",
+            f"- **Target Files**: {', '.join(f'`{f}`' for f in target_files) or 'Unresolved'}",
             f"- **Relevant Symbols**: {', '.join(f'`{s}`' for s in retrieved_symbols[:15]) or '*(none discovered)*'}",
             f"- **Key Callers**: {', '.join(f'`{c}`' for c in callers[:10]) or '*(none)*'}",
             f"- **Dependencies**: {', '.join(f'`{d}`' for d in dependencies[:10]) or '*(none)*'}",

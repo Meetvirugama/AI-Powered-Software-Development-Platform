@@ -42,7 +42,6 @@ from app.models.task import (
     TaskSourceType,
     TaskStatus,
     VerificationResult as TaskVerificationResult,
-    VerificationStatus,
     Workspace,
     WorkspaceStatus,
 )
@@ -50,8 +49,10 @@ from app.models.user import User
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 from app.repositories.task_repository import TaskNotFoundError, TaskRepository
 from app.schemas.task import can_transition, VALID_TASK_TRANSITIONS
+from app.schemas.workspace import WorkspaceCreateRequest
+from app.services.git_branch import format_agent_branch_name
 from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
-from sandbox.workspace_manager import WorkspaceManager, WorkspaceMetadata
+from sandbox.workspace_manager import WorkspaceManager
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +383,7 @@ class TestPostVerificationDiffImmutability:
     """Stress-tests that workspace tampering post-verification halts publication immediately."""
 
     def test_post_verification_mutation_blocks_branch_push_and_pr_publication(
-        self, client_harness, tmp_path: Path
+        self, client_harness, local_task_base_revision, record_verified_commit,
     ):
         db = client_harness["db"]
         orchestrator = client_harness["orchestrator"]
@@ -391,56 +392,27 @@ class TestPostVerificationDiffImmutability:
         user = _make_user(db, "immutability-victim")
         repo = _make_repo(db, user)
         task_repo = TaskRepository(db)
-
         task = task_repo.create_task(
             repository_id=repo.id,
             user_id=user.id,
             title="Tamper Detection Task",
             source_type=TaskSourceType.DIRECT,
-            base_revision="abcdef0123456789abcdef0123456789abcdef01",
+            base_revision=local_task_base_revision,
         )
-
-        # Set up a real workspace on disk
-        ws_dir = tmp_path / "workspaces" / f"ws-{task.id}"
-        ws_dir.mkdir(parents=True, exist_ok=True)
-        code_file = ws_dir / "service.py"
-        code_file.write_text("def sanitize(x): return x.strip()\n")
-
-        # Provision Workspace metadata
-        meta = WorkspaceMetadata(
-            workspace_id=f"ws-{task.id}",
-            task_id=str(task.id),
-            repository_id=str(repo.id),
-            workspace_path=str(ws_dir),
-            branch_name=f"agent/task-{task.id}",
-            base_revision="abcdef0123456789abcdef0123456789abcdef01",
-            status=WorkspaceStatus.READY.value,
+        meta = wm.create_workspace(
+            WorkspaceCreateRequest(
+                task_id=str(task.id),
+                repository_id=str(repo.id),
+                base_revision=local_task_base_revision,
+                branch_name=format_agent_branch_name(task.id),
+            ),
+            repository_url=f"https://github.com/{repo.owner}/{repo.name}.git",
+            installation_token="fixture-token",
         )
-        wm._workspaces[str(task.id)] = meta
-        task_repo.record_workspace(
-            task_id=task.id,
-            repository_id=repo.id,
-            workspace_path=str(ws_dir),
-            task_branch=f"agent/task-{task.id}",
-            base_revision="abcdef0123456789abcdef0123456789abcdef01",
-        )
-
-        # Compute initial verification diff hash
-        verified_hash = wm.compute_verification_diff_hash(str(task.id))
-        meta.verification_diff_hash = verified_hash
-
-        # Record PASSED verification record
-        task_repo.record_verification_result(
-            task_id=task.id,
-            repository_id=repo.id,
-            verified_revision="abcdef0123456789abcdef0123456789abcdef01",
-            status=VerificationStatus.PASSED.value,
-            blocking_findings=[],
-        )
-
-        # State is ready
-        task.status = TaskStatus.READY_FOR_PUBLICATION.value
-        db.commit()
+        code_file = Path(meta.workspace_path) / "service.py"
+        code_file.write_text("def sanitize(x): return x.strip()\n", encoding="utf-8")
+        revision = record_verified_commit(wm, task_repo, task)
+        orchestrator.authorize_verified_publication(task, task_repo, user.id, revision, None)
 
         # Sanity check: verify immutability passes before tampering
         imm_check = wm.verify_diff_immutability(str(task.id))
@@ -464,7 +436,7 @@ class TestPostVerificationDiffImmutability:
             )
         assert exc_push.value.status_code == 409
         assert exc_push.value.code == ErrorCode.VERIFICATION_FAILED
-        assert "modified after independent verification" in exc_push.value.message
+        assert "must be clean" in exc_push.value.message
 
         # PR publication must raise HTTP 409 VERIFICATION_FAILED
         with pytest.raises(APIError) as exc_pr:
@@ -485,7 +457,9 @@ class TestPostVerificationDiffImmutability:
 class TestMissingVerificationDiffHash:
     """Stress-tests rejection when verification_diff_hash is empty or missing."""
 
-    def test_empty_or_none_diff_hash_fails_closed(self, client_harness, tmp_path: Path):
+    def test_empty_or_none_diff_hash_fails_closed(
+        self, client_harness, local_task_base_revision, record_verified_commit,
+    ):
         db = client_harness["db"]
         orchestrator = client_harness["orchestrator"]
         wm = client_harness["workspace_manager"]
@@ -499,30 +473,19 @@ class TestMissingVerificationDiffHash:
             user_id=user.id,
             title="Missing Hash Test Task",
             source_type=TaskSourceType.DIRECT,
+            base_revision=local_task_base_revision,
         )
-
-        ws_dir = tmp_path / "workspaces" / f"ws-{task.id}"
-        ws_dir.mkdir(parents=True, exist_ok=True)
-        meta = WorkspaceMetadata(
-            workspace_id=f"ws-{task.id}",
-            task_id=str(task.id),
-            repository_id=str(repo.id),
-            workspace_path=str(ws_dir),
-            branch_name=f"agent/task-{task.id}",
-            base_revision="abcdef0123456789abcdef0123456789abcdef01",
-            verification_diff_hash="",  # Explicitly empty / missing
-            status=WorkspaceStatus.READY.value,
+        meta = wm.create_workspace(
+            WorkspaceCreateRequest(
+                task_id=str(task.id),
+                repository_id=str(repo.id),
+                base_revision=local_task_base_revision,
+                branch_name=format_agent_branch_name(task.id),
+            ),
+            repository_url=f"https://github.com/{repo.owner}/{repo.name}.git",
+            installation_token="fixture-token",
         )
-        wm._workspaces[str(task.id)] = meta
-
-        # Record PASSED verification
-        task_repo.record_verification_result(
-            task_id=task.id,
-            repository_id=repo.id,
-            verified_revision="abcdef0123456789abcdef0123456789abcdef01",
-            status=VerificationStatus.PASSED.value,
-            blocking_findings=[],
-        )
+        record_verified_commit(wm, task_repo, task, include_diff_hash=False)
 
         # 1. verify_diff_immutability must return is_immutable=False
         res = wm.verify_diff_immutability(str(task.id), expected_diff_hash="")

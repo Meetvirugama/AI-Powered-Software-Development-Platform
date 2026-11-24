@@ -5,12 +5,11 @@
  * - Visual interactive 6-stage workflow pipeline (Plan -> Execute -> Test -> Diff -> Verify -> Ship PR)
  * - Hero Next-Step Action Bar with plain-English guidance and one-click primary CTAs
  * - Tabbed workspace views eliminating clutter and cognitive overload
- * - One-click "⚡ Auto-Pilot" mode for automated planning, execution, and verification
  * - Sleek prompt-driven Task Intake modal with quick starter templates
  * - Comprehensive code diff inspector, test runner, quality gates, and GitHub PR integration
  */
 
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -39,11 +38,14 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from '../lib/utils';
+import { useRepository } from '../hooks/useRepositories';
+import { apiClient } from '../services/api';
 import {
   useTasks,
   useTask,
+  useTaskPlan,
   useTaskEvents,
   useTaskWorkspace,
   useTaskTests,
@@ -52,22 +54,23 @@ import {
   useTaskPullRequest,
   taskKeys,
 } from '../hooks/useTasks';
-import { useRepository } from '../hooks/useRepositories';
 import {
   approveTaskPlan,
   authorizeTaskPublication,
   cancelTask,
   commitTaskChanges,
-  createTask,
   createTaskDraftPR,
   executeTask,
   generateTaskPlan,
+  getWorkflowStatus,
   importGitHubIssue,
   pauseTask,
   recoverTask,
   rejectTaskPlan,
   resumeTask,
   startAutonomousWorkflow,
+  submitTaskPrompt,
+  type PromptToPlanResponse,
   triggerTaskRepair,
   triggerTaskTests,
   triggerTaskVerification,
@@ -78,6 +81,7 @@ import type {
   TaskPullRequestResponse,
   TaskSummary,
 } from '../types/task';
+import { isExecutionActive } from '../types/task';
 import { ExecutionTimeline } from '../components/tasks/ExecutionTimeline';
 import {
   RepositoryTaskChangesTab,
@@ -248,6 +252,7 @@ export function RepositoryTaskStudio() {
 
   const queryClient = useQueryClient();
   const { data: repository } = useRepository(repoId);
+  const planPanel = useRef<HTMLDivElement>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState<string | null>(null);
 
@@ -260,6 +265,7 @@ export function RepositoryTaskStudio() {
   // New Task Modal State
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [newTaskPrompt, setNewTaskPrompt] = useState('');
+  const [promptReview, setPromptReview] = useState<PromptToPlanResponse | null>(null);
 
   // Import Issue Form State
   const [showImportIssueModal, setShowImportIssueModal] = useState(false);
@@ -271,12 +277,14 @@ export function RepositoryTaskStudio() {
   const [showRevisionInput, setShowRevisionInput] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
   const [showRejectionInput, setShowRejectionInput] = useState(false);
-  const [publicationAuthorized, setPublicationAuthorized] = useState(false);
+  const [publicationApproval, setPublicationApproval] = useState<{ taskId: string; sha: string } | null>(null);
+  const [startedWorkflowTask, setStartedWorkflowTask] = useState<string | null>(null);
 
   // Query: Repository Task List
   const {
     data: taskListData,
     isLoading: loadingTasks,
+    error: taskListError,
   } = useTasks({ repository_id: repoId });
   const tasks: TaskSummary[] = useMemo(() => taskListData?.items ?? [], [taskListData?.items]);
 
@@ -289,7 +297,8 @@ export function RepositoryTaskStudio() {
     setPrevUrlTaskId(urlTaskId);
     setSelectedTaskId(urlTaskId);
     setUserSelectedTab(null);
-    setPublicationAuthorized(false);
+    setPublicationApproval(null);
+    setPromptReview(null);
     setShowRevisionInput(false);
     setShowRejectionInput(false);
     setApprovalComment('');
@@ -304,7 +313,7 @@ export function RepositoryTaskStudio() {
     (taskId: string) => {
       setUserSelectedTab(null);
       setSelectedTaskId(taskId);
-      setPublicationAuthorized(false);
+      setPublicationApproval(null);
       setShowRevisionInput(false);
       setShowRejectionInput(false);
       setApprovalComment('');
@@ -342,8 +351,15 @@ export function RepositoryTaskStudio() {
   const {
     data: taskDetailData,
     isLoading: loadingDetail,
+    error: taskDetailError,
   } = useTask(activeTaskId ?? undefined, { enabled: isTaskActive });
   const taskDetail = (isTaskActive ? taskDetailData : null) as TaskDetail | null;
+  const { data: workflow } = useQuery({
+    queryKey: [...taskKeys.detail(activeTaskId ?? ''), 'workflow'],
+    queryFn: () => getWorkflowStatus(activeTaskId!),
+    enabled: isTaskActive && (startedWorkflowTask === activeTaskId || isExecutionActive(taskDetail?.status ?? 'CREATED')),
+    refetchInterval: (query) => ['COMPLETED', 'FAILED', 'CANCELLED'].includes(query.state.data?.status ?? '') ? false : 2000,
+  });
 
   // Query: Events, Workspace, Tests, Repair, Verification, Draft PR
   const { data: eventsData } = useTaskEvents(activeTaskId ?? undefined, undefined, {
@@ -377,9 +393,17 @@ export function RepositoryTaskStudio() {
     enabled: isTaskActive,
   });
   const verificationResult = isTaskActive ? (verificationData ?? null) : null;
+  const publicationAuthorized = Boolean(
+    taskDetail?.status === 'PUBLISHING' ||
+    (publicationApproval && publicationApproval.taskId === activeTaskId && publicationApproval.sha === verificationResult?.verified_revision),
+  );
+  const setPublicationAuthorized = (authorized: boolean) => {
+    const sha = verificationResult?.verified_revision;
+    setPublicationApproval(authorized && activeTaskId && sha ? { taskId: activeTaskId, sha } : null);
+  };
 
   const { data: draftPRData } = useTaskPullRequest(activeTaskId ?? undefined, {
-    enabled: isTaskActive,
+    enabled: isTaskActive && taskDetail?.status === 'DRAFT_PR_CREATED',
   });
   const draftPR = (isTaskActive ? (draftPRData ?? null) : null) as TaskPullRequestResponse | null;
 
@@ -387,31 +411,53 @@ export function RepositoryTaskStudio() {
   const activeTab: StudioTab = userSelectedTab ?? getRecommendedTabForStatus(taskDetail?.status);
   const setActiveTab = (tab: StudioTab) => setUserSelectedTab(tab);
 
-  // Global Refresher
+  const savedPlanVersion = taskDetail?.latest_plan?.plan_version ?? taskDetail?.plan_version;
+  const planQuery = useTaskPlan(activeTaskId ?? undefined, savedPlanVersion || undefined, {
+    enabled: activeTab === 'plan' && Boolean(savedPlanVersion),
+  });
+  const latestPlan = planQuery.data ?? taskDetail?.latest_plan ?? null;
+
+  const readinessQuery = useQuery({
+    queryKey: ['task-planner-readiness'],
+    queryFn: async () => {
+      const response = await apiClient.get<{ operations?: { sandbox_backend_ok?: boolean } }>('/health/ready', {
+        timeout: 15000,
+      });
+      return response.data;
+    },
+    enabled: taskDetail?.status === 'APPROVED',
+    staleTime: 15000,
+    refetchInterval: 30000,
+    retry: false,
+  });
+  const planRevision = latestPlan?.base_revision ?? taskDetail?.base_revision;
+  const needsPinnedPlan = (taskDetail?.status === 'PENDING_APPROVAL' || taskDetail?.status === 'APPROVED') &&
+    Boolean(latestPlan) && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(planRevision ?? '');
+  const sandboxUnavailable = readinessQuery.data?.operations?.sandbox_backend_ok === false;
+  const executionBlocker = needsPinnedPlan
+    ? 'This plan needs a full indexed commit. Sync the repository if needed, then regenerate and review the new plan.'
+    : sandboxUnavailable
+      ? 'The execution sandbox is unavailable. Plan review is available while the runner is being restored.'
+      : null;
+
+  // Update active queries in the background so a failed refresh cannot hold a completed action open.
   const refreshTasksAndCurrentDetail = useCallback(
-    async (targetTaskId?: string) => {
+    (targetTaskId?: string) => {
       const tid = targetTaskId || activeTaskId;
-      await queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.lists() });
       if (tid) {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: taskKeys.detail(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.events(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.workspace(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.tests(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.repairBudget(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.verification(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.pullRequest(tid) }),
-          queryClient.invalidateQueries({ queryKey: taskKeys.diff(tid) }),
-        ]);
+        void queryClient.invalidateQueries({
+          queryKey: taskKeys.detail(tid),
+          predicate: (query) => query.queryKey.at(-1) !== 'workflow',
+        });
       }
     },
     [activeTaskId, queryClient]
   );
-
-  // Latest plan helper
-  const latestPlan = useMemo(() => {
-    return taskDetail?.latest_plan || null;
-  }, [taskDetail]);
+  const workflowUpdatedAt = workflow?.updated_at;
+  useEffect(() => {
+    if (workflowUpdatedAt) void refreshTasksAndCurrentDetail();
+  }, [workflowUpdatedAt, refreshTasksAndCurrentDetail]);
 
   const hasWorkspace = Boolean(workspaceMeta);
 
@@ -434,63 +480,23 @@ export function RepositoryTaskStudio() {
     const prompt = newTaskPrompt.trim();
     if (!prompt) return;
 
-    const firstLine = prompt.split('\n')[0].replace(/^[\s#*•-]+/, '');
-    const finalTitle = firstLine.length > 70 ? firstLine.slice(0, 67) + '...' : firstLine || 'Autonomous Task';
-
     setActionBusy('create');
     setErrorBanner(null);
+    setPromptReview(null);
     try {
-      const created = await createTask({
-        repository_id: repoId,
-        title: finalTitle,
-        description: prompt,
-        source: { type: 'USER_PROMPT', repository_id: repoId },
-        requirements: [
-          {
-            id: 'req-1',
-            description: prompt,
-            category: 'functional',
-            target_files: [],
-            acceptance_criteria: [
-              'All target changes implemented cleanly.',
-              'Existing and new unit tests pass.',
-            ],
-          },
-        ],
-        assumptions: [
-          {
-            id: 'asm-1',
-            description: 'Isolated workspace will branch from default branch HEAD.',
-            unresolved: false,
-            risk_level: 'low',
-          },
-        ],
-        constraints: [
-          {
-            id: 'cst-1',
-            description: 'Protected files must not be modified.',
-            constraint_type: 'protected_file',
-            forbidden_files: ['.env', '.github/workflows/deploy.yml'],
-            forbidden_packages: [],
-          },
-        ],
-      });
-
-      setShowNewTaskModal(false);
-      setNewTaskPrompt('');
-      handleSelectTask(created.task_id);
-
-      try {
-        await generateTaskPlan(created.task_id, {
-          prompt_instructions: `Autonomous plan for: ${prompt}`,
-        });
-      } catch {
-        // Non-blocking
+      const result = await submitTaskPrompt(repoId, prompt);
+      setPromptReview(result);
+      if (result.task_id) {
+        setShowNewTaskModal(false);
+        setNewTaskPrompt('');
+        handleSelectTask(result.task_id);
       }
     } catch (err: any) {
-      setErrorBanner(err?.message || 'Failed to create task.');
+      setErrorBanner(err?.code === 'NETWORK_ERROR' || err?.code === 'REQUEST_TIMEOUT'
+        ? 'The task request could not be confirmed. Check the task list before submitting again.'
+        : err?.message || 'Failed to create task.');
     } finally {
-      await refreshTasksAndCurrentDetail();
+      refreshTasksAndCurrentDetail();
       setActionBusy(null);
     }
   }
@@ -510,46 +516,26 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || `Failed to import issue #${num}.`);
     } finally {
-      await refreshTasksAndCurrentDetail();
+      refreshTasksAndCurrentDetail();
       setActionBusy(null);
     }
   }
 
   async function handleApprovePlan() {
-    if (!taskDetail || !latestPlan) return;
+    if (!taskDetail || !latestPlan || needsPinnedPlan) return;
     setActionBusy('approve');
     setErrorBanner(null);
     try {
       await approveTaskPlan(taskDetail.task_id, {
         plan_version: latestPlan.plan_version,
+        base_revision: latestPlan.base_revision || undefined,
         comment: approvalComment.trim() || 'Plan approved by user via Studio.',
       });
       setApprovalComment('');
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to approve plan.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
-      setActionBusy(null);
-    }
-  }
-
-  async function handleApproveAndExecute() {
-    if (!taskDetail || !latestPlan) return;
-    setActionBusy('approve-execute');
-    setErrorBanner(null);
-    try {
-      if (taskDetail.status !== 'APPROVED') {
-        await approveTaskPlan(taskDetail.task_id, {
-          plan_version: latestPlan.plan_version,
-          comment: 'Plan approved with instant execution launch.',
-        });
-      }
-      setActiveTab('workspace');
-      await executeTask(taskDetail.task_id, { run_steps: true });
-    } catch (err: any) {
-      setErrorBanner(err?.message || 'Execution failed or blocked by gate.');
-    } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -568,44 +554,24 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Execution blocked by approval gate.');
     } finally {
-      await refreshTasksAndCurrentDetail(tid);
+      refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
 
-  async function handleRunAutoPilot() {
-    if (!taskDetail) return;
+  async function handleRunWorkflow() {
+    if (!taskDetail || taskDetail.status !== 'APPROVED' || executionBlocker) return;
     const tid = taskDetail.task_id;
-    setActionBusy('autopilot');
+    setActionBusy('execute');
     setErrorBanner(null);
     try {
-      if (taskDetail.status === 'FAILED' || taskDetail.status === 'RECOVERY_REQUIRED') {
-        await recoverTask(tid);
-      }
-      if (taskDetail.status === 'PENDING_APPROVAL' && latestPlan) {
-        await approveTaskPlan(tid, {
-          plan_version: latestPlan.plan_version,
-          comment: 'Auto-pilot approval',
-        });
-      }
+      await startAutonomousWorkflow(tid, { run_tests: true, auto_repair: true });
+      setStartedWorkflowTask(tid);
       setActiveTab('workspace');
-      try {
-        await startAutonomousWorkflow(tid, {
-          run_tests: true,
-          auto_repair: true,
-          publication_authorized: false,
-        });
-      } catch {
-        await executeTask(tid, {
-          run_steps: true,
-          run_tests_after: true,
-          auto_repair: true,
-        });
-      }
     } catch (err: any) {
-      setErrorBanner(err?.message || 'Auto-pilot pipeline encountered an error.');
+      setErrorBanner(err?.message || 'Failed to start the approved workflow.');
     } finally {
-      await refreshTasksAndCurrentDetail(tid);
+      refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
@@ -623,7 +589,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to synthesize implementation plan.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -641,7 +607,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to reject plan.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -655,7 +621,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to pause workspace execution.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -669,7 +635,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to resume workspace execution.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -683,7 +649,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to cancel task.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -699,7 +665,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to run workspace tests.');
     } finally {
-      await refreshTasksAndCurrentDetail(tid);
+      refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
@@ -715,7 +681,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Bounded self-repair failed or budget exhausted.');
     } finally {
-      await refreshTasksAndCurrentDetail(tid);
+      refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
@@ -734,7 +700,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Independent verification failed.');
     } finally {
-      await refreshTasksAndCurrentDetail(tid);
+      refreshTasksAndCurrentDetail(tid);
       setActionBusy(null);
     }
   }
@@ -750,27 +716,25 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to commit changes in isolated workspace.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
 
   async function handleCreateDraftPR() {
-    if (!taskDetail) return;
+    if (!taskDetail || !publicationAuthorized || !verificationResult?.verified_revision) return;
     setActionBusy('create-pr');
     setErrorBanner(null);
     try {
-      if (publicationAuthorized) {
+      if (taskDetail.status !== 'PUBLISHING') {
         await authorizeTaskPublication(taskDetail.task_id, {
-          head_sha: verificationResult?.verified_revision || undefined,
+          head_sha: verificationResult.verified_revision,
           notes: 'User authorized Draft PR publication via Studio',
-        }).catch(() => {
-          // Continue if already authorized
         });
       }
 
       const pr = await createTaskDraftPR(taskDetail.task_id, {
-        publication_authorized: publicationAuthorized,
+        publication_authorized: true,
         title: `feat: ${taskDetail.title}`,
       });
       queryClient.setQueryData(taskKeys.pullRequest(taskDetail.task_id), pr);
@@ -779,7 +743,7 @@ export function RepositoryTaskStudio() {
         err?.message || 'Publication blocked: Independent verification and authorization are required.'
       );
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -793,7 +757,7 @@ export function RepositoryTaskStudio() {
     } catch (err: any) {
       setErrorBanner(err?.message || 'Failed to recover task state.');
     } finally {
-      await refreshTasksAndCurrentDetail(taskDetail.task_id);
+      refreshTasksAndCurrentDetail(taskDetail.task_id);
       setActionBusy(null);
     }
   }
@@ -818,10 +782,10 @@ export function RepositoryTaskStudio() {
       return {
         stage: 'Approval',
         headline: `Plan v${latestPlan?.plan_version ?? 1} Ready for Review`,
-        description: 'Review the planned steps below. One-click approval launches the isolated agent.',
-        actionLabel: 'Approve & Start Execution',
+        description: 'Review the planned steps, files, and risks before approving this version.',
+        actionLabel: 'Review Plan',
         actionIcon: Play,
-        actionType: 'approve_and_execute',
+        actionType: 'review_plan',
         color: 'emerald',
       };
     }
@@ -830,7 +794,7 @@ export function RepositoryTaskStudio() {
         stage: 'Execution',
         headline: 'Plan Approved — Ready to Launch Autonomous Agent',
         description: 'Sandbox workspace will be provisioned on an isolated git branch.',
-        actionLabel: 'Start Workspace Execution',
+        actionLabel: 'Run Approved Plan',
         actionIcon: Play,
         actionType: 'execute',
         color: 'emerald',
@@ -929,11 +893,13 @@ export function RepositoryTaskStudio() {
       case 'generate_plan':
         handleGenerateOrRevisePlan();
         break;
-      case 'approve_and_execute':
-        handleApproveAndExecute();
+      case 'review_plan':
+        setActiveTab('plan');
+        void planQuery.refetch({ cancelRefetch: false });
+        requestAnimationFrame(() => planPanel.current?.scrollIntoView?.({ block: 'start' }));
         break;
       case 'execute':
-        handleExecuteTask(true);
+        handleRunWorkflow();
         break;
       case 'tab_workspace':
         setActiveTab('workspace');
@@ -983,6 +949,12 @@ export function RepositoryTaskStudio() {
           </button>
           <ListChecks className="hidden lg:block h-4 w-4 text-muted-foreground shrink-0" />
           <span className="truncate">Task Planner</span>
+          {repository?.name && (
+            <span className="hidden sm:inline text-[11px] font-mono text-muted-foreground font-normal truncate">
+              · {repository.name}
+              {repository.default_branch ? ` (${repository.default_branch})` : ''}
+            </span>
+          )}
           <span className="text-[11px] font-mono text-muted-foreground font-normal shrink-0">
             {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
           </span>
@@ -1048,21 +1020,26 @@ export function RepositoryTaskStudio() {
       </header>
 
       {/* Error Alert Banner */}
-      {errorBanner && (
+      {(errorBanner || taskListError || taskDetailError) && (
         <div
           role="alert"
           className="shrink-0 bg-destructive/10 border-b border-destructive/25 px-4 py-2.5 text-xs text-destructive flex items-center justify-between gap-3"
         >
           <div className="flex items-center gap-2 min-w-0">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            <span className="break-words">{errorBanner}</span>
+            <span className="break-words">
+              {errorBanner ??
+                (taskDetailError
+                  ? `Could not load the task. ${taskDetailError.message}`
+                  : `Could not load repository tasks. ${taskListError?.message ?? ''}`)}
+            </span>
           </div>
           <button
             type="button"
-            onClick={() => setErrorBanner(null)}
+            onClick={() => (errorBanner ? setErrorBanner(null) : refreshTasksAndCurrentDetail())}
             className="text-xs font-medium underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
-            Dismiss
+            {errorBanner ? 'Dismiss' : 'Retry'}
           </button>
         </div>
       )}
@@ -1314,30 +1291,19 @@ export function RepositoryTaskStudio() {
                   <div className="flex items-center gap-2 shrink-0 flex-wrap">
                     <button
                       type="button"
-                      disabled={actionBusy !== null}
+                      disabled={nextStepInfo.actionType === 'review_plan'
+                        ? planQuery.isFetching && !latestPlan
+                        : actionBusy !== null || (nextStepInfo.actionType === 'execute' && Boolean(executionBlocker))}
                       onClick={handlePrimaryStepAction}
                       className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-primary hover:bg-primary/90 text-primary-foreground transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {actionBusy ? (
+                      {(nextStepInfo.actionType === 'review_plan' ? planQuery.isFetching : actionBusy) ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <nextStepInfo.actionIcon className="h-3.5 w-3.5" />
                       )}
                       <span>{nextStepInfo.actionLabel}</span>
                     </button>
-
-                    {(taskDetail.status === 'APPROVED' || taskDetail.status === 'PENDING_APPROVAL') && (
-                      <button
-                        type="button"
-                        disabled={actionBusy !== null}
-                        onClick={handleRunAutoPilot}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border bg-background hover:bg-accent text-foreground text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        title="Run steps, tests, repair, and verification automatically"
-                      >
-                        <Zap className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                        <span className="hidden sm:inline">Auto-Pilot</span>
-                      </button>
-                    )}
                   </div>
                 </div>
               )}
@@ -1392,26 +1358,103 @@ export function RepositoryTaskStudio() {
                 role="tabpanel"
                 id={`studio-tabpanel-${activeTab}`}
                 aria-labelledby={`studio-tab-${activeTab}`}
+                className="space-y-4"
               >
+                {activeTab === 'plan' && promptReview?.task_id === taskDetail.task_id && latestPlan?.plan_version === 1 && (
+                  <section aria-label="Prompt analysis" className="rounded-lg border border-border bg-card p-3 space-y-1.5 text-xs text-muted-foreground">
+                    <p className="text-foreground">
+                      Detected intent:{' '}
+                      {[promptReview.intent_analysis.primary_intent, ...promptReview.intent_analysis.secondary_intents]
+                        .map((intent) => intent.replaceAll('_', ' '))
+                        .join(', ')}
+                    </p>
+                    {promptReview.critic_review.issues.map((issue, index) => (
+                      <p key={index}>{issue.message}</p>
+                    ))}
+                  </section>
+                )}
+
+                {(needsPinnedPlan || taskDetail.status === 'APPROVED') && executionBlocker && (
+                  <div
+                    role="status"
+                    className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-300 space-y-1.5"
+                  >
+                    <p>{executionBlocker}</p>
+                    {needsPinnedPlan ? (
+                      <button
+                        type="button"
+                        className="font-medium underline cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                        disabled={actionBusy !== null}
+                        onClick={() => void handleGenerateOrRevisePlan()}
+                      >
+                        Regenerate plan
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="font-medium underline cursor-pointer disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+                        disabled={readinessQuery.isFetching}
+                        onClick={() => void readinessQuery.refetch()}
+                      >
+                        Check sandbox again
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {activeTab === 'plan' && (
-                  <RepositoryTaskPlanTab
-                    taskDetail={taskDetail}
-                    latestPlan={latestPlan}
-                    showRevisionInput={showRevisionInput}
-                    setShowRevisionInput={setShowRevisionInput}
-                    showRejectionInput={showRejectionInput}
-                    setShowRejectionInput={setShowRejectionInput}
-                    revisionNotes={revisionNotes}
-                    setRevisionNotes={setRevisionNotes}
-                    rejectionReason={rejectionReason}
-                    setRejectionReason={setRejectionReason}
-                    approvalComment={approvalComment}
-                    setApprovalComment={setApprovalComment}
-                    actionBusy={actionBusy}
-                    handleGenerateOrRevisePlan={handleGenerateOrRevisePlan}
-                    handleRejectPlan={handleRejectPlan}
-                    handleApprovePlan={handleApprovePlan}
-                  />
+                  <div ref={planPanel}>
+                    {planQuery.isError && (
+                      <p role="alert" className="mb-3 text-xs text-destructive">
+                        Could not refresh the saved plan. {planQuery.error.message}
+                      </p>
+                    )}
+                    {planQuery.isFetching && !latestPlan ? (
+                      <p role="status" className="text-xs text-muted-foreground">
+                        Loading saved plan…
+                      </p>
+                    ) : (
+                      <RepositoryTaskPlanTab
+                        taskDetail={taskDetail}
+                        latestPlan={latestPlan}
+                        showRevisionInput={showRevisionInput}
+                        setShowRevisionInput={setShowRevisionInput}
+                        showRejectionInput={showRejectionInput}
+                        setShowRejectionInput={setShowRejectionInput}
+                        revisionNotes={revisionNotes}
+                        setRevisionNotes={setRevisionNotes}
+                        rejectionReason={rejectionReason}
+                        setRejectionReason={setRejectionReason}
+                        approvalComment={approvalComment}
+                        approvalBlocked={needsPinnedPlan}
+                        setApprovalComment={setApprovalComment}
+                        actionBusy={actionBusy}
+                        handleGenerateOrRevisePlan={handleGenerateOrRevisePlan}
+                        handleRejectPlan={handleRejectPlan}
+                        handleApprovePlan={handleApprovePlan}
+                      />
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'workspace' && workflow?.status && workflow.status !== 'IDLE' && (
+                  <section
+                    aria-label="Workflow status"
+                    role="status"
+                    className="rounded-lg border border-border bg-card p-3 space-y-1 text-xs text-muted-foreground"
+                  >
+                    <p className="font-medium text-foreground">
+                      {(workflow.current_step || workflow.status).replaceAll('_', ' ')}
+                    </p>
+                    <p>
+                      {workflow.durability_mode === 'DBOS_DURABLE'
+                        ? 'DBOS workflow'
+                        : 'Runs on the current API process'}
+                    </p>
+                    {workflow.error_summary && (
+                      <p className="text-destructive">{workflow.error_summary}</p>
+                    )}
+                  </section>
                 )}
 
                 {activeTab === 'workspace' && (
@@ -1559,6 +1602,8 @@ export function RepositoryTaskStudio() {
                 <textarea
                   id="new-task-prompt"
                   rows={4}
+                  minLength={3}
+                  maxLength={10000}
                   required
                   autoFocus
                   value={newTaskPrompt}
@@ -1567,6 +1612,12 @@ export function RepositoryTaskStudio() {
                   className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring leading-relaxed font-normal"
                 />
               </div>
+
+              {promptReview?.ambiguity_detected && (
+                <ul aria-label="Clarification questions" className="list-disc pl-4 text-xs text-amber-300">
+                  {promptReview.clarifications.map((question) => <li key={question}>{question}</li>)}
+                </ul>
+              )}
 
               {/* Starter Quick Tags */}
               <div className="space-y-1.5">

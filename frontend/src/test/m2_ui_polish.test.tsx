@@ -229,6 +229,20 @@ describe('M2 UI/UX Polish & Accessibility Verification', () => {
     });
 
     it('resets publication authorization checkbox when switching between tasks', async () => {
+      server.use(
+        http.get('*/api/v1/tasks/:taskId/verification', ({ params }) =>
+          HttpResponse.json({
+            task_id: String(params.taskId),
+            verified_revision: `1234567890abcdef1234567890abcdef12345678`,
+            status: 'PASS',
+            checks: [],
+            blocking_findings: [],
+            warnings: [],
+            pr_summary: 'Verified',
+            created_at: '2026-01-01T00:00:00Z',
+          })
+        )
+      );
       renderTaskStudio('/app/repositories/repo-1/studios/tasks');
 
       await waitFor(() => {
@@ -238,6 +252,9 @@ describe('M2 UI/UX Polish & Accessibility Verification', () => {
       fireEvent.click(screen.getByRole('tab', { name: /6\. Pull Request/i }));
 
       const checkbox = await screen.findByRole('checkbox');
+      await waitFor(() => {
+        expect(checkbox).not.toBeDisabled();
+      });
       fireEvent.click(checkbox);
       expect(checkbox).toBeChecked();
 
@@ -272,53 +289,96 @@ describe('M2 UI/UX Polish & Accessibility Verification', () => {
     });
   });
 
-  describe('ToolsIntegrationsAdminPage accessibility, validation & non-silent errors (F7)', () => {
-    it('associates explicit labels, validates empty submissions inline, and clears errors on typing', () => {
+  describe('ToolsIntegrationsAdminPage accessibility, real catalog & non-silent errors (F7)', () => {
+    const mockCatalogServer = {
+      id: 'mcp-platform-core',
+      name: 'Platform Repository Intelligence MCP',
+      transport: 'in_process' as const,
+      endpointOrCommand: 'Built-in dispatcher',
+      enabled: true,
+      status: 'connected' as const,
+      protocolVersion: '2024-11-05',
+      lastLatencyMs: null,
+      tools: [
+        {
+          name: 'repo_read_file',
+          description: 'Read repository file with workspace boundary guards.',
+          riskTier: 'low' as const,
+          requiresApproval: false,
+          inputSchemaJson: '{"type":"object","properties":{"path":{"type":"string"}}}',
+        },
+        {
+          name: 'sandbox_execute_patch',
+          description: 'Apply synthesized unified diff inside isolated sandbox worktree.',
+          riskTier: 'high' as const,
+          requiresApproval: true,
+          inputSchemaJson: '{"type":"object","properties":{"unified_diff":{"type":"string"}}}',
+        },
+      ],
+    };
+
+    it('renders search empty state with Clear filter, exposes aria-expanded, and keeps approval gates read-only', async () => {
+      server.use(
+        http.get('*/api/v1/mcp/servers', () => HttpResponse.json([mockCatalogServer], { status: 200 }))
+      );
+
       render(<ToolsIntegrationsAdminPage />);
 
-      const nameInput = screen.getByLabelText(/Server Name/i);
-      const transportSelect = screen.getByLabelText(/Transport/i);
-      const endpointInput = screen.getByLabelText(/Command or Endpoint URL/i);
+      await waitFor(() => {
+        expect(screen.getByText('Platform Repository Intelligence MCP')).toBeInTheDocument();
+      });
 
-      expect(nameInput).toHaveAttribute('placeholder', 'Server display name');
-      expect(transportSelect).toHaveValue('stdio');
-      expect(endpointInput).toHaveAttribute('placeholder', 'Command or endpoint URL');
+      // No simulated mutation controls
+      expect(screen.queryByRole('button', { name: /Register|Disable Server/i })).not.toBeInTheDocument();
 
-      // Submit empty form -> displays inline validation errors
-      fireEvent.click(screen.getByRole('button', { name: /Register MCP Server/i }));
-      expect(screen.getByText(/Server display name is required\./i)).toBeInTheDocument();
-      expect(screen.getByText(/Command or endpoint URL is required\./i)).toBeInTheDocument();
+      // Approval gates are read-only badges
+      expect(screen.getByText('Approval Required')).toBeInTheDocument();
+      expect(screen.getByText('No additional approval')).toBeInTheDocument();
 
-      // Typing clears validation errors
-      fireEvent.change(nameInput, { target: { value: 'My MCP' } });
-      expect(screen.queryByText(/Server display name is required\./i)).not.toBeInTheDocument();
-    });
-
-    it('renders search empty state with Clear filter button and exposes aria-expanded/aria-pressed', () => {
-      render(<ToolsIntegrationsAdminPage />);
-
+      // Schema toggle exposes aria-expanded
       const inspectBtn = screen.getAllByRole('button', { name: /Inspect Schema/i })[0];
       expect(inspectBtn).toHaveAttribute('aria-expanded', 'false');
       fireEvent.click(inspectBtn);
       expect(screen.getByRole('button', { name: /Hide Schema/i })).toHaveAttribute('aria-expanded', 'true');
 
-      const toggleServerBtn = screen.getByRole('button', { name: /Disable Server/i });
-      expect(toggleServerBtn).toHaveAttribute('aria-pressed', 'true');
-      fireEvent.click(toggleServerBtn);
-      expect(screen.getByRole('button', { name: /Enable Server/i })).toHaveAttribute('aria-pressed', 'false');
-
       // Search unmatched query -> empty state + Clear filter
       const searchBox = screen.getByRole('searchbox', { name: /Filter servers or tools/i });
       fireEvent.change(searchBox, { target: { value: 'nonexistent-mcp-xyz' } });
-      expect(screen.getByText(/No MCP servers match "nonexistent-mcp-xyz"\./i)).toBeInTheDocument();
+      expect(screen.getByText(/No MCP servers or tools match "nonexistent-mcp-xyz"\./i)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /Clear filter/i }));
       expect(screen.getByText('Platform Repository Intelligence MCP')).toBeInTheDocument();
     });
 
-    it('surfaces non-silent warning/error banners when MCP API calls fail while keeping fallback servers', async () => {
+    it('surfaces non-silent alert with Retry when catalog load fails and does not fabricate fallback servers', async () => {
+      let attempt = 0;
       server.use(
-        http.get('*/api/v1/mcp/servers', () => HttpResponse.json({ message: 'Offline' }, { status: 503 })),
+        http.get('*/api/v1/mcp/servers', () => {
+          attempt += 1;
+          if (attempt === 1) {
+            return HttpResponse.json({ message: 'Offline' }, { status: 503 });
+          }
+          return HttpResponse.json([mockCatalogServer], { status: 200 });
+        })
+      );
+
+      render(<ToolsIntegrationsAdminPage />);
+
+      await waitFor(() => {
+        expect(screen.getByRole('alert')).toHaveTextContent('Unable to load the MCP tool catalog.');
+      });
+      expect(screen.queryByText('Platform Repository Intelligence MCP')).not.toBeInTheDocument();
+
+      // Clicking Retry recovers when backend comes back
+      fireEvent.click(screen.getByRole('button', { name: /Retry/i }));
+      await waitFor(() => {
+        expect(screen.getByText('Platform Repository Intelligence MCP')).toBeInTheDocument();
+      });
+    });
+
+    it('surfaces non-silent alert when Ping dispatcher fails', async () => {
+      server.use(
+        http.get('*/api/v1/mcp/servers', () => HttpResponse.json([mockCatalogServer], { status: 200 })),
         http.post('*/api/v1/mcp/servers/:id/ping', () =>
           HttpResponse.json({ message: 'Handshake timeout' }, { status: 503 })
         )
@@ -326,73 +386,12 @@ describe('M2 UI/UX Polish & Accessibility Verification', () => {
 
       render(<ToolsIntegrationsAdminPage />);
 
-      // Initial fallback stays visible
-      expect(screen.getByText('Platform Repository Intelligence MCP')).toBeInTheDocument();
-
-      // Offline warning surfaces after listMCPServers rejects
-      await waitFor(() => {
-        expect(screen.getByText(/Live MCP registry is unreachable/i)).toBeInTheDocument();
-      });
-
-      // Trigger ping -> non-silent error banner appears
-      fireEvent.click(screen.getByRole('button', { name: /Ping Handshake/i }));
-      await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent(/Ping handshake failed/i);
-      });
-    });
-
-    it.each([
-      ['HTTP 404', () => HttpResponse.json({ message: 'Not found' }, { status: 404 })],
-      ['NETWORK_ERROR', () => HttpResponse.error()],
-    ])('retains registered server in local session on POST /mcp/servers %s', async (_label, handler) => {
-      server.use(
-        http.get('*/api/v1/mcp/servers', () => HttpResponse.json([], { status: 200 })),
-        http.post('*/api/v1/mcp/servers', handler)
-      );
-
-      render(<ToolsIntegrationsAdminPage />);
-
-      const nameInput = screen.getByLabelText(/Server Name/i);
-      const endpointInput = screen.getByLabelText(/Command or Endpoint URL/i);
-      fireEvent.change(nameInput, { target: { value: 'Local Session MCP' } });
-      fireEvent.change(endpointInput, { target: { value: 'npx local-mcp' } });
-      fireEvent.click(screen.getByRole('button', { name: /Register MCP Server/i }));
+      const pingBtn = await screen.findByRole('button', { name: /Ping dispatcher/i });
+      fireEvent.click(pingBtn);
 
       await waitFor(() => {
-        expect(screen.getByRole('alert')).toHaveTextContent(
-          /Registered "Local Session MCP" in local session only/i
-        );
+        expect(screen.getByRole('alert')).toHaveTextContent('Unable to ping the MCP dispatcher.');
       });
-      expect(screen.getByRole('heading', { level: 2, name: 'Local Session MCP' })).toBeInTheDocument();
-    });
-
-    it('does not let a late-resolving initial listMCPServers overwrite local mutations', async () => {
-      let resolveList!: (value: Response) => void;
-      const listPromise = new Promise<Response>((resolve) => {
-        resolveList = resolve;
-      });
-      server.use(
-        http.get('*/api/v1/mcp/servers', () => listPromise),
-        http.post('*/api/v1/mcp/servers', () => HttpResponse.json({ message: 'Not found' }, { status: 404 }))
-      );
-
-      render(<ToolsIntegrationsAdminPage />);
-
-      fireEvent.change(screen.getByLabelText(/Server Name/i), { target: { value: 'Early Local MCP' } });
-      fireEvent.change(screen.getByLabelText(/Command or Endpoint URL/i), { target: { value: 'npx early-mcp' } });
-      fireEvent.click(screen.getByRole('button', { name: /Register MCP Server/i }));
-
-      await waitFor(() => {
-        expect(screen.getByRole('heading', { level: 2, name: 'Early Local MCP' })).toBeInTheDocument();
-      });
-
-      // Now resolve the initial GET with an empty list
-      resolveList(HttpResponse.json([], { status: 200 }));
-
-      await waitFor(() => {
-        expect(screen.queryByRole('status', { name: /Syncing registry/i })).not.toBeInTheDocument();
-      });
-      expect(screen.getByRole('heading', { level: 2, name: 'Early Local MCP' })).toBeInTheDocument();
     });
   });
 

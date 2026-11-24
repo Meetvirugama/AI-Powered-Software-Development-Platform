@@ -108,27 +108,4 @@ jobs:
 
       - name: Run PostgreSQL migration lifecycle, schema drift & persistence tests
         run: |
-          pytest -v --no-cov \
-            backend/tests/test_migration_smoke.py \
-            backend/tests/test_om_day7.py \
-            backend/tests/test_repository_aggregates_and_postgres.py \
-            backend/tests/test_om_w2_d1_persistence.py \
-            backend/tests/test_om_w2_d2_explanation_history.py \
-            backend/tests/test_om_w2_d3_finding_persistence.py \
-            backend/tests/test_om_w2_d4_test_generation_history.py \
-            backend/tests/test_om_w2_d5_review_history.py \
-            backend/tests/test_om_w2_d6_integration_integrity.py \
-            backend/tests/test_om_w2_d7_acceptance_regression.py \
-            backend/tests/test_om_w3_d1_persistence.py \
-            backend/tests/test_om_w3_d2_planning_persistence.py \
-            backend/tests/test_om_w3_d3_d4_execution_persistence.py \
-            backend/tests/test_om_w3_d5_verification_pr_traceability.py \
-            backend/tests/test_om_w3_d6_d7_performance_recovery_acceptance.py \
-            backend/tests/test_repository_deletion_cascades.py \
-            backend/tests/test_project_memory_service.py \
-            backend/tests/test_embedding_service.py \
-            backend/tests/test_embedding_dimension_invariant.py \
-            backend/tests/test_vector_retrieval.py \
-            backend/tests/test_hybrid_retrieval.py \
-            backend/tests/test_adaptive_hnsw.py \
-            backend/tests/test_code_lexical_retrieval.py
+          pytest -v --no-cov @backend/tests/postgres-persistence-selectors.txt

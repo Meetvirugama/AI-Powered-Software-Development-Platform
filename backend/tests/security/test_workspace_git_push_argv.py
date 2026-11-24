@@ -65,5 +65,5 @@ def test_push_task_branch_never_exposes_token_in_argv(tmp_path: Path) -> None:
 
     # Verify token is safely configured via GIT_CONFIG_* environment variables
     assert push_env.get("GIT_CONFIG_COUNT") == "1"
-    assert push_env.get("GIT_CONFIG_KEY_0") == "http.extraheader"
+    assert push_env.get("GIT_CONFIG_KEY_0") == "http.https://github.com/.extraheader"
     assert "AUTHORIZATION: basic" in push_env.get("GIT_CONFIG_VALUE_0", "")

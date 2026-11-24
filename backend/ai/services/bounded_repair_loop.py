@@ -122,8 +122,10 @@ class BoundedRepairLoop:
         allowed_files: Sequence[str] | None = None,
         allow_test_edits: bool = False,
         plan_scope_files: Sequence[str] | None = None,
+        attempt_limit: int | None = None,
     ) -> BoundedRepairOutcome:
         """Run bounded repair loop until tests pass or 3-attempt ceiling is reached."""
+        max_attempts = self.max_repair_attempts if attempt_limit is None else min(self.max_repair_attempts, attempt_limit)
         start_time = datetime.now(UTC)
         meta = self.workspace_manager.get_workspace(task_id)
         if not meta:
@@ -209,14 +211,14 @@ class BoundedRepairLoop:
             )
 
         # Bounded repair attempts
-        while current_attempts < self.max_repair_attempts:
+        while current_attempts < max_attempts:
             current_attempts += 1
             attempt_start = datetime.now(UTC)
 
             self.workspace_manager.record_timeline_event(
                 task_id=task_id,
                 event_type=WorkspaceExecutionEventType.REPAIR_ATTEMPT_STARTED,
-                message=f"Starting repair attempt {current_attempts} of {self.max_repair_attempts}.",
+                message=f"Starting repair attempt {current_attempts} of {max_attempts}.",
                 payload={"attempt_number": current_attempts},
             )
 
@@ -238,7 +240,7 @@ class BoundedRepairLoop:
                 patch_payload,
                 allowed_files=effective_allowed_files,
                 forbidden_files=list(forbidden_files) if forbidden_files else None,
-                max_attempts=self.max_repair_attempts,
+                max_attempts=max_attempts,
                 allow_test_edits=effective_allow_test_edits,
             )
 
@@ -346,14 +348,14 @@ class BoundedRepairLoop:
 
         # Budget exhausted
         total_ms = (datetime.now(UTC) - start_time).total_seconds() * 1000
-        msg = f"Bounded self-repair exhausted maximum budget of {self.max_repair_attempts} attempts without passing all tests."
+        msg = f"Bounded self-repair exhausted maximum budget of {max_attempts} attempts without passing all tests."
         logger.warning("repair_budget_exhausted", extra={"task_id": task_id, "attempts": current_attempts})
 
         self.workspace_manager.record_timeline_event(
             task_id=task_id,
             event_type=WorkspaceExecutionEventType.REPAIR_BUDGET_EXHAUSTED,
             message=msg,
-            payload={"attempts_used": current_attempts, "max_attempts": self.max_repair_attempts},
+            payload={"attempts_used": current_attempts, "max_attempts": max_attempts},
         )
 
         return BoundedRepairOutcome(

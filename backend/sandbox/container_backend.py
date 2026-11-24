@@ -38,6 +38,21 @@ from sandbox.resource_monitor import WorkspaceResourceMonitor
 logger = logging.getLogger(__name__)
 
 
+def container_runtime_available() -> bool:
+    """Check that the Docker client can reach the local daemon."""
+    try:
+        result = subprocess.run(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 class ContainerBackend(SandboxBackend):
     """Secure production backend executing untrusted workloads inside isolated containers."""
 
@@ -251,6 +266,9 @@ class ContainerBackend(SandboxBackend):
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
         ]
+        git_metadata = ws_path / ".git"
+        if git_metadata.exists():
+            docker_cmd.extend(["-v", f"{git_metadata}:/workspace/.git:ro"])
 
         # Non-root user if not disabled
         # Use UID 10001 (standard unprivileged sandbox UID) or default

@@ -6,11 +6,33 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.sync_job import SyncJob, SyncJobStatus
 from app.services.sync_worker import process_sync_job
+from app.workers import sync_worker
+
+
+def test_worker_web_health_requires_its_own_redis_heartbeat(monkeypatch):
+    redis = AsyncMock()
+    redis.exists.side_effect = [0, 1, RedisConnectionError()]
+
+    async def run_worker(worker_id, *, stop_event):
+        await stop_event.wait()
+
+    monkeypatch.setattr(sync_worker, "run_worker", run_worker)
+    monkeypatch.setattr(sync_worker, "get_redis_async", AsyncMock(return_value=redis))
+
+    with TestClient(sync_worker.worker_app) as client:
+        assert client.get("/health").status_code == 503
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ready"}
+        assert client.get("/health").status_code == 503
+        redis.exists.assert_awaited_with(f"worker:heartbeat:{sync_worker.worker_app.state.worker_id}")
 
 
 @pytest.mark.asyncio

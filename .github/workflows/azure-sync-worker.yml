@@ -2,40 +2,51 @@ name: Deploy Sync Worker to Azure Web App
 
 on:
   workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful main API release workflow run ID
+        required: true
+        type: string
 
 permissions:
-  id-token: write
+  actions: read
   contents: read
+  id-token: write
+
+concurrency:
+  group: azure-sync-worker-production
+  cancel-in-progress: false
 
 jobs:
   deploy-worker:
-    name: Deploy sync_worker to Azure
+    name: Deploy sync worker to Azure
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
-
+    if: github.ref == 'refs/heads/main'
     steps:
-      - name: Download artifact from triggering workflow
+      - name: Verify release source
         uses: actions/github-script@v7
+        env:
+          RELEASE_RUN_ID: ${{ inputs.run_id }}
         with:
           script: |
-            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: ${{ github.event.workflow_run.id }},
+            const runId = process.env.RELEASE_RUN_ID;
+            if (!/^[1-9][0-9]*$/.test(runId)) throw new Error('Invalid release run ID');
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...context.repo,
+              run_id: runId,
             });
-            const match = artifacts.data.artifacts.find(a => a.name === 'python-app');
-            if (!match) throw new Error('Artifact python-app not found in triggering workflow');
-            const download = await github.rest.actions.downloadArtifact({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              artifact_id: match.id,
-              archive_format: 'zip',
-            });
-            const fs = require('fs');
-            fs.writeFileSync('python-app.zip', Buffer.from(download.data));
+            if (run.path !== '.github/workflows/main_ai-powered-dev-platform-api.yml'
+                || run.head_branch !== 'main' || run.event !== 'push' || run.conclusion !== 'success') {
+              throw new Error('Select a successful main-branch API release run.');
+            }
 
-      - name: Unzip artifact
-        run: unzip python-app.zip -d release
+      - name: Download the verified API release package
+        uses: actions/download-artifact@v4
+        with:
+          name: python-app
+          path: release
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
 
       - name: Login to Azure (OIDC)
         uses: azure/login@v2
@@ -44,31 +55,31 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F5CA4B1BDC3647FFBF114253AA948A4D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_FBC8B15832C5410083B5503431A35776 }}
 
-      - name: Set SERVICE_ROLE app setting on worker web app
-        continue-on-error: true
+      - name: Configure the worker startup role
         run: |
           az webapp config appsettings set \
             --name ai-powered-dev-platform-worker \
             --resource-group ai-platform-rg \
-            --settings SERVICE_ROLE=sync_worker WEBSITES_PORT=8000 || echo "::warning::Could not set Azure appsettings via CLI (requires Website Contributor role)."
+            --settings SERVICE_ROLE=sync_worker_web WEBSITES_PORT=8000 \
+            --output none
 
       - name: Deploy to Azure Web App (worker)
         uses: azure/webapps-deploy@v3
+        id: deploy
         with:
           app-name: ai-powered-dev-platform-worker
           package: release
 
-      - name: Post-deploy health check — worker process running
+      - name: Confirm the worker is processing its Redis heartbeat
+        env:
+          WORKER_URL: ${{ steps.deploy.outputs.webapp-url }}
         run: |
-          echo "Waiting 30s for worker process to start..."
-          sleep 30
-          STATUS=$(az webapp show \
-            --name ai-powered-dev-platform-worker \
-            --resource-group ai-platform-rg \
-            --query "state" -o tsv)
-          echo "App state: $STATUS"
-          if [ "$STATUS" != "Running" ]; then
-            echo "ERROR: Worker web app is not in Running state after deploy."
-            exit 1
-          fi
-          echo "Worker process is running."
+          test -n "$WORKER_URL"
+          for attempt in {1..18}; do
+            if curl -fsS --max-time 5 "${WORKER_URL%/}/health" | jq -e '.status == "ready"' >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::The sync worker did not publish a Redis heartbeat."
+          exit 1

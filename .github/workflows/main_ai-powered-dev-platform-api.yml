@@ -250,7 +250,7 @@ jobs:
         run: |
           pytest --no-cov -v -k "not test_clean_schema_migration_lifecycle" \
                  backend/tests/test_migration_smoke.py \
-                 backend/tests/test_om_day7.py \
+                 backend/tests/test_analysis_persistence.py::test_complete_data_pipeline_end_to_end \
                  backend/tests/test_project_memory_service.py \
                  backend/tests/test_embedding_service.py \
                  backend/tests/test_vector_retrieval.py \
@@ -436,21 +436,15 @@ jobs:
           DOCS_URL="${BASE_URL}/docs"
           echo "Verifying Azure API production health at ${HEALTH_URL}..."
           for i in {1..12}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" || true)
-            if [ "$STATUS" = "200" ]; then
-              echo "Health check succeeded with HTTP 200 after attempt $i."
-              READY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$READY_URL" || true)
-              DOCS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$DOCS_URL" || true)
-              echo "Readiness HTTP status: ${READY_STATUS} | Docs HTTP status: ${DOCS_STATUS}"
-              if [ "$READY_STATUS" != "200" ] || [ "$DOCS_STATUS" != "200" ]; then
-                echo "ERROR: Readiness (${READY_STATUS}) or Swagger docs (${DOCS_STATUS}) check failed."
-                exit 1
-              fi
+            if curl -fsS --max-time 10 "$HEALTH_URL" | jq -e '.status == "ok"' >/dev/null &&
+               curl -fsS --max-time 15 "$READY_URL" | jq -e '.database.status == "healthy"' >/dev/null &&
+               curl -fsS --max-time 10 "$DOCS_URL" >/dev/null; then
+              echo "Health, database readiness, and API docs passed on attempt $i."
               exit 0
             fi
-            echo "Attempt $i: Received HTTP $STATUS, retrying in 10s..."
-            sleep 10
+            echo "Attempt $i: One or more endpoints are still unavailable."
+            if [ "$i" -lt 12 ]; then sleep 10; fi
           done
-          echo "ERROR: Health check failed to return HTTP 200 within timeout."
+          echo "::error::API health, readiness, or docs check timed out."
           echo "ROLLBACK GUIDANCE: In Azure Portal or via az webapp deployment slot swap, roll back to previous deployment slot."
           exit 1

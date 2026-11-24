@@ -793,7 +793,8 @@ export interface TaskWorkflowStatusResponse {
   status: string;
   current_step?: string | null;
   completed_steps: string[];
-  progress_percentage: number;
+  progress_percentage: number | null;
+  durability_mode: 'NATIVE_TRANSIENT' | 'DBOS_DURABLE';
   verification?: Record<string, unknown> | null;
   pull_request?: Record<string, unknown> | null;
   error_summary?: string | null;
@@ -807,8 +808,25 @@ export interface TaskWorkflowAcceptedResponse {
   task_id: string;
   workflow_id: string;
   status: string;
+  durability_mode: 'NATIVE_TRANSIENT' | 'DBOS_DURABLE';
   message: string;
   status_url: string;
+}
+
+export interface PromptToPlanResponse {
+  task_id: string | null;
+  intent_analysis: { primary_intent: string; secondary_intents: string[] };
+  ambiguity_detected: boolean;
+  clarifications: string[];
+  critic_review: { issues: { severity: string; message: string }[] };
+}
+
+export async function submitTaskPrompt(repositoryId: string, prompt: string): Promise<PromptToPlanResponse> {
+  const { data } = await apiClient.post<PromptToPlanResponse>('/tasks/prompt-to-plan', {
+    repository_id: repositoryId,
+    prompt,
+  });
+  return data;
 }
 
 /**

@@ -64,7 +64,7 @@ export function PublicationPanel({
   onPublished,
 }: PublicationPanelProps) {
   const queryClient = useQueryClient();
-  const { data: prData } = useTaskPullRequest(task.task_id, { repositoryId: task.repository_id });
+  const { data: prData } = useTaskPullRequest(task.task_id, { repositoryId: task.repository_id, enabled: task.status === 'DRAFT_PR_CREATED' });
 
   const {
     data: verification,

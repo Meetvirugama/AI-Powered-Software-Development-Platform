@@ -153,7 +153,15 @@ def test_workflow_fails_safely_when_approval_missing(mock_appr):
 # API Integration Tests (HTTP 202 & Workflow Status)
 # ---------------------------------------------------------------------------
 
-def test_api_run_workflow_returns_202_accepted(client, db_session, test_user, auth_headers, monkeypatch):
+@pytest.mark.parametrize(
+    ("revision", "backend", "expected_status"),
+    [("a" * 40, "local", 202), ("main", "local", 409), ("a" * 40, "runner", 503)],
+)
+def test_api_run_workflow_checks_preflight(client, db_session, test_user, auth_headers, monkeypatch, revision, backend, expected_status):
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "sandbox_backend", backend)
+    monkeypatch.setattr(get_settings(), "task_workspace_root", None)
     task_id = uuid.uuid4()
     task = AgentTask(
         id=task_id,
@@ -162,14 +170,14 @@ def test_api_run_workflow_returns_202_accepted(client, db_session, test_user, au
         title="Test Task",
         description="Autonomous workflow test",
         status=TaskStatus.APPROVED.value,
-        base_revision="main",
+        base_revision=revision,
     )
     db_session.add(task)
     db_session.commit()
 
     # Mock task ownership, approved plan, and prevent background DBOS execution from trying live DB
     monkeypatch.setattr("app.api.v1.tasks._owned_task", lambda tid, req, db, min_role=None: (task, test_user.id))
-    monkeypatch.setattr("app.repositories.task_repository.TaskRepository.get_approved_plan", lambda self, tid: MagicMock(plan_version=1))
+    monkeypatch.setattr("app.repositories.task_repository.TaskRepository.verify_execution_approval_gate", lambda self, candidate: MagicMock(plan_version=1, base_revision=revision))
     monkeypatch.setattr("ai.workflows.autonomous_task_workflow.run_autonomous_task_workflow", lambda *a, **kw: None)
 
     # Call run-workflow with async_execution=True
@@ -179,7 +187,11 @@ def test_api_run_workflow_returns_202_accepted(client, db_session, test_user, au
         json={"async_execution": True, "run_tests": False},
     )
 
-    assert resp.status_code == 202
+    assert resp.status_code == expected_status, resp.text
+    if expected_status != 202:
+        message = resp.json()["error"]["message"]
+        assert ("indexed commit SHA" if expected_status == 409 else "TASK_WORKSPACE_ROOT") in message
+        return
     data = resp.json()
     assert data["task_id"] == str(task_id)
     assert data["status"] in ("QUEUED", "RUNNING")

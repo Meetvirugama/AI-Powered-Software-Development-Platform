@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -31,7 +32,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from sandbox.backend import SandboxBackend
 
-from app.core.config import PROJECT_ROOT
+from app.core.config import PROJECT_ROOT, get_settings
 from app.core.secret_redaction import redact
 from app.schemas.workspace import (
     DiffImmutabilityCheckResult,
@@ -48,8 +49,6 @@ from app.schemas.workspace import (
     WorkspaceCreateRequest,
     WorkspaceDiffResult,
     WorkspaceDiskUsageResult,
-    WorkspaceDraftPRRequest,
-    WorkspaceDraftPRResult,
     WorkspaceExecutionEvent,
     WorkspaceExecutionEventType,
     WorkspaceFilePatchResult,
@@ -133,7 +132,8 @@ class WorkspaceManager:
         if base_workspaces_dir is not None:
             self._base_dir = Path(base_workspaces_dir).resolve()
         else:
-            self._base_dir = (PROJECT_ROOT / DEFAULT_WORKSPACE_SUBDIR).resolve()
+            configured_root = get_settings().task_workspace_root
+            self._base_dir = Path(configured_root or (PROJECT_ROOT / DEFAULT_WORKSPACE_SUBDIR)).resolve()
 
         self._backend = backend
         self._workspaces: dict[str, WorkspaceMetadata] = {}
@@ -177,7 +177,9 @@ class WorkspaceManager:
     # Workspace Lifecycle Operations
     # -----------------------------------------------------------------------
 
-    def create_workspace(self, request: WorkspaceCreateRequest) -> WorkspaceMetadata:
+    def create_workspace(
+        self, request: WorkspaceCreateRequest, *, repository_url: str | None = None, installation_token: str | None = None,
+    ) -> WorkspaceMetadata:
         """Create and initialize an isolated workspace for a task.
 
         Lifecycle: NOT_CREATED -> CREATING -> READY (or FAILED on error).
@@ -223,13 +225,17 @@ class WorkspaceManager:
             self._repo_roots[task_id] = Path(request.repository_root)
 
         try:
-            isolation_used = self._provision_workspace(
-                workspace_path=workspace_path,
-                repo_root=Path(request.repository_root) if request.repository_root else None,
-                base_revision=request.base_revision,
-                branch_name=branch_name,
-                preferred_isolation=request.isolation_type,
-            )
+            if repository_url:
+                self._checkout_repository_revision(workspace_path, repository_url, request.base_revision, branch_name, installation_token)
+                isolation_used = "directory_copy"
+            else:
+                isolation_used = self._provision_workspace(
+                    workspace_path=workspace_path,
+                    repo_root=Path(request.repository_root) if request.repository_root else None,
+                    base_revision=request.base_revision,
+                    branch_name=branch_name,
+                    preferred_isolation=request.isolation_type,
+                )
             metadata.isolation_type = isolation_used
             metadata.status = WorkspaceStatus.READY
             metadata.updated_at = datetime.now(UTC).isoformat()
@@ -271,6 +277,49 @@ class WorkspaceManager:
             # Clean up partial directory on failure
             self._safe_remove_dir(workspace_path)
             raise WorkspaceCreationError(f"Failed to create workspace for task '{task_id}': {exc}") from exc
+
+    def _checkout_repository_revision(
+        self, workspace: Path, url: str, revision: str, branch: str, token: str | None,
+    ) -> None:
+        if not token or not re.fullmatch(r"https://github\.com/[\w.-]+/[\w.-]+\.git", url):
+            raise WorkspaceCreationError("Authenticated GitHub repository access is required.")
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
+            raise WorkspaceCreationError("Workspace checkout requires the full approved commit SHA.")
+        _validate_ref_or_option(branch, "branch name")
+        if branch.casefold() in PROTECTED_BRANCHES:
+            raise WorkspaceProtectedBranchError("Workspace checkout requires a task branch.")
+
+        workspace.mkdir(mode=0o700)
+        env = os.environ.copy()
+        env.update(self._git_https_auth_environment(token))
+
+        def git(*args: str, authenticated: bool = False) -> str:
+            proc = subprocess.run(
+                ["git", "-c", "core.hooksPath=/dev/null", "-C", str(workspace), *args],
+                env=env if authenticated else None, capture_output=True, text=True, timeout=90,
+            )
+            if proc.returncode:
+                raise WorkspaceCreationError(f"Git {args[0]} failed while preparing the approved commit.")
+            return proc.stdout.strip()
+
+        git("init")
+        git("remote", "add", "origin", url)
+        git("fetch", "--no-tags", "--depth=1", "origin", revision, authenticated=True)
+        git("checkout", "-b", branch, "FETCH_HEAD")
+        if git("rev-parse", "HEAD") != revision:
+            raise WorkspaceCreationError("The checked-out commit differs from the approved revision.")
+
+    @staticmethod
+    def _git_https_auth_environment(token: str) -> dict[str, str]:
+        import base64
+
+        auth = base64.b64encode(f"x-access-token:{token.strip()}".encode()).decode("ascii")
+        return {
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {auth}",
+        }
 
     def _provision_workspace(
         self,
@@ -394,9 +443,7 @@ class WorkspaceManager:
             for item in self._base_dir.iterdir():
                 if not item.is_dir() or not item.name.startswith("task-"):
                     continue
-                meta_file = item / "metadata.json"
-                if not meta_file.exists():
-                    meta_file = item / "workspace_metadata.json"
+                meta_file = self._workspace_metadata_path(item)
                 if meta_file.exists():
                     try:
                         data = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -1220,7 +1267,7 @@ class WorkspaceManager:
                             f"File path '{f}' escapes workspace directory."
                         )
                     subprocess.run(
-                        ["git", "-C", str(workspace_path), "add", "--", f_str],
+                        ["git", "--literal-pathspecs", "-C", str(workspace_path), "add", "--", f_str],
                         capture_output=True,
                         check=True,
                         timeout=15,
@@ -1256,7 +1303,7 @@ class WorkspaceManager:
 
         try:
             commit_proc = subprocess.run(
-                ["git", "-C", str(workspace_path), "commit", "--no-verify", "-m", full_msg],
+                ["git", "-c", "core.hooksPath=/dev/null", "-C", str(workspace_path), "commit", "--no-verify", "-m", full_msg],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1359,15 +1406,13 @@ class WorkspaceManager:
 
         # 3. Execute git push host-side (F26 / ISS-019: credentials passed via environment, never in argv or disk config)
         remote_target = request.remote_url or request.remote_name
-        cmd = ["git", "-C", str(workspace_path), "push", "--no-verify", remote_target, "--", branch]
+        refspec = branch
+        if request.expected_revision:
+            refspec = f"{request.expected_revision}:refs/heads/{branch}"
+        cmd = ["git", "-C", str(workspace_path), "push", "--no-verify", remote_target, "--", refspec]
         push_env = os.environ.copy()
         if getattr(request, "installation_token", None):
-            import base64
-            token_val = str(request.installation_token).strip()
-            auth_token = base64.b64encode(f"x-access-token:{token_val}".encode()).decode("utf-8")
-            push_env["GIT_CONFIG_COUNT"] = "1"
-            push_env["GIT_CONFIG_KEY_0"] = "http.extraheader"
-            push_env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {auth_token}"
+            push_env.update(self._git_https_auth_environment(request.installation_token))
         try:
             push_proc = subprocess.run(
                 cmd,
@@ -1389,14 +1434,16 @@ class WorkspaceManager:
             raise WorkspacePushError(redact(f"Push execution failed: {exc}")) from exc
 
         # Resolve pushed SHA
-        sha_proc = subprocess.run(
-            ["git", "-C", str(workspace_path), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
-        pushed_sha = sha_proc.stdout.strip()
+        pushed_sha = request.expected_revision
+        if pushed_sha is None:
+            sha_proc = subprocess.run(
+                ["git", "-C", str(workspace_path), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+            pushed_sha = sha_proc.stdout.strip()
 
         self.record_timeline_event(
             task_id=task_id,
@@ -1413,87 +1460,7 @@ class WorkspaceManager:
             remote_name=request.remote_name,
         )
 
-    def create_draft_pr(
-        self,
-        request: WorkspaceDraftPRRequest,
-    ) -> WorkspaceDraftPRResult:
-        """Create draft pull request with structured task summary. Auto-merge forbidden (ADR-010)."""
-        task_id = request.task_id
-        meta = self.get_workspace(task_id)
-        if not meta:
-            raise WorkspaceError(f"Workspace not found for task '{task_id}'.")
-
-        # 1. Publication Authorization Gate
-        _validate_ref_or_option(request.head_branch, "head branch")
-        _validate_ref_or_option(request.base_branch, "base branch")
-        if not request.publication_authorized:
-            self.record_timeline_event(
-                task_id=task_id,
-                event_type=WorkspaceExecutionEventType.PUBLICATION_FAILED,
-                message="Draft PR creation blocked: explicit human publication authorization is required.",
-                payload={"head_branch": request.head_branch},
-            )
-            raise WorkspacePublicationUnauthorizedError(
-                "Publication not authorized: Explicit human authorization is required before creating a PR "
-                "(ADR-010, Docs/week3.md §6 F37, Docs/team_rules.md §Week 3)."
-            )
-
-        # 2. Protected Branch Guard for Head
-        head = request.head_branch
-        if head.lower() in PROTECTED_BRANCHES or head.replace("refs/heads/", "").lower() in PROTECTED_BRANCHES:
-            raise WorkspaceProtectedBranchError(
-                f"Head branch '{head}' cannot be a protected branch. Target a feature branch."
-            )
-
-        # 3. Always Draft PR - Zero Auto-Merge Guard (ADR-010)
-        is_draft = True
-
-        # 4. Generate Structured Markdown Summary
-        diff_res = self.get_workspace_diff(task_id)
-        test_history = self.get_test_history(task_id)
-        latest_test = test_history[-1] if test_history else None
-
-        pr_number = int(hash(task_id) % 9000 + 1000)
-        repo_owner = request.repository_owner or "local"
-        repo_name = request.repository_name or "repository"
-        pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
-
-        body_content = request.body or ""
-        summary_markdown = self._format_draft_pr_summary(
-            task_id=task_id,
-            title=request.title,
-            head_branch=request.head_branch,
-            base_branch=request.base_branch,
-            diff_result=diff_res,
-            latest_test=latest_test,
-            custom_body=body_content,
-        )
-
-        self.record_timeline_event(
-            task_id=task_id,
-            event_type=WorkspaceExecutionEventType.PR_CREATED,
-            message=f"Draft PR #{pr_number} prepared for branch '{head}' -> '{request.base_branch}'.",
-            payload={
-                "pr_number": pr_number,
-                "pr_url": pr_url,
-                "head_branch": head,
-                "base_branch": request.base_branch,
-                "is_draft": True,
-            },
-        )
-
-        return WorkspaceDraftPRResult(
-            success=True,
-            task_id=task_id,
-            pr_number=pr_number,
-            pr_url=pr_url,
-            head_branch=head,
-            base_branch=request.base_branch,
-            is_draft=is_draft,
-            summary=summary_markdown,
-        )
-
-    def _format_draft_pr_summary(
+    def format_draft_pr_summary(
         self,
         task_id: str,
         title: str,
@@ -1563,12 +1530,21 @@ class WorkspaceManager:
     # Week 3 Day 6 — Reliability, Security, and Failure Recovery (Docs/week3.md §8 Day 6)
     # -----------------------------------------------------------------------
 
+    @staticmethod
+    def _workspace_metadata_path(workspace: Path) -> Path:
+        sidecar = workspace.with_name(f".{workspace.name}.metadata.json")
+        for candidate in (sidecar, workspace / "metadata.json", workspace / "workspace_metadata.json"):
+            if candidate.is_file() and not candidate.is_symlink():
+                return candidate
+        return sidecar
+
     def _save_metadata_file(self, metadata: WorkspaceMetadata) -> None:
-        """Persist metadata.json into the workspace directory for crash recovery."""
+        """Persist orchestration state beside the working tree."""
         try:
             ws_path = Path(metadata.workspace_path)
             if ws_path.exists() and ws_path.is_dir():
-                (ws_path / "metadata.json").write_text(
+                sidecar = ws_path.with_name(f".{ws_path.name}.metadata.json")
+                sidecar.write_text(
                     metadata.model_dump_json(indent=2),
                     encoding="utf-8",
                 )
@@ -1620,9 +1596,7 @@ class WorkspaceManager:
                 continue
 
             total_scanned += 1
-            meta_file = item / "metadata.json"
-            if not meta_file.exists():
-                meta_file = item / "workspace_metadata.json"
+            meta_file = self._workspace_metadata_path(item)
             if not meta_file.exists():
                 failed_count += 1
                 continue
@@ -1719,9 +1693,7 @@ class WorkspaceManager:
                 for item in self._base_dir.iterdir():
                     if not item.is_dir() or not item.name.startswith("task-"):
                         continue
-                    meta_file = item / "metadata.json"
-                    if not meta_file.exists():
-                        meta_file = item / "workspace_metadata.json"
+                    meta_file = self._workspace_metadata_path(item)
                     if meta_file.exists():
                         try:
                             data = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -1987,9 +1959,7 @@ class WorkspaceManager:
 
                 # If still not found in memory, try reading metadata.json from disk
                 if not meta:
-                    meta_file = item / "metadata.json"
-                    if not meta_file.exists():
-                        meta_file = item / "workspace_metadata.json"
+                    meta_file = self._workspace_metadata_path(item)
                     if meta_file.exists():
                         try:
                             m_data = json.loads(meta_file.read_text(encoding="utf-8"))

@@ -313,7 +313,7 @@ class WorkspaceCommandRunner:
             # Ensure backend resolves and executes in the exact workspace_root
             if hasattr(backend, "_workspaces"):
                 backend._workspaces[task_id] = workspace_root.resolve()
-            elif hasattr(backend, "create_workspace"):
+            elif not getattr(settings, "task_workspace_root", None) and hasattr(backend, "create_workspace"):
                 # Remote runner client: ensure workspace is initialized on runner
                 try:
                     backend.create_workspace(task_id)

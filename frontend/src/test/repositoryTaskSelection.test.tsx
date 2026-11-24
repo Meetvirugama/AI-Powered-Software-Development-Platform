@@ -40,6 +40,50 @@ describe('RepositoryTaskStudio Selection & Query Invalidation (P0.3 & P0.4)', ()
     resetMockStore();
   });
 
+  it('loads the persisted plan version and sends its revision for approval', async () => {
+    const revision = 'a'.repeat(40);
+    const requestedVersions: (string | null)[] = [];
+    let approval: unknown;
+    server.use(
+      http.get('*/api/v1/tasks/task-seed-1/plan', ({ request }) => {
+        requestedVersions.push(new URL(request.url).searchParams.get('version'));
+        return HttpResponse.json({
+          task_id: 'task-seed-1', plan_version: 1, base_revision: revision,
+          summary: 'Plan returned by the saved-plan API', assumptions: [], steps: [],
+          status: 'PENDING_APPROVAL',
+        });
+      }),
+      http.post('*/api/v1/tasks/task-seed-1/approve', async ({ request }) => {
+        approval = await request.json();
+        return HttpResponse.json({});
+      }),
+    );
+
+    renderTaskStudio('/app/repositories/repo-1/studios/tasks?taskId=task-seed-1');
+    await screen.findByText('Plan returned by the saved-plan API');
+    fireEvent.click(screen.getByRole('button', { name: 'Review Plan' }));
+    await waitFor(() => expect(requestedVersions).toEqual(['1', '1']));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve Plan' }));
+    await waitFor(() => expect(approval).toMatchObject({ plan_version: 1, base_revision: revision }));
+  });
+
+  it('shows the runner blocker and prevents execution when live readiness reports it unavailable', async () => {
+    const revision = 'b'.repeat(40);
+    server.use(
+      http.get('*/api/v1/tasks/task-seed-2', () => HttpResponse.json({
+        task_id: 'task-seed-2', repository_id: 'repo-1', title: 'Approved task',
+        status: 'APPROVED', base_revision: revision, plan_version: 1,
+      })),
+      http.get('*/api/v1/health/ready', () => HttpResponse.json({
+        operations: { sandbox_backend_ok: false },
+      })),
+    );
+
+    renderTaskStudio('/app/repositories/repo-1/studios/tasks?taskId=task-seed-2');
+    expect(await screen.findByText(/execution sandbox is unavailable/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run Approved Plan' })).toBeDisabled();
+  });
+
   it('auto-selects first task when no taskId is in URL', async () => {
     renderTaskStudio('/app/repositories/repo-1/studios/tasks');
 

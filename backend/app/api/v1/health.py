@@ -3,19 +3,61 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 import time
-from fastapi import APIRouter, Request, Response, status
-from sqlalchemy import text
+from pathlib import Path
 
-from app.core.config import get_settings
+import httpx
+from fastapi import APIRouter, Request, Response, status
+from sqlalchemy import func, select, text
+
+from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal
 from app.core.redis import get_redis
+from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 from app.schemas.health import ComponentHealth, HealthResponse, OperationalReadinessMetrics, ReadinessResponse
+from sandbox.container_backend import container_runtime_available
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
+
+
+async def _sandbox_backend_ready(settings: Settings) -> bool:
+    backend = settings.sandbox_backend.strip().lower()
+    if backend == "runner":
+        if not settings.task_workspace_root or not settings.runner_base_url or not settings.runner_auth_secret:
+            return False
+        root = Path(settings.task_workspace_root)
+        if not root.is_absolute() or not root.is_dir() or not os.access(root, os.R_OK | os.W_OK | os.X_OK):
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                result = await client.get(f"{settings.runner_base_url.rstrip('/')}/health")
+                result.raise_for_status()
+                data = result.json()
+            return (
+                isinstance(data, dict)
+                and data.get("status") == "healthy"
+                and data.get("backend") == "container"
+                and data.get("shared_workspace_ready") is True
+            )
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+            logger.debug("readiness_check_runner_failed")
+            return False
+    if backend == "container":
+        return await asyncio.to_thread(container_runtime_available)
+    return backend == "local"
+
+
+def _count_webhook_backlog() -> int:
+    with SessionLocal() as db:
+        return db.scalar(
+            select(func.count()).select_from(GitHubWebhookEvent).where(
+                GitHubWebhookEvent.status.in_((WebhookEventStatus.PENDING, WebhookEventStatus.RETRY))
+            )
+        ) or 0
 
 
 @router.get(
@@ -128,7 +170,12 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
 
     # 5. Operational metrics (OPT-24)
     sync_worker_heartbeat_age_s: float | None = None
-    webhook_backlog: int = 0
+    webhook_backlog: int | None = None
+    if db_health.status == "healthy":
+        try:
+            webhook_backlog = await asyncio.wait_for(asyncio.to_thread(_count_webhook_backlog), timeout=2.0)
+        except Exception:
+            logger.debug("readiness_check_webhook_backlog_failed")
     if redis_health.status == "healthy":
         try:
             r = get_redis()
@@ -148,7 +195,6 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
                 if latest_hb > 0:
                     sync_worker_heartbeat_age_s = max(0.0, time.time() - latest_hb)
 
-            webhook_backlog = int(r.llen("webhook_events:queue") or 0)
         except Exception as exc:
             logger.debug("operational_metrics_redis_error", extra={"error": str(exc)})
 
@@ -158,7 +204,7 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         "semgrep": shutil.which("semgrep") is not None,
         "gitleaks": shutil.which("gitleaks") is not None,
     }
-    sandbox_backend_ok = settings.sandbox_backend in ("local", "container", "runner")
+    sandbox_backend_ok = await _sandbox_backend_ready(settings)
 
     operations = OperationalReadinessMetrics(
         sync_worker_heartbeat_age_s=sync_worker_heartbeat_age_s,
@@ -172,7 +218,8 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
         overall_status = "not_ready"
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     elif (
-        redis_health.status == "degraded"
+        not sandbox_backend_ok
+        or redis_health.status == "degraded"
         or llm_health.status == "degraded"
         or rag_health.status in ("degraded", "unhealthy")
     ):

@@ -28,6 +28,10 @@ class TaskIntent(str, Enum):
     AI_ML = "ai_ml"
     DOCUMENTATION = "documentation"
     TESTING = "testing"
+    DEVOPS = "devops"
+    INFRASTRUCTURE = "infrastructure"
+    API_INTEGRATION = "api_integration"
+    MULTI_COMPONENT = "multi_component"
     MIXED = "mixed"
 
 
@@ -177,6 +181,11 @@ class IntentRouter:
         _count_matches(self._TESTING_KEYWORDS, TaskIntent.TESTING)
         _count_matches(self._DOCS_KEYWORDS, TaskIntent.DOCUMENTATION)
         _count_matches(self._REFACTOR_KEYWORDS, TaskIntent.REFACTOR)
+        _count_matches({"backend", "middleware", "endpoint", "fastapi", "server"}, TaskIntent.BACKEND)
+        _count_matches({"llm", "embedding", "retrieval", "rag", "machine learning", "inference"}, TaskIntent.AI_ML)
+        _count_matches({"ci/cd", "github actions", "deployment", "pipeline", "release"}, TaskIntent.DEVOPS)
+        _count_matches({"terraform", "kubernetes", "docker", "azure", "load balancer"}, TaskIntent.INFRASTRUCTURE)
+        _count_matches({"webhook", "third-party api", "api integration", "oauth callback"}, TaskIntent.API_INTEGRATION)
 
         # Feature matching if prompt mentions adding/creating new things
         if any(term in lower for term in ("add", "create", "implement", "support", "new", "build")):
@@ -206,6 +215,12 @@ class IntentRouter:
             affected_layers.append("testing")
         if TaskIntent.BACKEND in matched_categories or not affected_layers:
             affected_layers.insert(0, "backend")
+        for intent in (TaskIntent.AI_ML, TaskIntent.DEVOPS, TaskIntent.INFRASTRUCTURE, TaskIntent.API_INTEGRATION):
+            if intent in matched_categories:
+                affected_layers.append(intent.value)
+        implementation_layers = set(affected_layers) - {"security", "testing"}
+        if len(implementation_layers) > 1:
+            secondary_intents.append(TaskIntent.MULTI_COMPONENT)
 
         # 5. Compute complexity score
         complexity = min(1.0, max(0.2, (len(affected_layers) * 0.2) + (len(text) / 500.0) * 0.2))

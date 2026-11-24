@@ -338,6 +338,7 @@ export interface RepositoryTaskPlanTabProps {
   rejectionReason: string;
   setRejectionReason: (v: string) => void;
   approvalComment: string;
+  approvalBlocked: boolean;
   setApprovalComment: (v: string) => void;
   actionBusy: string | null;
   handleGenerateOrRevisePlan: () => void;
@@ -358,6 +359,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
     rejectionReason,
     setRejectionReason,
     approvalComment,
+    approvalBlocked,
     setApprovalComment,
     actionBusy,
     handleGenerateOrRevisePlan,
@@ -371,7 +373,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs font-bold text-foreground">
-                Plan v{latestPlan.plan_version} Ready for Approval
+                Plan v{latestPlan.plan_version} {approvalBlocked ? 'Needs Attention' : 'Ready for Approval'}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -445,7 +447,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
             />
             <button
               type="button"
-              disabled={actionBusy !== null}
+              disabled={actionBusy !== null || approvalBlocked}
               onClick={handleApprovePlan}
               className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
@@ -1021,31 +1023,47 @@ export const RepositoryTaskPrTab: React.FC<RepositoryTaskPrTabProps> = memo(
               </span>
             </div>
             <p className="text-muted-foreground text-[11px]">
-              All unit tests and scope bounds are verified before pull request publication is unlocked.
+              The branch can be published after independent verification and approval of its commit.
             </p>
+            {verificationResult?.status === 'PASS' && <code className="break-all">{verificationResult.verified_revision}</code>}
           </div>
 
-          <label className="flex items-start gap-2.5 text-xs text-foreground cursor-pointer pt-1">
-            <input
-              type="checkbox"
-              checked={publicationAuthorized}
-              onChange={(e) => setPublicationAuthorized(e.target.checked)}
-              className="mt-0.5 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
-            />
-            <span>
-              I authorize pushing the isolated task branch to remote GitHub and creating a Draft Pull Request.
-            </span>
-          </label>
+          {(() => {
+            const canAuthorize = Boolean(
+              verificationResult?.status === 'PASS' && verificationResult?.verified_revision
+            );
+            return (
+              <>
+                <label
+                  className={cn(
+                    'flex items-start gap-2.5 text-xs pt-1',
+                    canAuthorize ? 'text-foreground cursor-pointer' : 'text-muted-foreground opacity-60 cursor-not-allowed'
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={publicationAuthorized}
+                    disabled={!canAuthorize}
+                    onChange={(e) => setPublicationAuthorized(e.target.checked)}
+                    className="mt-0.5 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                  />
+                  <span>
+                    I authorize pushing the isolated task branch to remote GitHub and creating a Draft Pull Request.
+                  </span>
+                </label>
 
-          <button
-            type="button"
-            disabled={actionBusy !== null || !publicationAuthorized}
-            onClick={handleCreateDraftPR}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <GitPullRequest className="h-4 w-4" />
-            <span>Publish Draft Pull Request</span>
-          </button>
+                <button
+                  type="button"
+                  disabled={actionBusy !== null || !publicationAuthorized || !canAuthorize}
+                  onClick={handleCreateDraftPR}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <GitPullRequest className="h-4 w-4" />
+                  <span>Publish Draft Pull Request</span>
+                </button>
+              </>
+            );
+          })()}
         </div>
       )}
     </div>
