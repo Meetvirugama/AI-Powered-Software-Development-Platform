@@ -682,7 +682,7 @@ def get_webhook_event(
 
 
 @router.post("/events/{event_id}/replay", summary="Safely replay a failed or dead-letter webhook event")
-async def replay_webhook_event(
+def replay_webhook_event(
     event_id: str,
     request: Request,
     db: Session = Depends(get_db),
