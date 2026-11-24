@@ -691,6 +691,16 @@ class TaskPlanner:
                     plan = self._sanitize_llm_plan(instance, ctx)
                     from ai.services.plan_critic import PlanCritic
 
+                    # Link the repository test requirement to a step that already
+                    # schedules its full verification command.
+                    for req in requirements:
+                        if req.category != "testing" or not req.requirement_id.startswith("REQ-TEST-"):
+                            continue
+                        for step in plan.steps:
+                            if req.required_tests and set(req.required_tests).issubset(step.tests_to_run):
+                                if req.requirement_id not in step.requirement_ids:
+                                    step.requirement_ids.append(req.requirement_id)
+                                break
                     review = PlanCritic().review_plan(plan, requirements=requirements)
                     if not any(issue.category == "requirement_coverage" for issue in review.issues):
                         return plan
