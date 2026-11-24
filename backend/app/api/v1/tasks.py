@@ -307,6 +307,20 @@ def _owned_repository(repository_id: UUID, user_id: UUID, db: Session) -> Reposi
 _owned_task = get_owned_task
 
 
+def _indexed_revision(repo: Repository) -> str | None:
+    for revision in (repo.active_commit_sha, repo.last_indexed_commit_sha):
+        if isinstance(revision, str) and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision):
+            return revision
+    return None
+
+
+def _plan_revision(repo: Repository, requested: str | None) -> str:
+    branch = repo.default_branch or "main"
+    if not requested or requested in (branch, f"refs/heads/{branch}"):
+        return _indexed_revision(repo) or branch
+    return requested
+
+
 def _review_task_plan(db: Session, task: AgentTask, plan, base_revision: str | None):
     from ai.context.task_context import TaskContextBuilder
     from ai.services.task_requirement_discovery import TaskRequirementDiscovery
@@ -315,7 +329,7 @@ def _review_task_plan(db: Session, task: AgentTask, plan, base_revision: str | N
     requirements = TaskRequirementDiscovery().discover_requirements(task, context)
     repo = db.get(Repository, task.repository_id)
     repository_context = {}
-    if repo and repo.active_commit_sha and repo.active_commit_sha == base_revision:
+    if repo and base_revision and _indexed_revision(repo) == base_revision:
         index = select(RepositoryFile.path).where(RepositoryFile.repository_id == repo.id)
         if db.scalar(index.limit(1)) is not None:
             targets = set(plan.expected_files).union(*(step.expected_files for step in plan.steps))
@@ -571,8 +585,7 @@ def create_task(
     user_id = _request_user_id(request)
     repo = _owned_repository(payload.repository_id, user_id, db)
 
-    if not payload.base_revision and not payload.source.base_revision:
-        payload.base_revision = repo.active_commit_sha or repo.default_branch or "main"
+    payload.base_revision = _plan_revision(repo, payload.base_revision or payload.source.base_revision)
 
     task_repo = TaskRepository(db)
     task = task_repo.create_task(user_id=user_id, intake=payload)
@@ -598,8 +611,7 @@ async def prompt_to_plan(
     router_svc = IntentRouter()
     intent_result = router_svc.classify_intent(payload.prompt)
 
-    requested_revision = payload.base_revision or repo.default_branch or "main"
-    base_rev = repo.active_commit_sha if requested_revision == (repo.default_branch or "main") and repo.active_commit_sha else requested_revision
+    base_rev = _plan_revision(repo, payload.base_revision)
     cleaned_prompt = payload.prompt.strip()
     if not cleaned_prompt:
         raise APIError(422, ErrorCode.INVALID_REQUEST, "Enter a development request.")
@@ -770,8 +782,8 @@ async def generate_task_plan(
 
     effective_base_rev = (body.base_revision if body and body.base_revision else None) or task.base_revision
     repository = task.repository
-    if repository and repository.active_commit_sha and effective_base_rev == repository.default_branch:
-        effective_base_rev = repository.active_commit_sha
+    if repository:
+        effective_base_rev = _plan_revision(repository, effective_base_rev)
     plan_record = task_repo.save_plan(
         task=task,
         plan_schema=plan_schema,

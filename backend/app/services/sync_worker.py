@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import shutil
 import tempfile
 import time
@@ -407,7 +408,23 @@ async def process_sync_job(
             repo=name,
             branch=branch,
             workspace_path=str(clone_dir),
+            archive_revision=head_sha,
         )
+
+        if (clone_dir / ".git").is_dir():
+            git = await asyncio.create_subprocess_exec(
+                "git", "-C", str(clone_dir), "rev-parse", "--verify", "HEAD",
+                stdout=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await git.communicate()
+            checked_out = stdout.decode().strip()
+            if git.returncode or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", checked_out):
+                raise RuntimeError("Could not identify the checked-out commit for indexing.")
+            head_sha = checked_out
+        elif not head_sha and clone_dir.exists():
+            raise RuntimeError("Could not identify the commit for the downloaded repository archive.")
+        if target_commit_sha and head_sha != target_commit_sha:
+            raise RuntimeError("The checked-out branch moved beyond the requested sync commit.")
 
         # Step 6: Walk repository files
         _set_job_progress(job_id, stage=SyncJobStage.SCANNING.value)
