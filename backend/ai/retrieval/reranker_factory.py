@@ -15,7 +15,7 @@ from .reranker_onnx import ONNXCrossEncoderReranker
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["create_reranker"]
+__all__ = ["create_reranker", "create_serving_reranker"]
 
 
 def create_reranker(
@@ -79,3 +79,11 @@ def create_reranker(
         if k in {"model_name", "model", "min_logit", "max_chars"}
     }
     return CrossEncoderReranker(**pytorch_kwargs)
+
+
+def create_serving_reranker(**kwargs: Any) -> CrossEncoderReranker | ONNXCrossEncoderReranker:
+    """Prepare the production PyTorch model before the retrieval service becomes ready."""
+    reranker = create_reranker(**kwargs)
+    if isinstance(reranker, CrossEncoderReranker):
+        reranker.warm_up()
+    return reranker
