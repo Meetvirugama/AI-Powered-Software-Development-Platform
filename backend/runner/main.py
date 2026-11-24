@@ -194,6 +194,16 @@ def create_runner_app(backend: SandboxBackend | None = None) -> FastAPI:
     ) -> WorkspaceCommandResult:
         try:
             cwd_path = Path(payload.cwd) if payload.cwd else None
+            shared_root = getattr(settings, "task_workspace_root", None)
+            if shared_root and cwd_path is not None and cwd_path.is_absolute():
+                root = Path(shared_root).resolve()
+                resolved = cwd_path.resolve()
+                if (
+                    resolved.parent != root or resolved.name != task_id
+                    or not resolved.name.startswith("task-") or not (resolved / ".git").is_dir()
+                ):
+                    raise SandboxSecurityError("Task commands require a checked-out workspace under TASK_WORKSPACE_ROOT.")
+                cwd_path = resolved
             return exec_backend.execute(
                 task_id=task_id,
                 command=payload.command,

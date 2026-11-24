@@ -35,6 +35,7 @@ from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.models.repository import Repository
+from app.models.repository_file import RepositoryFile
 from app.models.task import (
     AgentTask,
     TaskApprovalRecord,
@@ -57,6 +58,7 @@ from app.schemas.plan import (
     PlanStep,
     PromptToPlanRequest,
     PromptToPlanResponse,
+    StructuredPlan,
     TaskApprovalResponse,
     TaskEventResponse,
     TaskPlanGenerateRequest,
@@ -303,6 +305,22 @@ def _owned_repository(repository_id: UUID, user_id: UUID, db: Session) -> Reposi
 
 
 _owned_task = get_owned_task
+
+
+def _review_task_plan(db: Session, task: AgentTask, plan, base_revision: str | None):
+    from ai.context.task_context import TaskContextBuilder
+    from ai.services.task_requirement_discovery import TaskRequirementDiscovery
+
+    context = TaskContextBuilder().build_task_context(task, db)
+    requirements = TaskRequirementDiscovery().discover_requirements(task, context)
+    repo = db.get(Repository, task.repository_id)
+    repository_context = {}
+    if repo and repo.active_commit_sha and repo.active_commit_sha == base_revision:
+        index = select(RepositoryFile.path).where(RepositoryFile.repository_id == repo.id)
+        if db.scalar(index.limit(1)) is not None:
+            targets = set(plan.expected_files).union(*(step.expected_files for step in plan.steps))
+            repository_context["indexed_paths"] = list(db.scalars(index.where(RepositoryFile.path.in_(targets))))
+    return PlanCritic().review_plan(plan, requirements=requirements, repository_context=repository_context)
 
 
 def _serialize_plan_record(plan: TaskPlanRecord, task: AgentTask) -> TaskPlanResponse:
@@ -554,7 +572,7 @@ def create_task(
     repo = _owned_repository(payload.repository_id, user_id, db)
 
     if not payload.base_revision and not payload.source.base_revision:
-        payload.base_revision = repo.default_branch or "main"
+        payload.base_revision = repo.active_commit_sha or repo.default_branch or "main"
 
     task_repo = TaskRepository(db)
     task = task_repo.create_task(user_id=user_id, intake=payload)
@@ -574,14 +592,17 @@ async def prompt_to_plan(
     db: Session = Depends(get_db),
 ) -> PromptToPlanResponse:
     user_id = _request_user_id(request)
-    repo = _owned_repository(payload.repository_id, user_id, db, min_role=UserRole.DEVELOPER)
+    repo = _owned_repository(payload.repository_id, user_id, db)
 
     # 1. Intent Analysis & Ambiguity Detection (Phase 2)
     router_svc = IntentRouter()
     intent_result = router_svc.classify_intent(payload.prompt)
 
-    base_rev = payload.base_revision or repo.default_branch or "main"
+    requested_revision = payload.base_revision or repo.default_branch or "main"
+    base_rev = repo.active_commit_sha if requested_revision == (repo.default_branch or "main") and repo.active_commit_sha else requested_revision
     cleaned_prompt = payload.prompt.strip()
+    if not cleaned_prompt:
+        raise APIError(422, ErrorCode.INVALID_REQUEST, "Enter a development request.")
 
     created_task = None
     task_repo = TaskRepository(db)
@@ -592,18 +613,17 @@ async def prompt_to_plan(
         extracted = re.findall(r"\b([a-zA-Z0-9_\-/\\]+\.(?:py|ts|tsx|js|jsx|json|yaml|yml))\b", cleaned_prompt)
         explicit_targets = [f for f in extracted if not f.startswith(".")]
 
-    # 2. Persist Task record if requested
-    if payload.auto_create_task:
-        from app.schemas.task import TaskSourceReference, TaskRequirement
-        reqs_intake = [
-            TaskRequirement(
-                id="req-1",
-                description=cleaned_prompt[:256],
-                target_files=explicit_targets,
-            )
-        ]
+    from app.schemas.task import TaskSourceReference, TaskRequirement
+
+    reqs_intake = [
+        TaskRequirement(id=f"req-{index}", description=requirement, target_files=explicit_targets)
+        for index, requirement in enumerate(router_svc.decompose_requirements(cleaned_prompt), start=1)
+    ]
+
+    if payload.auto_create_task and not intent_result.is_ambiguous:
         task_intake = TaskCreateRequest(
             repository_id=payload.repository_id,
+            title=cleaned_prompt.splitlines()[0][:120],
             description=cleaned_prompt,
             base_revision=base_rev,
             source=TaskSourceReference(type="USER_PROMPT"),
@@ -620,6 +640,7 @@ async def prompt_to_plan(
             description=cleaned_prompt,
             base_revision=base_rev,
             status=TaskStatus.PLANNING.value,
+            requirements=[req.model_dump(mode="json") for req in reqs_intake],
         )
 
     # 3. Generate structured implementation plan
@@ -629,23 +650,8 @@ async def prompt_to_plan(
         planner = TaskPlanner(llm_gateway=llm_gateway)
 
     structured_plan = await planner.generate_plan(target_task, db=db)
-    if explicit_targets:
-        curr_exp = list(structured_plan.expected_files or [])
-        for et in explicit_targets:
-            if et not in curr_exp:
-                curr_exp.append(et)
-        structured_plan.expected_files = curr_exp
-        structured_plan.expected_files_to_modify = curr_exp
-
     # 4. Adversarial Plan Critic Review
-    critic = PlanCritic()
-    from ai.services.task_requirement_discovery import TaskRequirementDiscovery
-    from ai.context.task_context import TaskContextBuilder
-    context_builder = TaskContextBuilder()
-    manifest = context_builder.build_task_context(target_task, db)
-    req_discovery = TaskRequirementDiscovery()
-    reqs = req_discovery.discover_requirements(target_task, manifest)
-    critic_review = critic.review_plan(structured_plan, requirements=reqs)
+    critic_review = _review_task_plan(db, target_task, structured_plan, base_rev)
 
     # 5. Save plan record if task was persisted
     if created_task:
@@ -660,8 +666,8 @@ async def prompt_to_plan(
         task_id=str(created_task.id) if created_task else None,
         repository_id=str(payload.repository_id),
         intent_analysis=intent_result.model_dump(mode="json"),
-        plan=structured_plan.model_dump(mode="json"),
-        critic_review=critic_review.model_dump(mode="json"),
+        plan=redact_obj(structured_plan.model_dump(mode="json")),
+        critic_review=redact_obj(critic_review.model_dump(mode="json")),
         ambiguity_detected=intent_result.is_ambiguous,
         clarifications=intent_result.suggested_clarifications,
     )
@@ -763,6 +769,9 @@ async def generate_task_plan(
         )
 
     effective_base_rev = (body.base_revision if body and body.base_revision else None) or task.base_revision
+    repository = task.repository
+    if repository and repository.active_commit_sha and effective_base_rev == repository.default_branch:
+        effective_base_rev = repository.active_commit_sha
     plan_record = task_repo.save_plan(
         task=task,
         plan_schema=plan_schema,
@@ -829,10 +838,23 @@ def approve_task_plan(
             "Cannot approve plan: implementation plan contains zero executable steps.",
         )
 
-    if task.requirements and plan_record:
+    if plan_record and getattr(task, "source_type", None) == "USER_PROMPT":
+        parsed_plan = StructuredPlan(
+            task_id=str(task.id),
+            plan_version=plan_record.plan_version,
+            base_revision=plan_record.base_revision,
+            summary=plan_record.summary,
+            steps=[PlanStep.model_validate(step) for step in plan_record.steps or []],
+            tests_to_run=plan_record.tests_to_run or [],
+            expected_files=plan_record.expected_files or [],
+        )
+        review = _review_task_plan(db, task, parsed_plan, plan_record.base_revision)
+        if not review.is_approved:
+            messages = [issue.message for issue in review.issues if issue.severity.value == "BLOCKING"]
+            raise APIError(409, ErrorCode.PLAN_VALIDATION_FAILED, redact(" ".join(messages)))
+    elif task.requirements and plan_record:
         from ai.services.task_completeness_checker import TaskCompletenessChecker
         from ai.services.task_requirement_discovery import DiscoveredTaskRequirement
-        from app.schemas.plan import PlanStep, StructuredPlan
         discovered_reqs: list[DiscoveredTaskRequirement] = []
         for req in task.requirements:
             if isinstance(req, dict) and req.get("requirement_id"):
@@ -1867,12 +1889,9 @@ def authorize_task_publication_endpoint(
 ) -> PublicationAuthorizationResponse:
     task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
-    updated = task_repo.authorize_publication(
-        task_id=task.id,
-        repository_id=task.repository_id,
-        head_sha=payload.head_sha,
-        user_id=user_id,
-        notes=payload.notes,
+    orchestrator = get_task_execution_orchestrator(request.app.state)
+    updated = orchestrator.authorize_verified_publication(
+        task, task_repo, user_id, payload.head_sha, payload.notes,
     )
     return PublicationAuthorizationResponse(
         task_id=str(updated.id),
@@ -2090,6 +2109,13 @@ def run_autonomous_workflow_endpoint(
     task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
+    if body and body.publication_authorized:
+        raise APIError(
+            status.HTTP_400_BAD_REQUEST,
+            ErrorCode.INVALID_REQUEST,
+            "Authorize publication after verification using the exact verified commit SHA.",
+        )
+
     # Check if async durable workflow execution was requested
     is_async = (
         (body and body.async_execution)
@@ -2100,13 +2126,7 @@ def run_autonomous_workflow_endpoint(
     if is_async:
         from ai.workflows import AutonomousWorkflowInput, submit_autonomous_workflow
 
-        plan = task_repo.get_approved_plan(task.id)
-        if not plan:
-            raise APIError(
-                status.HTTP_400_BAD_REQUEST,
-                ErrorCode.INVALID_REQUEST,
-                f"Task '{task_id}' has no approved plan. Approval gate violation (ADR-010).",
-            )
+        plan = task_repo.verify_execution_approval_gate(task)
 
         input_data = AutonomousWorkflowInput(
             task_id=str(task.id),
@@ -2126,6 +2146,7 @@ def run_autonomous_workflow_endpoint(
             "task_id": str(task.id),
             "workflow_id": wf_res.workflow_id,
             "status": wf_res.status.value,
+            "durability_mode": wf_res.durability_mode,
             "message": "Autonomous execution has been accepted.",
             "status_url": f"/api/v1/tasks/{task.id}/workflow-status",
         }
@@ -2205,10 +2226,10 @@ def get_task_workflow_status(
         return redact_obj({
             "task_id": str(task.id),
             "workflow_id": f"wf-{task.id}",
-            "status": "COMPLETED" if is_completed else ("FAILED" if task.status == "FAILED" else "QUEUED"),
+            "status": "COMPLETED" if is_completed else (task.status if task.status in {"FAILED", "CANCELLED"} else "IDLE"),
             "current_step": None,
             "completed_steps": [cp.step_name for cp in (task.checkpoints or [])],
-            "progress_percentage": 100 if is_completed else 0,
+            "progress_percentage": 100 if is_completed else None,
             "verification": latest_ver,
             "pull_request": pr_dict,
             "error_summary": err_summary,
@@ -2223,15 +2244,13 @@ def get_task_workflow_status(
             "durability_mode": "NATIVE_TRANSIENT",
         })
 
-    total_steps = 7
-    pct = int((len(wf.completed_steps) / total_steps) * 100) if total_steps else 0
     return redact_obj({
         "task_id": str(task.id),
         "workflow_id": wf.workflow_id,
         "status": wf.status.value,
         "current_step": wf.current_step,
         "completed_steps": wf.completed_steps,
-        "progress_percentage": min(100, pct),
+        "progress_percentage": 100 if wf.status.value == "COMPLETED" else None,
         "verification": wf.verification,
         "pull_request": wf.pull_request,
         "error_summary": wf.error_summary,

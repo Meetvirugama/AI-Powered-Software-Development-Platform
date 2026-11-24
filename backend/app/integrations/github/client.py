@@ -268,6 +268,8 @@ class GitHubClient:
         state: str = "open",
         per_page: int = 30,
         page: int = 1,
+        head: str | None = None,
+        base: str | None = None,
     ) -> list[dict[str, Any]]:
         """List pull requests for a repository."""
         params: dict[str, Any] = {
@@ -275,6 +277,10 @@ class GitHubClient:
             "per_page": per_page,
             "page": page,
         }
+        if head:
+            params["head"] = head
+        if base:
+            params["base"] = base
         return await self._request("GET", f"/repos/{owner}/{repo}/pulls", params=params)
 
     async def get_pull_request(

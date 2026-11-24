@@ -283,7 +283,9 @@ class GitBranchService:
         """Resolve an authenticated GitHubClient for the repository's installation."""
         if self._client is not None:
             return self._client
+        return GitHubClient(await self.get_installation_token_for_repo(repo))
 
+    async def get_installation_token_for_repo(self, repo: Repository) -> str:
         installation = None
         if hasattr(self._db, "get"):
             try:
@@ -308,7 +310,7 @@ class GitBranchService:
             )
             token = await GitHubClient.get_installation_token(str(ext_inst_id))
 
-        return GitHubClient(token)
+        return token
 
     # ----- Day 1 Public Operations -----------------------------------------
 

@@ -94,26 +94,43 @@ class PlanCritic:
                 CriticIssue(
                     issue_id="crit-unresolved-targets",
                     category="invalid_targets",
-                    severity=CriticSeverity.WARNING,
+                    severity=CriticSeverity.BLOCKING,
                     message="Plan contains UNRESOLVED localization targets. Clarification or exploratory localization required.",
                     suggested_remedy="Investigate repository files to ground specific target paths before execution.",
                 )
             )
 
         # 3. Check for forbidden file access
-        for s in steps:
-            for ef in getattr(s, "expected_files", []) or []:
-                norm = ef.lower().strip()
-                if any(forbidden in norm for forbidden in self._FORBIDDEN_FILES):
-                    issues.append(
-                        CriticIssue(
-                            issue_id=f"crit-forbidden-{s.step_id}",
-                            category="security_risk",
-                            severity=CriticSeverity.BLOCKING,
-                            message=f"Step '{s.step_id}' targets forbidden file or secret path '{ef}'.",
-                            suggested_remedy="Remove protected infrastructure and credential files from plan targets.",
-                        )
+        targets = set(expected_files).union(*(step.expected_files for step in steps))
+        for index, path in enumerate(sorted(targets)):
+            normalized = path.lower().strip()
+            parts = normalized.split("/")
+            if normalized in self._FORBIDDEN_FILES or any(part in self._FORBIDDEN_FILES for part in parts):
+                issues.append(
+                    CriticIssue(
+                        issue_id=f"crit-forbidden-{index}",
+                        category="security_risk",
+                        severity=CriticSeverity.BLOCKING,
+                        message=f"Plan targets forbidden file or secret path '{path}'.",
+                        suggested_remedy="Remove protected infrastructure and credential files from plan targets.",
                     )
+                )
+
+        indexed_paths = (repository_context or {}).get("indexed_paths")
+        if indexed_paths is not None:
+            creation_paths = {
+                path
+                for step in steps if step.action_type in {"create", "create_file", "new_file", "add_file", "add_test", "create_test"}
+                for path in step.expected_files
+            }
+            for index, path in enumerate(sorted(targets - set(indexed_paths) - creation_paths - {"UNRESOLVED"})):
+                issues.append(CriticIssue(
+                    issue_id=f"crit-missing-path-{index}",
+                    category="invalid_targets",
+                    severity=CriticSeverity.BLOCKING,
+                    message=f"'{path}' is missing from the indexed revision and has no creation step.",
+                    suggested_remedy="Use an indexed path or specify a file creation step.",
+                ))
 
         # 4. Check DAG dependencies
         if steps:

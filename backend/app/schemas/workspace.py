@@ -783,6 +783,7 @@ class WorkspacePushRequest(BaseModel):
     remote_name: str = "origin"
     publication_authorized: bool = False
     remote_url: str | None = None
+    expected_revision: str | None = Field(default=None, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
     installation_token: str | None = Field(
         default=None,
         description="Optional GitHub App installation token for host-side push authentication (never persisted to disk or sent to containers)",

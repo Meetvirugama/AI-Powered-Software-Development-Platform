@@ -702,6 +702,10 @@ class WorkspaceTestRunner:
             stderr=clean_stderr,
             framework_status=fw_status,
         )
+        if outcome_status == TestOutcomeStatus.PASSED and total == 0:
+            outcome_status = TestOutcomeStatus.NO_TESTS_FOUND
+            classification = TestFailureClassification.INFRASTRUCTURE_ERROR
+            is_repair_eligible = False
 
         # Check if budget is already exhausted
         attempts_used = len(self._repair_attempts.get(request.task_id, []))

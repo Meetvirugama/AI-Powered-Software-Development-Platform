@@ -1013,8 +1013,9 @@ export const RepositoryTaskPrTab: React.FC<RepositoryTaskPrTabProps> = memo(
               </span>
             </div>
             <p className="text-muted-foreground text-[11px]">
-              All unit tests and scope bounds are verified before pull request publication is unlocked.
+              The branch can be published after independent verification and approval of its commit.
             </p>
+            {verificationResult?.status === 'PASS' && <code className="break-all">{verificationResult.verified_revision}</code>}
           </div>
 
           <label className="flex items-start gap-2.5 text-xs text-foreground cursor-pointer pt-1">

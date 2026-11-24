@@ -304,3 +304,107 @@ def vcr_llm_cassette():
     from tests.fixtures.vcr_llm_cassette import VCRLLMCassette
     cassette_path = Path(__file__).resolve().parent / "fixtures" / "cassettes" / "platform_llm_vcr.json"
     return VCRLLMCassette(cassette_path=cassette_path, mode="replay")
+
+
+@pytest.fixture
+def task_git():
+    import subprocess
+
+    def git(root, *args):
+        return subprocess.run(
+            ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+             "-C", str(root), *args],
+            check=True, capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+
+    return git
+
+
+@pytest.fixture
+def local_task_repository(tmp_path, monkeypatch, task_git):
+    """Use real Git objects while replacing authenticated GitHub checkout."""
+    from app.services.git_branch import GitBranchService
+    from sandbox.workspace_manager import WorkspaceManager
+
+    source = tmp_path / "task-source"
+    source.mkdir()
+    task_git(source, "init", "-b", "main")
+    task_git(source, "commit", "--allow-empty", "-m", "Task base")
+
+    async def fixture_token(self, repository):
+        return "fixture-token"
+
+    def checkout(self, workspace, url, revision, branch, token):
+        task_git(tmp_path, "clone", "--no-local", str(source), str(workspace))
+        task_git(workspace, "checkout", "-b", branch, revision)
+
+    monkeypatch.setattr(GitBranchService, "get_installation_token_for_repo", fixture_token)
+    monkeypatch.setattr(WorkspaceManager, "_checkout_repository_revision", checkout)
+    return source
+
+
+@pytest.fixture
+def local_task_base_revision(local_task_repository, task_git):
+    return task_git(local_task_repository, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def local_task_publication(local_task_repository, task_git, monkeypatch):
+    """Push to the local fixture repository and stub the GitHub Draft PR response."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.services.git_branch import GitBranchService
+    from sandbox.workspace_manager import WorkspaceManager
+
+    push = WorkspaceManager.push_task_branch
+
+    def local_push(self, request):
+        return push(self, request.model_copy(update={
+            "remote_url": str(local_task_repository),
+            "installation_token": None,
+        }))
+
+    async def create_pull_request(*, owner, repo, head, base, draft, **kwargs):
+        return {
+            "number": 7,
+            "html_url": f"https://github.com/{owner}/{repo}/pull/7",
+            "draft": draft,
+            "head": {"ref": head, "sha": task_git(local_task_repository, "rev-parse", head)},
+            "base": {"ref": base},
+        }
+
+    client = SimpleNamespace(
+        list_pull_requests=AsyncMock(return_value=[]),
+        create_pull_request=AsyncMock(side_effect=create_pull_request),
+    )
+    monkeypatch.setattr(WorkspaceManager, "push_task_branch", local_push)
+    monkeypatch.setattr(GitBranchService, "_get_client_for_repo", AsyncMock(return_value=client))
+
+
+@pytest.fixture
+def record_verified_commit(task_git):
+    """Persist a fixture commit and its matching verification evidence."""
+    def record(manager, task_repo, task, *, include_diff_hash=True):
+        task_id = str(task.id)
+        workspace = manager.get_workspace_path(task_id)
+        task_git(workspace, "add", "--all")
+        task_git(workspace, "commit", "--allow-empty", "-m", "Verified change")
+        revision = task_git(workspace, "rev-parse", "HEAD")
+        diff_hash = manager.compute_verification_diff_hash(task_id, record_baseline=include_diff_hash)
+        task_repo.record_verification_result(
+            task_id=task.id,
+            repository_id=task.repository_id,
+            verified_revision=revision,
+            status="PASSED",
+            checks=[{
+                "name": "tests",
+                "status": "PASSED",
+                "details": {"target_revision": f"diff-sha256:{diff_hash}"},
+            }],
+            blocking_findings=[],
+            diff_hash=diff_hash if include_diff_hash else None,
+        )
+        return revision
+
+    return record
