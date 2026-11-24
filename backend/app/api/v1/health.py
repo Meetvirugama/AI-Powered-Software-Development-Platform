@@ -10,11 +10,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Request, Response, status
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from app.core.config import Settings, get_settings
 from app.core.database import SessionLocal
 from app.core.redis import get_redis
+from app.models.webhook_event import GitHubWebhookEvent, WebhookEventStatus
 from app.schemas.health import ComponentHealth, HealthResponse, OperationalReadinessMetrics, ReadinessResponse
 from sandbox.container_backend import container_runtime_available
 
@@ -48,6 +49,15 @@ async def _sandbox_backend_ready(settings: Settings) -> bool:
     if backend == "container":
         return await asyncio.to_thread(container_runtime_available)
     return backend == "local"
+
+
+def _count_webhook_backlog() -> int:
+    with SessionLocal() as db:
+        return db.scalar(
+            select(func.count()).select_from(GitHubWebhookEvent).where(
+                GitHubWebhookEvent.status.in_((WebhookEventStatus.PENDING, WebhookEventStatus.RETRY))
+            )
+        ) or 0
 
 
 @router.get(
@@ -160,7 +170,12 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
 
     # 5. Operational metrics (OPT-24)
     sync_worker_heartbeat_age_s: float | None = None
-    webhook_backlog: int = 0
+    webhook_backlog: int | None = None
+    if db_health.status == "healthy":
+        try:
+            webhook_backlog = await asyncio.wait_for(asyncio.to_thread(_count_webhook_backlog), timeout=2.0)
+        except Exception:
+            logger.debug("readiness_check_webhook_backlog_failed")
     if redis_health.status == "healthy":
         try:
             r = get_redis()
@@ -180,7 +195,6 @@ async def health_readiness(request: Request, response: Response) -> ReadinessRes
                 if latest_hb > 0:
                     sync_worker_heartbeat_age_s = max(0.0, time.time() - latest_hb)
 
-            webhook_backlog = int(r.llen("webhook_events:queue") or 0)
         except Exception as exc:
             logger.debug("operational_metrics_redis_error", extra={"error": str(exc)})
 

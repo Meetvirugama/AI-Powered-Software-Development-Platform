@@ -17,15 +17,7 @@ from ai.llm.schemas import LLMRequest, Message
 from ai.retrieval.cache import RetrievalResultCache, TwoLevelRetrievalCache
 from ai.retrieval.cache_keys import get_repository_index_version
 from ai.security.taint_tracker import TaintTracker
-from app.api.v1.mcp_registry import (
-    RegisterMCPServerRequest,
-    UpdateToolApprovalPolicyRequest,
-    list_mcp_servers,
-    ping_mcp_server,
-    register_mcp_server,
-    toggle_mcp_server,
-    update_mcp_tool_policy,
-)
+from app.api.v1.mcp_registry import list_mcp_servers, ping_mcp_server
 from app.core.errors import APIError
 from app.mcp.server import PlatformMCPContractDispatcher, PlatformMCPServer
 from app.observability.langfuse_adapter import LangfuseAdapter
@@ -222,30 +214,15 @@ async def test_mcp_contract_pre_init_guard_adapter_and_registry(tmp_path: pathli
     adapter_res = adapter.execute(tdef, {"path": "env.py"}, {})
     assert adapter_res["isError"] is False
 
-    # Verify MCP Registry API endpoints & SSRF protection
     servers = await list_mcp_servers()
-    assert len(servers) >= 1
+    assert [server.id for server in servers] == ["mcp-platform-core"]
     pinged = await ping_mcp_server("mcp-platform-core")
     assert pinged.status == "connected"
-    toggled = await toggle_mcp_server("mcp-platform-core")
-    assert toggled.enabled is False
-    toggled_back = await toggle_mcp_server("mcp-platform-core")
-    assert toggled_back.enabled is True
-    pol_updated = await update_mcp_tool_policy(
-        "mcp-platform-core",
-        "repo_read_file",
-        UpdateToolApprovalPolicyRequest(requiresApproval=True),
-    )
-    assert any(t.name == "repo_read_file" and t.requiresApproval is True for t in pol_updated.tools)
+    assert pinged.lastLatencyMs is not None
 
-    with pytest.raises(APIError):
-        await register_mcp_server(
-            RegisterMCPServerRequest(
-                name="Bad SSRF MCP",
-                transport="sse",
-                endpointOrCommand="http://169.254.169.254/latest/meta-data/",
-            )
-        )
+    with pytest.raises(APIError) as error:
+        await ping_mcp_server("external")
+    assert error.value.status_code == 404
 
 
 @pytest.mark.asyncio

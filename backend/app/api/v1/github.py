@@ -550,16 +550,6 @@ async def github_webhook(
             retryable=True,
         ) from db_exc
 
-    # Notify background worker via Redis
-    try:
-        r_async = await get_redis_async()
-        if hasattr(r_async, "rpush"):
-            push_res = r_async.rpush("webhook_events:queue", str(event_record.id))
-            if inspect.isawaitable(push_res):
-                await push_res
-    except Exception as queue_exc:
-        logger.warning("webhook_queue_notify_failed", extra={"error": str(queue_exc)})
-
     from fastapi.responses import JSONResponse
 
     return JSONResponse(
@@ -716,16 +706,6 @@ async def replay_webhook_event(
         replayed = repo.replay_event(event_uuid)
     except ValueError as val_err:
         raise APIError(409, ErrorCode.CONFLICT, str(val_err))
-
-    # Notify background worker
-    try:
-        r_async = await get_redis_async()
-        if hasattr(r_async, "rpush"):
-            p_res = r_async.rpush("webhook_events:queue", str(replayed.id))
-            if inspect.isawaitable(p_res):
-                await p_res
-    except Exception as exc:
-        logger.debug("Failed enqueueing replayed webhook event to Redis: %s", exc)
 
     return {
         "status": "replayed",

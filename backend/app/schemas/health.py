@@ -15,7 +15,7 @@ class ComponentHealth(BaseModel):
 
 class OperationalReadinessMetrics(BaseModel):
     sync_worker_heartbeat_age_s: float | None = None
-    webhook_backlog: int = 0
+    webhook_backlog: int | None = None
     scanner_availability: dict[str, bool] = {}
     sandbox_backend_ok: bool = True
 
