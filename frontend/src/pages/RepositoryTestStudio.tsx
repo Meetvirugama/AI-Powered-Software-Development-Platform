@@ -201,7 +201,6 @@ export function RepositoryTestStudio() {
               <TestGenerationView
                 result={testResult.result}
                 proposedPathStatus={proposedPathStatus}
-                proposedPathExists={proposedPathStatus === 'EXISTS'}
                 activeSourceReference={activeSourceReference}
                 onSelectSourceReference={(ref) => {
                   setActiveSourceReference(ref);

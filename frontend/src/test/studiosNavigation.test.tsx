@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StudioSubNav } from '../components/studios/StudioSubNav';
 import { CommandPalette } from '../components/studios/CommandPalette';
+import { RepositoryStudioLayout } from '../layouts/RepositoryStudioLayout';
+import { repositoryKeys } from '../hooks/useRepositories';
 import type { Repository } from '../types/api';
 
 const queryClient = new QueryClient({
@@ -36,6 +38,27 @@ function renderWithProviders(ui: React.ReactElement, initialRoute = '/app/reposi
     </QueryClientProvider>
   );
 }
+
+it('clears the studio draft when switching between cached repositories', () => {
+  const cache = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  for (const id of ['first', 'second']) {
+    cache.setQueryData(repositoryKeys.detail(id), { ...mockRepo, id });
+  }
+  render(
+    <QueryClientProvider client={cache}>
+      <MemoryRouter initialEntries={['/app/repositories/first/chat']}>
+        <Routes>
+          <Route path="/app/repositories/:id" element={<RepositoryStudioLayout />}>
+            <Route path="chat" element={<><input aria-label="Draft" /><Link to="/app/repositories/second/chat">Next repo</Link></>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  fireEvent.change(screen.getByRole('textbox', { name: 'Draft' }), { target: { value: 'First repo question' } });
+  fireEvent.click(screen.getByRole('link', { name: 'Next repo' }));
+  expect(screen.getByRole('textbox', { name: 'Draft' })).toHaveValue('');
+});
 
 describe('StudioSubNav', () => {
   it('renders repository name, org, and all 6 studio workspace tabs', () => {

@@ -36,7 +36,6 @@ import type {
 export interface TestGenerationViewProps {
   result: TestGenerationResult;
   proposedPathStatus?: 'EXISTS' | 'NEW' | 'UNKNOWN';
-  proposedPathExists?: boolean;
   onSelectSourceReference?: (source: SourceReference) => void;
   activeSourceReference?: SourceReference | null;
   onSelectFramework?: (framework: SupportedTestFramework | null) => void;
@@ -82,8 +81,7 @@ const FRAMEWORK_COMMANDS: Record<SupportedTestFramework, string> = {
 
 export function TestGenerationView({
   result,
-  proposedPathStatus,
-  proposedPathExists = false,
+  proposedPathStatus = 'UNKNOWN',
   onSelectSourceReference,
   activeSourceReference,
   onSelectFramework,
@@ -145,15 +143,6 @@ export function TestGenerationView({
     timeoutsRef.current.push(id);
     return id;
   };
-
-  // Determine effective path collision state (EXISTS, NEW, or UNKNOWN)
-  const effectivePathStatus = useMemo<'EXISTS' | 'NEW' | 'UNKNOWN'>(() => {
-    if (proposedPathStatus) return proposedPathStatus;
-    if (typeof proposedPathExists === 'boolean') {
-      return proposedPathExists ? 'EXISTS' : 'NEW';
-    }
-    return 'UNKNOWN';
-  }, [proposedPathStatus, proposedPathExists]);
 
   // Target language determination for framework compatibility
   const targetLanguage = useMemo<'python' | 'javascript' | 'unknown'>(() => {
@@ -657,12 +646,12 @@ export function TestGenerationView({
             <span>Proposed Test Path:</span>
           </div>
 
-          {effectivePathStatus === 'EXISTS' ? (
+          {proposedPathStatus === 'EXISTS' ? (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-amber-500/15 text-amber-400 border border-amber-500/30">
               <AlertTriangle className="h-2.5 w-2.5" />
               File Exists (Collision Detected)
             </span>
-          ) : effectivePathStatus === 'UNKNOWN' ? (
+          ) : proposedPathStatus === 'UNKNOWN' ? (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-mono font-medium bg-blue-500/15 text-blue-400 border border-blue-500/30">
               <HelpCircle className="h-2.5 w-2.5" />
               Existence Unverified
@@ -680,7 +669,7 @@ export function TestGenerationView({
         </div>
 
         {/* Existing file collision warning callout */}
-        {effectivePathStatus === 'EXISTS' && (
+        {proposedPathStatus === 'EXISTS' && (
           <div
             role="alert"
             className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 space-y-1 animate-in fade-in duration-150"
@@ -696,7 +685,7 @@ export function TestGenerationView({
         )}
 
         {/* Uncertainty notice when file index is unverified */}
-        {effectivePathStatus === 'UNKNOWN' && (
+        {proposedPathStatus === 'UNKNOWN' && (
           <div
             role="status"
             className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-2.5 space-y-1 animate-in fade-in duration-150"
@@ -711,7 +700,7 @@ export function TestGenerationView({
           </div>
         )}
 
-        {effectivePathStatus === 'NEW' && (
+        {proposedPathStatus === 'NEW' && (
           <p className="text-[10px] text-muted-foreground leading-relaxed">
             Path derived from detected directory layout and naming conventions.
           </p>
