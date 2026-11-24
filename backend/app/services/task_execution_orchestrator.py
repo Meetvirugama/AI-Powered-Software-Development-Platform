@@ -95,6 +95,7 @@ from sandbox.exceptions import (
     WorkspacePushError,
     WorkspaceRecoveryError,
     WorkspaceRepairBudgetExhaustedError,
+    WorkspaceStaleRevisionError,
     WorkspaceStateError,
 )
 from sandbox.tool_policy_bridge import CANONICAL_TOOL_METADATA, WorkspaceToolPolicyBridge, register_workspace_tools
@@ -1792,7 +1793,10 @@ class TaskExecutionOrchestrator:
         if task.status != TaskStatus.PUBLISHING.value:
             raise APIError(409, ErrorCode.INVALID_STATE_TRANSITION, "Task is not awaiting publication.")
         if current_remote_head_sha:
-            self.workspace_manager.assert_not_stale(str(task.id), current_remote_head_sha=current_remote_head_sha)
+            try:
+                self.workspace_manager.assert_not_stale(str(task.id), current_remote_head_sha=current_remote_head_sha)
+            except WorkspaceStaleRevisionError as exc:
+                raise APIError(409, ErrorCode.PLAN_VERSION_MISMATCH, redact(str(exc))) from exc
 
         repo = self._publication_repository(task)
         try:
@@ -1875,6 +1879,11 @@ class TaskExecutionOrchestrator:
             )
 
             pr_title = redact(title or f"feat: {task.title}")
+            body_sections = [part for part in (body, ver.summary) if part]
+            if task.finding_id:
+                body_sections.append(f"**Originating Finding ID:** `{task.finding_id}`")
+            if task.source_id:
+                body_sections.append(f"**Source Reference:** `#{task.source_id}` ({task.source_type})")
             summary = self.workspace_manager.format_draft_pr_summary(
                 task_id=str(task.id),
                 title=pr_title,
@@ -1882,7 +1891,7 @@ class TaskExecutionOrchestrator:
                 base_branch=effective_base,
                 diff_result=self.workspace_manager.get_workspace_diff(str(task.id)),
                 latest_test=(self.workspace_manager.get_test_history(str(task.id)) or [None])[-1],
-                custom_body="\n\n".join(part for part in (body, ver.summary) if part),
+                custom_body="\n\n".join(body_sections),
             )
 
             async def publish() -> dict[str, Any]:

@@ -260,7 +260,7 @@ def test_publication_blocked_before_verification(api_env):
 def test_workflow_and_branch_blocked_before_plan_approval(api_env):
     task_id = _create_task(api_env.client)
     for path, body in [
-        ("/run-workflow", {"publication_authorized": True}),
+        ("/run-workflow", {}),
         ("/branch", {}),
         ("/commit", {"message": "x"}),
     ]:

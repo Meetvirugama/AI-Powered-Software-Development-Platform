@@ -2717,24 +2717,6 @@ class TestWeek3Day7E2EWorkflow:
 
 # Week 3 Day 5, Day 6 & Day 7 End-to-End Integration, Security & Final Acceptance Suite.
 
-def _check_publication_docker() -> bool:
-    import shutil, subprocess
-    if not shutil.which("docker"):
-        return False
-    try:
-        res = subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.5)
-        return res.returncode == 0
-    except Exception:
-        return False
-
-_publication_docker_available = _check_publication_docker()
-skip_no_publication_docker = pytest.mark.skipif(
-    not _publication_docker_available,
-    reason="Docker daemon not available in this environment",
-)
-
-
-
 @pytest.fixture()
 def publication_db_session() -> Session:
     engine = create_engine(
@@ -2758,12 +2740,12 @@ def publication_db_session() -> Session:
 
 
 @pytest.fixture()
-def sandbox_orchestrator(tmp_path: Path) -> TaskExecutionOrchestrator:
+def sandbox_orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TaskExecutionOrchestrator:
     ws_root = tmp_path / ".workspaces"
     ws_root.mkdir(parents=True, exist_ok=True)
     wm = WorkspaceManager(base_workspaces_dir=ws_root)
     orch = TaskExecutionOrchestrator(workspace_manager=wm)
-    app.state.task_execution_orchestrator = orch
+    monkeypatch.setattr(app.state, "task_execution_orchestrator", orch, raising=False)
     return orch
 
 
@@ -2772,6 +2754,7 @@ def publication_client(
     publication_db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
     monkeypatch: pytest.MonkeyPatch,
+    local_task_publication,
 ) -> TestClient:
     from app.core.rate_limit import InMemoryRateLimitStore
 
@@ -2839,6 +2822,7 @@ def _create_approved_task(
     publication_client: TestClient,
     repo_id: str,
     headers: dict[str, str],
+    base_revision: str,
     *,
     target_files: list[str] | None = None,
     forbidden_files: list[str] | None = None,
@@ -2856,7 +2840,7 @@ def _create_approved_task(
             "source": {
                 "type": "USER_PROMPT",
                 "repository_id": repo_id,
-                "base_revision": "a1b2c3d4e5f60123456789abcdef0123456789ab",
+                "base_revision": base_revision,
             },
             "requirements": [
                 {
@@ -2885,7 +2869,7 @@ def _create_approved_task(
                     "max_budget_tokens": 20000,
                 }
             ],
-            "base_revision": "a1b2c3d4e5f60123456789abcdef0123456789ab",
+            "base_revision": base_revision,
         },
     )
     assert create_resp.status_code == 201, create_resp.text
@@ -2912,14 +2896,24 @@ def _create_approved_task(
 # 1. Day 5: Independent Verification & Multi-Dimensional Gates (F36)
 # ---------------------------------------------------------------------------
 
-@skip_no_publication_docker
+def _run_publication_tests(client: TestClient, task_id: str, headers: dict[str, str], path: str) -> None:
+    response = client.post(
+        f"/api/v1/tasks/{task_id}/tests",
+        headers=headers,
+        json={"test_path": path, "framework": "pytest"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "PASSED", response.text
+
+
 def test_independent_verification_passes_clean_in_scope_changes(
     publication_client: TestClient,
     publication_db_session: Session,
+    local_task_base_revision,
 ) -> None:
     _, repo, token = _seed_user_and_repo(publication_db_session, suffix="1")
     headers = {"Authorization": f"Bearer {token}"}
-    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers)
+    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers, local_task_base_revision)
 
     # Start workspace execution
     exec_resp = publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
@@ -2959,21 +2953,14 @@ def test_independent_verification_passes_clean_in_scope_changes(
     )
     assert write_test.status_code == 200
 
-    # Run tests inside isolated workspace
-    test_resp = publication_client.post(
-        f"/api/v1/tasks/{task_id}/tests",
-        headers=headers,
-        json={"test_path": "tests/test_validator.py", "framework": "pytest"},
-    )
-    assert test_resp.status_code == 200
-    assert test_resp.json()["status"] == "PASSED"
+    _run_publication_tests(publication_client, task_id, headers, "tests/test_validator.py")
 
     # Trigger independent verification
     ver_resp = publication_client.post(f"/api/v1/tasks/{task_id}/verify", headers=headers, json={})
     assert ver_resp.status_code == 200, ver_resp.text
     ver_data = ver_resp.json()
 
-    assert ver_data["status"] == "PASS"
+    assert ver_data["status"] == "PASS", ver_resp.text
     assert ver_data["is_eligible_for_publication"] is True
     assert ver_data["task_status"] == "READY_FOR_PUBLICATION"
     assert len(ver_data["blocking_findings"]) == 0
@@ -2994,13 +2981,15 @@ def test_independent_verification_passes_clean_in_scope_changes(
 def test_independent_verification_blocks_secret_leak_and_out_of_scope_files(
     publication_client: TestClient,
     publication_db_session: Session,
+    local_task_base_revision,
     sandbox_orchestrator: TaskExecutionOrchestrator,
 ) -> None:
     _, repo, token = _seed_user_and_repo(publication_db_session, suffix="2")
     headers = {"Authorization": f"Bearer {token}"}
-    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers)
+    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers, local_task_base_revision)
 
-    publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    exec_resp = publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    assert exec_resp.status_code == 200, exec_resp.text
 
     # Write a file containing a leaked secret and an out-of-scope file directly in workspace
     ws_path = sandbox_orchestrator.workspace_manager.get_workspace_path(task_id)
@@ -3043,13 +3032,15 @@ def test_independent_verification_blocks_secret_leak_and_out_of_scope_files(
 def test_publication_gates_enforce_authorization_protected_branch_and_diff_immutability(
     publication_client: TestClient,
     publication_db_session: Session,
+    local_task_base_revision,
     sandbox_orchestrator: TaskExecutionOrchestrator,
 ) -> None:
     _, repo, token = _seed_user_and_repo(publication_db_session, suffix="3")
     headers = {"Authorization": f"Bearer {token}"}
-    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers)
+    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers, local_task_base_revision)
 
-    publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    exec_resp = publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    assert exec_resp.status_code == 200, exec_resp.text
     publication_client.post(
         f"/api/v1/tasks/{task_id}/tools/write_file",
         headers=headers,
@@ -3061,7 +3052,7 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
         },
     )
 
-    # 1. Protected branch rejected on /branch, /commit, /push, and /create-pr
+    # 1. Protected branches are rejected for workspace branch creation and commits.
     for protected in ("main", "master", "production"):
         b_resp = publication_client.post(
             f"/api/v1/tasks/{task_id}/branch",
@@ -3079,10 +3070,23 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
         assert c_resp.status_code == 403
         assert c_resp.json()["error"]["code"] == "POLICY_VIOLATION"
 
+    write_test = publication_client.post(
+        f"/api/v1/tasks/{task_id}/tools/write_file",
+        headers=headers,
+        json={"arguments": {
+            "file_path": "tests/test_validator.py",
+            "content": "from src.validator import validate_amount\n\n"
+                       "def test_nonnegative():\n    assert validate_amount(2) == 2\n",
+        }},
+    )
+    assert write_test.status_code == 200, write_test.text
+
+    _run_publication_tests(publication_client, task_id, headers, "tests/test_validator.py")
+
     # 2. Run verification so task enters READY_FOR_PUBLICATION
     ver_resp = publication_client.post(f"/api/v1/tasks/{task_id}/verify", headers=headers, json={})
     assert ver_resp.status_code == 200
-    assert ver_resp.json()["status"] == "PASS"
+    assert ver_resp.json()["status"] == "PASS", ver_resp.text
 
     # 3. Missing publication_authorized=True is blocked with 403 PUBLICATION_AUTHORIZATION_REQUIRED
     unauth_push = publication_client.post(
@@ -3100,6 +3104,13 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
     )
     assert unauth_pr.status_code == 403
     assert unauth_pr.json()["error"]["code"] == "PUBLICATION_AUTHORIZATION_REQUIRED"
+
+    auth_resp = publication_client.post(
+        f"/api/v1/tasks/{task_id}/authorize-publication",
+        headers=headers,
+        json={"head_sha": ver_resp.json()["verified_revision"]},
+    )
+    assert auth_resp.status_code == 200, auth_resp.text
 
     # 4. Stale base revision detection blocks push/create-pr with 409 PLAN_VERSION_MISMATCH
     stale_pr = publication_client.post(
@@ -3127,12 +3138,18 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
     )
     assert tampered_pr.status_code == 409
     assert tampered_pr.json()["error"]["code"] == "VERIFICATION_FAILED"
-    assert "modified after independent verification" in tampered_pr.json()["error"]["message"].lower()
+    assert "must be clean" in tampered_pr.json()["error"]["message"].lower()
+
+    (ws_path / "src" / "validator.py").write_text(
+        "def validate_amount(a: float) -> float:\n    return max(0.0, a)\n# Re-verified revision\n",
+        encoding="utf-8",
+    )
+    _run_publication_tests(publication_client, task_id, headers, "tests/test_validator.py")
 
     # 6. Re-running verification re-binds the diff hash and allows authorized Draft PR creation
     rever_resp = publication_client.post(f"/api/v1/tasks/{task_id}/verify", headers=headers, json={})
     assert rever_resp.status_code == 200
-    assert rever_resp.json()["status"] == "PASS"
+    assert rever_resp.json()["status"] == "PASS", rever_resp.text
 
     auth_resp = publication_client.post(
         f"/api/v1/tasks/{task_id}/authorize-publication",
@@ -3180,12 +3197,14 @@ def test_publication_gates_enforce_authorization_protected_branch_and_diff_immut
 def test_checkpoints_and_crash_recovery_preserve_repair_budget_and_scrub_secrets(
     publication_client: TestClient,
     publication_db_session: Session,
+    local_task_base_revision,
 ) -> None:
     _, repo, token = _seed_user_and_repo(publication_db_session, suffix="4")
     headers = {"Authorization": f"Bearer {token}"}
-    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers)
+    task_id, _ = _create_approved_task(publication_client, str(repo.id), headers, local_task_base_revision)
 
-    publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    exec_resp = publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    assert exec_resp.status_code == 200, exec_resp.text
 
     # Save a checkpoint containing a secret in state_data to verify secret scrubbing
     cp_resp = publication_client.post(
@@ -3252,14 +3271,27 @@ def test_checkpoints_and_crash_recovery_preserve_repair_budget_and_scrub_secrets
 def test_full_17_step_finding_to_issue_to_plan_to_verified_draft_pr_workflow(
     publication_client: TestClient,
     publication_db_session: Session,
+    local_task_base_revision,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Demonstrates the complete 17-step Week 3 chain:
     Finding -> GitHub Issue -> Task Intake -> Plan v1 -> Reject -> Plan v2 -> Approve ->
-    Autonomous Post-Approval Workflow (Workspace -> Tool Edit -> Test -> Bounded Repair ->
-    Independent Verification -> Commit -> Push -> Draft PR) -> Ordered Timeline Audit.
+    Workspace -> Tool Edit -> Test -> Independent Verification -> Commit ->
+    Human Authorization -> Push -> Draft PR -> Ordered Timeline Audit.
     """
     user, repo, token = _seed_user_and_repo(publication_db_session, suffix="5")
     headers = {"Authorization": f"Bearer {token}"}
+
+    from app.integrations.github.base import GitHubIssueData
+
+    issue = GitHubIssueData(
+        number=1,
+        title="Discount clamp",
+        body="Reject negative discounted totals.",
+        state="open",
+        html_url=f"https://github.com/{repo.owner}/{repo.name}/issues/1",
+    )
+    monkeypatch.setattr("app.integrations.github.service.GitHubService.create_issue", AsyncMock(return_value=issue))
 
     # Step 1: Seed a Week 2 AnalysisFinding (Bug Hunter finding)
     analysis_run = AnalysisRun(
@@ -3310,7 +3342,7 @@ def test_full_17_step_finding_to_issue_to_plan_to_verified_draft_pr_workflow(
     assert task_id is not None
 
     # Step 4: Generate Plan v1 (F32)
-    plan_v1 = publication_client.post(f"/api/v1/tasks/{task_id}/plan", headers=headers, json={})
+    plan_v1 = publication_client.post(f"/api/v1/tasks/{task_id}/plan", headers=headers, json={"base_revision": local_task_base_revision})
     assert plan_v1.status_code == 200
     assert plan_v1.json()["plan_version"] == 1
 
@@ -3345,38 +3377,49 @@ def test_full_17_step_finding_to_issue_to_plan_to_verified_draft_pr_workflow(
     assert app_resp.status_code == 200
     assert app_resp.json()["status"] == "APPROVED"
 
-    # Steps 8–16: Run Autonomous Post-Approval Workflow (Workspace -> Edit -> Test -> Verify -> Commit -> Push -> Draft PR)
-    plan_steps = plan_v2.json()["steps"]
-    first_edit_step_id = next(
-        (s["step_id"] for s in plan_steps if s.get("action_type") in ("edit", "create")),
-        plan_steps[0]["step_id"],
-    )
-    wf_resp = publication_client.post(
-        f"/api/v1/tasks/{task_id}/run-workflow",
+    # Steps 8–16: Execute, test and verify before authorizing the resulting commit.
+    exec_resp = publication_client.post(f"/api/v1/tasks/{task_id}/execute", headers=headers, json={"run_steps": False})
+    assert exec_resp.status_code == 200, exec_resp.text
+    files = {
+        "src/payment.py": (
+            "def calculate_discounted_total(price: float, discount: float) -> float:\n"
+            "    return max(0.0, price - max(0.0, discount))\n"
+        ),
+        "tests/test_payment.py": (
+            "from src.payment import calculate_discounted_total\n\n"
+            "def test_discount_clamp():\n    assert calculate_discounted_total(10, 20) == 0.0\n"
+        ),
+    }
+    for file_path, content in files.items():
+        write_resp = publication_client.post(
+            f"/api/v1/tasks/{task_id}/tools/write_file",
+            headers=headers,
+            json={"arguments": {"file_path": file_path, "content": content}},
+        )
+        assert write_resp.status_code == 200, write_resp.text
+
+    _run_publication_tests(publication_client, task_id, headers, "tests/test_payment.py")
+    ver_resp = publication_client.post(
+        f"/api/v1/tasks/{task_id}/verify",
         headers=headers,
-        json={
-            "step_payloads": {
-                first_edit_step_id: {
-                    "file_path": "src/payment.py",
-                    "content": (
-                        "def calculate_discounted_total(price: float, discount: float) -> float:\n"
-                        "    return max(0.0, price - max(0.0, discount))\n"
-                    ),
-                }
-            },
-            "run_tests": False,
-            "auto_repair": True,
-            "publication_authorized": True,
-            "pr_title": "fix(payment): clamp discounted total to non-negative value",
-        },
+        json={},
     )
-    assert wf_resp.status_code == 200, wf_resp.text
-    wf_data = wf_resp.json()
-    assert wf_data["status"] == "DRAFT_PR_CREATED"
-    assert wf_data["verification"]["status"] == "PASS"
-    assert wf_data["pull_request"] is not None
-    assert wf_data["pull_request"]["is_draft"] is True
-    assert str(finding.id) in (wf_data["pull_request"]["body"] or "")
+    assert ver_resp.status_code == 200, ver_resp.text
+    assert ver_resp.json()["status"] == "PASS", ver_resp.text
+    auth_resp = publication_client.post(
+        f"/api/v1/tasks/{task_id}/authorize-publication",
+        headers=headers,
+        json={"head_sha": ver_resp.json()["verified_revision"]},
+    )
+    assert auth_resp.status_code == 200, auth_resp.text
+    pr_resp = publication_client.post(
+        f"/api/v1/tasks/{task_id}/create-pr",
+        headers=headers,
+        json={"publication_authorized": True, "title": "fix(payment): clamp discounted total to non-negative value"},
+    )
+    assert pr_resp.status_code == 200, pr_resp.text
+    assert pr_resp.json()["is_draft"] is True
+    assert str(finding.id) in (pr_resp.json()["body"] or "")
 
     # Step 17: Inspect ordered timeline events and cross-tenant isolation
     events_resp = publication_client.get(f"/api/v1/tasks/{task_id}/events", headers=headers)
@@ -3388,7 +3431,7 @@ def test_full_17_step_finding_to_issue_to_plan_to_verified_draft_pr_workflow(
     assert "VERIFICATION_COMPLETED" in event_types
     assert "DRAFT_PR_CREATED" in event_types
 
-        # Verify Day 5-6 Traceability & Stale-Check endpoints
+    # Verify Day 5-6 Traceability & Stale-Check endpoints
     trace_resp = publication_client.get(f"/api/v1/tasks/{task_id}/traceability", headers=headers)
     assert trace_resp.status_code == 200, trace_resp.text
     trace_data = trace_resp.json()

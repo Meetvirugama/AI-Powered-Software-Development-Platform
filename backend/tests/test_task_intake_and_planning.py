@@ -1607,6 +1607,11 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
     api_client: TestClient,
     seeded_entities,
     sqlite_db: Session,
+    local_task_repository,
+    local_task_base_revision,
+    task_git,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ):
     """End-to-end Week 3 Day 2 acceptance test covering Scenarios A, B, and C:
     - Task creation -> Plan generation (v1) -> Unapproved execution blocked (403 APPROVAL_REQUIRED)
@@ -1617,6 +1622,11 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
     - Re-plan v4 at new base revision -> Approve v4 -> Execution gate passes -> WORKSPACE_SETUP
     - Timeline events recorded in order.
     """
+    from app.services.task_execution_orchestrator import TaskExecutionOrchestrator
+    from sandbox.workspace_manager import WorkspaceManager
+
+    orchestrator = TaskExecutionOrchestrator(workspace_manager=WorkspaceManager(base_workspaces_dir=tmp_path / "workspaces"))
+    monkeypatch.setattr(api_client.app.state, "task_execution_orchestrator", orchestrator, raising=False)
     user_a = seeded_entities["user_a"]
     user_b = seeded_entities["user_b"]
     repo_a = seeded_entities["repo_a"]
@@ -1630,7 +1640,7 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
             "description": "Reject zero, negative, and NaN amounts in src/validation.py.",
             "source": {
                 "type": "USER_PROMPT",
-                "base_revision": "0123456789abcdef",
+                "base_revision": local_task_base_revision,
             },
             "requirements": [
                 {
@@ -1657,7 +1667,7 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
                     "forbidden_files": [".env"],
                 }
             ],
-            "base_revision": "0123456789abcdef",
+            "base_revision": local_task_base_revision,
         },
         headers=_auth_headers(user_a.id),
     )
@@ -1778,7 +1788,9 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
 
     task_record = sqlite_db.get(AgentTask, uuid.UUID(task_id))
     assert task_record is not None
-    task_record.base_revision = "9999999999abcdef"
+    task_git(local_task_repository, "commit", "--allow-empty", "-m", "Upstream revision")
+    new_base_revision = task_git(local_task_repository, "rev-parse", "HEAD")
+    task_record.base_revision = new_base_revision
     sqlite_db.commit()
 
     exec_drifted = api_client.post(
@@ -1791,7 +1803,7 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
     # 12. Re-plan (v4) at new base_revision, approve v4, and execute -> transitions to WORKSPACE_SETUP
     plan_v4_resp = api_client.post(
         f"/api/v1/tasks/{task_id}/plan",
-        json={"base_revision": "9999999999abcdef"},
+        json={"base_revision": new_base_revision},
         headers=_auth_headers(user_a.id),
     )
     assert plan_v4_resp.status_code == 200
@@ -1799,7 +1811,7 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
 
     approve_v4_resp = api_client.post(
         f"/api/v1/tasks/{task_id}/approve",
-        json={"plan_version": 4, "base_revision": "9999999999abcdef"},
+        json={"plan_version": 4, "base_revision": new_base_revision},
         headers=_auth_headers(user_a.id),
     )
     assert approve_v4_resp.status_code == 200
@@ -1808,7 +1820,7 @@ def test_full_task_planning_approval_rejection_revision_and_execution_gate_workf
         f"/api/v1/tasks/{task_id}/execute",
         headers=_auth_headers(user_a.id),
     )
-    assert exec_ok_resp.status_code == 200
+    assert exec_ok_resp.status_code == 200, exec_ok_resp.text
     assert exec_ok_resp.json()["status"] == "WORKSPACE_SETUP"
 
     # 13. Verify timeline audit events via GET /api/v1/tasks/{task_id}/events

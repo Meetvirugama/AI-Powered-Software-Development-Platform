@@ -2,7 +2,7 @@
 
 Validates:
 - Attempting to create a Draft PR without persisted publication authorization fails with 409 PUBLICATION_AUTHORIZATION_REQUIRED.
-- Attempting to create a Draft PR with mismatched authorized HEAD SHA fails with 409 PLAN_VERSION_MISMATCH.
+- Attempting to create a Draft PR with mismatched authorized HEAD SHA fails with 409 PUBLICATION_AUTHORIZATION_REQUIRED.
 - Happy path: Independent verification -> authorize publication with head SHA -> create Draft PR succeeds.
 """
 
@@ -18,6 +18,7 @@ from app.core.security import create_access_token
 from app.core.database import Base, get_db
 from app.main import app
 from app.models.task import Task as AgentTask, TaskStatus
+from app.services.git_branch import format_agent_branch_name
 from app.models.github_installation import GitHubInstallation
 from app.models.repository import Repository, SyncStatus
 from app.models.user import User
@@ -50,12 +51,12 @@ def db_session() -> Session:
 
 
 @pytest.fixture()
-def sandbox_orchestrator(tmp_path: Path) -> TaskExecutionOrchestrator:
+def sandbox_orchestrator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TaskExecutionOrchestrator:
     ws_root = tmp_path / ".workspaces"
     ws_root.mkdir(parents=True, exist_ok=True)
     wm = WorkspaceManager(base_workspaces_dir=ws_root)
     orch = TaskExecutionOrchestrator(workspace_manager=wm)
-    app.state.task_execution_orchestrator = orch
+    monkeypatch.setattr(app.state, "task_execution_orchestrator", orch, raising=False)
     return orch
 
 
@@ -64,6 +65,7 @@ def client(
     db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
     monkeypatch: pytest.MonkeyPatch,
+    local_task_publication,
 ) -> TestClient:
     from app.core.rate_limit import InMemoryRateLimitStore
 
@@ -90,6 +92,8 @@ def client(
 def _seed_verified_task(
     db: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    base_revision: str,
+    record_verified_commit,
 ) -> tuple[User, Repository, AgentTask, str, str]:
     user = User(
         id=uuid4(),
@@ -133,7 +137,7 @@ def _seed_verified_task(
         title="Implement secure discount clamping",
         description="Clamp discount to prevent negative totals",
         status=TaskStatus.READY_FOR_PUBLICATION.value,
-        base_revision="1111111111111111111111111111111111111111",
+        base_revision=base_revision,
         plan_version=1,
         approved_plan_version=1,
     )
@@ -146,7 +150,10 @@ def _seed_verified_task(
             task_id=str(task.id),
             repository_id=str(repo.id),
             base_revision=task.base_revision,
-        )
+            branch_name=format_agent_branch_name(task.id),
+        ),
+        repository_url=f"https://github.com/{repo.owner}/{repo.name}.git",
+        installation_token="fixture-token",
     )
     ws_path = Path(ws_meta.workspace_path)
     (ws_path / "src").mkdir(parents=True, exist_ok=True)
@@ -160,33 +167,14 @@ def _seed_verified_task(
         encoding="utf-8",
     )
 
-    # Record verification result
-    diff_hash = sandbox_orchestrator.workspace_manager.compute_verification_diff_hash(str(task.id), record_baseline=True)
-    verified_rev = "2222222222222222222222222222222222222222"
-
-    task_repo.record_verification_result(
-        task_id=task.id,
-        repository_id=repo.id,
-        verified_revision=verified_rev,
-        status="PASSED",
-        checks=[
-            {"name": "diff_scope", "status": "PASSED", "duration_ms": 10, "message": "In scope"},
-            {"name": "secret_scan", "status": "PASSED", "duration_ms": 10, "message": "No secrets"},
-            {"name": "static_analysis", "status": "PASSED", "duration_ms": 10, "message": "No syntax errors"},
-            {"name": "tests", "status": "PASSED", "duration_ms": 10, "message": "Tests pass"},
-            {"name": "ai_code_review", "status": "PASSED", "duration_ms": 10, "message": "Reviewed"},
-        ],
-        blocking_findings=[],
-        warnings=[],
-        summary="Independent verification passed",
-    )
+    verified_rev = record_verified_commit(sandbox_orchestrator.workspace_manager, task_repo, task)
 
     from app.models.task import Workspace, WorkspaceStatus as DBWorkspaceStatus
 
     db_ws = Workspace(
         task_id=task.id,
         workspace_path=str(ws_path),
-        task_branch="agent/task-test-branch",
+        task_branch=ws_meta.branch_name,
         base_revision=task.base_revision,
         current_revision=verified_rev,
         status=DBWorkspaceStatus.READY.value,
@@ -201,9 +189,13 @@ def test_create_pr_without_persisted_authorization_fails(
     client: TestClient,
     db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    local_task_base_revision,
+    record_verified_commit,
 ) -> None:
     """TST-20: create-pr without prior POST /authorize-publication fails with 409."""
-    _user, repo, task, token, verified_rev = _seed_verified_task(db_session, sandbox_orchestrator)
+    _user, repo, task, token, verified_rev = _seed_verified_task(
+        db_session, sandbox_orchestrator, local_task_base_revision, record_verified_commit,
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     # Attempt to create PR without calling /authorize-publication
@@ -214,16 +206,20 @@ def test_create_pr_without_persisted_authorization_fails(
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "PUBLICATION_AUTHORIZATION_REQUIRED"
-    assert "no recorded publication authorization" in resp.json()["error"]["message"].lower()
+    assert "authorize this verified commit" in resp.json()["error"]["message"].lower()
 
 
 def test_authorize_publication_with_mismatched_head_sha_fails(
     client: TestClient,
     db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    local_task_base_revision,
+    record_verified_commit,
 ) -> None:
     """TST-20: POST /authorize-publication fails if head_sha does not match verified revision."""
-    _user, repo, task, token, verified_rev = _seed_verified_task(db_session, sandbox_orchestrator)
+    _user, repo, task, token, verified_rev = _seed_verified_task(
+        db_session, sandbox_orchestrator, local_task_base_revision, record_verified_commit,
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     # Authorize with a mismatched head sha
@@ -239,9 +235,13 @@ def test_create_pr_with_stale_authorized_sha_fails(
     client: TestClient,
     db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    local_task_base_revision,
+    record_verified_commit,
 ) -> None:
-    """TST-20: create-pr fails with 409 PLAN_VERSION_MISMATCH if authorized SHA doesn't match new verified revision."""
-    _user, repo, task, token, verified_rev = _seed_verified_task(db_session, sandbox_orchestrator)
+    """TST-20: create-pr fails with 409 PUBLICATION_AUTHORIZATION_REQUIRED if authorized SHA doesn't match new verified revision."""
+    _user, repo, task, token, verified_rev = _seed_verified_task(
+        db_session, sandbox_orchestrator, local_task_base_revision, record_verified_commit,
+    )
     headers = {"Authorization": f"Bearer {token}"}
     task_repo = TaskRepository(db_session)
 
@@ -254,19 +254,10 @@ def test_create_pr_with_stale_authorized_sha_fails(
     assert auth_resp.status_code == 200
 
     # 2. Re-record verification with a new revision (e.g. after code changes)
-    new_verified_rev = "4444444444444444444444444444444444444444"
-    task.status = TaskStatus.READY_FOR_PUBLICATION.value
-    task_repo.record_verification_result(
-        task_id=task.id,
-        repository_id=repo.id,
-        verified_revision=new_verified_rev,
-        status="PASSED",
-        checks=[],
-        blocking_findings=[],
-        warnings=[],
-        summary="Re-verified revision",
-    )
-    db_session.commit()
+    manager = sandbox_orchestrator.workspace_manager
+    payment = manager.get_workspace_path(str(task.id)) / "src" / "payment.py"
+    payment.write_text(payment.read_text(encoding="utf-8") + "\n# Follow-up revision\n", encoding="utf-8")
+    assert record_verified_commit(manager, task_repo, task) != verified_rev
 
     # 3. Attempt to create PR with the old authorization still recorded
     resp = client.post(
@@ -275,16 +266,20 @@ def test_create_pr_with_stale_authorized_sha_fails(
         json={"publication_authorized": True},
     )
     assert resp.status_code == 409
-    assert "does not match verified revision" in resp.json()["error"]["message"].lower()
+    assert resp.json()["error"]["code"] == "PUBLICATION_AUTHORIZATION_REQUIRED"
 
 
 def test_create_pr_happy_path_with_valid_authorization(
     client: TestClient,
     db_session: Session,
     sandbox_orchestrator: TaskExecutionOrchestrator,
+    local_task_base_revision,
+    record_verified_commit,
 ) -> None:
     """TST-20: create-pr succeeds when preceded by valid SHA-bound publication authorization."""
-    _user, repo, task, token, verified_rev = _seed_verified_task(db_session, sandbox_orchestrator)
+    _user, repo, task, token, verified_rev = _seed_verified_task(
+        db_session, sandbox_orchestrator, local_task_base_revision, record_verified_commit,
+    )
     headers = {"Authorization": f"Bearer {token}"}
 
     # Authorize publication with the exact verified_revision
