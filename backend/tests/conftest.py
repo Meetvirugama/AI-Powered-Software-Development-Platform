@@ -26,7 +26,7 @@ try:
     import responses
 except ImportError:
     responses = None  # type: ignore
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session, sessionmaker
@@ -197,9 +197,12 @@ def test_engine():
         with engine.begin() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
+    owns_schema = not inspect(engine).get_table_names()
     Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine, checkfirst=True)
+    # A migrated database owns its tables, enum types and Alembic revision.
+    if owns_schema:
+        Base.metadata.drop_all(bind=engine, checkfirst=True)
     engine.dispose()
 
 

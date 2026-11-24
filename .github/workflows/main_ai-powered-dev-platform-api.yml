@@ -125,7 +125,10 @@ jobs:
                  -v
 
       - name: Run end-to-end API and workflow tests
-        run: python -m pytest tests/e2e --no-cov --timeout=120 -q
+        run: |
+          python -m pytest tests/e2e -o addopts= --timeout=120 -q \
+            --cov=app --cov=ai --cov-append --cov-fail-under=50 \
+            --cov-report=xml:coverage.xml
 
       - name: Upload coverage report artifact
         if: always()

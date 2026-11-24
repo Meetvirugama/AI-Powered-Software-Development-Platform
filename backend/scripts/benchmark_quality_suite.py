@@ -211,7 +211,11 @@ async def run_rag_retrieval_benchmark() -> dict[str, Any]:
             reciprocal_ranks.append(0.0)
 
     # Evaluate hard negatives (queries outside the codebase)
-    hard_negatives_evaluated = len(RAG_HARD_NEGATIVES)
+    hard_negatives_empty = 0
+    for item in RAG_HARD_NEGATIVES:
+        results = await hybrid.retrieve(item["query"], repo_id, top_k=5)
+        if not results:
+            hard_negatives_empty += 1
 
     latencies_ms.sort()
     p50_idx = int(0.50 * len(latencies_ms))
@@ -240,7 +244,8 @@ async def run_rag_retrieval_benchmark() -> dict[str, Any]:
         "target_hit_rate_met": hit_rate >= 0.80,
         "target_mrr_met": mrr >= 0.80,
         "per_category_hit_rate": per_category,
-        "hard_negatives_tested": hard_negatives_evaluated,
+        "hard_negatives_tested": len(RAG_HARD_NEGATIVES),
+        "hard_negatives_with_empty_results": hard_negatives_empty,
     }
 
 
@@ -1194,7 +1199,8 @@ def generate_markdown_report(results: dict[str, Any], output_path: Path) -> None
     content = f"""# Platform Quality & Retrieval Benchmark Report
 
 **Generated:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
-**Environment:** Python {sys.version.split()[0]} | PostgreSQL 15 + pgvector | Redis 7  
+**Environment:** Python {sys.version.split()[0]} | In-memory retrieval fixtures
+
 **Overall Quality Gate Status:** {'✅ ALL GATES PASSED' if results['all_quality_gates_passed'] else '❌ GATES FAILED'}
 
 ---
