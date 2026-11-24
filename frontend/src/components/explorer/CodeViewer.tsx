@@ -3,6 +3,7 @@ import { Copy, Check, Hash, Layers, X, Target, Sparkles, FileCode, Code } from '
 import { LoadingSpinner } from '../shared/LoadingSpinner';
 import { useRepositoryFileContent } from '../../hooks/useRepositories';
 import { cn } from '../../lib/utils';
+import { resolveFileType } from '../../lib/fileLanguage';
 import { useVirtualRange } from '../../utils/virtualizationAndSyntax';
 import type { RepositoryFile, CodeSymbol } from '../../types/api';
 import type { AnalysisTarget, SourceReference } from '../../types/analysis';
@@ -53,6 +54,14 @@ const PYTHON_KEYWORDS = new Set([
   'nonlocal', 'True', 'False', 'None', 'self', 'cls',
 ]);
 
+const RUST_GO_KEYWORDS = new Set([
+  'fn', 'let', 'mut', 'pub', 'struct', 'enum', 'impl', 'trait', 'use', 'mod',
+  'match', 'if', 'else', 'for', 'while', 'loop', 'return', 'async', 'await',
+  'where', 'type', 'const', 'static', 'ref', 'move', 'self', 'Self', 'crate',
+  'super', 'true', 'false', 'package', 'func', 'var', 'interface', 'defer',
+  'go', 'chan', 'select', 'switch', 'case', 'default', 'range', 'nil', 'struct',
+]);
+
 function tokenizeLine(line: string, language: string | null): Token[] {
   if (!line) return [{ text: '', type: 'plain' }];
 
@@ -63,19 +72,24 @@ function tokenizeLine(line: string, language: string | null): Token[] {
     lang.includes('javascript') ||
     lang.includes('tsx') ||
     lang.includes('jsx');
+  const isRustOrGo = lang === 'rust' || lang === 'go' || lang.endsWith('.rs') || lang.endsWith('.go');
+  const isHtmlOrXml = lang === 'html' || lang === 'xml' || lang === 'svg' || lang.endsWith('.html');
   const isJson = lang.includes('json');
   const isMarkdown = lang.includes('markdown') || lang.endsWith('.md');
 
   // Single-line comment check
   const trimmed = line.trimStart();
-  if (isPython && trimmed.startsWith('#')) {
+  if ((isPython || lang === 'yaml' || lang === 'shell' || lang === 'toml') && trimmed.startsWith('#')) {
     return [{ text: line, type: 'comment' }];
   }
-  if (isJsTs && trimmed.startsWith('//')) {
+  if ((isJsTs || isRustOrGo) && trimmed.startsWith('//')) {
     return [{ text: line, type: 'comment' }];
   }
-  if (isMarkdown && line.startsWith('#')) {
+  if (isMarkdown && trimmed.startsWith('#')) {
     return [{ text: line, type: 'keyword' }];
+  }
+  if (isHtmlOrXml && trimmed.startsWith('<!--')) {
+    return [{ text: line, type: 'comment' }];
   }
 
   // Tokenize using regex matches
@@ -83,8 +97,10 @@ function tokenizeLine(line: string, language: string | null): Token[] {
   // Tokenizer regex: matches comments, strings, identifiers/words, numbers, symbols
   const regex = isPython
     ? /(#.*$)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_]\w*\b)|([^\s\w"']+)|(\s+)/g
-    : isJsTs
+    : isJsTs || isRustOrGo
     ? /(\/\/.*$)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d+(?:\.\d+)?\b)|(\b[a-zA-Z_]\w*\b)|([^\s\w"'`]+)|(\s+)/g
+    : isHtmlOrXml
+    ? /(<\/?[a-zA-Z][\w:-]*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\/>|>)|(\b[a-zA-Z_:][\w:.-]*(?==))|([^\s<>="']+)|(\s+)/g
     : isJson
     ? /("(?:\\.|[^"\\])*"(?=\s*:))|("(?:\\.|[^"\\])*")|(\b(?:true|false|null|\d+(?:\.\d+)?)\b)|([^\s"':,{}[\]]+)|(\s+)|([:,{}[\]])/g
     : /(\b\w+\b)|([^\w\s]+)|(\s+)/g;
@@ -115,7 +131,7 @@ function tokenizeLine(line: string, language: string | null): Token[] {
       } else {
         tokens.push({ text: fullMatch, type: 'plain' });
       }
-    } else if (isJsTs) {
+    } else if (isJsTs || isRustOrGo) {
       if (match[1]) {
         tokens.push({ text: fullMatch, type: 'comment' });
       } else if (match[2]) {
@@ -124,11 +140,22 @@ function tokenizeLine(line: string, language: string | null): Token[] {
         tokens.push({ text: fullMatch, type: 'number' });
       } else if (match[4]) {
         const word = match[4];
-        if (JS_TS_KEYWORDS.has(word)) {
+        const keywordSet = isRustOrGo ? RUST_GO_KEYWORDS : JS_TS_KEYWORDS;
+        if (keywordSet.has(word)) {
           tokens.push({ text: fullMatch, type: 'keyword' });
         } else {
           tokens.push({ text: fullMatch, type: 'plain' });
         }
+      } else {
+        tokens.push({ text: fullMatch, type: 'plain' });
+      }
+    } else if (isHtmlOrXml) {
+      if (match[1] || match[3]) {
+        tokens.push({ text: fullMatch, type: 'keyword' });
+      } else if (match[2]) {
+        tokens.push({ text: fullMatch, type: 'string' });
+      } else if (match[4]) {
+        tokens.push({ text: fullMatch, type: 'type' });
       } else {
         tokens.push({ text: fullMatch, type: 'plain' });
       }
@@ -160,37 +187,37 @@ function renderToken(token: Token, key: number) {
   switch (token.type) {
     case 'keyword':
       return (
-        <span key={key} className="text-purple-400 font-medium">
+        <span key={key} className="text-rose-700 dark:text-rose-400 font-medium">
           {token.text}
         </span>
       );
     case 'type':
       return (
-        <span key={key} className="text-amber-400">
+        <span key={key} className="text-amber-700 dark:text-amber-400">
           {token.text}
         </span>
       );
     case 'string':
       return (
-        <span key={key} className="text-emerald-400">
+        <span key={key} className="text-emerald-700 dark:text-emerald-400">
           {token.text}
         </span>
       );
     case 'number':
       return (
-        <span key={key} className="text-blue-400">
+        <span key={key} className="text-sky-700 dark:text-sky-400">
           {token.text}
         </span>
       );
     case 'comment':
       return (
-        <span key={key} className="text-muted-foreground/70 italic">
+        <span key={key} className="text-muted-foreground/75 italic">
           {token.text}
         </span>
       );
     case 'function':
       return (
-        <span key={key} className="text-cyan-400">
+        <span key={key} className="text-teal-700 dark:text-teal-400">
           {token.text}
         </span>
       );
@@ -226,13 +253,18 @@ export function CodeViewer({
     };
   }, []);
 
+  const resolvedFileType = useMemo(
+    () => resolveFileType(file.path, file.language),
+    [file.path, file.language]
+  );
+
   const content = fileData?.content;
   const lines = useMemo(() => (content ? content.split('\n') : []), [content]);
 
   // Pre-tokenize lines for performance
   const tokenizedLines = useMemo(() => {
-    return lines.map((line) => tokenizeLine(line, file.language || file.path));
-  }, [lines, file.language, file.path]);
+    return lines.map((line) => tokenizeLine(line, resolvedFileType.id));
+  }, [lines, resolvedFileType.id]);
 
   // Virtualize long code documents (> 200 lines) while rendering <= 200 lines directly
   const { windowSlice, onScroll } = useVirtualRange({
@@ -360,9 +392,13 @@ export function CodeViewer({
             </span>
           )}
 
+          <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-border/60 text-[10px] font-mono shrink-0">
+            {resolvedFileType.label}
+          </span>
+
           {/* Active Cited Source Badge */}
           {isCitedSourceActive && highlightedSource && (
-            <span className="inline-flex items-center gap-1 text-cyan-400 font-medium bg-cyan-500/15 px-2 py-0.5 rounded border border-cyan-500/30 text-[10px]">
+            <span className="inline-flex items-center gap-1 text-sky-700 dark:text-sky-400 font-medium bg-sky-500/10 px-2 py-0.5 rounded border border-sky-500/25 text-[10px]">
               <span>Cited: L{highlightedSource.start_line}–L{highlightedSource.end_line}</span>
               {onClearHighlightedSource && (
                 <button
@@ -460,8 +496,8 @@ export function CodeViewer({
           >
             {copied ? (
               <>
-                <Check className="h-3 w-3 text-emerald-400" />
-                <span className="text-emerald-400">Copied</span>
+                <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                <span className="text-emerald-600 dark:text-emerald-400">Copied</span>
               </>
             ) : (
               <>
@@ -484,8 +520,15 @@ export function CodeViewer({
             Could not retrieve file content. Chunks might still be indexing.
           </div>
         ) : !content ? (
-          <div className="p-6 text-center text-xs text-muted-foreground italic font-sans">
-            Empty file or non-indexed binary content.
+          <div className="flex flex-col items-center justify-center p-10 text-center gap-2 font-sans">
+            <span className="px-2 py-0.5 rounded-md bg-muted border border-border text-[11px] font-mono text-muted-foreground">
+              {resolvedFileType.label}
+            </span>
+            <p className="text-xs text-muted-foreground">
+              {resolvedFileType.isBinaryOrMedia
+                ? `${resolvedFileType.label} file — binary or media content cannot be rendered as plain source code.`
+                : 'Empty file or non-indexed content.'}
+            </p>
           </div>
         ) : (
           <div className="flex min-w-full leading-5 select-text py-2">

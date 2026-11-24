@@ -18,6 +18,7 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { getFileLanguageLabel } from '../../lib/fileLanguage';
 import { useRepositories, useRepositoryFiles } from '../../hooks/useRepositories';
 import { useTasks } from '../../hooks/useTasks';
 
@@ -80,6 +81,18 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
     };
   }, []);
 
+  // Close on Escape regardless of focus location (including before the 40ms focus timer or on the backdrop).
+  useEffect(() => {
+    const handleWindowEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleWindowEscape);
+    return () => window.removeEventListener('keydown', handleWindowEscape);
+  }, [onClose]);
+
   const navigationItems = useMemo<PaletteItem[]>(
     () => [
       { id: 'nav-dashboard', type: 'navigation', title: 'Dashboard', subtitle: 'Overview of repositories and tasks', icon: LayoutDashboard, to: '/app/dashboard' },
@@ -116,14 +129,21 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
     () =>
       (reposData?.items ?? [])
         .filter((repo) => repo.id !== repoId)
-        .map((repo) => ({
-          id: `repo-${repo.id}`,
-          type: 'repository' as const,
-          title: repo.full_name || repo.name,
-          subtitle: `${repo.language ?? 'repository'} · ${repo.sync_status.toLowerCase().replace('_', ' ')}`,
-          icon: GitBranch,
-          to: `/app/repositories/${repo.id}`,
-        })),
+        .map((repo) => {
+          const normalizedLang = repo.language?.trim();
+          const repoLang =
+            normalizedLang && !['unknown', 'other'].includes(normalizedLang.toLowerCase())
+              ? normalizedLang
+              : 'repository';
+          return {
+            id: `repo-${repo.id}`,
+            type: 'repository' as const,
+            title: repo.full_name || repo.name,
+            subtitle: `${repoLang} · ${repo.sync_status.toLowerCase().replace('_', ' ')}`,
+            icon: GitBranch,
+            to: `/app/repositories/${repo.id}`,
+          };
+        }),
     [reposData, repoId]
   );
 
@@ -143,14 +163,18 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
   const fileItems = useMemo<PaletteItem[]>(() => {
     if (!repoId) return [];
     const base = studioBaseFor(location.pathname, repoId);
-    return (filesData?.items ?? []).map((file) => ({
-      id: `file-${file.id}`,
-      type: 'file' as const,
-      title: file.path,
-      subtitle: `${file.language ?? 'file'} · ${file.size_bytes ? `${Math.max(1, Math.round(file.size_bytes / 1024))} KB` : 'file'}`,
-      icon: FileCode,
-      to: `${base}?file=${encodeURIComponent(file.path)}`,
-    }));
+    return (filesData?.items ?? []).map((file) => {
+      const languageLabel = getFileLanguageLabel(file.path, file.language);
+      const sizeLabel = file.size_bytes > 0 ? `${Math.max(1, Math.round(file.size_bytes / 1024))} KB` : null;
+      return {
+        id: `file-${file.id}`,
+        type: 'file' as const,
+        title: file.path,
+        subtitle: sizeLabel ? `${languageLabel} · ${sizeLabel}` : languageLabel,
+        icon: FileCode,
+        to: `${base}?file=${encodeURIComponent(file.path)}`,
+      };
+    });
   }, [filesData, location.pathname, repoId]);
 
   const filteredItems = useMemo(() => {
@@ -167,7 +191,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
       ...lead.filter(matches),
       ...repositoryItems.filter(matches).slice(0, 10),
       ...taskItems.filter(matches).slice(0, 10),
-      ...fileItems.filter((f) => f.title.toLowerCase().includes(q)).slice(0, 20),
+      ...fileItems.filter(matches).slice(0, 20),
     ];
   }, [query, repoId, studioItems, navigationItems, repositoryItems, taskItems, fileItems]);
 
@@ -201,12 +225,9 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
       } else if (e.key === 'Enter') {
         e.preventDefault();
         runItem(filteredItems[activeIndex]);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
       }
     },
-    [filteredItems, activeIndex, runItem, onClose]
+    [filteredItems, activeIndex, runItem]
   );
 
   return (
@@ -214,16 +235,16 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
       role="dialog"
       aria-modal="true"
       aria-label="Command Palette"
-      className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 px-4 bg-background/80 backdrop-blur-sm animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-12 sm:pt-24 px-3 sm:px-4 bg-black/40 dark:bg-black/60 backdrop-blur-[2px]"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl rounded-xl border border-border/80 bg-card shadow-2xl overflow-hidden flex flex-col max-h-[75vh]"
+        className="w-full max-w-xl rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl overflow-hidden flex flex-col max-h-[80vh] sm:max-h-[75vh]"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         {/* Search header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border/60 bg-muted/20">
+        <div className="flex items-center gap-2.5 sm:gap-3 px-3.5 sm:px-4 py-3 border-b border-border">
           <Search className="h-4 w-4 text-muted-foreground shrink-0" />
           <input
             ref={inputRef}
@@ -241,20 +262,33 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
             aria-label="Search commands"
             aria-controls="command-palette-results"
             aria-activedescendant={filteredItems[activeIndex] ? `palette-item-${activeIndex}` : undefined}
-            className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-hidden"
+            className="flex-1 min-w-0 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/70 focus:outline-hidden"
           />
           {query && (
             <button
-              onClick={() => setQuery('')}
-              className="p-1 rounded text-muted-foreground hover:text-foreground"
+              type="button"
+              onClick={() => {
+                setQuery('');
+                setSelectedIndex(0);
+                inputRef.current?.focus();
+              }}
+              className="px-1.5 py-0.5 rounded-md text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
               aria-label="Clear query"
             >
-              <X className="h-3.5 w-3.5" />
+              Clear
             </button>
           )}
           <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground bg-accent rounded border border-border">
             ESC
           </kbd>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close command palette"
+            className="sm:hidden p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring shrink-0"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Results list */}
@@ -262,7 +296,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
           ref={listRef}
           id="command-palette-results"
           role="listbox"
-          className="overflow-y-auto p-2 max-h-[420px]"
+          className="flex-1 min-h-0 overflow-y-auto p-2 max-h-[60vh] sm:max-h-[420px]"
         >
           {filteredItems.length === 0 ? (
             <div className="py-10 text-center text-xs text-muted-foreground">
@@ -281,6 +315,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
                     </div>
                   )}
                   <button
+                    type="button"
                     id={`palette-item-${idx}`}
                     role="option"
                     aria-selected={isSelected}
@@ -288,19 +323,19 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
                     onClick={() => runItem(item)}
                     onMouseEnter={() => setSelectedIndex(idx)}
                     className={cn(
-                      'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-xs transition-colors',
+                      'w-full flex items-center gap-3 px-3 py-2.5 sm:py-2 rounded-lg text-left text-xs transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                       isSelected
-                        ? 'bg-primary/10 text-primary border border-primary/30'
-                        : 'hover:bg-accent/50 text-foreground border border-transparent'
+                        ? 'bg-accent text-foreground'
+                        : 'text-foreground/90 hover:bg-accent/60'
                     )}
                   >
                     <div
                       className={cn(
                         'p-1.5 rounded-md shrink-0',
-                        item.type === 'file' ? 'bg-muted text-muted-foreground' : 'bg-primary/10 text-primary'
+                        isSelected ? 'bg-background text-foreground border border-border' : 'bg-muted text-muted-foreground'
                       )}
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="h-3.5 w-3.5" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium truncate">{item.title}</div>
@@ -309,7 +344,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
                       )}
                     </div>
                     {isSelected && (
-                      <div className="flex items-center gap-1 text-[11px] text-primary shrink-0">
+                      <div className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground shrink-0">
                         <span>Jump</span>
                         <CornerDownLeft className="h-3 w-3" />
                       </div>
@@ -322,7 +357,7 @@ function CommandPaletteModal({ repoId, onClose }: { repoId?: string; onClose: ()
         </div>
 
         {/* Footer shortcuts */}
-        <div className="px-4 py-2 bg-muted/30 border-t border-border/40 flex items-center justify-between text-[11px] text-muted-foreground">
+        <div className="hidden sm:flex px-4 py-2 bg-muted/30 border-t border-border/40 items-center justify-between text-[11px] text-muted-foreground">
           <div className="flex items-center gap-3">
             <span>
               <kbd className="font-mono bg-accent px-1 py-0.5 rounded border border-border">↑</kbd>{' '}
