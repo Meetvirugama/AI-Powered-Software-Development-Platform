@@ -72,9 +72,9 @@ export function RepositoryTestStudio() {
       files,
       filesLoading,
       filesError,
-      false
+      files.length === filesData?.total
     );
-  }, [testResult, files, filesLoading, filesError]);
+  }, [testResult, files, filesLoading, filesError, filesData?.total]);
 
   return (
     <StudioLayout

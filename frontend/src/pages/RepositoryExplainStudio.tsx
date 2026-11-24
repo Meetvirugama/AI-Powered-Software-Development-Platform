@@ -109,7 +109,7 @@ export function RepositoryExplainStudio() {
     if (!selectedFile || explainMutation.isPending) return;
 
     const allSelected = Array.from(
-      new Set([...Array.from(selectedRelatedPaths), ...customSelectedFiles])
+      new Set([...selectedRelatedPaths, ...customSelectedFiles])
     );
 
     const isDeep = explainAtDepth || explanationLevel === 'deep_technical';
@@ -174,7 +174,7 @@ export function RepositoryExplainStudio() {
   // Search filtered files for dropdown
   const filteredRepoFiles = useMemo(() => {
     if (!fileSearchQuery.trim()) return [];
-    const q = fileSearchQuery.toLowerCase();
+    const q = fileSearchQuery.trim().toLowerCase();
     return files
       .filter(
         (f) =>
