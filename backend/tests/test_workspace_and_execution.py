@@ -2089,8 +2089,13 @@ def test_bounded_repair_loop_handles_rejected_patches_and_applies_real_diff_hunk
 # 4. End-to-End API Integration Tests for Week 3 Day 3 & Day 4 (tasks.py)
 # ---------------------------------------------------------------------------
 
-def test_full_week3_day3_day4_api_lifecycle_and_security_gates(w3_d34_env) -> None:
+def test_full_week3_day3_day4_api_lifecycle_and_security_gates(
+    w3_d34_env, local_task_base_revision, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Verify end-to-end API flow: intake -> plan -> approve -> execute -> workspace -> tools -> diff -> pause/resume -> tests -> repair."""
+    from ai.services.task_planner import TaskPlanner
+
+    monkeypatch.setattr(fastapi_app.state, "task_planner", TaskPlanner(), raising=False)
     client = TestClient(fastapi_app)
 
     # 1. Create task with protected file constraint
@@ -2101,7 +2106,7 @@ def test_full_week3_day3_day4_api_lifecycle_and_security_gates(w3_d34_env) -> No
             "repository_id": str(REPO_A_ID),
             "title": "Implement Discount Calculator and Unit Tests",
             "description": "Add discount calculation function in src/discount.py.",
-            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": "a1b2c3d4"},
+            "source": {"type": "USER_PROMPT", "repository_id": str(REPO_A_ID), "base_revision": local_task_base_revision},
             "requirements": [
                 {
                     "id": "req-1",
@@ -2167,21 +2172,30 @@ def test_full_week3_day3_day4_api_lifecycle_and_security_gates(w3_d34_env) -> No
     assert approve_data["title"] == "Implement Discount Calculator and Unit Tests"
 
     # 6. Execute approved task with run_steps=True and custom step_payloads
-    first_step_id = plan_data["steps"][0]["step_id"]
+    implementation = (
+        "def apply_discount(price: float, pct: float) -> float:\n"
+        "    return round(price * (1.0 - pct / 100.0), 2)\n"
+    )
+    regression_test = (
+        "from src.discount import apply_discount\n\n"
+        "def test_apply_discount():\n"
+        "    assert apply_discount(100.0, 15.0) == 85.0\n"
+    )
+    edit_step = next(step for step in plan_data["steps"] if step["action_type"] == "modify")
+    test_step = next(step for step in plan_data["steps"] if step["action_type"] == "add_test")
     exec_resp = client.post(
         f"/api/v1/tasks/{task_id}/execute",
         headers=_headers(USER_A_ID),
         json={
             "run_steps": True,
             "step_payloads": {
-                first_step_id: {
-                    "content": "def apply_discount(price: float, pct: float) -> float:\n    return round(price * (1.0 - pct / 100.0), 2)\n"
-                }
+                edit_step["step_id"]: {"content": implementation},
+                test_step["step_id"]: {"content": regression_test},
             },
         },
     )
-    assert exec_resp.status_code == 200
-    assert exec_resp.json()["status"] == "EXECUTING"
+    assert exec_resp.status_code == 200, exec_resp.text
+    assert exec_resp.json()["status"] == "EXECUTING", exec_resp.text
 
     # 7. Inspect GET /api/v1/tasks/{task_id}/workspace
     ws_resp = client.get(f"/api/v1/tasks/{task_id}/workspace", headers=_headers(USER_A_ID))
@@ -2196,11 +2210,7 @@ def test_full_week3_day3_day4_api_lifecycle_and_security_gates(w3_d34_env) -> No
         json={
             "arguments": {
                 "file_path": "tests/test_discount.py",
-                "content": (
-                    "from src.discount import apply_discount\n\n"
-                    "def test_apply_discount():\n"
-                    "    assert apply_discount(100.0, 15.0) == 85.0\n"
-                ),
+                "content": regression_test,
             }
         },
     )
