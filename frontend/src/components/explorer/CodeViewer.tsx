@@ -241,11 +241,19 @@ export function CodeViewer({
   isAnalyzing = false,
   className,
 }: CodeViewerProps) {
-  const { data: fileData, isLoading, isError } = useRepositoryFileContent(repositoryId, file.id);
+  const { data: fileData, isLoading, isError, error, refetch } = useRepositoryFileContent(repositoryId, file.id);
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [anchorLine, setAnchorLine] = useState<number | null>(null);
   const codeContainerRef = useRef<HTMLDivElement>(null);
+
+  // Reset scroll offset and line selection anchor whenever the active file changes
+  useEffect(() => {
+    setAnchorLine(null);
+    if (codeContainerRef.current) {
+      codeContainerRef.current.scrollTop = 0;
+    }
+  }, [file.id]);
 
   useEffect(() => {
     return () => {
@@ -520,8 +528,19 @@ export function CodeViewer({
             </span>
           </div>
         ) : isError ? (
-          <div className="p-6 text-center text-xs text-destructive">
-            Could not retrieve file content. Chunks might still be indexing.
+          <div className="flex flex-col items-center justify-center p-8 text-center gap-3 font-sans">
+            <p className="text-xs text-destructive max-w-md">
+              {error instanceof Error && error.message
+                ? error.message
+                : 'Could not retrieve file content. Chunks might still be indexing.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+            >
+              Retry
+            </button>
           </div>
         ) : !content ? (
           <div className="flex flex-col items-center justify-center p-10 text-center gap-2 font-sans">

@@ -297,6 +297,7 @@ def e2e_redis(monkeypatch) -> E2EInMemoryRedis:
         return mock
 
     monkeypatch.setattr("app.core.redis.get_redis_async", _async_redis)
+    monkeypatch.setattr("app.api.v1.github.get_redis_async", _async_redis)
     try:
         monkeypatch.setattr("app.api.v1.events.get_redis_async", _async_redis)
     except AttributeError:

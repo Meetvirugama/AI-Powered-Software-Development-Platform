@@ -354,7 +354,7 @@ def get_file_by_path(
     response_model=RepositoryFileContentResponse,
     summary="Get indexed file content and symbols",
 )
-def get_file_content(
+async def get_file_content(
     repository_id: UUID,
     file_id: UUID,
     request: Request,
@@ -363,7 +363,7 @@ def get_file_content(
     from app.core.secret_redaction import redact
     from indexer.chunker import reconstruct_file_from_chunks
 
-    _owned_repository(repository_id, request, db)
+    repo = _owned_repository(repository_id, request, db)
     file_record = (
         db.query(RepositoryFile)
         .filter(RepositoryFile.id == file_id, RepositoryFile.repository_id == repository_id)
@@ -379,6 +379,27 @@ def get_file_content(
         .all()
     )
     content = redact(reconstruct_file_from_chunks(chunks))
+
+    # Fallback to GitHub source content when a non-empty file has no indexed chunks
+    # (e.g., if embeddings failed during sync so repository_files was saved without code_chunks).
+    if not content and (file_record.size_bytes or 0) > 0:
+        try:
+            from app.integrations.github.schemas import FileContentRequest
+            from app.integrations.github.source_service import GitHubSourceService
+
+            ref = getattr(repo, "last_indexed_commit_sha", None) or getattr(repo, "default_branch", None)
+            fallback = await GitHubSourceService(db).get_file_content(
+                repository_id=repository_id,
+                user_id=_request_user_id(request),
+                request=FileContentRequest(path=file_record.path, ref=ref),
+            )
+            if not fallback.is_binary and fallback.content:
+                content = redact(fallback.content)
+        except Exception as exc:
+            logger.debug(
+                "file_content_github_fallback_unavailable",
+                extra={"repository_id": str(repository_id), "file_id": str(file_id), "error": str(exc)},
+            )
 
     symbols = (
         db.query(CodeSymbol)

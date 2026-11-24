@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from ai.retrieval.base import CodeChunk, Retriever
 from ai.retrieval.fusion import RRFFusion
 from ai.retrieval.hybrid import HybridRetriever
-from ai.retrieval.reranker import CrossEncoderReranker
+from ai.retrieval.reranker_factory import create_serving_reranker
 from ai.context.review_context import ModifiedFile
 from ai.evaluation.quality_gate import QualityGate
 from app.schemas.analysis import AnalysisSourceReference, ReviewFinding, ReviewTarget
@@ -171,11 +171,14 @@ async def run_rag_retrieval_benchmark() -> dict[str, Any]:
 
     vector_retriever = InFixtureRetriever(chunks, mode="vector")
     lexical_retriever = InFixtureRetriever(chunks, mode="lexical")
+    startup_start = time.perf_counter()
+    reranker = create_serving_reranker(backend="pytorch")
+    startup_ms = (time.perf_counter() - startup_start) * 1000
     hybrid = HybridRetriever(
         vector_retriever=vector_retriever,
         lexical_retriever=lexical_retriever,
         fusion=RRFFusion(),
-        reranker=CrossEncoderReranker(),
+        reranker=reranker,
     )
 
     total_queries = len(RAG_BENCHMARK_DATASET)
@@ -211,7 +214,11 @@ async def run_rag_retrieval_benchmark() -> dict[str, Any]:
             reciprocal_ranks.append(0.0)
 
     # Evaluate hard negatives (queries outside the codebase)
-    hard_negatives_evaluated = len(RAG_HARD_NEGATIVES)
+    hard_negatives_empty = 0
+    for item in RAG_HARD_NEGATIVES:
+        results = await hybrid.retrieve(item["query"], repo_id, top_k=5)
+        if not results:
+            hard_negatives_empty += 1
 
     latencies_ms.sort()
     p50_idx = int(0.50 * len(latencies_ms))
@@ -235,12 +242,14 @@ async def run_rag_retrieval_benchmark() -> dict[str, Any]:
         "precision_at_5": p_at_5,
         "recall_at_5": recall_at_5,
         "mrr": mrr,
+        "reranker_startup_ms": round(startup_ms, 2),
         "latency_p50_ms": round(latencies_ms[p50_idx], 2),
         "latency_p95_ms": round(latencies_ms[p95_idx], 2),
         "target_hit_rate_met": hit_rate >= 0.80,
         "target_mrr_met": mrr >= 0.80,
         "per_category_hit_rate": per_category,
-        "hard_negatives_tested": hard_negatives_evaluated,
+        "hard_negatives_tested": len(RAG_HARD_NEGATIVES),
+        "hard_negatives_with_empty_results": hard_negatives_empty,
     }
 
 
@@ -1194,7 +1203,8 @@ def generate_markdown_report(results: dict[str, Any], output_path: Path) -> None
     content = f"""# Platform Quality & Retrieval Benchmark Report
 
 **Generated:** {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}  
-**Environment:** Python {sys.version.split()[0]} | PostgreSQL 15 + pgvector | Redis 7  
+**Environment:** Python {sys.version.split()[0]} | In-memory retrieval fixtures
+
 **Overall Quality Gate Status:** {'✅ ALL GATES PASSED' if results['all_quality_gates_passed'] else '❌ GATES FAILED'}
 
 ---
@@ -1210,6 +1220,7 @@ Evaluates the `HybridRetriever` (Vector + Lexical + RRF Fusion $k=60$ + MiniLM R
 | **Precision@1** | **{rag['precision_at_1']*100:.1f}%** | $\\ge 70.0\\%$ | {'✅ PASS' if rag['precision_at_1'] >= 0.70 else '❌ FAIL'} |
 | **Precision@5** | **{rag['precision_at_5']*100:.1f}%** | Informational | ℹ️ INFO |
 | **Recall@5** | **{rag['recall_at_5']*100:.1f}%** | $\\ge 80.0\\%$ | {'✅ PASS' if rag['recall_at_5'] >= 0.80 else '❌ FAIL'} |
+| **Reranker startup** | **{rag['reranker_startup_ms']} ms** | Before serving requests | ℹ️ INFO |
 | **P50 Retrieval Latency** | **{rag['latency_p50_ms']} ms** | < 100 ms | {'✅ PASS' if rag['latency_p50_ms'] < 100 else '❌ FAIL'} |
 | **P95 Retrieval Latency** | **{rag['latency_p95_ms']} ms** | < 250 ms | {'✅ PASS' if rag['latency_p95_ms'] < 250 else '❌ FAIL'} |
 

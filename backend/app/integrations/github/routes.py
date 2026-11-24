@@ -493,35 +493,26 @@ def _build_deprecated_task_source_response(request: Request) -> JSONResponse:
     )
 
 
-@router.api_route(
-    "/{repository_id}/source/task/{action:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    deprecated=True,
-    summary="Deprecated duplicate task execution surface",
-    description="Deprecated duplicate task endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=False,
-)
 async def deprecated_task_source_endpoint(
     repository_id: UUID,
     action: str,
     request: Request,
 ) -> JSONResponse:
-    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
+    """Keep legacy task execution URLs available during migration."""
     return _build_deprecated_task_source_response(request)
 
 
-@router.api_route(
-    "/{repository_id}/source/task-workspace/{action:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    deprecated=True,
-    summary="Deprecated duplicate task workspace execution surface",
-    description="Deprecated duplicate task workspace endpoint. Use canonical `/api/v1/tasks/{id}/*` endpoints instead.",
-    include_in_schema=False,
-)
-async def deprecated_task_workspace_source_endpoint(
-    repository_id: UUID,
-    action: str,
-    request: Request,
-) -> JSONResponse:
-    """Deprecation handler informing clients to use canonical /api/v1/tasks/* execution endpoints."""
-    return _build_deprecated_task_source_response(request)
+# FastAPI generates one OpenAPI operation ID per route. Register each verb separately.
+for legacy_surface in ("task", "task-workspace"):
+    for method in ("GET", "POST", "PUT", "DELETE", "PATCH"):
+        router.add_api_route(
+            f"/{{repository_id}}/source/{legacy_surface}/{{action:path}}",
+            deprecated_task_source_endpoint,
+            methods=[method],
+            name=("deprecated_task_workspace_source_endpoint" if legacy_surface == "task-workspace"
+                  else "deprecated_task_source_endpoint"),
+            deprecated=True,
+            summary="Deprecated task execution endpoint",
+            description="Use the canonical `/api/v1/tasks/{id}/*` endpoints.",
+            status_code=410,
+        )

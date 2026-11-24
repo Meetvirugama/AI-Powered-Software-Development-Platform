@@ -48,20 +48,17 @@ export function RepositoryReviewStudio() {
       setReviewResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunReview = useCallback(() => {
     if (!selectedFile || reviewMutation.isPending) return;
+    setActiveMobileTab('results');
 
-    const normalizedTarget =
-      activeTarget.type === 'range' || activeTarget.type === 'symbol'
-        ? { type: 'file' as const, path: activeTarget.path }
-        : activeTarget;
-
-    reviewMutation.mutate({
-      target: normalizedTarget as any,
-    });
-  }, [selectedFile, activeTarget, reviewMutation]);
+    reviewMutation.mutate({ target: { type: 'file', path: selectedFile.path } });
+  }, [selectedFile, reviewMutation]);
 
   const handleSelectSourceReference = useCallback(
     (source: SourceReference) => {
@@ -134,7 +131,7 @@ export function RepositoryReviewStudio() {
             ) : (
               <>
                 <FileCheck className="h-3.5 w-3.5" />
-                <span>Run Code Review</span>
+                <span>Review entire file</span>
               </>
             )}
           </button>
@@ -142,6 +139,7 @@ export function RepositoryReviewStudio() {
         sourcePanel={
           selectedFile ? (
             <CodeViewer
+              key={selectedFile.id}
               repositoryId={repoId}
               file={selectedFile}
               activeTarget={activeTarget}
@@ -149,7 +147,7 @@ export function RepositoryReviewStudio() {
               highlightedSource={activeSourceReference}
               onClearHighlightedSource={() => setActiveSourceReference(null)}
               action={{
-                label: 'Review target',
+                label: 'Review entire file',
                 onClick: handleRunReview,
                 isPending: reviewMutation.isPending,
               }}

@@ -52,10 +52,14 @@ export function RepositoryTestStudio() {
       setTestResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunGenerate = useCallback(() => {
     if (!selectedFile || testMutation.isPending) return;
+    setActiveMobileTab('results');
 
     testMutation.mutate({
       target: activeTarget,
@@ -72,9 +76,9 @@ export function RepositoryTestStudio() {
       files,
       filesLoading,
       filesError,
-      false
+      files.length === filesData?.total
     );
-  }, [testResult, files, filesLoading, filesError]);
+  }, [testResult, files, filesLoading, filesError, filesData?.total]);
 
   return (
     <StudioLayout
@@ -161,6 +165,7 @@ export function RepositoryTestStudio() {
       sourcePanel={
         selectedFile ? (
           <CodeViewer
+            key={selectedFile.id}
             repositoryId={repoId}
             file={selectedFile}
             activeTarget={activeTarget}
@@ -201,7 +206,6 @@ export function RepositoryTestStudio() {
               <TestGenerationView
                 result={testResult.result}
                 proposedPathStatus={proposedPathStatus}
-                proposedPathExists={proposedPathStatus === 'EXISTS'}
                 activeSourceReference={activeSourceReference}
                 onSelectSourceReference={(ref) => {
                   setActiveSourceReference(ref);

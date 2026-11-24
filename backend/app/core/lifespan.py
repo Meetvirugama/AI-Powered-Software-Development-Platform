@@ -128,7 +128,6 @@ def init_rag_pipeline(app: FastAPI) -> bool:
         gemini_keys = settings.all_gemini_keys
         lexical_retriever = LexicalRetriever(db=AsyncSessionLocal)
         vector_retriever = None
-        reranker = None
 
         if gemini_keys:
             try:
@@ -166,8 +165,8 @@ def init_rag_pipeline(app: FastAPI) -> bool:
         # Reranker independently created via factory (ISS-008)
         reranker = None
         try:
-            from ai.retrieval.reranker_factory import create_reranker
-            reranker = create_reranker()
+            from ai.retrieval.reranker_factory import create_reranker, create_serving_reranker
+            reranker = create_serving_reranker() if settings.is_production else create_reranker()
         except Exception as r_exc:  # noqa: BLE001
             logger.warning("reranker_init_failed_falling_back_to_none", extra={"error": str(r_exc)})
 

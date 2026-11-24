@@ -71,6 +71,9 @@ flowchart TB
   RED --> ANS["RepositoryAnswer {answer, sources[file, lines]}"]
 ```
 
+Production workers load the PyTorch reranker and run one inference during startup. Budget for model download on a fresh worker or provision the model cache before launch. The fixture benchmark reports this startup cost separately and times every labelled request, including the first one served.
+
+
 - All vector and lexical queries are scoped by `repository_id`.
 - HNSW settings: `RETRIEVAL_HNSW_*_EF_SEARCH`, iterative scan `relaxed_order`; applied inside a transaction savepoint.
 - Cache invalidation: a completed sync bumps the repository's index version; old keys become unreachable and are garbage-collected with bounded `SCAN`.

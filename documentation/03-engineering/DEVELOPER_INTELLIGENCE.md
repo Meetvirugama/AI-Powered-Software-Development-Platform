@@ -19,6 +19,8 @@ flowchart LR
 
 ## Code explanation
 
+Follow-up chat drafts include the file analyzed by the explanation, even after opening a citation in another file.
+
 - Targets: file, symbol or line range; detail levels summary / detailed / deep (one call-graph level).
 - Context: enclosing symbol, callers/callees, related files (imports, edges, PageRank, co-change), framework conventions.
 - Output: overview, step-by-step walkthrough, inputs/outputs, edge cases, example flows, citations.
@@ -42,12 +44,16 @@ flowchart LR
 
 ## Test generation
 
+The proposed path is marked new only after checking the complete indexed file list. On a partial list, a missing path is shown as unverified.
+
 - Framework detection: pytest, unittest, Jest, Vitest (plus conventions such as test paths and fixtures).
 - Requirement discovery and gap analysis select what to test; generated tests are syntax-checked and path-checked (no writes outside allowed test paths).
 - Execution verification (when a sandbox backend is available): build → run → **3 consecutive passing runs** (stability) → coverage delta attribution → optional mutation scoring. Tests that cannot be executed are marked unverified rather than passed.
 - Coverage-guided iteration feeds uncovered lines back for another generation round within budget.
 
 ## Code review
+
+The studio reviews the entire selected file, including when a symbol or line range is highlighted.
 
 - Inputs: file, commit, pull request (by number) or raw diff.
 - Static review: ruff, bandit, eslint, biome — batched per scanner, executed concurrently.

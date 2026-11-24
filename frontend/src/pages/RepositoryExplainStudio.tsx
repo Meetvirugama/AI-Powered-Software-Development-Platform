@@ -26,7 +26,6 @@ import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { cn } from '../lib/utils';
 import type {
   SourceReference,
-  CodeExplanation,
   CodeExplanationResponse,
   ExplanationLevel,
 } from '../types/analysis';
@@ -48,13 +47,12 @@ export function RepositoryExplainStudio() {
   const navigate = useNavigate();
 
   const repoId = id ?? '';
-  const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
+  const { data: filesData, isLoading: filesLoading, isError: filesError, error: filesErrorData } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [activeSourceReference, setActiveSourceReference] = useState<SourceReference | null>(null);
-  const [explanationResult, setExplanationResult] = useState<CodeExplanation | null>(null);
-  const [runId, setRunId] = useState<string | null>(null);
+  const [result, setResult] = useState<Pick<CodeExplanationResponse, 'explanation' | 'target' | 'run_id'> | null>(null);
   const [activeMobileTab, setActiveMobileTab] = useState<'source' | 'results'>('source');
   const [explanationLevel, setExplanationLevel] = useState<ExplanationLevel>('detailed');
   const [explainAtDepth, setExplainAtDepth] = useState<boolean>(false);
@@ -75,8 +73,7 @@ export function RepositoryExplainStudio() {
     handleTargetChange,
   } = useStudioFile(files, () => {
     setActiveSourceReference(null);
-    setExplanationResult(null);
-    setRunId(null);
+    setResult(null);
     setUserSelectedRelatedPaths(null);
     setCustomSelectedFiles([]);
   });
@@ -99,17 +96,20 @@ export function RepositoryExplainStudio() {
   // Explain mutation
   const explainMutation = useExplainCode(repoId, {
     onSuccess: (data: CodeExplanationResponse) => {
-      setExplanationResult(data.explanation);
-      setRunId(data.run_id);
+      setResult(data);
+      setActiveMobileTab('results');
+    },
+    onError: () => {
       setActiveMobileTab('results');
     },
   });
 
   const handleRunExplain = useCallback(() => {
     if (!selectedFile || explainMutation.isPending) return;
+    setActiveMobileTab('results');
 
     const allSelected = Array.from(
-      new Set([...Array.from(selectedRelatedPaths), ...customSelectedFiles])
+      new Set([...selectedRelatedPaths, ...customSelectedFiles])
     );
 
     const isDeep = explainAtDepth || explanationLevel === 'deep_technical';
@@ -174,7 +174,7 @@ export function RepositoryExplainStudio() {
   // Search filtered files for dropdown
   const filteredRepoFiles = useMemo(() => {
     if (!fileSearchQuery.trim()) return [];
-    const q = fileSearchQuery.toLowerCase();
+    const q = fileSearchQuery.trim().toLowerCase();
     return files
       .filter(
         (f) =>
@@ -209,9 +209,9 @@ export function RepositoryExplainStudio() {
   };
 
   const handleAskFollowUp = (question?: string) => {
-    if (!selectedFile) return;
+    if (!result) return;
     const qParam = question ? `&prompt=${encodeURIComponent(question)}` : '';
-    navigate(`/app/repositories/${repoId}/chat?file=${encodeURIComponent(selectedFile.path)}${qParam}`);
+    navigate(`/app/repositories/${repoId}/chat?file=${encodeURIComponent(result.target.path)}${qParam}`);
   };
 
   return (
@@ -281,6 +281,7 @@ export function RepositoryExplainStudio() {
       sourcePanel={
         selectedFile ? (
           <CodeViewer
+            key={selectedFile.id}
             repositoryId={repoId}
             file={selectedFile}
             activeTarget={activeTarget}
@@ -294,6 +295,16 @@ export function RepositoryExplainStudio() {
             }}
             isAnalyzing={explainMutation.isPending}
           />
+        ) : filesError ? (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <ErrorMessage
+              message={
+                filesErrorData instanceof Error
+                  ? filesErrorData.message
+                  : 'Could not load repository files.'
+              }
+            />
+          </div>
         ) : (
           <div className="flex-1 flex items-center justify-center p-8 text-center text-muted-foreground text-xs">
             Select a file to inspect its source code.
@@ -511,16 +522,16 @@ export function RepositoryExplainStudio() {
             <div className="p-4">
               <ErrorMessage error={explainMutation.error} />
             </div>
-          ) : explanationResult ? (
+          ) : result ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-border">
                 <div className="flex items-center gap-2">
                   <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-primary/10 text-primary border border-primary/20">
                     Repository Intelligence Grounded
                   </span>
-                  {runId && (
+                  {result.run_id && (
                     <span className="text-[10px] text-muted-foreground font-mono">
-                      Run #{runId.slice(0, 8)}
+                      Run #{result.run_id.slice(0, 8)}
                     </span>
                   )}
                 </div>
@@ -536,8 +547,8 @@ export function RepositoryExplainStudio() {
               </div>
 
               <ExplanationResultView
-                explanation={explanationResult}
-                targetFilePath={selectedFile?.path}
+                explanation={result.explanation}
+                targetFilePath={result.target.path}
                 activeSourceReference={activeSourceReference}
                 onSelectSourceReference={handleSelectSourceReference}
                 onAskFollowUp={handleAskFollowUp}
@@ -589,9 +600,8 @@ export function RepositoryExplainStudio() {
             if (runFile && runFile.path !== selectedFile?.path) {
               handleSelectFile(runFile, { preserveResults: true });
             }
-            setExplanationResult(explanation);
+            setResult({ explanation, target, run_id: run });
             handleTargetChange(target);
-            setRunId(run);
             setActiveMobileTab('results');
             setHistoryOpen(false);
           }}

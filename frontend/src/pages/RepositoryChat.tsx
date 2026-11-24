@@ -70,20 +70,13 @@ export function RepositoryChat() {
   const fileParam = searchParams.get('file');
   const promptParam = searchParams.get('prompt');
 
-  // Input state — initialized with ?prompt= or ?file= query parameter if present.
-  const [draft, setDraft] = useState(() => {
-    if (promptParam) return promptParam;
-    return fileParam ? `Can you explain the structure and logic of \`${fileParam}\`?` : '';
-  });
-  const [prevParamsKey, setPrevParamsKey] = useState(`${fileParam ?? ''}::${promptParam ?? ''}`);
-  const currentParamsKey = `${fileParam ?? ''}::${promptParam ?? ''}`;
-  if (currentParamsKey !== prevParamsKey) {
-    setPrevParamsKey(currentParamsKey);
-    if (promptParam) {
-      setDraft(promptParam);
-    } else if (fileParam) {
-      setDraft(`Can you explain the structure and logic of \`${fileParam}\`?`);
-    }
+  const fileQuestion = fileParam ? `Can you explain the structure and logic of \`${fileParam}\`?` : '';
+  const initialDraft = promptParam && fileParam ? `${fileParam}\n\n${promptParam}` : promptParam || fileQuestion;
+  const [draft, setDraft] = useState(initialDraft);
+  const [previousDraft, setPreviousDraft] = useState(initialDraft);
+  if (initialDraft !== previousDraft) {
+    setPreviousDraft(initialDraft);
+    if (initialDraft) setDraft(initialDraft);
   }
 
   const [activeSource, setActiveSource] = useState<ChatSource | null>(null);
@@ -151,7 +144,7 @@ export function RepositoryChat() {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
         e.preventDefault();
         handleSend();
       }
@@ -163,7 +156,7 @@ export function RepositoryChat() {
 
   // Gather all sources across conversation for reference
   const allSources = messages
-    .filter((m) => m.role === 'assistant' && m.sources && m.sources.length > 0)
+    .filter((m) => m.role === 'assistant')
     .flatMap((m) => m.sources ?? []);
 
   return (

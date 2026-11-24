@@ -2,8 +2,8 @@
 
 # Development, testing, static analysis, and security audit dependencies
 # Pinned to ensure reproducible CI runs — update deliberately, not on every pip install
-pytest==8.4.2
-pytest-asyncio==0.26.0
+pytest==9.0.3
+pytest-asyncio==1.3.0
 pytest-cov==7.1.0
 pytest-timeout>=2.3.0,<3.0.0
 respx>=0.21.0
