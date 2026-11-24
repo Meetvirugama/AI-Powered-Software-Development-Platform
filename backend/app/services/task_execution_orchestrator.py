@@ -106,6 +106,17 @@ logger = logging.getLogger(__name__)
 _HEX_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _COMMIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
+
+def validate_task_execution_preflight(base_revision: str | None) -> None:
+    """Reject known configuration and revision failures before accepting execution."""
+    if not _COMMIT_SHA_RE.fullmatch(base_revision or ""):
+        raise APIError(409, ErrorCode.PLAN_VERSION_MISMATCH, "Regenerate the plan against a full indexed commit SHA, then approve the new version.")
+    settings = get_settings()
+    if settings.sandbox_backend == "runner":
+        root = Path(settings.task_workspace_root) if settings.task_workspace_root else None
+        if root is None or not root.is_absolute() or not root.is_dir():
+            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Configure TASK_WORKSPACE_ROOT on the API and runner before executing repository tasks.")
+
 DEFAULT_COMMAND_ALLOWLIST: dict[str, list[list[str]]] = {
     "execute_command": [
         ["pytest", "*"],
@@ -305,11 +316,7 @@ class TaskExecutionOrchestrator:
         task_id_str = str(task.id)
         branch_name = format_agent_branch_name(task.id)
         base_rev = verified_plan.base_revision or task.base_revision or "main"
-        if not _COMMIT_SHA_RE.fullmatch(base_rev):
-            raise APIError(409, ErrorCode.PLAN_VERSION_MISMATCH, "Regenerate the plan against a full indexed commit SHA, then approve the new version.")
-        settings = get_settings()
-        if settings.sandbox_backend == "runner" and not settings.task_workspace_root:
-            raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Configure TASK_WORKSPACE_ROOT on the API and runner before executing repository tasks.")
+        validate_task_execution_preflight(base_rev)
 
         # 1. Transition APPROVED -> WORKSPACE_SETUP if not already past it
         if TaskStatus(task.status) == TaskStatus.APPROVED:
