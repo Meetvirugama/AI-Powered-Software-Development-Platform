@@ -335,6 +335,7 @@ export interface RepositoryTaskPlanTabProps {
   rejectionReason: string;
   setRejectionReason: (v: string) => void;
   approvalComment: string;
+  approvalBlocked: boolean;
   setApprovalComment: (v: string) => void;
   actionBusy: string | null;
   handleGenerateOrRevisePlan: () => void;
@@ -355,6 +356,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
     rejectionReason,
     setRejectionReason,
     approvalComment,
+    approvalBlocked,
     setApprovalComment,
     actionBusy,
     handleGenerateOrRevisePlan,
@@ -439,7 +441,7 @@ export const RepositoryTaskPlanTab: React.FC<RepositoryTaskPlanTabProps> = memo(
             />
             <button
               type="button"
-              disabled={actionBusy !== null}
+              disabled={actionBusy !== null || approvalBlocked}
               onClick={handleApprovePlan}
               className="px-4 py-1.5 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
             >

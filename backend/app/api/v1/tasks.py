@@ -91,7 +91,7 @@ from app.schemas.workspace import (
     WorkspaceStatus,
 )
 from app.services.git_branch import format_agent_branch_name
-from app.services.task_execution_orchestrator import get_task_execution_orchestrator
+from app.services.task_execution_orchestrator import get_task_execution_orchestrator, validate_task_execution_preflight
 
 logger = logging.getLogger(__name__)
 
@@ -2127,6 +2127,7 @@ def run_autonomous_workflow_endpoint(
         from ai.workflows import AutonomousWorkflowInput, submit_autonomous_workflow
 
         plan = task_repo.verify_execution_approval_gate(task)
+        validate_task_execution_preflight(plan.base_revision or task.base_revision)
 
         input_data = AutonomousWorkflowInput(
             task_id=str(task.id),
