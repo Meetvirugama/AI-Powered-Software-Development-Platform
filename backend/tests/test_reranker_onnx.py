@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from backend.ai.retrieval.base import CodeChunk
 from backend.ai.retrieval.reranker import CrossEncoderReranker
-from backend.ai.retrieval.reranker_factory import create_reranker
+from backend.ai.retrieval.reranker_factory import create_reranker, create_serving_reranker
 from backend.ai.retrieval.reranker_onnx import ONNXCrossEncoderReranker
 
 
@@ -32,6 +32,16 @@ def _make_chunk(name: str = "chunk", score: float = 0.5) -> CodeChunk:
 def test_reranker_factory_default_pytorch() -> None:
     reranker = create_reranker()
     assert isinstance(reranker, CrossEncoderReranker)
+
+
+def test_serving_reranker_runs_inference_before_first_request() -> None:
+    model = MagicMock()
+    model.predict.return_value = [1.0]
+    reranker = create_serving_reranker(backend="pytorch", model=model)
+    model.predict.assert_called_once()
+    chunk = _make_chunk()
+    assert reranker.rerank("question", [chunk])[0].id == chunk.id
+    assert model.predict.call_count == 2
 
 
 def test_reranker_factory_onnx_selection() -> None:

@@ -62,6 +62,10 @@ class CrossEncoderReranker:
         self._max_chars = max_chars
         self.last_status: str = "initialized"
 
+    def warm_up(self) -> None:
+        """Load weights and initialize the inference runtime before accepting requests."""
+        self._get_model().predict([("startup probe", "startup probe")])
+
     @property
     def status(self) -> str:
         """Observable degradation status of the reranker (AI-08)."""
