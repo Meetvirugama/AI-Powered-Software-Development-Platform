@@ -53,7 +53,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'PASSED',
       label: 'Passed',
-      className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+      className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
       isRepairEligible: false,
     };
   }
@@ -62,7 +62,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'TIMEOUT',
       label: 'Timeout',
-      className: 'bg-orange-500/10 text-orange-400 border-orange-500/30',
+      className: 'bg-orange-500/10 text-orange-700 dark:text-orange-400 border-orange-500/30',
       isRepairEligible: false,
     };
   }
@@ -71,7 +71,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'INFRASTRUCTURE_ERROR',
       label: 'Infrastructure Failure',
-      className: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
+      className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30',
       isRepairEligible: false,
     };
   }
@@ -80,7 +80,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'UNSUPPORTED_FRAMEWORK',
       label: 'Unsupported Framework',
-      className: 'bg-slate-500/10 text-slate-400 border-slate-500/30',
+      className: 'bg-slate-500/10 text-slate-700 dark:text-slate-400 border-slate-500/30',
       isRepairEligible: false,
     };
   }
@@ -89,7 +89,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'SKIPPED',
       label: 'Skipped',
-      className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+      className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
       isRepairEligible: false,
     };
   }
@@ -98,7 +98,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'NOT_RUN',
       label: 'Not Run',
-      className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+      className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
       isRepairEligible: false,
     };
   }
@@ -107,7 +107,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'UNAVAILABLE',
       label: 'Unavailable',
-      className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+      className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
       isRepairEligible: false,
     };
   }
@@ -121,7 +121,7 @@ function classifyTestOutcome(run: TestRunItem): {
     return {
       outcome: 'TEST_FAILURE',
       label: 'Assertion Failure',
-      className: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+      className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30',
       isRepairEligible: repairEligible,
     };
   }
@@ -129,7 +129,7 @@ function classifyTestOutcome(run: TestRunItem): {
   return {
     outcome: 'UNAVAILABLE',
     label: 'Unavailable',
-    className: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/30',
+    className: 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/30',
     isRepairEligible: false,
   };
 }
@@ -189,9 +189,9 @@ export function TestExecutionPanel({
         className
       )}
     >
-      <div className="flex items-center justify-between border-b border-border pb-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
         <div className="flex items-center gap-2">
-          <TestTube2 className="h-4 w-4 text-primary" />
+          <TestTube2 className="h-4 w-4 text-primary shrink-0" />
           <h3 className="text-base font-semibold text-foreground">Test Execution Telemetry</h3>
         </div>
 
@@ -199,7 +199,8 @@ export function TestExecutionPanel({
           type="button"
           onClick={() => refetch()}
           disabled={isFetching || isLoading}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50"
+          aria-label="Refresh test results"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title="Refresh test results"
         >
           <RefreshCw className={cn('h-3.5 w-3.5', (isFetching || isLoading) && 'animate-spin')} />
@@ -243,8 +244,9 @@ export function TestExecutionPanel({
                 {/* Run Header */}
                 <button
                   type="button"
+                  aria-expanded={isExpanded}
                   onClick={() => toggleRun(idx)}
-                  className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between p-3.5 hover:bg-accent/40 transition-colors text-left gap-2"
+                  className="w-full flex flex-col sm:flex-row sm:items-center sm:justify-between p-3.5 hover:bg-accent/40 transition-colors text-left gap-2 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <div className="flex items-center gap-2.5 flex-wrap min-w-0">
                     {isExpanded ? (
@@ -289,8 +291,8 @@ export function TestExecutionPanel({
                         className={cn(
                           'text-[10px] font-mono px-1.5 py-0.5 rounded border flex items-center gap-1',
                           isRepairEligible
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                            : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                            ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+                            : 'bg-zinc-500/10 text-zinc-700 dark:text-zinc-400 border-zinc-500/20'
                         )}
                       >
                         <Wrench className="h-2.5 w-2.5" />
@@ -300,17 +302,17 @@ export function TestExecutionPanel({
                   </div>
 
                   {/* Summary Counts */}
-                  <div className="flex items-center gap-3 font-mono text-xs text-muted-foreground shrink-0 pl-6 sm:pl-0">
+                  <div className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted-foreground shrink-0 pl-6 sm:pl-0">
                     {passedCount !== undefined && (
-                      <span className="text-emerald-400 font-semibold">{passedCount} passed</span>
+                      <span className="text-emerald-700 dark:text-emerald-400 font-semibold">{passedCount} passed</span>
                     )}
                     {failedCount !== undefined && (
-                      <span className={cn('font-semibold', failedCount > 0 ? 'text-rose-400' : 'text-muted-foreground')}>
+                      <span className={cn('font-semibold', failedCount > 0 ? 'text-rose-700 dark:text-rose-400' : 'text-muted-foreground')}>
                         {failedCount} failed
                       </span>
                     )}
                     {skippedCount > 0 && <span>{skippedCount} skipped</span>}
-                    {errorCount > 0 && <span className="text-amber-400">{errorCount} error</span>}
+                    {errorCount > 0 && <span className="text-amber-700 dark:text-amber-400">{errorCount} error</span>}
                     {totalCount !== undefined && <span>({totalCount} total)</span>}
                   </div>
                 </button>
@@ -320,7 +322,7 @@ export function TestExecutionPanel({
                   <div className="border-t border-border/60 p-4 space-y-3.5 bg-muted/10 text-xs">
                     {/* Execution Details Bar */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-[11px] bg-background/60 p-2.5 rounded border border-border/60">
-                      <div>
+                      <div className="min-w-0">
                         <span className="text-muted-foreground block text-[10px]">Command:</span>
                         <span className="text-foreground font-semibold break-all">{run.command}</span>
                       </div>
@@ -329,7 +331,7 @@ export function TestExecutionPanel({
                         <span
                           className={cn(
                             'font-semibold',
-                            run.exit_code === 0 ? 'text-emerald-400' : 'text-rose-400'
+                            run.exit_code === 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-700 dark:text-rose-400'
                           )}
                         >
                           {run.exit_code}
@@ -352,10 +354,10 @@ export function TestExecutionPanel({
                     {/* Failed Test Names */}
                     {run.failed_test_names && run.failed_test_names.length > 0 && (
                       <div className="space-y-1">
-                        <span className="text-[11px] font-semibold text-rose-400 uppercase tracking-wider flex items-center gap-1">
+                        <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 uppercase tracking-wider flex items-center gap-1">
                           <XCircle className="h-3 w-3" /> Failed Tests ({run.failed_test_names.length})
                         </span>
-                        <ul className="list-disc list-inside space-y-0.5 bg-rose-950/20 border border-rose-500/30 p-2.5 rounded font-mono text-xs text-rose-300">
+                        <ul className="list-disc list-inside space-y-0.5 bg-rose-500/10 dark:bg-rose-950/20 border border-rose-500/30 p-2.5 rounded font-mono text-xs text-rose-800 dark:text-rose-300">
                           {run.failed_test_names.map((name, i) => (
                             <li key={i} className="truncate">{name}</li>
                           ))}
@@ -369,7 +371,7 @@ export function TestExecutionPanel({
                         <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
                           Outcome Summary
                         </span>
-                        <p className="p-2.5 rounded bg-background/70 border border-border/70 font-mono text-xs text-foreground/90 whitespace-pre-wrap">
+                        <p className="p-2.5 rounded bg-background/70 border border-border/70 font-mono text-xs text-foreground/90 whitespace-pre-wrap break-words">
                           {run.output_summary}
                         </p>
                       </div>
@@ -388,7 +390,7 @@ export function TestExecutionPanel({
                             <span className="text-[10px] text-muted-foreground font-mono">stdout:</span>
                             <pre
                               data-testid="test-stdout"
-                              className="max-h-56 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] bg-background/90 p-3 rounded border border-border text-foreground/90 leading-relaxed select-text"
+                              className="max-h-56 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] bg-background/90 p-3 rounded border border-border text-foreground/90 leading-relaxed select-text"
                             >
                               {run.stdout.length > 50000
                                 ? `${run.stdout.slice(0, 50000)}\n... [output truncated at 50,000 characters]`
@@ -399,10 +401,10 @@ export function TestExecutionPanel({
 
                         {run.stderr && (
                           <div className="space-y-1">
-                            <span className="text-[10px] text-rose-400 font-mono">stderr:</span>
+                            <span className="text-[10px] text-rose-700 dark:text-rose-400 font-mono">stderr:</span>
                             <pre
                               data-testid="test-stderr"
-                              className="max-h-56 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] bg-rose-950/20 p-3 rounded border border-rose-500/30 text-rose-300 leading-relaxed select-text"
+                              className="max-h-56 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] bg-rose-500/10 dark:bg-rose-950/20 p-3 rounded border border-rose-500/30 text-rose-800 dark:text-rose-300 leading-relaxed select-text"
                             >
                               {run.stderr.length > 50000
                                 ? `${run.stderr.slice(0, 50000)}\n... [output truncated at 50,000 characters]`

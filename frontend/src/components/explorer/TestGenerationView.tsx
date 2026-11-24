@@ -589,7 +589,7 @@ export function TestGenerationView({
                   {detected_framework}
                 </span>
                 {hasFrameworkOverride && (
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-foreground border border-border">
                     Active Override: {selectedFrameworkOverride}
                   </span>
                 )}
@@ -778,7 +778,7 @@ export function TestGenerationView({
                   >
                     Mutation Score{mutationIsEstimate ? ' (est.)' : ''}
                   </div>
-                  <div className="text-sm font-semibold text-purple-400">
+                  <div className="text-sm font-semibold text-foreground">
                     {qualityReport.mutation_score_percent !== null && qualityReport.mutation_score_percent !== undefined
                       ? `${qualityReport.mutation_score_percent}%`
                       : 'N/A'}

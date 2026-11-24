@@ -112,27 +112,28 @@ export function SecurityAlertBanner({ events = [], className }: SecurityAlertBan
 
   return (
     <div
+      role="alert"
       data-testid="security-alert-banner"
       className={cn(
-        'rounded-lg border-2 border-red-500/50 bg-red-950/25 p-4 shadow-sm text-xs space-y-2',
+        'rounded-lg border-2 border-red-500/50 bg-red-500/10 dark:bg-red-950/25 p-4 shadow-sm text-xs space-y-2',
         className
       )}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 font-semibold text-red-400">
-          <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-semibold text-red-700 dark:text-red-400">
+          <ShieldAlert className="h-4 w-4 shrink-0 text-red-700 dark:text-red-400" />
           <span>Security Policy Enforcement Blocked Operation</span>
         </div>
-        <span className="font-mono text-[10px] bg-red-500/20 text-red-300 border border-red-500/30 px-2 py-0.5 rounded uppercase font-bold">
+        <span className="font-mono text-[10px] bg-red-500/20 text-red-800 dark:text-red-300 border border-red-500/30 px-2 py-0.5 rounded uppercase font-bold">
           {eventTypeLabel}
         </span>
       </div>
 
-      <p className="text-red-200/90 leading-relaxed font-mono text-[11px] pl-6 bg-red-950/40 p-2.5 rounded border border-red-500/20 whitespace-pre-wrap break-all">
+      <p className="text-red-900 dark:text-red-200/90 leading-relaxed font-mono text-[11px] pl-6 bg-red-500/10 dark:bg-red-950/40 p-2.5 rounded border border-red-500/20 whitespace-pre-wrap break-all">
         {sanitized}
       </p>
 
-      <div className="flex items-center gap-4 text-[11px] text-red-300/70 pl-6 pt-1 flex-wrap">
+      <div className="flex items-center gap-4 text-[11px] text-red-800/80 dark:text-red-300/70 pl-6 pt-1 flex-wrap">
         <span className="flex items-center gap-1">
           <Lock className="h-3 w-3" /> Sandbox Isolation Active
         </span>

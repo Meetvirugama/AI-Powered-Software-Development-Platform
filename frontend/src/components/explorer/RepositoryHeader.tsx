@@ -5,13 +5,17 @@ import {
   Box,
   Clock,
   X,
+  BarChart3,
 } from 'lucide-react';
 import type { Repository } from '../../types/api';
+import { cn } from '../../lib/utils';
 
 export interface RepositoryHeaderProps {
   repo: Repository;
   isDeletePending: boolean;
   onDelete: () => void;
+  showMetrics?: boolean;
+  onToggleMetrics?: () => void;
   // Optional legacy props kept for type compatibility
   progress?: unknown;
   isReady?: boolean;
@@ -23,24 +27,26 @@ export function RepositoryHeader({
   repo,
   isDeletePending,
   onDelete,
+  showMetrics,
+  onToggleMetrics,
 }: RepositoryHeaderProps) {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
 
   return (
     <>
-      <div className="shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3 py-2 rounded-lg bg-card/60 border border-border/70 text-xs shadow-2xs">
-        {/* Left: Metadata badges & Description */}
-        <div className="flex flex-wrap items-center gap-2 min-w-0">
+      <div className="shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-card border border-border text-xs">
+        {/* Left: Metadata & Description */}
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
           {repo.language && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 border border-border/60 text-foreground font-medium text-[11px]">
-              <Code className="h-3 w-3 text-primary" />
+            <div className="inline-flex items-center gap-1 text-foreground font-medium text-xs">
+              <Code className="h-3 w-3 text-muted-foreground" />
               <span>{repo.language}</span>
             </div>
           )}
 
           {repo.framework && (
-            <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-muted/40 border border-border/60 text-foreground font-medium text-[11px]">
-              <Box className="h-3 w-3 text-emerald-500" />
+            <div className="inline-flex items-center gap-1 text-muted-foreground text-xs">
+              <Box className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
               <span>{repo.framework}</span>
             </div>
           )}
@@ -53,17 +59,34 @@ export function RepositoryHeader({
           )}
 
           {repo.description && (
-            <span className="hidden lg:inline text-muted-foreground/80 truncate max-w-md italic text-[11px]">
-              — {repo.description}
+            <span className="hidden lg:inline text-muted-foreground truncate max-w-md text-xs">
+              · {repo.description}
             </span>
           )}
         </div>
 
-        {/* Right: Disconnect action */}
-        <div className="flex items-center gap-2 shrink-0">
+        {/* Right: Metrics toggle & Disconnect */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onToggleMetrics && (
+            <button
+              type="button"
+              onClick={onToggleMetrics}
+              aria-pressed={Boolean(showMetrics)}
+              className={cn(
+                'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-colors cursor-pointer',
+                showMetrics
+                  ? 'bg-accent text-foreground border-border'
+                  : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-accent/70'
+              )}
+              title="Toggle repository metrics & dependencies"
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+              <span>Metrics</span>
+            </button>
+          )}
           <button
             onClick={() => setShowConfirmDelete(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 border border-transparent hover:border-destructive/20 transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 border border-transparent hover:border-destructive/20 transition-colors cursor-pointer"
             title="Disconnect repository from workspace"
           >
             <Trash2 className="h-3 w-3" />

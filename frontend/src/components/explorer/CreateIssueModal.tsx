@@ -5,7 +5,7 @@
  * Owner: Dhramraj — Week 3 Day 1 Deliverable (Docs/daily_tasks.md & Docs/week3.md §6 F31)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -101,6 +101,18 @@ export function CreateIssueModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [createdResult, setCreatedResult] = useState<IssueImportResponse | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen || !finding) return null;
 
   // Older backends omit the flag; treat missing as published.
@@ -188,9 +200,9 @@ export function CreateIssueModal({
         {createdResult ? (
           <div className="p-6 space-y-4">
             <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-start gap-3">
-              <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+              <CheckCircle2 className="h-5 w-5 text-emerald-700 dark:text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-1 text-xs">
-                <h4 className="font-semibold text-emerald-300 text-sm">
+                <h4 className="font-semibold text-emerald-800 dark:text-emerald-300 text-sm">
                   {publishedToGitHub
                     ? `GitHub Issue #${createdResult.issue?.issue_number} & Task Created`
                     : 'Task Created (saved locally)'}

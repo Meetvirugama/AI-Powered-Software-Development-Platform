@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Brain,
@@ -111,6 +111,18 @@ export function ProjectMemoryPanel({
 
   const entries = useMemo(() => memoryData?.items ?? [], [memoryData]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const handleCopyUri = (uri: string) => {
@@ -123,25 +135,25 @@ export function ProjectMemoryPanel({
     switch (type) {
       case 'rule':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-foreground border border-border">
             <Pin className="h-2.5 w-2.5" /> Rule
           </span>
         );
       case 'decision':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-sky-500/10 text-sky-700 dark:text-sky-400 border border-sky-500/25">
             <Lightbulb className="h-2.5 w-2.5" /> Decision
           </span>
         );
       case 'task_summary':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25">
             <CheckCircle className="h-2.5 w-2.5" /> Task Summary
           </span>
         );
       case 'failure':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-400 border border-rose-500/20">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/25">
             <AlertTriangle className="h-2.5 w-2.5" /> Failure
           </span>
         );
@@ -159,9 +171,13 @@ export function ProjectMemoryPanel({
       role="dialog"
       aria-modal="true"
       aria-label="Project Memory & Knowledge"
-      className="fixed inset-0 z-50 flex justify-end bg-background/80 backdrop-blur-xs animate-in fade-in duration-200"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex justify-end bg-black/50 dark:bg-black/65 backdrop-blur-[2px]"
     >
-      <div className="w-full max-w-2xl bg-card border-l border-border h-full flex flex-col shadow-2xl overflow-hidden">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl bg-card border-l border-border h-full flex flex-col shadow-2xl overflow-hidden"
+      >
         {/* Header */}
         <div className="p-4 border-b border-border flex items-center justify-between shrink-0 bg-muted/20">
           <div className="flex items-center gap-2.5">
@@ -231,7 +247,7 @@ export function ProjectMemoryPanel({
 
             <button
               onClick={() => setShowPinForm((prev) => !prev)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md bg-purple-500/10 text-purple-400 hover:bg-purple-500/20 border border-purple-500/30 transition-colors shrink-0"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-border bg-background text-foreground hover:bg-accent transition-colors shrink-0 cursor-pointer"
               title="Pin a new architectural rule"
             >
               <Plus className="h-3 w-3" />
@@ -255,14 +271,14 @@ export function ProjectMemoryPanel({
 
         {/* Pin Rule Input Form Drawer */}
         {showPinForm && (
-          <div className="p-3 border-b border-border bg-purple-500/5 space-y-2 animate-in slide-in-from-top-2 duration-150 shrink-0">
+          <div className="p-3 border-b border-border bg-muted/30 space-y-2 shrink-0">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-purple-300 flex items-center gap-1">
-                <Pin className="h-3 w-3" /> Pin Architectural Convention or Rule
+              <span className="text-xs font-semibold text-foreground flex items-center gap-1">
+                <Pin className="h-3 w-3 text-muted-foreground" /> Pin Architectural Convention or Rule
               </span>
               <button
                 onClick={() => setShowPinForm(false)}
-                className="text-muted-foreground hover:text-foreground"
+                className="text-muted-foreground hover:text-foreground cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -277,7 +293,7 @@ export function ProjectMemoryPanel({
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowPinForm(false)}
-                className="px-2.5 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground"
+                className="px-2.5 py-1 text-xs rounded border border-border text-muted-foreground hover:text-foreground cursor-pointer"
               >
                 Cancel
               </button>
@@ -289,7 +305,7 @@ export function ProjectMemoryPanel({
                   }
                 }}
                 disabled={!newRuleText.trim() || pinRuleMutation.isPending}
-                className="px-3 py-1 text-xs rounded font-medium bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-50"
+                className="px-3 py-1 text-xs rounded font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
               >
                 {pinRuleMutation.isPending ? 'Pinning...' : 'Pin Rule'}
               </button>

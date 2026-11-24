@@ -47,6 +47,7 @@ export function RepositoryDetail() {
   const [showModal, setShowModal] = useState(false);
   const [isHistoryDrawerOpen, setIsHistoryDrawerOpen] = useState(false);
   const [isMemoryPanelOpen, setIsMemoryPanelOpen] = useState(false);
+  const [showMetricsSidebar, setShowMetricsSidebar] = useState(false);
   const [customTarget, setCustomTarget] = useState<AnalysisTarget | null>(null);
   const [_reviewTarget, setReviewTarget] = useState<{ type: 'file' | 'commit' | 'pr'; path?: string }>({
     type: 'file',
@@ -283,23 +284,27 @@ export function RepositoryDetail() {
             repo={repo}
             isDeletePending={isDeletePending}
             onDelete={handleDelete}
+            showMetrics={showMetricsSidebar}
+            onToggleMetrics={() => setShowMetricsSidebar((v) => !v)}
           />
 
-          <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3 md:gap-4 h-full">
-          {/* Left Column: Metrics & Dependencies Explorer */}
-          <div className="md:col-span-4 lg:col-span-3 min-h-0 h-full">
-            <RepositoryMetricsSidebar
-              repo={repo}
-              repositoryId={repo.id}
-              totalFiles={filesData?.total}
-              dependencies={dependencies}
-              depsLoading={depsLoading}
-              depsError={depsError}
-            />
-          </div>
+          <div className="flex-1 min-h-0 flex gap-3 md:gap-4 h-full overflow-hidden">
+          {/* Optional Left Column: Metrics & Dependencies Explorer */}
+          {showMetricsSidebar && (
+            <div className="w-72 shrink-0 min-h-0 h-full">
+              <RepositoryMetricsSidebar
+                repo={repo}
+                repositoryId={repo.id}
+                totalFiles={filesData?.total}
+                dependencies={dependencies}
+                depsLoading={depsLoading}
+                depsError={depsError}
+              />
+            </div>
+          )}
 
-          {/* Right Column: Code Intelligence Workbench */}
-          <div className="md:col-span-8 lg:col-span-9 flex flex-col min-h-0 h-full">
+          {/* Main Column: Code Intelligence Workbench */}
+          <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full">
             <div className="h-full min-h-0 flex flex-col rounded-xl border border-border bg-card shadow-sm overflow-hidden">
               {/* Workbench Header with quick action links */}
               <WorkbenchHeader

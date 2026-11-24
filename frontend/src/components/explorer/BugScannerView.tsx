@@ -83,10 +83,10 @@ const SEVERITY_CONFIG: Record<
   INFO: {
     label: 'Info',
     icon: Info,
-    badgeClass: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
-    pillClass: 'hover:bg-slate-500/20 data-[active=true]:bg-slate-500/25 data-[active=true]:text-slate-300 data-[active=true]:border-slate-500/50',
-    textClass: 'text-slate-400',
-    borderClass: 'border-l-slate-400',
+    badgeClass: 'bg-muted text-muted-foreground border-border',
+    pillClass: 'hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground data-[active=true]:border-border',
+    textClass: 'text-muted-foreground',
+    borderClass: 'border-l-border',
   },
 };
 
@@ -102,25 +102,25 @@ const SOURCE_TYPE_CONFIG: Record<
   STATIC: {
     label: 'Static Rule',
     icon: Cpu,
-    className: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+    className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/25',
     description: 'Detected deterministically by static analyzer / AST pattern',
   },
   AI: {
     label: 'AI Reasoning',
     icon: Sparkles,
-    className: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+    className: 'bg-muted text-foreground border-border',
     description: 'Inferred via AI defect analysis and semantic reasoning',
   },
   COMBINED: {
     label: 'Static + AI',
     icon: ShieldAlert,
-    className: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40 font-semibold',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25 font-semibold',
     description: 'Corroborated by both static rules and AI validation (High Confidence)',
   },
   HYBRID: {
     label: 'Hybrid',
     icon: ShieldAlert,
-    className: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
     description: 'Static candidate investigated and confirmed by AI reasoning',
   },
 };
@@ -170,7 +170,7 @@ const EVIDENCE_LEVEL_CONFIG: Record<
   NEEDS_CONTEXT: {
     label: 'NEEDS CONTEXT',
     icon: AlertTriangle,
-    className: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
+    className: 'bg-muted text-muted-foreground border-border',
     description: 'External package or unindexed repository symbols prevent deterministic confirmation',
   },
 };
@@ -372,7 +372,7 @@ export function BugScannerView({
           </div>
 
           <div className="rounded-lg bg-muted/20 border border-border/50 p-2 flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+            <Sparkles className="h-3.5 w-3.5 text-foreground shrink-0" />
             <div className="min-w-0">
               <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-mono">AI Reasoning</div>
               <div className="font-bold text-foreground text-xs mt-0.5">

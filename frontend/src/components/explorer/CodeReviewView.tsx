@@ -115,11 +115,11 @@ const SEVERITY_CONFIG: Record<
   INFO: {
     label: 'Info',
     icon: Info,
-    badgeClass: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+    badgeClass: 'bg-muted text-muted-foreground border-border',
     pillClass:
-      'hover:bg-slate-500/20 data-[active=true]:bg-slate-500/25 data-[active=true]:text-slate-300 data-[active=true]:border-slate-500/50',
-    textClass: 'text-slate-400',
-    borderClass: 'border-l-slate-400',
+      'hover:bg-accent data-[active=true]:bg-accent data-[active=true]:text-foreground data-[active=true]:border-border',
+    textClass: 'text-muted-foreground',
+    borderClass: 'border-l-border',
   },
 };
 
@@ -172,19 +172,19 @@ const SOURCE_TYPE_CONFIG: Record<
   AI: {
     label: 'AI Reasoning',
     icon: Sparkles,
-    className: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+    className: 'bg-muted text-foreground border-border',
     description: 'AI-assisted code review engine',
   },
   COMBINED: {
     label: 'Static + AI',
     icon: ShieldAlert,
-    className: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/40 font-semibold',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25 font-semibold',
     description: 'Corroborated by both static rules and AI validation',
   },
   HYBRID: {
     label: 'Hybrid',
     icon: ShieldAlert,
-    className: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
+    className: 'bg-teal-500/10 text-teal-700 dark:text-teal-400 border-teal-500/25',
     description: 'Static candidate investigated and confirmed by AI validation',
   },
 };
@@ -198,11 +198,11 @@ const CATEGORY_NAMES: Record<ReviewCategory, string> = {
 };
 
 const CATEGORY_COLORS: Record<ReviewCategory, string> = {
-  correctness: 'text-blue-400 bg-blue-500/10 border-blue-500/30',
-  security: 'text-rose-400 bg-rose-500/10 border-rose-500/30',
-  performance: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-  reliability: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-  maintainability: 'text-purple-400 bg-purple-500/10 border-purple-500/30',
+  correctness: 'text-sky-700 dark:text-sky-400 bg-sky-500/10 border-sky-500/25',
+  security: 'text-rose-700 dark:text-rose-400 bg-rose-500/10 border-rose-500/25',
+  performance: 'text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/25',
+  reliability: 'text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/25',
+  maintainability: 'text-foreground bg-muted border-border',
 };
 
 const LIFECYCLE_CONFIG: Record<
@@ -508,7 +508,7 @@ export function CodeReviewView({
                   type="button"
                   onClick={handleManualPublish}
                   disabled={publicationState.isPublishing}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-indigo-500/40 bg-indigo-500/10 text-indigo-300 hover:bg-indigo-500/20 transition-colors"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-border bg-background text-foreground hover:bg-accent transition-colors cursor-pointer"
                 >
                   {publicationState.isPublishing ? (
                     <Loader2 className="h-2.5 w-2.5 animate-spin" />
@@ -599,20 +599,20 @@ export function CodeReviewView({
         }
 
         return (
-          <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3 flex items-center justify-between text-xs">
+          <div className="rounded-xl border border-border bg-muted/40 p-3 flex items-center justify-between text-xs">
             <div className="flex items-center gap-2">
-              <GitPullRequest className="h-4 w-4 text-indigo-400 shrink-0" />
+              <GitPullRequest className="h-4 w-4 text-muted-foreground shrink-0" />
               <div>
-                <span className="font-semibold text-indigo-300">
+                <span className="font-semibold text-foreground">
                   GitHub PR Review:
                 </span>{' '}
-                <span className="text-foreground">
+                <span className="text-muted-foreground">
                   {pub.skipped_reason || 'Publication evaluated'}
                 </span>
               </div>
             </div>
             {pub.review_id && (
-              <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 text-[10px] font-mono">
+              <span className="px-2 py-0.5 rounded bg-background text-foreground border border-border text-[10px] font-mono">
                 Review ID: #{pub.review_id}
               </span>
             )}

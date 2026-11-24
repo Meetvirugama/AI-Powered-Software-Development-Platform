@@ -54,27 +54,27 @@ function getOverallStatusBadge(status: VerificationOverallStatus) {
     case 'PASS':
       return {
         label: 'VERIFICATION PASSED',
-        bg: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400',
-        icon: <CheckCircle2 className="h-4 w-4 text-emerald-400" />,
+        bg: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-700 dark:text-emerald-400',
+        icon: <CheckCircle2 className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />,
       };
     case 'FAIL':
       return {
         label: 'VERIFICATION FAILED',
-        bg: 'bg-rose-500/15 border-rose-500/30 text-rose-400',
-        icon: <XCircle className="h-4 w-4 text-rose-400" />,
+        bg: 'bg-rose-500/15 border-rose-500/30 text-rose-700 dark:text-rose-400',
+        icon: <XCircle className="h-4 w-4 text-rose-700 dark:text-rose-400" />,
       };
     case 'REQUIRES_HUMAN_REVIEW':
       return {
         label: 'REQUIRES HUMAN REVIEW',
-        bg: 'bg-amber-500/15 border-amber-500/30 text-amber-400',
-        icon: <AlertTriangle className="h-4 w-4 text-amber-400" />,
+        bg: 'bg-amber-500/15 border-amber-500/30 text-amber-700 dark:text-amber-400',
+        icon: <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-400" />,
       };
     case 'INCONCLUSIVE':
     default:
       return {
         label: 'INCONCLUSIVE',
-        bg: 'bg-yellow-500/15 border-yellow-500/30 text-yellow-400',
-        icon: <HelpCircle className="h-4 w-4 text-yellow-400" />,
+        bg: 'bg-yellow-500/15 border-yellow-500/30 text-yellow-700 dark:text-yellow-400',
+        icon: <HelpCircle className="h-4 w-4 text-yellow-700 dark:text-yellow-400" />,
       };
   }
 }
@@ -84,44 +84,44 @@ function getCheckStatusBadge(status: VerificationCheckStatus | string) {
     case 'PASSED':
       return {
         label: 'Passed',
-        bg: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400',
-        icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />,
+        bg: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-700 dark:text-emerald-400',
+        icon: <CheckCircle2 className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400" />,
       };
     case 'FAILED':
       return {
         label: 'Failed',
-        bg: 'bg-rose-500/10 border-rose-500/20 text-rose-400',
-        icon: <XCircle className="h-3.5 w-3.5 text-rose-400" />,
+        bg: 'bg-rose-500/10 border-rose-500/20 text-rose-700 dark:text-rose-400',
+        icon: <XCircle className="h-3.5 w-3.5 text-rose-700 dark:text-rose-400" />,
       };
     case 'RUNNING':
       return {
         label: 'Running',
-        bg: 'bg-sky-500/10 border-sky-500/20 text-sky-400',
-        icon: <RefreshCw className="h-3.5 w-3.5 text-sky-400 animate-spin" />,
+        bg: 'bg-sky-500/10 border-sky-500/20 text-sky-700 dark:text-sky-400',
+        icon: <RefreshCw className="h-3.5 w-3.5 text-sky-700 dark:text-sky-400 animate-spin" />,
       };
     case 'SKIPPED':
       return {
         label: 'Skipped',
-        bg: 'bg-slate-500/10 border-slate-500/20 text-slate-400',
-        icon: <MinusCircle className="h-3.5 w-3.5 text-slate-400" />,
+        bg: 'bg-slate-500/10 border-slate-500/20 text-slate-700 dark:text-slate-400',
+        icon: <MinusCircle className="h-3.5 w-3.5 text-slate-700 dark:text-slate-400" />,
       };
     case 'UNSUPPORTED':
       return {
         label: 'Unsupported',
-        bg: 'bg-amber-500/10 border-amber-500/20 text-amber-400',
-        icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />,
+        bg: 'bg-amber-500/10 border-amber-500/20 text-amber-700 dark:text-amber-400',
+        icon: <AlertTriangle className="h-3.5 w-3.5 text-amber-700 dark:text-amber-400" />,
       };
     case 'UNAVAILABLE':
       return {
         label: 'Unavailable',
-        bg: 'bg-zinc-500/10 border-zinc-500/20 border-dashed text-zinc-400',
-        icon: <Ban className="h-3.5 w-3.5 text-zinc-400" />,
+        bg: 'bg-zinc-500/10 border-zinc-500/20 border-dashed text-zinc-700 dark:text-zinc-400',
+        icon: <Ban className="h-3.5 w-3.5 text-zinc-700 dark:text-zinc-400" />,
       };
     case 'COMPLETED':
       return {
         label: 'Completed',
-        bg: 'bg-blue-500/10 border-blue-500/20 text-blue-400',
-        icon: <CheckCircle2 className="h-3.5 w-3.5 text-blue-400" />,
+        bg: 'bg-blue-500/10 border-blue-500/20 text-blue-700 dark:text-blue-400',
+        icon: <CheckCircle2 className="h-3.5 w-3.5 text-blue-700 dark:text-blue-400" />,
       };
     default:
       return {
@@ -135,16 +135,16 @@ function getCheckStatusBadge(status: VerificationCheckStatus | string) {
 function getSeverityBadge(severity: FindingSeverity | string) {
   switch (severity) {
     case 'CRITICAL':
-      return 'bg-red-500/20 text-red-300 border-red-500/30';
+      return 'bg-red-500/20 text-red-800 dark:text-red-300 border-red-500/30';
     case 'HIGH':
-      return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
+      return 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border-rose-500/30';
     case 'MEDIUM':
-      return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+      return 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-500/30';
     case 'LOW':
-      return 'bg-blue-500/20 text-blue-300 border-blue-500/30';
+      return 'bg-blue-500/20 text-blue-800 dark:text-blue-300 border-blue-500/30';
     case 'INFO':
     default:
-      return 'bg-slate-500/20 text-slate-300 border-slate-500/30';
+      return 'bg-muted text-muted-foreground border-border';
   }
 }
 
@@ -276,7 +276,7 @@ export function VerificationPanel({
           data-testid="reverify-button"
           disabled={triggerMutation.isPending}
           onClick={handleReverify}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 cursor-pointer self-start sm:self-auto shrink-0"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-foreground hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer self-start sm:self-auto shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {triggerMutation.isPending ? (
             <>
@@ -294,15 +294,18 @@ export function VerificationPanel({
 
       {/* Trigger Error Alert */}
       {triggerError && (
-        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
-            <span>{triggerError.message || 'Verification could not be initiated.'}</span>
+        <div
+          role="alert"
+          className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3.5 text-xs text-rose-900 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
+            <span className="break-words">{triggerError.message || 'Verification could not be initiated.'}</span>
           </div>
           <button
             type="button"
             onClick={() => setTriggerError(null)}
-            className="text-xs text-rose-400 hover:text-rose-200 underline ml-2 cursor-pointer"
+            className="text-xs text-rose-700 hover:text-rose-950 dark:text-rose-400 dark:hover:text-rose-200 underline shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
           >
             Dismiss
           </button>
@@ -313,16 +316,16 @@ export function VerificationPanel({
       {isStale && (
         <div
           data-testid="stale-verification-warning"
-          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-200 space-y-1.5"
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-xs text-amber-900 dark:text-amber-200 space-y-1.5"
         >
-          <div className="flex items-center gap-2 font-semibold text-amber-300">
+          <div className="flex items-center gap-2 font-semibold text-amber-800 dark:text-amber-300">
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span>Stale Verification Detected — Revision Mismatch</span>
           </div>
-          <p className="pl-6 text-amber-200/90 leading-relaxed">
+          <p className="pl-6 text-amber-900/90 dark:text-amber-200/90 leading-relaxed">
             The workspace was modified or rebased after verification occurred. The verified commit (
-            <code className="font-mono text-amber-100">{verification?.verified_revision?.slice(0, 10)}</code>) differs from the current revision (
-            <code className="font-mono text-amber-100">{currentRevision?.slice(0, 10)}</code>). Re-run verification to revalidate changes before publication.
+            <code className="font-mono text-amber-950 dark:text-amber-100">{verification?.verified_revision?.slice(0, 10)}</code>) differs from the current revision (
+            <code className="font-mono text-amber-950 dark:text-amber-100">{currentRevision?.slice(0, 10)}</code>). Re-run verification to revalidate changes before publication.
           </p>
         </div>
       )}
@@ -342,7 +345,7 @@ export function VerificationPanel({
             <button
               type="button"
               onClick={() => refetch()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-card text-muted-foreground hover:text-foreground hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               <span>Retry</span>
@@ -425,8 +428,9 @@ export function VerificationPanel({
                         {hasDetails && (
                           <button
                             type="button"
+                            aria-expanded={isExpanded}
                             onClick={() => toggleExpand(check.name)}
-                            className="inline-flex items-center gap-0.5 text-xs text-primary hover:underline"
+                            className="inline-flex items-center gap-0.5 text-xs text-primary hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
                           >
                             <span>Details</span>
                             {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -451,8 +455,8 @@ export function VerificationPanel({
           {/* ---------------------------------------------------------------- */}
           {verification.blocking_findings && verification.blocking_findings.length > 0 && (
             <div data-testid="blocking-findings-section" className="space-y-3">
-              <div className="flex items-center gap-2 text-xs font-semibold text-rose-400">
-                <ShieldAlert className="h-4 w-4" />
+              <div className="flex items-center gap-2 text-xs font-semibold text-rose-700 dark:text-rose-400">
+                <ShieldAlert className="h-4 w-4 shrink-0" />
                 <span>Blocking Findings ({verification.blocking_findings.length}) — Publication Forbidden</span>
               </div>
 
@@ -471,7 +475,7 @@ export function VerificationPanel({
                           Category: {finding.category}
                         </span>
                         {finding.rule_id && (
-                          <span className="font-mono bg-background/60 text-foreground px-1.5 py-0.2 rounded border border-border text-[10px]">
+                          <span className="font-mono bg-background/60 text-foreground px-1.5 py-0.5 rounded border border-border text-[10px]">
                             Rule: {finding.rule_id}
                           </span>
                         )}
@@ -479,14 +483,14 @@ export function VerificationPanel({
                       <span className="font-mono text-[10px] text-muted-foreground">{finding.id}</span>
                     </div>
 
-                    <p className="text-rose-200 leading-relaxed font-medium">
+                    <p className="text-rose-900 dark:text-rose-200 leading-relaxed font-medium break-words">
                       {finding.message}
                     </p>
 
                     {finding.file_path && (
-                      <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-rose-300/90 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-500/20">
-                        <FileCode className="h-3 w-3" />
-                        <span>{finding.file_path}</span>
+                      <div className="inline-flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-rose-800 dark:text-rose-300/90 bg-rose-500/10 dark:bg-rose-950/40 px-2 py-0.5 rounded border border-rose-500/20 max-w-full break-all">
+                        <FileCode className="h-3 w-3 shrink-0" />
+                        <span className="break-all">{finding.file_path}</span>
                         {finding.line_number && <span>:L{finding.line_number}</span>}
                       </div>
                     )}
@@ -501,8 +505,8 @@ export function VerificationPanel({
           {/* ---------------------------------------------------------------- */}
           {verification.warnings && verification.warnings.length > 0 && (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 text-xs font-semibold text-amber-400">
-                <AlertTriangle className="h-4 w-4" />
+              <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>Warnings & Observations ({verification.warnings.length})</span>
               </div>
 
@@ -513,15 +517,15 @@ export function VerificationPanel({
                     className="p-3 rounded-md border border-amber-500/30 bg-amber-500/10 text-xs space-y-1.5"
                   >
                     <div className="flex items-center justify-between flex-wrap gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={cn('px-1.5 py-0.2 rounded text-[10px] font-mono font-bold border uppercase', getSeverityBadge(warning.severity))}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={cn('px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border uppercase', getSeverityBadge(warning.severity))}>
                           {warning.severity}
                         </span>
                         <span className="font-mono text-muted-foreground text-[11px]">
                           {warning.category}
                         </span>
                         {warning.rule_id && (
-                          <span className="font-mono bg-background/60 text-foreground px-1.5 py-0.2 rounded border border-border text-[10px]">
+                          <span className="font-mono bg-background/60 text-foreground px-1.5 py-0.5 rounded border border-border text-[10px]">
                             {warning.rule_id}
                           </span>
                         )}
@@ -529,14 +533,14 @@ export function VerificationPanel({
                       <span className="font-mono text-[10px] text-muted-foreground">{warning.id}</span>
                     </div>
 
-                    <p className="text-amber-200 leading-relaxed">
+                    <p className="text-amber-900 dark:text-amber-200 leading-relaxed break-words">
                       {warning.message}
                     </p>
 
                     {warning.file_path && (
-                      <div className="inline-flex items-center gap-1 font-mono text-[11px] text-amber-300/80">
-                        <FileCode className="h-3 w-3" />
-                        <span>{warning.file_path}</span>
+                      <div className="inline-flex flex-wrap items-center gap-1 font-mono text-[11px] text-amber-800 dark:text-amber-300/80 max-w-full break-all">
+                        <FileCode className="h-3 w-3 shrink-0" />
+                        <span className="break-all">{warning.file_path}</span>
                         {warning.line_number && <span>:L{warning.line_number}</span>}
                       </div>
                     )}
@@ -565,11 +569,11 @@ export function VerificationPanel({
           ) : isStaleCheckError ? (
             <div
               data-testid="publication-eligibility-verdict"
-              className="rounded-md p-4 text-xs space-y-1 border border-rose-500/40 bg-rose-500/10 text-rose-200"
+              className="rounded-md p-4 text-xs space-y-1 border border-rose-500/40 bg-rose-500/10 text-rose-900 dark:text-rose-200"
             >
               <div className="flex items-center gap-2 font-semibold">
-                <XCircle className="h-4 w-4 text-rose-400" />
-                <span className="text-rose-300">Publication Blocked — Revision Freshness Check Failed</span>
+                <XCircle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
+                <span className="text-rose-800 dark:text-rose-300">Publication Blocked — Revision Freshness Check Failed</span>
               </div>
               <p className="pl-6 text-[11px] opacity-90 leading-relaxed">
                 Remote revision stale-check API failed. Server state cannot be verified.
@@ -581,20 +585,20 @@ export function VerificationPanel({
               className={cn(
                 'rounded-md p-4 text-xs space-y-1 border',
                 isEligible
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                  : 'border-rose-500/40 bg-rose-500/10 text-rose-200'
+                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200'
+                  : 'border-rose-500/40 bg-rose-500/10 text-rose-900 dark:text-rose-200'
               )}
             >
               <div className="flex items-center gap-2 font-semibold">
                 {isEligible ? (
                   <>
-                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                    <span className="text-emerald-300">Publication Eligible — Independent Verification Passed</span>
+                    <CheckCircle2 className="h-4 w-4 text-emerald-700 dark:text-emerald-400 shrink-0" />
+                    <span className="text-emerald-800 dark:text-emerald-300">Publication Eligible — Independent Verification Passed</span>
                   </>
                 ) : (
                   <>
-                    <XCircle className="h-4 w-4 text-rose-400" />
-                    <span className="text-rose-300">Publication Blocked — Verification Incomplete or Failed</span>
+                    <XCircle className="h-4 w-4 text-rose-700 dark:text-rose-400 shrink-0" />
+                    <span className="text-rose-800 dark:text-rose-300">Publication Blocked — Verification Incomplete or Failed</span>
                   </>
                 )}
               </div>

@@ -311,18 +311,18 @@ export function ExplanationResultView({
       {call_graph_depth_expanded &&
         ((expanded_callers && expanded_callers.length > 0) ||
           (expanded_callees && expanded_callees.length > 0)) && (
-          <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 p-2.5 flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="font-mono font-semibold text-indigo-300 flex items-center gap-1">
-              <GitFork className="h-3.5 w-3.5" />
+          <div className="rounded-lg border border-border bg-muted/40 p-2.5 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="font-mono font-semibold text-foreground flex items-center gap-1">
+              <GitFork className="h-3.5 w-3.5 text-muted-foreground" />
               <span>1-Hop Call Graph Expanded:</span>
             </span>
             {expanded_callers && expanded_callers.length > 0 && (
-              <span className="font-mono text-purple-300 bg-purple-500/15 px-1.5 py-0.5 rounded border border-purple-500/30">
+              <span className="font-mono text-foreground bg-background px-1.5 py-0.5 rounded border border-border">
                 Callers: {expanded_callers.join(', ')}
               </span>
             )}
             {expanded_callees && expanded_callees.length > 0 && (
-              <span className="font-mono text-blue-300 bg-blue-500/15 px-1.5 py-0.5 rounded border border-blue-500/30">
+              <span className="font-mono text-sky-700 dark:text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/25">
                 Callees: {expanded_callees.join(', ')}
               </span>
             )}
@@ -382,10 +382,10 @@ export function ExplanationResultView({
       {/* Deep Technical & Architecture Breakdown                        */}
       {/* -------------------------------------------------------------- */}
       {detailed_explanation && (
-        <section className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-3.5 space-y-2 shadow-xs">
-          <div className="flex items-center gap-1.5 text-indigo-400 font-semibold text-xs uppercase tracking-wide font-mono">
-            <Cpu className="h-3.5 w-3.5" />
-            <span>Deep Technical & Architecture Breakdown</span>
+        <section className="rounded-xl border border-border bg-card p-3.5 space-y-2">
+          <div className="flex items-center gap-1.5 text-foreground font-semibold text-xs uppercase tracking-wide font-mono">
+            <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
+            <span>Deep Technical &amp; Architecture Breakdown</span>
           </div>
           <div className="text-foreground leading-relaxed font-sans text-xs pt-0.5 whitespace-pre-line space-y-2">
             {detailed_explanation}
@@ -550,7 +550,7 @@ export function ExplanationResultView({
               )}
             </button>
           </div>
-          <pre className="p-3 rounded-lg bg-zinc-950 text-zinc-100 font-mono text-[11px] overflow-x-auto leading-relaxed border border-border/70 max-h-96">
+          <pre className="p-3 rounded-lg bg-muted/60 text-foreground font-mono text-[11px] overflow-x-auto leading-relaxed border border-border max-h-96">
             <code>{corrected_code}</code>
           </pre>
         </section>

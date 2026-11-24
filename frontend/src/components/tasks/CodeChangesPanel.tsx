@@ -37,24 +37,24 @@ function getFileStatusBadge(status: string) {
     case 'added':
       return {
         label: 'ADDED',
-        className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
+        className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30',
       };
     case 'removed':
     case 'deleted':
       return {
         label: 'REMOVED',
-        className: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
+        className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border-rose-500/30',
       };
     case 'renamed':
       return {
         label: 'RENAMED',
-        className: 'bg-purple-500/10 text-purple-400 border-purple-500/30',
+        className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/25',
       };
     case 'modified':
     default:
       return {
         label: 'MODIFIED',
-        className: 'bg-sky-500/10 text-sky-400 border-sky-500/30',
+        className: 'bg-sky-500/10 text-sky-700 dark:text-sky-400 border-sky-500/30',
       };
   }
 }
@@ -103,14 +103,14 @@ export function CodeChangesPanel({
     <div
       data-testid="code-changes-panel"
       className={cn(
-        'rounded-lg border border-border bg-card p-5 shadow-xs space-y-6',
+        'min-w-0 rounded-lg border border-border bg-card p-5 shadow-xs space-y-6',
         className
       )}
     >
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border pb-3">
-        <div className="flex items-center gap-2">
-          <FileDiff className="h-4 w-4 text-primary" />
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileDiff className="h-4 w-4 text-primary shrink-0" />
           <h3 className="text-base font-semibold text-foreground">Code Changes & Diff Telemetry</h3>
         </div>
 
@@ -118,7 +118,8 @@ export function CodeChangesPanel({
           type="button"
           onClick={() => refetch()}
           disabled={isFetching || isLoading}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50"
+          aria-label="Refresh diff telemetry"
+          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground p-1 rounded hover:bg-accent transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title="Refresh diff telemetry"
         >
           <RefreshCw className={cn('h-3.5 w-3.5', (isFetching || isLoading) && 'animate-spin')} />
@@ -128,10 +129,10 @@ export function CodeChangesPanel({
       {/* ------------------------------------------------------------------ */}
       {/* Section 1: Planned Changes (Pre-Execution Forecast)                */}
       {/* ------------------------------------------------------------------ */}
-      <div className="rounded-md border border-border/80 bg-background/40 p-4 space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="rounded-md border border-border/80 bg-background/40 p-4 space-y-3 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider flex items-center gap-1.5">
-            <Layers className="h-3.5 w-3.5 text-primary" />
+            <Layers className="h-3.5 w-3.5 text-primary shrink-0" />
             Planned Changes (Pre-Execution Forecast)
           </h4>
           <span className="text-[11px] text-muted-foreground/80 italic">
@@ -145,9 +146,9 @@ export function CodeChangesPanel({
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
           {/* Requirement Target Files */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 min-w-0">
             <span className="text-[11px] font-medium text-foreground flex items-center gap-1">
-              <Target className="h-3 w-3 text-primary" />
+              <Target className="h-3 w-3 text-primary shrink-0" />
               Requirement Target Files ({uniqueTargetFiles.length})
             </span>
             {uniqueTargetFiles.length > 0 ? (
@@ -155,7 +156,7 @@ export function CodeChangesPanel({
                 {uniqueTargetFiles.map((file) => (
                   <span
                     key={file}
-                    className="font-mono text-[11px] bg-background px-2 py-0.5 rounded border border-border/80 text-foreground/90"
+                    className="font-mono text-[11px] bg-background px-2 py-0.5 rounded border border-border/80 text-foreground/90 break-all"
                   >
                     {file}
                   </span>
@@ -167,9 +168,9 @@ export function CodeChangesPanel({
           </div>
 
           {/* Plan Expected Files */}
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 min-w-0">
             <span className="text-[11px] font-medium text-foreground flex items-center gap-1">
-              <ListTodo className="h-3 w-3 text-sky-400" />
+              <ListTodo className="h-3 w-3 text-sky-700 dark:text-sky-400 shrink-0" />
               Plan Expected Files ({uniqueExpectedFiles.length})
             </span>
             {uniqueExpectedFiles.length > 0 ? (
@@ -177,7 +178,7 @@ export function CodeChangesPanel({
                 {uniqueExpectedFiles.map((file) => (
                   <span
                     key={file}
-                    className="font-mono text-[11px] bg-background px-2 py-0.5 rounded border border-border/80 text-foreground/90"
+                    className="font-mono text-[11px] bg-background px-2 py-0.5 rounded border border-border/80 text-foreground/90 break-all"
                   >
                     {file}
                   </span>
@@ -193,23 +194,23 @@ export function CodeChangesPanel({
       {/* ------------------------------------------------------------------ */}
       {/* Section 2: Actual Workspace Modifications (Git Diff Telemetry)     */}
       {/* ------------------------------------------------------------------ */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="space-y-3 min-w-0">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h4 className="text-xs font-semibold uppercase text-muted-foreground tracking-wider flex items-center gap-1.5">
-            <FileCode className="h-3.5 w-3.5 text-emerald-400" />
+            <FileCode className="h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400 shrink-0" />
             Actual Workspace Modifications
           </h4>
 
           {diffData && (
-            <div className="flex items-center gap-3 font-mono text-xs">
+            <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
               <span className="text-muted-foreground">
                 {diffData.total_files_changed} file{diffData.total_files_changed === 1 ? '' : 's'} changed
               </span>
-              <span className="text-emerald-400 font-semibold flex items-center">
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold flex items-center">
                 <Plus className="h-3 w-3 inline" />
                 {diffData.total_additions}
               </span>
-              <span className="text-rose-400 font-semibold flex items-center">
+              <span className="text-rose-700 dark:text-rose-400 font-semibold flex items-center">
                 <Minus className="h-3 w-3 inline" />
                 {diffData.total_deletions}
               </span>
@@ -229,7 +230,7 @@ export function CodeChangesPanel({
               <button
                 type="button"
                 onClick={() => refetch()}
-                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors"
+                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 py-1 rounded border border-border hover:bg-accent transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <RefreshCw className="h-3 w-3" />
                 Retry Loading Diff
@@ -252,7 +253,7 @@ export function CodeChangesPanel({
             </p>
           </div>
         ) : (
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 min-w-0">
             {diffData.files.map((file) => {
               const badge = getFileStatusBadge(file.status);
               const isExpanded = expandedFiles[file.file_path] ?? true;
@@ -268,15 +269,16 @@ export function CodeChangesPanel({
                 <div
                   key={file.file_path}
                   data-testid={`diff-file-${file.file_path}`}
-                  className="rounded-md border border-border/80 bg-background/50 overflow-hidden"
+                  className="min-w-0 rounded-md border border-border/80 bg-background/50 overflow-hidden"
                 >
                   {/* File Header */}
                   <button
                     type="button"
+                    aria-expanded={isExpanded}
                     onClick={() => toggleFile(file.file_path)}
-                    className="w-full flex items-center justify-between p-3 hover:bg-accent/40 transition-colors text-left"
+                    className="w-full flex flex-wrap items-center justify-between gap-2 p-3 hover:bg-accent/40 transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
                       {isExpanded ? (
                         <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                       ) : (
@@ -287,14 +289,14 @@ export function CodeChangesPanel({
                       </span>
                       <span
                         className={cn(
-                          'font-mono text-[10px] font-semibold px-1.5 py-0.2 rounded border',
+                          'font-mono text-[10px] font-semibold px-1.5 py-0.5 rounded border shrink-0',
                           badge.className
                         )}
                       >
                         {badge.label}
                       </span>
                       {fileFindings.length > 0 && (
-                        <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 px-1.5 py-0.2 rounded">
+                        <span className="inline-flex items-center gap-1 font-mono text-[10px] font-bold bg-rose-500/15 text-rose-800 dark:text-rose-300 border border-rose-500/30 px-1.5 py-0.5 rounded shrink-0">
                           <ShieldAlert className="h-3 w-3" />
                           {fileFindings.length} finding{fileFindings.length === 1 ? '' : 's'}
                         </span>
@@ -302,23 +304,23 @@ export function CodeChangesPanel({
                     </div>
 
                     <div className="flex items-center gap-3 font-mono text-xs shrink-0">
-                      <span className="text-emerald-400 font-medium">+{file.additions}</span>
-                      <span className="text-rose-400 font-medium">-{file.deletions}</span>
+                      <span className="text-emerald-700 dark:text-emerald-400 font-medium">+{file.additions}</span>
+                      <span className="text-rose-700 dark:text-rose-400 font-medium">-{file.deletions}</span>
                     </div>
                   </button>
 
                   {/* Inline File Verification Findings */}
                   {fileFindings.length > 0 && (
-                    <div className="mx-3 mb-2 p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 space-y-1">
-                      <div className="flex items-center gap-1.5 font-semibold text-rose-300">
-                        <ShieldAlert className="h-3.5 w-3.5" />
+                    <div className="mx-3 mb-2 p-2 rounded bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-900 dark:text-rose-200 space-y-1">
+                      <div className="flex items-center gap-1.5 font-semibold text-rose-800 dark:text-rose-300">
+                        <ShieldAlert className="h-3.5 w-3.5 shrink-0" />
                         <span>Associated Verification Findings:</span>
                       </div>
                       {fileFindings.map((f) => (
-                        <div key={f.id} className="pl-5 text-rose-200/90 font-mono text-[10px] flex items-center gap-2">
-                          <span className="uppercase font-bold text-[9px] bg-rose-500/20 px-1 rounded">{f.severity}</span>
-                          <span>{f.message}</span>
-                          {f.line_number && <span className="text-muted-foreground">(Line {f.line_number})</span>}
+                        <div key={f.id} className="pl-5 text-rose-800/90 dark:text-rose-200/90 font-mono text-[10px] flex flex-wrap items-center gap-2 min-w-0">
+                          <span className="uppercase font-bold text-[9px] bg-rose-500/20 px-1 rounded shrink-0">{f.severity}</span>
+                          <span className="break-words">{f.message}</span>
+                          {f.line_number && <span className="text-muted-foreground shrink-0">(Line {f.line_number})</span>}
                         </div>
                       ))}
                     </div>
@@ -328,15 +330,15 @@ export function CodeChangesPanel({
                   {isExpanded && (
                     <div className="border-t border-border/60 bg-muted/20 p-3 font-mono text-xs overflow-x-auto max-h-72 overflow-y-auto">
                       {file.patch ? (
-                        <pre className="space-y-0.5 leading-relaxed">
+                        <pre className="min-w-full w-max space-y-0.5 leading-relaxed">
                           {file.patch.split('\n').map((line, idx) => {
-                            let lineStyle = 'text-foreground/80';
+                            let lineStyle = 'text-foreground/80 block px-1';
                             if (line.startsWith('+') && !line.startsWith('+++')) {
-                              lineStyle = 'text-emerald-400 bg-emerald-950/20 block px-1 rounded-xs';
+                              lineStyle = 'text-emerald-800 dark:text-emerald-300 bg-emerald-500/10 dark:bg-emerald-950/25 block px-1 rounded-xs';
                             } else if (line.startsWith('-') && !line.startsWith('---')) {
-                              lineStyle = 'text-rose-400 bg-rose-950/20 block px-1 rounded-xs';
+                              lineStyle = 'text-rose-800 dark:text-rose-300 bg-rose-500/10 dark:bg-rose-950/25 block px-1 rounded-xs';
                             } else if (line.startsWith('@@')) {
-                              lineStyle = 'text-cyan-400 bg-cyan-950/30 block px-1 font-semibold rounded-xs';
+                              lineStyle = 'text-cyan-800 dark:text-cyan-300 bg-cyan-500/10 dark:bg-cyan-950/30 block px-1 font-semibold rounded-xs';
                             }
 
                             const isHeaderOrHunk = line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@');

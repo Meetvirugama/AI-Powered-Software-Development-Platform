@@ -85,7 +85,7 @@ export function RepositoryMetricsSidebar({
               {metrics.languages.slice(0, 6).map((lang, i) => (
                 <div
                   key={lang.language}
-                  className={['bg-primary', 'bg-emerald-500', 'bg-amber-500', 'bg-sky-500', 'bg-fuchsia-500', 'bg-muted-foreground'][i]}
+                  className={['bg-foreground/80', 'bg-emerald-500', 'bg-amber-500', 'bg-sky-500', 'bg-teal-500', 'bg-muted-foreground'][i]}
                   style={{ width: `${metrics.total_lines ? (lang.lines / metrics.total_lines) * 100 : 0}%` }}
                   title={`${lang.language}: ${lang.lines.toLocaleString()} lines`}
                 />

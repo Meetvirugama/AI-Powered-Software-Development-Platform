@@ -218,25 +218,25 @@ export function RepositoryBugStudio() {
                     Executing multi-phase repository context investigation ({scanMode.toUpperCase()} mode).
                   </p>
                 </div>
-                <div className="w-full text-left space-y-2 p-3.5 rounded-xl border border-border/70 bg-card/60 backdrop-blur-xs font-mono text-[11px]">
-                  <div className="flex items-center gap-2 text-emerald-400">
+                <div className="w-full text-left space-y-2 p-3.5 rounded-xl border border-border bg-card font-mono text-[11px]">
+                  <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
                     <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                    <span>1. Candidate Discovery (AST & Taint analysis)</span>
+                    <span>1. Candidate Discovery (AST &amp; Taint analysis)</span>
                   </div>
-                  <div className="flex items-center gap-2 text-cyan-400">
+                  <div className="flex items-center gap-2 text-sky-700 dark:text-sky-400">
                     <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                     <span>2. Dependency Graph Slicing (2-hop traversal)</span>
                   </div>
-                  <div className="flex items-center gap-2 text-purple-400 animate-pulse">
+                  <div className="flex items-center gap-2 text-foreground animate-pulse">
                     <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                    <span>3. AI Investigation & Bug Verification</span>
+                    <span>3. AI Investigation &amp; Bug Verification</span>
                   </div>
-                  <div className="flex items-center gap-2 text-muted-foreground/70">
-                    <div className="h-3.5 w-3.5 rounded-full border border-muted-foreground/40 shrink-0" />
-                    <span>4. Counterevidence Validation (Guards & Tests)</span>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <div className="h-3.5 w-3.5 rounded-full border border-border shrink-0" />
+                    <span>4. Counterevidence Validation (Guards &amp; Tests)</span>
                   </div>
-                  <div className="flex items-center gap-2 text-muted-foreground/70">
-                    <div className="h-3.5 w-3.5 rounded-full border border-muted-foreground/40 shrink-0" />
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <div className="h-3.5 w-3.5 rounded-full border border-border shrink-0" />
                     <span>5. Multidimensional Priority Scoring (0-100)</span>
                   </div>
                 </div>
