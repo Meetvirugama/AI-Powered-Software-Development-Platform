@@ -48,10 +48,14 @@ export function RepositoryReviewStudio() {
       setReviewResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunReview = useCallback(() => {
     if (!selectedFile || reviewMutation.isPending) return;
+    setActiveMobileTab('results');
 
     reviewMutation.mutate({ target: { type: 'file', path: selectedFile.path } });
   }, [selectedFile, reviewMutation]);
@@ -135,6 +139,7 @@ export function RepositoryReviewStudio() {
         sourcePanel={
           selectedFile ? (
             <CodeViewer
+              key={selectedFile.id}
               repositoryId={repoId}
               file={selectedFile}
               activeTarget={activeTarget}

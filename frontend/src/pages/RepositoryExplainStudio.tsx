@@ -47,7 +47,7 @@ export function RepositoryExplainStudio() {
   const navigate = useNavigate();
 
   const repoId = id ?? '';
-  const { data: filesData, isLoading: filesLoading } = useRepositoryFiles(repoId, 1, 500);
+  const { data: filesData, isLoading: filesLoading, isError: filesError, error: filesErrorData } = useRepositoryFiles(repoId, 1, 500);
   const files = useMemo(() => filesData?.items ?? [], [filesData]);
 
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -99,10 +99,14 @@ export function RepositoryExplainStudio() {
       setResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunExplain = useCallback(() => {
     if (!selectedFile || explainMutation.isPending) return;
+    setActiveMobileTab('results');
 
     const allSelected = Array.from(
       new Set([...selectedRelatedPaths, ...customSelectedFiles])
@@ -277,6 +281,7 @@ export function RepositoryExplainStudio() {
       sourcePanel={
         selectedFile ? (
           <CodeViewer
+            key={selectedFile.id}
             repositoryId={repoId}
             file={selectedFile}
             activeTarget={activeTarget}
@@ -290,6 +295,16 @@ export function RepositoryExplainStudio() {
             }}
             isAnalyzing={explainMutation.isPending}
           />
+        ) : filesError ? (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <ErrorMessage
+              message={
+                filesErrorData instanceof Error
+                  ? filesErrorData.message
+                  : 'Could not load repository files.'
+              }
+            />
+          </div>
         ) : (
           <div className="flex-1 flex items-center justify-center p-8 text-center text-muted-foreground text-xs">
             Select a file to inspect its source code.

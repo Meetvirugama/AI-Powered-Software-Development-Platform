@@ -61,4 +61,11 @@ describe('normaliseError (F-04 & F-10)', () => {
     expect(normaliseError({ response: { status: 500 } }).code).toBe('SERVER_ERROR');
     expect(normaliseError({ code: 'ERR_NETWORK' }).code).toBe('NETWORK_ERROR');
   });
+
+  it('preserves backend data.detail messages on 401/403/404/409 responses', () => {
+    expect(normaliseError({ response: { status: 401, data: { detail: 'Token expired.' } } }).message).toBe('Token expired.');
+    expect(normaliseError({ response: { status: 403, data: { detail: 'Repository access restricted.' } } }).message).toBe('Repository access restricted.');
+    expect(normaliseError({ response: { status: 404, data: { detail: 'Branch not found.' } } }).message).toBe('Branch not found.');
+    expect(normaliseError({ response: { status: 409, data: { detail: 'Sync already in progress.' } } }).message).toBe('Sync already in progress.');
+  });
 });

@@ -52,10 +52,14 @@ export function RepositoryTestStudio() {
       setTestResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunGenerate = useCallback(() => {
     if (!selectedFile || testMutation.isPending) return;
+    setActiveMobileTab('results');
 
     testMutation.mutate({
       target: activeTarget,
@@ -161,6 +165,7 @@ export function RepositoryTestStudio() {
       sourcePanel={
         selectedFile ? (
           <CodeViewer
+            key={selectedFile.id}
             repositoryId={repoId}
             file={selectedFile}
             activeTarget={activeTarget}

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -149,8 +152,18 @@ class TestDockerfileAndDependencyHardening:
         parsed = tomllib.loads(GITLEAKS_CONFIG_PATH.read_text(encoding="utf-8"))
         assert parsed.get("extend", {}).get("useDefault") is True
 
+        ruff_cmd: list[str] | None = None
+        if importlib.util.find_spec("ruff") is not None:
+            ruff_cmd = [sys.executable, "-m", "ruff"]
+        else:
+            ruff_bin = shutil.which("ruff")
+            if ruff_bin:
+                ruff_cmd = [ruff_bin]
+        if ruff_cmd is None:
+            pytest.skip("ruff is not installed in this local environment")
+
         proc = subprocess.run(
-            [sys.executable, "-m", "ruff", "check", "backend/app", "--select", "E9,F63,F7,F82"],
+            [*ruff_cmd, "check", "backend/app", "--select", "E9,F63,F7,F82"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,

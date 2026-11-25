@@ -92,13 +92,16 @@ export function RepositoryDetail() {
     isError: filesError,
   } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
-  // Reset extra pages when repository ID changes
+  // Reset extra pages and file selection state when repository ID changes
   const [prevId, setPrevId] = useState(id);
   if (prevId !== id) {
     setPrevId(id);
     setExtraLoadedFiles([]);
     setCurrentPage(1);
     setLookupAttemptedPath(null);
+    setUserSelectedFile(null);
+    setCustomTarget(null);
+    setUserHighlightedSource(null);
   }
 
   // Merge page 1 items with extraLoadedFiles (deduplicated by id)
@@ -318,7 +321,7 @@ export function RepositoryDetail() {
               {/* Workbench Split Workspace */}
               <div className="flex-1 min-h-0 flex flex-col sm:flex-row overflow-hidden">
                 {/* Sub-pane 1: Interactive File Tree */}
-                <div className="w-full sm:w-56 lg:w-64 border-b sm:border-b-0 sm:border-r border-border flex flex-col shrink-0 min-h-0 bg-muted/10">
+                <div className="w-full max-h-56 sm:max-h-none sm:w-56 lg:w-64 border-b sm:border-b-0 sm:border-r border-border flex flex-col shrink-0 min-h-0 bg-muted/10">
                   <FileTree
                     files={loadedFiles}
                     totalFiles={filesData?.total}

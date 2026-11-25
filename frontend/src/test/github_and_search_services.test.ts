@@ -105,4 +105,17 @@ describe('GitHub & Code Search Services (FEAT-15 / FEAT-16)', () => {
     });
     expect(result).toEqual(mockData);
   });
+
+  it('listRepositorySymbols maps query to q and unwraps PaginatedResponse items', async () => {
+    const items = [{ id: 'sym-2', name: 'verifyToken', kind: 'function', file_path: 'auth.py', start_line: 12, end_line: 25 }];
+    getSpy.mockResolvedValueOnce({
+      data: { page: 1, page_size: 50, total: 1, items },
+    });
+
+    const result = await listRepositorySymbols('repo-uuid', { query: 'verify', kind: 'function' });
+    expect(getSpy).toHaveBeenCalledWith('/repositories/repo-uuid/symbols', {
+      params: { kind: 'function', q: 'verify' },
+    });
+    expect(result).toEqual(items);
+  });
 });

@@ -52,10 +52,14 @@ export function RepositoryBugStudio() {
       setBugResult(data);
       setActiveMobileTab('results');
     },
+    onError: () => {
+      setActiveMobileTab('results');
+    },
   });
 
   const handleRunScan = useCallback(() => {
     if (!selectedFile || bugMutation.isPending) return;
+    setActiveMobileTab('results');
 
     bugMutation.mutate({
       target: activeTarget,
@@ -186,6 +190,7 @@ export function RepositoryBugStudio() {
         sourcePanel={
           selectedFile ? (
             <CodeViewer
+              key={selectedFile.id}
               repositoryId={repoId}
               file={selectedFile}
               activeTarget={activeTarget}

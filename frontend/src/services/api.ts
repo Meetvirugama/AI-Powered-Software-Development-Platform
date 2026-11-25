@@ -107,6 +107,34 @@ apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return reqConfig;
 });
 
+let refreshPromise: Promise<string | null> | null = null;
+
+function refreshSessionToken(): Promise<string | null> {
+  if (!refreshPromise) {
+    const currentToken = getStoredToken();
+    refreshPromise = axios
+      .post<{ access_token?: string }>(
+        `${API_BASE_URL}/auth/refresh`,
+        {},
+        {
+          withCredentials: true,
+          headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
+        }
+      )
+      .then((res) => {
+        const nextToken = res.data?.access_token ?? null;
+        if (nextToken) {
+          setStoredToken(nextToken);
+        }
+        return nextToken;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
 // ---------------------------------------------------------------------------
 // Response interceptor — latency logging & error normalisation
 // ---------------------------------------------------------------------------
@@ -128,34 +156,20 @@ apiClient.interceptors.response.use(
 
     const normalised = normaliseError(error);
 
-    // ISS-012 / T4.9: Attempt token renewal on 401 before redirecting
+    // ISS-012 / T4.9: Attempt deduplicated token renewal on 401 before redirecting
     const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
-    if (
-      error.response?.status === 401 &&
-      originalRequest &&
-      !originalRequest._retry &&
-      !originalRequest.url?.includes('/auth/refresh') &&
-      !originalRequest.url?.includes('/auth/login') &&
-      !originalRequest.url?.includes('/auth/github') &&
-      !originalRequest.url?.includes('/auth/dev-login')
-    ) {
+    const isAuthEndpoint =
+      originalRequest?.url?.includes('/auth/refresh') ||
+      originalRequest?.url?.includes('/auth/login') ||
+      originalRequest?.url?.includes('/auth/github') ||
+      originalRequest?.url?.includes('/auth/dev-login');
+
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true;
-      const currentToken = getStoredToken();
-      return axios
-        .post<{ access_token?: string }>(
-          `${API_BASE_URL}/auth/refresh`,
-          {},
-          {
-            withCredentials: true,
-            headers: currentToken ? { Authorization: `Bearer ${currentToken}` } : undefined,
-          }
-        )
-        .then((res) => {
-          if (res.data?.access_token) {
-            setStoredToken(res.data.access_token);
-            if (originalRequest.headers) {
-              originalRequest.headers.Authorization = `Bearer ${res.data.access_token}`;
-            }
+      return refreshSessionToken()
+        .then((nextToken) => {
+          if (nextToken && originalRequest.headers) {
+            originalRequest.headers.Authorization = `Bearer ${nextToken}`;
           }
           return apiClient(originalRequest);
         })
@@ -174,9 +188,10 @@ apiClient.interceptors.response.use(
         });
     }
 
-    // F-10: Preserve intended return route on 401 redirect
+    // F-10: Preserve intended return route on 401 redirect (skip auth endpoints)
     if (
       error.response?.status === 401 &&
+      !isAuthEndpoint &&
       typeof window !== 'undefined' &&
       !window.location.pathname.startsWith('/login') &&
       !window.location.pathname.startsWith('/auth')
@@ -316,21 +331,21 @@ export function normaliseError(error: unknown): ApiError {
   }
 
   // Fallback by HTTP status code
+  const detailMessage = typeof data?.detail === 'string' && data.detail.trim() ? data.detail : undefined;
   if (status === 400) {
-    const msg = typeof data?.detail === 'string' ? data.detail : 'Bad request.';
-    return { code: 'BAD_REQUEST', message: msg, retryable: false, status, requestId };
+    return { code: 'BAD_REQUEST', message: detailMessage ?? 'Bad request.', retryable: false, status, requestId };
   }
   if (status === 401) {
-    return { code: 'UNAUTHORIZED', message: 'Not authenticated.', retryable: false, status, requestId };
+    return { code: 'UNAUTHORIZED', message: detailMessage ?? 'Not authenticated.', retryable: false, status, requestId };
   }
   if (status === 403) {
-    return { code: 'FORBIDDEN', message: 'Access denied.', retryable: false, status, requestId };
+    return { code: 'FORBIDDEN', message: detailMessage ?? 'Access denied.', retryable: false, status, requestId };
   }
   if (status === 404) {
-    return { code: 'NOT_FOUND', message: 'Resource not found.', retryable: false, status, requestId };
+    return { code: 'NOT_FOUND', message: detailMessage ?? 'Resource not found.', retryable: false, status, requestId };
   }
   if (status === 409) {
-    return { code: 'CONFLICT', message: 'Resource conflict occurred.', retryable: false, status, requestId };
+    return { code: 'CONFLICT', message: detailMessage ?? 'Resource conflict occurred.', retryable: false, status, requestId };
   }
   if (status === 422) {
     return {

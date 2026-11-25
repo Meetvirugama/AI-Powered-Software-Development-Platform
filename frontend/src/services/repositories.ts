@@ -237,13 +237,23 @@ export async function searchRepository(
  */
 export async function listRepositorySymbols(
   repositoryId: string,
-  params?: { query?: string; kind?: string },
-): Promise<Array<{ id: string; name: string; kind: string; file_path: string; start_line: number; end_line: number }>> {
+  params?: { query?: string; q?: string; kind?: string; file_id?: string },
+): Promise<Array<{ id: string; name: string; kind: string; file_path?: string; file_id?: string; start_line: number; end_line: number }>> {
+  const mappedParams: Record<string, string> = {};
+  const searchTerm = params?.q ?? params?.query;
+  if (searchTerm) mappedParams.q = searchTerm;
+  if (params?.kind) mappedParams.kind = params.kind;
+  if (params?.file_id) mappedParams.file_id = params.file_id;
   const response = await apiClient.get(
     `/repositories/${repositoryId}/symbols`,
-    { params },
+    { params: mappedParams },
   );
-  return response.data;
+  const raw = response.data as unknown;
+  if (Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown[] }).items)) {
+    return (raw as { items: Array<{ id: string; name: string; kind: string; file_path?: string; file_id?: string; start_line: number; end_line: number }> }).items;
+  }
+  return [];
 }
 
 
