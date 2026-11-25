@@ -16,6 +16,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import type { RepositoryFile } from '../types/api';
 import type { AnalysisTarget, AnalysisTargetType } from '../types/analysis';
 import { findMatchingRepositoryFile } from '../lib/sourceReference';
+import { useSelectedFileStore } from '../stores/useSelectedFileStore';
 
 export interface TargetRange {
   start_line?: number;
@@ -90,6 +91,10 @@ export function useStudioFile(
   }
 
   const fileQuery = searchParams.get('file');
+  const storedFilePath = useSelectedFileStore((state) =>
+    repoId ? state.selectedPathByRepo[repoId] ?? null : null
+  );
+  const setStoredFilePath = useSelectedFileStore((state) => state.setSelectedFilePath);
 
   // Validated override scoped strictly to current repoId and verified to exist in files
   const validOverride = useMemo(() => {
@@ -99,20 +104,31 @@ export function useStudioFile(
   }, [fileOverride, repoId, files]);
 
   const selectedFile: RepositoryFile | null = useMemo(() => {
-    // 1. Deep link query parameter matching
-    if (fileQuery && files.length > 0) {
-      const match = findMatchingRepositoryFile(files, fileQuery);
-      if (match) return match;
+    // 1. Explicit deep link query parameter takes top priority
+    if (fileQuery) {
+      if (files.length > 0) {
+        const match = findMatchingRepositoryFile(files, fileQuery);
+        if (match) return match;
+        return files.find((f) => !f.path.startsWith('.') && f.size_bytes > 0) ?? files[0];
+      }
+      return null;
     }
+
     // 2. Active user selection override belonging to current repo
     if (validOverride) return validOverride;
 
-    // 3. Fallback to default index file
+    // 3. Persisted selection across repository workspace tabs (Explorer / Explain / Bugs / Tests / Review)
+    if (storedFilePath && files.length > 0) {
+      const persistedMatch = findMatchingRepositoryFile(files, storedFilePath);
+      if (persistedMatch) return persistedMatch;
+    }
+
+    // 4. Fallback to default index file
     if (files.length > 0) {
       return files.find((f) => !f.path.startsWith('.') && f.size_bytes > 0) ?? files[0];
     }
     return null;
-  }, [validOverride, fileQuery, files]);
+  }, [validOverride, fileQuery, storedFilePath, files]);
 
   const activeTarget: AnalysisTarget = useMemo(() => {
     const path = selectedFile?.path ?? '';
@@ -162,6 +178,9 @@ export function useStudioFile(
 
   const handleSelectFile = (file: RepositoryFile, options?: SelectFileOptions) => {
     setFileOverride({ repoId, file });
+    if (repoId) {
+      setStoredFilePath(repoId, file.path);
+    }
     setStoredTarget({ type: 'file' });
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);

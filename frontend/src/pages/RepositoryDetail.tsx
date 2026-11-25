@@ -14,6 +14,7 @@ import { findMatchingRepositoryFile } from '../lib/sourceReference';
 import { StudioLayoutSkeleton } from '../components/shared/Skeletons';
 import { useSseConnectionStatus } from '../hooks/useSseConnectionStatus';
 import { useSyncProgressStore } from '../stores/useSyncProgressStore';
+import { useSelectedFileStore } from '../stores/useSelectedFileStore';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { FileTree } from '../components/explorer/FileTree';
 import { CodeViewer, CodeViewerEmptyState } from '../components/explorer/CodeViewer';
@@ -59,6 +60,8 @@ export function RepositoryDetail() {
 
   const { isConnected: isSseConnected } = useSseConnectionStatus();
   const liveProgress = useSyncProgressStore((state) => (id ? state.progressByRepo[id] ?? null : null));
+  const storedFilePath = useSelectedFileStore((state) => (id ? state.selectedPathByRepo[id] ?? null : null));
+  const setStoredFilePath = useSelectedFileStore((state) => state.setSelectedFilePath);
 
   // ------------------------------------------------------------------
   // Data Fetching
@@ -144,13 +147,15 @@ export function RepositoryDetail() {
     }
   }
 
+  const effectiveLookupPath = fileParam ?? storedFilePath;
+
   // Derive whether an active async lookup is underway
   const isLookingUpPath = useMemo(() => {
-    if (!id || !fileParam || !isReady || filesLoading) return false;
-    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, fileParam);
+    if (!id || !effectiveLookupPath || !isReady || filesLoading) return false;
+    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, effectiveLookupPath);
     if (alreadyLoaded) return false;
-    return lookupAttemptedPath !== fileParam;
-  }, [id, fileParam, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
+    return lookupAttemptedPath !== effectiveLookupPath;
+  }, [id, effectiveLookupPath, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
 
   // Check if cited file from query parameters is already loaded or needs direct backend path lookup
   const queryMatchedFile = useMemo(() => {
@@ -158,17 +163,23 @@ export function RepositoryDetail() {
     return findMatchingRepositoryFile(loadedFiles, fileParam);
   }, [fileParam, isReady, loadedFiles]);
 
+  const storedMatchedFile = useMemo(() => {
+    if (!storedFilePath || !isReady) return null;
+    return findMatchingRepositoryFile(loadedFiles, storedFilePath);
+  }, [storedFilePath, isReady, loadedFiles]);
+
   // Effect: perform explicit path lookup if not in initial 500
   useEffect(() => {
-    if (!id || !fileParam || !isReady || filesLoading || queryMatchedFile) return;
-    if (lookupAttemptedPath === fileParam) return;
+    const matchedTarget = fileParam ? queryMatchedFile : storedMatchedFile;
+    if (!id || !effectiveLookupPath || !isReady || filesLoading || matchedTarget) return;
+    if (lookupAttemptedPath === effectiveLookupPath) return;
 
     let cancelled = false;
 
-    lookupRepositoryFileByPath(id, fileParam)
+    lookupRepositoryFileByPath(id, effectiveLookupPath)
       .then((file) => {
         if (!cancelled) {
-          setLookupAttemptedPath(fileParam);
+          setLookupAttemptedPath(effectiveLookupPath);
           if (file) {
             setExtraLoadedFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [...prev, file]));
           }
@@ -176,15 +187,15 @@ export function RepositoryDetail() {
       })
       .catch((err) => {
         if (!cancelled) {
-          setLookupAttemptedPath(fileParam);
+          setLookupAttemptedPath(effectiveLookupPath);
         }
-        console.debug(`Path lookup for ${fileParam} unsuccessful:`, err);
+        console.debug(`Path lookup for ${effectiveLookupPath} unsuccessful:`, err);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [id, fileParam, isReady, filesLoading, queryMatchedFile, lookupAttemptedPath]);
+  }, [id, fileParam, effectiveLookupPath, isReady, filesLoading, queryMatchedFile, storedMatchedFile, lookupAttemptedPath]);
 
   const citedFileUnavailable = useMemo(() => {
     return fileParam && !filesLoading && !isLookingUpPath && !queryMatchedFile ? fileParam : null;
@@ -193,8 +204,9 @@ export function RepositoryDetail() {
   const selectedFile = useMemo(() => {
     if (userSelectedFile) return userSelectedFile;
     if (queryMatchedFile) return queryMatchedFile;
+    if (storedMatchedFile) return storedMatchedFile;
     return loadedFiles.length > 0 ? loadedFiles[0] : null;
-  }, [userSelectedFile, queryMatchedFile, loadedFiles]);
+  }, [userSelectedFile, queryMatchedFile, storedMatchedFile, loadedFiles]);
 
   // Active target range derived from selection or custom range
   const activeTarget: AnalysisTarget = useMemo(() => {
@@ -336,6 +348,9 @@ export function RepositoryDetail() {
                     selectedFile={selectedFile}
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
+                      if (id) {
+                        setStoredFilePath(id, file.path);
+                      }
                       setUserHighlightedSource(null);
                       setReviewTarget((prev) =>
                         prev.type === 'file' ? { type: 'file', path: file.path } : prev
