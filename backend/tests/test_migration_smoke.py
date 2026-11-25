@@ -86,6 +86,7 @@ EXPECTED_MILESTONE_REVISIONS = (
     "m1a2b3c4d5e6",  # composite indexes for polling, repo lookups, and graph traversals (Issue #265 / F-45)
     "n2b3c4d5e6f7",  # add sync job progress, stage, error details, and duration tracking
     "o3c4d5e6f7a8",  # server-side repository chat history (conversations + messages)
+    "p4d5e6f7a8b9",  # denormalize repository counts and latest sync error
 )
 
 

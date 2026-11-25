@@ -27,7 +27,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request

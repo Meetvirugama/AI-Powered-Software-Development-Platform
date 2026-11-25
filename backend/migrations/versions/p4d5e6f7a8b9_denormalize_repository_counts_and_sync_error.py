@@ -50,7 +50,7 @@ def upgrade() -> None:
             WHERE code_chunks.repository_id = repositories.id
         ),
         last_sync_error = (
-            SELECT sync_jobs.error_message
+            SELECT SUBSTR(sync_jobs.error_message, 1, 512)
             FROM sync_jobs
             WHERE sync_jobs.repository_id = repositories.id
               AND sync_jobs.status = 'FAILED'
