@@ -51,12 +51,13 @@ app = FastAPI(
 # Middleware order: the LAST one added runs FIRST (outermost). Resulting order
 # for an incoming request:
 #   SecurityHeaders → CORS → RequestId → JWT → RateLimit → GZip → route
+# All custom middlewares are pure ASGI (no BaseHTTPMiddleware buffering), so:
 # - SecurityHeaders is outermost so every response (401, 429, 500, preflight) gets the headers.
 # - CORS sits outside RequestId/JWT so browser OPTIONS preflights are answered without a token.
 # - RequestId sits outside JWT so 401 and 403 responses from JWTMiddleware carry X-Request-ID.
 # - RateLimit sits inside JWT so request.state.user_id is available for per-user limits.
-# - GZip sits innermost around routes so minimum_size=1000 sees unstreamed response bodies
-#   (BaseHTTPMiddleware streams responses) and automatically skips SSE (text/event-stream).
+# - GZip sits innermost around routes so minimum_size=1000 applies accurately and
+#   automatically skips SSE responses (text/event-stream).
 app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 app.add_middleware(RateLimitMiddleware, api_prefix=settings.api_v1_prefix)
 app.add_middleware(JWTMiddleware)

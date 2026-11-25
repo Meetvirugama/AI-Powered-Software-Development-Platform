@@ -1,4 +1,6 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { realtimeClient } from '../realtime/index';
+import { useSyncProgressStore } from '../stores/useSyncProgressStore';
 import {
   listRepositories,
   getRepository,
@@ -69,6 +71,7 @@ export function useRepositories(
   return useQuery<PaginatedRepositoryResponse>({
     queryKey: repositoryKeys.list(page, pageSize),
     queryFn: () => listRepositories({ page, pageSize }),
+    placeholderData: keepPreviousData,
     ...options,
   });
 }
@@ -199,6 +202,7 @@ export function useRepositoryFiles(
     queryKey: repositoryKeys.files(id ?? '', page, pageSize),
     queryFn: () => getRepositoryFiles(id!, { page, pageSize }),
     enabled: Boolean(id) && (options?.enabled ?? true),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -223,33 +227,126 @@ export function useRepositoryDependencies(
 // Repository Actions: Sync, Delete, and File Content
 // ---------------------------------------------------------------------------
 
+type SyncMutationContext = {
+  previousDetail?: Repository;
+  previousLists: Array<[readonly unknown[], PaginatedRepositoryResponse | undefined]>;
+};
+
+type DeleteMutationContext = {
+  previousLists: Array<[readonly unknown[], PaginatedRepositoryResponse | undefined]>;
+};
+
 /**
  * useSyncRepository — Triggers background synchronization for a repository.
- * Invalidates repository queries on success so all UI reflects the new SYNCING state.
+ * Optimistically sets sync_status to SYNCING and rolls back on error.
  */
 export function useSyncRepository() {
   const queryClient = useQueryClient();
-  return useMutation<{ job_id: string }, ApiError, string | { id: string; force?: boolean }>({
+  return useMutation<
+    { job_id: string },
+    ApiError,
+    string | { id: string; force?: boolean },
+    SyncMutationContext
+  >({
     mutationFn: (param) => {
       const id = typeof param === 'string' ? param : param.id;
       const force = typeof param === 'string' ? false : Boolean(param.force);
       return syncRepository(id, force);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
+    onMutate: async (param) => {
+      const id = typeof param === 'string' ? param : param.id;
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: repositoryKeys.detail(id) }),
+        queryClient.cancelQueries({ queryKey: repositoryKeys.lists() }),
+      ]);
+
+      const previousDetail = queryClient.getQueryData<Repository>(repositoryKeys.detail(id));
+      const previousLists = queryClient.getQueriesData<PaginatedRepositoryResponse>({
+        queryKey: repositoryKeys.lists(),
+      });
+
+      if (previousDetail) {
+        queryClient.setQueryData<Repository>(repositoryKeys.detail(id), {
+          ...previousDetail,
+          sync_status: 'SYNCING',
+          last_sync_error: null,
+        });
+      }
+
+      queryClient.setQueriesData<PaginatedRepositoryResponse>(
+        { queryKey: repositoryKeys.lists() },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.map((repo) =>
+              repo.id === id ? { ...repo, sync_status: 'SYNCING', last_sync_error: null } : repo,
+            ),
+          };
+        },
+      );
+
+      useSyncProgressStore.getState().clearProgress(id);
+      return { previousDetail, previousLists };
+    },
+    onError: (_err, param, context) => {
+      const id = typeof param === 'string' ? param : param.id;
+      if (context?.previousDetail) {
+        queryClient.setQueryData(repositoryKeys.detail(id), context.previousDetail);
+      }
+      if (context?.previousLists) {
+        for (const [key, data] of context.previousLists) {
+          queryClient.setQueryData(key, data);
+        }
+      }
+    },
+    onSettled: (_data, _err, param) => {
+      const id = typeof param === 'string' ? param : param.id;
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.detail(id) });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.syncJobs(id) });
     },
   });
 }
 
 /**
  * useDeleteRepository — Disconnects and deletes a repository.
- * Invalidates repository queries on success so the dashboard updates.
+ * Optimistically removes the repository from list caches and rolls back on error.
  */
 export function useDeleteRepository() {
   const queryClient = useQueryClient();
-  return useMutation<void, ApiError, string>({
+  return useMutation<void, ApiError, string, DeleteMutationContext>({
     mutationFn: (id: string) => deleteRepository(id),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: repositoryKeys.lists() });
+      const previousLists = queryClient.getQueriesData<PaginatedRepositoryResponse>({
+        queryKey: repositoryKeys.lists(),
+      });
+
+      queryClient.setQueriesData<PaginatedRepositoryResponse>(
+        { queryKey: repositoryKeys.lists() },
+        (old) => {
+          if (!old) return old;
+          const nextItems = old.items.filter((repo) => repo.id !== id);
+          const removedCount = old.items.length - nextItems.length;
+          return {
+            ...old,
+            items: nextItems,
+            total: Math.max(0, old.total - removedCount),
+          };
+        },
+      );
+
+      return { previousLists };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previousLists) {
+        for (const [key, data] of context.previousLists) {
+          queryClient.setQueryData(key, data);
+        }
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
     },
   });
@@ -275,15 +372,16 @@ export function useRepositoryFileContent(
 // Sync status, metrics and live GitHub data
 // ---------------------------------------------------------------------------
 
-/** Recent sync jobs; polls every 2s while the newest job is still queued or running. */
+/** Recent sync jobs; falls back to 20s polling only when SSE is disconnected while active. */
 export function useRepositorySyncJobs(id: string | undefined, limit = 10) {
   return useQuery<SyncJob[], ApiError>({
     queryKey: repositoryKeys.syncJobs(id ?? ''),
     queryFn: () => getRepositorySyncJobs(id!, limit),
     enabled: Boolean(id),
     refetchInterval: (query) => {
+      if (realtimeClient.isConnected) return false;
       const latest = query.state.data?.[0];
-      return latest && (latest.status === 'QUEUED' || latest.status === 'RUNNING') ? 2000 : false;
+      return latest && (latest.status === 'QUEUED' || latest.status === 'RUNNING') ? 20_000 : false;
     },
   });
 }

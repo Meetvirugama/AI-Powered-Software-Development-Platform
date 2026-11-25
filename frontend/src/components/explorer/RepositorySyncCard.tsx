@@ -1,6 +1,7 @@
 import { RefreshCw, Database } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { SyncProgressIndicator } from './SyncProgressIndicator';
+import type { SyncProgressEntry } from '../../stores/useSyncProgressStore';
 import type { Repository, SyncProgress } from '../../types/api';
 
 export interface RepositorySyncCardProps {
@@ -10,6 +11,7 @@ export interface RepositorySyncCardProps {
   onSync: () => void;
   /** Failure reason recorded by the sync worker, shown when the last sync failed. */
   errorMessage?: string | null;
+  liveProgress?: SyncProgressEntry | null;
 }
 
 export function RepositorySyncCard({
@@ -18,6 +20,7 @@ export function RepositorySyncCard({
   isSyncActive,
   onSync,
   errorMessage,
+  liveProgress,
 }: RepositorySyncCardProps) {
   return (
     <div className="flex-1 min-h-0 flex items-center justify-center p-4 sm:p-6">
@@ -66,13 +69,16 @@ export function RepositorySyncCard({
           </div>
         )}
 
-        {isSyncActive && !progress.isFailed && progress.label && (
-          <p className="text-xs text-muted-foreground" aria-live="polite">{progress.label}</p>
+        {isSyncActive && !progress.isFailed && (liveProgress?.message || progress.label) && (
+          <p className="text-xs text-muted-foreground" aria-live="polite">
+            {liveProgress?.message || progress.label}
+          </p>
         )}
 
         <SyncProgressIndicator
           currentStage={progress.stage}
           isFailed={progress.isFailed}
+          liveProgress={liveProgress}
         />
       </div>
     </div>

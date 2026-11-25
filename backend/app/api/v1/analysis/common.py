@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid5
@@ -19,36 +22,12 @@ from ai.llm.schemas import (
     LLMValidationError,
 )
 from fastapi import Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_request_user_id as _request_user_id
-
-
-def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
-    import sys
-    analysis_mod = sys.modules.get("app.api.v1.analysis")
-    if analysis_mod is not None:
-        patched_fn = getattr(analysis_mod, "_owned_repository", None)
-        if patched_fn is not None and patched_fn is not _owned_repository:
-            return patched_fn(repository_id, request, db)
-        repo_cls = getattr(analysis_mod, "RepositoryRepository", RepositoryRepository)
-    else:
-        repo_cls = RepositoryRepository
-
-    user_id = _request_user_id(request)
-    repository = repo_cls(db).get_for_user(repository_id, user_id)
-    if repository is None:
-        raise APIError(
-            404,
-            ErrorCode.REPOSITORY_NOT_FOUND,
-            "Repository does not exist or you do not have access.",
-        )
-    return repository
-
-
-async def _owned_repository_async(repository_id: UUID, request: Request, db: Session) -> Repository:
-    return await asyncio.to_thread(_owned_repository, repository_id, request, db)
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
@@ -386,3 +365,112 @@ def assign_persistent_finding_ids(findings: list[Any], run_id: str) -> list[Any]
         new_id = str(uuid5(_FINDING_ID_NAMESPACE, f"{run_id}:{raw_id}"))
         result.append(finding.model_copy(update={"id": new_id}) if hasattr(finding, "model_copy") else finding)
     return result
+
+
+def _owned_repository(repository_id: UUID, request: Request, db: Session) -> Repository:
+    import sys
+
+    analysis_mod = sys.modules.get("app.api.v1.analysis")
+    if analysis_mod is not None:
+        patched_fn = getattr(analysis_mod, "_owned_repository", None)
+        if patched_fn is not None and patched_fn is not _owned_repository:
+            return patched_fn(repository_id, request, db)
+        repo_cls = getattr(analysis_mod, "RepositoryRepository", RepositoryRepository)
+    else:
+        repo_cls = RepositoryRepository
+
+    user_id = _request_user_id(request)
+    repository = repo_cls(db).get_for_user(repository_id, user_id)
+    if repository is None:
+        raise APIError(
+            404,
+            ErrorCode.REPOSITORY_NOT_FOUND,
+            "Repository does not exist or you do not have access.",
+        )
+    return repository
+
+
+async def _owned_repository_async(repository_id: UUID, request: Request, db: Session) -> Repository:
+    return await run_db(db, _owned_repository, repository_id, request, db)
+
+
+def sse_event(event: str, data: dict[str, Any]) -> str:
+    """Serialize a named Server-Sent Event frame."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def make_sse_response(generator: AsyncIterator[str]) -> StreamingResponse:
+    """Wrap an async SSE event generator with unbuffered streaming headers."""
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@contextmanager
+def fresh_analysis_session(request: Request) -> Iterator[Session]:
+    """Open a DB session for use inside an analysis streaming response body."""
+    factory = request.app.dependency_overrides.get(get_db, get_db)
+    gen = factory()
+    if inspect.isgenerator(gen):
+        try:
+            yield next(gen)
+        finally:
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+    else:
+        yield gen
+
+
+async def stream_analysis_events(
+    runner: Callable[[Callable[[str, str], Awaitable[None]]], Awaitable[BaseModel]],
+) -> AsyncIterator[str]:
+    """Run an analysis pipeline and stream ``status``, ``done``, and ``error`` SSE frames."""
+    queue: asyncio.Queue[tuple[str, dict[str, Any]] | None] = asyncio.Queue()
+
+    async def emit_stage(stage: str, message: str) -> None:
+        await queue.put(("status", {"stage": stage, "message": message}))
+
+    async def _run() -> None:
+        try:
+            result = await runner(emit_stage)
+            await queue.put(("done", result.model_dump(mode="json")))
+        except APIError as exc:
+            await queue.put(("error", {"code": exc.code, "message": exc.message, "retryable": exc.retryable}))
+        except Exception as exc:
+            logging.getLogger(__name__).warning("analysis_stream_failed", extra={"error": redact(str(exc))})
+            await queue.put(
+                (
+                    "error",
+                    {
+                        "code": ErrorCode.ANALYSIS_FAILED,
+                        "message": "Analysis failed during execution.",
+                        "retryable": False,
+                    },
+                )
+            )
+        finally:
+            await queue.put(None)
+
+    task = asyncio.create_task(_run())
+    try:
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event_name, data = item
+            yield sse_event(event_name, data)
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass

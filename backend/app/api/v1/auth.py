@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import require_role
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode, error_response
 from app.core.http_client import get_shared_http_client
 from app.core.redis import get_redis as _default_get_redis
@@ -365,7 +365,9 @@ async def github_callback(
         return _oauth_error(502, ErrorCode.GITHUB_PROFILE_FAILED, "GitHub returned an incomplete user profile.", retryable=True)
 
     settings = get_settings()
-    user = UserRepository(db).upsert_github_user(
+    user = await run_db(
+        db,
+        UserRepository(db).upsert_github_user,
         str(github_id),
         login,
         github_user.get("email") if isinstance(github_user.get("email"), str) else None,
@@ -408,7 +410,7 @@ async def _handle_installation_redirect(
     user_id_str = getattr(request.state, "user_id", None)
     if user_id_str:
         try:
-            user = UserRepository(db).get_by_id(UUID(str(user_id_str)))
+            user = await run_db(db, UserRepository(db).get_by_id, UUID(str(user_id_str)))
             if user is not None:
                 github_service = getattr(request.app.state, "github_service", None)
                 await link_installation_for_user(db, user, installation_id, github_service)
@@ -700,9 +702,10 @@ def logout(request: Request) -> Response:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Logout service is unavailable.", retryable=True) from exc
 
     try:
-        from app.core.auth import revoke_token_in_cache
+        from app.core.auth import publish_token_revocation, revoke_token_in_cache
 
         revoke_token_in_cache(token_jti)
+        publish_token_revocation(token_jti, redis_client)
     except Exception as exc:
         logger.debug("Failed revoking token in cache during logout: %s", exc)
 

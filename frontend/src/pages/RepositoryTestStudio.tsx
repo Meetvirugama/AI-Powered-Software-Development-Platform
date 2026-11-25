@@ -192,7 +192,9 @@ export function RepositoryTestStudio() {
               <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
                 <FlaskConical className="h-6 w-6 animate-spin" />
               </div>
-              <h3 className="text-sm font-semibold text-foreground">Generating framework-aware test suite...</h3>
+              <h3 className="text-sm font-semibold text-foreground" aria-live="polite">
+                {testMutation.stageMessage || 'Generating framework-aware test suite...'}
+              </h3>
               <p className="text-xs text-muted-foreground max-w-sm">
                 Synthesizing happy path, boundary condition, and exception test cases with syntax validation.
               </p>

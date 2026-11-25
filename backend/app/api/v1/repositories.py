@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.http_cache import (
     apply_cache_headers,
@@ -34,7 +34,7 @@ from app.models.code_symbol import CodeSymbol
 from app.models.github_installation import GitHubInstallation
 from app.models.symbol_edge import SymbolEdge
 from app.models.sync_job import SyncJob
-from app.models.repository import Repository
+from app.models.repository import Repository, SyncStatus
 from app.models.repository_file import RepositoryFile
 from app.repositories.repository_repository import RepositoryRepository
 from app.services.repository_sync import RedisSyncJobQueue, RepositorySyncService
@@ -172,16 +172,26 @@ def list_repositories(
 
     if not repositories:
         return []
-    repo_ids = [r.id for r in repositories if hasattr(r, "id")]
-    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos(repo_ids, db, request=request)
-    sync_errors = _latest_sync_errors(repo_repo, repo_ids)
+    missing_error_ids = [
+        r.id
+        for r in repositories
+        if hasattr(r, "id")
+        and getattr(r, "sync_status", None) == SyncStatus.FAILED
+        and getattr(r, "last_sync_error", None) is None
+    ]
+    fallback_errors = _latest_sync_errors(repo_repo, missing_error_ids) if missing_error_ids else {}
     return [
         _repository_response(
             repository,
-            file_count=file_counts.get(repository.id),
-            symbol_count=symbol_counts.get(repository.id),
-            chunk_count=chunk_counts.get(repository.id),
-            last_sync_error=sync_errors.get(repository.id),
+            file_count=int(getattr(repository, "file_count", 0) or 0),
+            symbol_count=int(getattr(repository, "symbol_count", 0) or 0),
+            chunk_count=int(getattr(repository, "chunk_count", 0) or 0),
+            last_sync_error=(
+                getattr(repository, "last_sync_error", None)
+                if getattr(repository, "sync_status", None) == SyncStatus.FAILED
+                and getattr(repository, "last_sync_error", None) is not None
+                else fallback_errors.get(repository.id)
+            ),
         )
         for repository in repositories
     ]
@@ -198,13 +208,17 @@ def _latest_sync_errors(repo_repo: RepositoryRepository, repo_ids: list[UUID]) -
 @router.get("/{repository_id}", response_model=RepositoryResponse, summary="Get repository details")
 def get_repository(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> RepositoryResponse:
     repo = _owned_repository(repository_id, request, db)
-    file_counts, symbol_counts, chunk_counts = _get_counts_for_repos([repo.id], db, request=request)
+    last_error: str | None = None
+    if getattr(repo, "sync_status", None) == SyncStatus.FAILED:
+        last_error = getattr(repo, "last_sync_error", None)
+        if last_error is None:
+            last_error = _latest_sync_errors(RepositoryRepository(db), [repo.id]).get(repo.id)
     return _repository_response(
         repo,
-        file_count=file_counts.get(repo.id, 0),
-        symbol_count=symbol_counts.get(repo.id, 0),
-        chunk_count=chunk_counts.get(repo.id, 0),
-        last_sync_error=_latest_sync_errors(RepositoryRepository(db), [repo.id]).get(repo.id),
+        file_count=int(getattr(repo, "file_count", 0) or 0),
+        symbol_count=int(getattr(repo, "symbol_count", 0) or 0),
+        chunk_count=int(getattr(repo, "chunk_count", 0) or 0),
+        last_sync_error=last_error,
     )
 
 
@@ -292,7 +306,7 @@ async def search_repository(
     from app.core.secret_redaction import redact
 
 
-    _owned_repository(repository_id, request, db)
+    await run_db(db, _owned_repository, repository_id, request, db)
     pipeline = get_rag_pipeline(request)
     try:
         chunks = await pipeline.retrieve(payload.query, repository_id, payload.top_k)
@@ -379,14 +393,18 @@ async def get_file_content(
     from app.core.secret_redaction import redact
     from indexer.chunker import reconstruct_file_from_chunks
 
-    repo = _owned_repository(repository_id, request, db)
-    file_record = (
-        db.query(RepositoryFile)
-        .filter(RepositoryFile.id == file_id, RepositoryFile.repository_id == repository_id)
-        .first()
-    )
-    if not file_record:
-        raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "File not found.")
+    def _load_file_and_chunks():
+        owned_repo = _owned_repository(repository_id, request, db)
+        f_rec = (
+            db.query(RepositoryFile)
+            .filter(RepositoryFile.id == file_id, RepositoryFile.repository_id == repository_id)
+            .first()
+        )
+        if not f_rec:
+            raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "File not found.")
+        return owned_repo, f_rec
+
+    repo, file_record = await run_db(db, _load_file_and_chunks)
 
     token = repository_index_token(repo)
     last_indexed = (
@@ -402,11 +420,14 @@ async def get_file_content(
     if etag is not None and etag_matches(request, etag):
         return not_modified(etag)
 
-    chunks = (
-        db.query(CodeChunk)
-        .filter(CodeChunk.repository_id == repository_id, CodeChunk.file_id == file_id)
-        .order_by(CodeChunk.start_line)
-        .all()
+    chunks = await run_db(
+        db,
+        lambda: (
+            db.query(CodeChunk)
+            .filter(CodeChunk.repository_id == repository_id, CodeChunk.file_id == file_id)
+            .order_by(CodeChunk.start_line)
+            .all()
+        ),
     )
     content = redact(reconstruct_file_from_chunks(chunks))
 
@@ -431,11 +452,14 @@ async def get_file_content(
                 extra={"repository_id": str(repository_id), "file_id": str(file_id), "error": str(exc)},
             )
 
-    symbols = (
-        db.query(CodeSymbol)
-        .filter(CodeSymbol.repository_id == repository_id, CodeSymbol.file_id == file_id)
-        .order_by(CodeSymbol.start_line)
-        .all()
+    symbols = await run_db(
+        db,
+        lambda: (
+            db.query(CodeSymbol)
+            .filter(CodeSymbol.repository_id == repository_id, CodeSymbol.file_id == file_id)
+            .order_by(CodeSymbol.start_line)
+            .all()
+        ),
     )
 
     if etag is not None and (content or (file_record.size_bytes or 0) == 0):
@@ -713,8 +737,13 @@ async def _call_github(coro_factory, what: str):
 
 @router.get("/{repository_id}/branches", response_model=list[BranchResponse], summary="List repository branches")
 async def list_branches(repository_id: UUID, request: Request, db: Session = Depends(get_db)) -> list[BranchResponse]:
-    repo = _owned_repository(repository_id, request, db)
-    github_service, inst_id = _github_context(repo, request, db)
+    repo, (github_service, inst_id) = await run_db(
+        db,
+        lambda: (
+            r := _owned_repository(repository_id, request, db),
+            _github_context(r, request, db),
+        ),
+    )
     branches = await _call_github(
         lambda: github_service.list_branches(repo.owner, repo.name, installation_id=inst_id), "branches"
     )
@@ -737,8 +766,13 @@ async def list_commits(
     page_size: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> list[CommitResponse]:
-    repo = _owned_repository(repository_id, request, db)
-    github_service, inst_id = _github_context(repo, request, db)
+    repo, (github_service, inst_id) = await run_db(
+        db,
+        lambda: (
+            r := _owned_repository(repository_id, request, db),
+            _github_context(r, request, db),
+        ),
+    )
     commits = await _call_github(
         lambda: github_service.list_commits(
             repo.owner,
@@ -767,8 +801,13 @@ async def list_pull_requests(
     page_size: int = Query(default=30, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> list[PullRequestSummaryResponse]:
-    repo = _owned_repository(repository_id, request, db)
-    github_service, inst_id = _github_context(repo, request, db)
+    repo, (github_service, inst_id) = await run_db(
+        db,
+        lambda: (
+            r := _owned_repository(repository_id, request, db),
+            _github_context(r, request, db),
+        ),
+    )
     pulls = await _call_github(
         lambda: github_service.list_pull_requests(
             repo.owner, repo.name, installation_id=inst_id, state=state, page=page, per_page=page_size

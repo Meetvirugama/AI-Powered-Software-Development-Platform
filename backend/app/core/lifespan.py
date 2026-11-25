@@ -568,6 +568,19 @@ async def lifespan(app: FastAPI):
             name="startup-reconciliation",
         )
 
+    # ── Background Auth Revocation Subscriber ────────────────────────────────
+    auth_revocation_task = None
+    if settings.app_env.strip().lower() not in {"testing", "test"}:
+        try:
+            from app.core.auth import revocation_subscriber_loop
+
+            auth_revocation_task = asyncio.create_task(
+                revocation_subscriber_loop(),
+                name="auth-revocation-subscriber",
+            )
+        except Exception as exc:
+            logger.debug("auth_revocation_subscriber_skipped: %s", exc)
+
     # ── Background Webhook Worker Task ───────────────────────────────────────
     webhook_worker_task = None
     if not settings.disable_embedded_webhook_worker:
@@ -593,6 +606,13 @@ async def lifespan(app: FastAPI):
             logger.warning("sync_worker_task_failed", extra={"error": str(exc)})
 
     yield
+
+    if auth_revocation_task is not None and not auth_revocation_task.done():
+        auth_revocation_task.cancel()
+        try:
+            await auth_revocation_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
     if reranker_warm_up_task is not None and not reranker_warm_up_task.done():
         reranker_warm_up_task.cancel()

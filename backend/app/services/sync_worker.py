@@ -36,7 +36,7 @@ from sqlalchemy import select
 
 from ai.embeddings.gemini_provider import GeminiEmbeddingProvider
 from ai.embeddings.rate_limiter import DistributedEmbeddingRateLimiter
-from ai.embeddings.service import EmbeddingService
+from ai.embeddings.service import CachedEmbeddingService, EmbeddingService
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal, SessionLocal
 from app.core.redis import get_redis_async
@@ -49,6 +49,7 @@ from indexer.incremental import IncrementalIndexer
 from scanner.walker import FileWalker
 
 logger = logging.getLogger(__name__)
+_DEFAULT_EMBEDDING_SERVICE = EmbeddingService
 
 __all__ = [
     "RepositoryBusyError",
@@ -84,6 +85,46 @@ def _set_job_progress(job_id: UUID, **fields: Any) -> None:
             db.commit()
     except Exception as exc:
         logger.debug("sync_job_progress_update_failed", extra={"job_id": str(job_id), "error": str(exc)})
+
+
+async def _set_job_progress_async(job_id: UUID, **fields: Any) -> None:
+    """Run sync job progress DB writes in a worker thread so the event loop never blocks."""
+    await asyncio.to_thread(_set_job_progress, job_id, **fields)
+
+
+async def _publish_sync_progress(
+    redis: Any,
+    *,
+    user_id: UUID,
+    repository_id: UUID,
+    job_id: UUID,
+    stage: str,
+    stats: dict[str, Any] | None = None,
+) -> None:
+    """Publish best-effort live sync progress events to Redis pub/sub for SSE clients."""
+    if redis is None or not hasattr(redis, "publish"):
+        return
+    try:
+        payload: dict[str, Any] = {
+            "repository_id": str(repository_id),
+            "user_id": str(user_id),
+            "job_id": str(job_id),
+            "stage": stage,
+        }
+        if stats:
+            payload.update(stats)
+        await redis.publish(
+            "platform_events",
+            json.dumps(
+                {
+                    "type": "repository.sync.progress",
+                    "user_id": str(user_id),
+                    "data": payload,
+                }
+            ),
+        )
+    except Exception as exc:
+        logger.debug("sync_progress_publish_failed", extra={"job_id": str(job_id), "error": str(exc)})
 
 
 class RepositoryBusyError(Exception):
@@ -249,6 +290,7 @@ async def process_sync_job(
             job.stats = {"skipped_reason": "commit_already_indexed"}
             repo.sync_status = SyncStatus.SYNCED
             repo.last_synced_at = now
+            repo.last_sync_error = None
             db.commit()
             return True
 
@@ -333,6 +375,7 @@ async def process_sync_job(
             job.started_at = datetime.now(timezone.utc)
             job.finished_at = None
             repo.sync_status = SyncStatus.SYNCING
+            repo.last_sync_error = None
             db.commit()
 
             installation = db.get(GitHubInstallation, repo.installation_id)
@@ -348,6 +391,7 @@ async def process_sync_job(
                 )
                 job.finished_at = datetime.now(timezone.utc)
                 repo.sync_status = SyncStatus.FAILED
+                repo.last_sync_error = job.error_message
                 db.commit()
                 return True
 
@@ -427,9 +471,16 @@ async def process_sync_job(
             raise RuntimeError("The checked-out branch moved beyond the requested sync commit.")
 
         # Step 6: Walk repository files
-        _set_job_progress(job_id, stage=SyncJobStage.SCANNING.value)
+        await _publish_sync_progress(
+            redis,
+            user_id=user_id,
+            repository_id=repository_id,
+            job_id=job_id,
+            stage=SyncJobStage.SCANNING.value,
+        )
+        await _set_job_progress_async(job_id, stage=SyncJobStage.SCANNING.value)
         walker = FileWalker()
-        scanned_files = walker.walk(str(clone_dir))
+        scanned_files = await asyncio.to_thread(walker.walk, str(clone_dir))
         logger.info(
             "sync_worker_files_scanned",
             extra={"repo_id": str(repository_id), "file_count": len(scanned_files)},
@@ -438,13 +489,22 @@ async def process_sync_job(
         for scanned in scanned_files:
             category = str(getattr(scanned, "category", "source") or "source")
             files_by_category[category] = files_by_category.get(category, 0) + 1
-        _set_job_progress(
+        scan_stats = {"files_scanned": len(scanned_files), "files_by_category": files_by_category}
+        await _set_job_progress_async(
             job_id,
             stage=SyncJobStage.INDEXING.value,
-            stats={"files_scanned": len(scanned_files), "files_by_category": files_by_category},
+            stats=scan_stats,
+        )
+        await _publish_sync_progress(
+            redis,
+            user_id=user_id,
+            repository_id=repository_id,
+            job_id=job_id,
+            stage=SyncJobStage.INDEXING.value,
+            stats=scan_stats,
         )
 
-        # Step 7: Initialize rate limiter and EmbeddingService
+        # Step 7: Initialize rate limiter and CachedEmbeddingService (batch_size=100)
         gemini_keys = settings.all_gemini_keys
         embedding_provider = (
             GeminiEmbeddingProvider(
@@ -469,12 +529,21 @@ async def process_sync_job(
             max_requests_per_minute=settings.embedding_max_requests_per_minute,
         )
 
-        embedding_service = EmbeddingService(
-            provider=embedding_provider,
-            batch_size=30,
-            max_concurrency=settings.embedding_max_concurrency,
-            rate_limiter=rate_limiter,
-        )
+        if EmbeddingService is _DEFAULT_EMBEDDING_SERVICE and embedding_provider is not None:
+            embedding_service: Any = CachedEmbeddingService(
+                provider=embedding_provider,
+                batch_size=100,
+                max_concurrency=settings.embedding_max_concurrency,
+                rate_limiter=rate_limiter,
+                redis_client=redis,
+            )
+        else:
+            embedding_service = EmbeddingService(
+                provider=embedding_provider,
+                batch_size=100,
+                max_concurrency=settings.embedding_max_concurrency,
+                rate_limiter=rate_limiter,
+            )
 
         # Re-check repository existence before running indexer (Issue #183)
         with SessionLocal() as db:
@@ -494,11 +563,25 @@ async def process_sync_job(
             if lost_ownership_event.is_set():
                 raise RuntimeError(f"Sync worker {assigned_worker} lost lock ownership before indexing")
 
-            # Step 8: Run IncrementalIndexer with bounded timeout to prevent infinite hangs
+            # Step 8: Run IncrementalIndexer with bounded timeout and live SSE progress callbacks
             indexer = IncrementalIndexer(
                 db_session=AsyncSessionLocal,
                 embedding_service=embedding_service,
             )
+
+            async def _on_indexer_progress(progress_payload: dict[str, Any]) -> None:
+                await _publish_sync_progress(
+                    redis,
+                    user_id=user_id,
+                    repository_id=repository_id,
+                    job_id=job_id,
+                    stage=str(progress_payload.get("stage") or SyncJobStage.INDEXING.value),
+                    stats={
+                        k: v
+                        for k, v in progress_payload.items()
+                        if k != "stage"
+                    },
+                )
 
             max_index_timeout = float(settings.sync_job_timeout_seconds)
             stats = await asyncio.wait_for(
@@ -507,6 +590,7 @@ async def process_sync_job(
                     scanned_files=scanned_files,
                     root_path=str(clone_dir),
                     job_id=job_id,
+                    progress_callback=_on_indexer_progress,
                 ),
                 timeout=max_index_timeout,
             )
@@ -527,6 +611,8 @@ async def process_sync_job(
 
         # Step 9: Mark completed only if repository and job still exist
         with SessionLocal() as db:
+            from app.repositories.repository_repository import RepositoryRepository
+
             repo = db.get(Repository, repository_id)
             job = db.get(SyncJob, job_id)
             if not repo or not job:
@@ -549,9 +635,11 @@ async def process_sync_job(
             }
             repo.sync_status = SyncStatus.SYNCED
             repo.last_synced_at = now
+            repo.last_sync_error = None
             if head_sha:
                 repo.last_indexed_commit_sha = head_sha
                 repo.active_commit_sha = head_sha
+            RepositoryRepository(db).refresh_repository_counts(repository_id)
             db.commit()
 
         # Step 9b: Invalidate distributed retrieval cache for repository
@@ -629,6 +717,7 @@ async def process_sync_job(
                 job.error_message = _user_facing_error(exc)
                 job.finished_at = datetime.now(timezone.utc)
                 repo.sync_status = SyncStatus.FAILED
+                repo.last_sync_error = job.error_message
                 db.commit()
 
         try:

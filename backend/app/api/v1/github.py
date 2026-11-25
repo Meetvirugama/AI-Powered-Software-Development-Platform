@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 from uuid import UUID
 
@@ -18,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import ensure_min_role, require_min_role
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.redis import get_redis, get_redis_async
 from app.models.github_installation import GitHubInstallation
@@ -69,6 +70,22 @@ def _verify_event_access(event: GitHubWebhookEvent, user_id: UUID, db: Session) 
         raise APIError(403, ErrorCode.FORBIDDEN, "Access denied to this event.")
 
 
+_DISCOVERY_CACHE_TTL_SECONDS = 240
+
+
+def _discovery_cache_key(user_id: UUID, installation_id: str | int) -> str:
+    return f"github:repos:{user_id}:{installation_id}"
+
+
+async def _invalidate_discovery_cache(user_id: UUID, installation_id: str | int) -> None:
+    try:
+        redis = await get_redis_async()
+        if redis is not None and hasattr(redis, "delete"):
+            await redis.delete(_discovery_cache_key(user_id, installation_id))
+    except Exception as exc:
+        logger.debug("github_discovery_cache_invalidate_skipped: %s", exc)
+
+
 @router.get(
     "/repositories",
     response_model=PaginatedAvailableRepositoryResponse,
@@ -80,6 +97,7 @@ async def list_github_repositories(
     page_size: int = Query(default=20, ge=1, le=100),
     search: str = Query(default=""),
     installation_id: str | None = Query(default=None),
+    refresh: bool = Query(default=False, description="Bypass Redis discovery cache and fetch fresh repositories from GitHub"),
     db: Session = Depends(get_db),
 ) -> PaginatedAvailableRepositoryResponse:
     """Return repositories accessible via the user's GitHub App installation."""
@@ -87,7 +105,7 @@ async def list_github_repositories(
 
     # Get user's GitHub installations
     installation_repo = GitHubInstallationRepository(db)
-    user = UserRepository(db).get_by_id(user_id)
+    user = await run_db(db, UserRepository(db).get_by_id, user_id)
 
     github_service = getattr(request.app.state, "github_service", None)
 
@@ -95,14 +113,15 @@ async def list_github_repositories(
     # confirms the installation belongs to this user's own account.
     if installation_id and user:
         try:
-            await link_installation_for_user(db, user, installation_id, github_service)
+            linked_inst = await link_installation_for_user(db, user, installation_id, github_service)
+            await _invalidate_discovery_cache(user_id, linked_inst.installation_id)
         except APIError as exc:
             if exc.status_code < 500:
                 raise
             # GitHub/App unavailable: still list what is already linked instead of failing the page.
             logger.warning("query_installation_link_unverified", extra={"reason": exc.message})
 
-    installations = installation_repo.list_by_user(user_id)
+    installations = await run_db(db, installation_repo.list_by_user, user_id)
 
     # Auto-discover installations on the user's own account if none are linked yet
     if not installations and github_service and user:
@@ -115,33 +134,78 @@ async def list_github_repositories(
 
     # Get already-connected repo IDs for this user
     repo_repo = RepositoryRepository(db)
-    connected_repos = repo_repo.list_by_user(user_id)
+    connected_repos = await run_db(db, repo_repo.list_by_user, user_id)
     connected_github_ids = {r.github_repo_id for r in connected_repos}
 
-    # Fetch repos from GitHub API for each installation
+    # Fetch repos from GitHub API (or Redis cache) in parallel across installations
     github_service = getattr(request.app.state, "github_service", None)
     all_repos: list[AvailableRepository] = []
 
     if github_service:
-        for installation in installations:
+        async def _load_for_installation(inst: GitHubInstallation) -> list[dict[str, object]]:
+            cache_key = _discovery_cache_key(user_id, inst.installation_id)
+            redis_client = None
             try:
-                gh_repos = await github_service.list_repositories(
-                    int(installation.installation_id)
-                )
-                for r in gh_repos:
-                    all_repos.append(
-                        AvailableRepository(
-                            github_repo_id=str(r.id),
-                            owner=r.owner,
-                            name=r.name,
-                            full_name=r.full_name,
-                            default_branch=r.default_branch,
-                            language=r.language,
-                            is_connected=str(r.id) in connected_github_ids,
-                        )
+                redis_client = await get_redis_async()
+            except Exception:
+                redis_client = None
+
+            if not refresh and redis_client is not None and hasattr(redis_client, "get"):
+                try:
+                    cached_raw = await redis_client.get(cache_key)
+                    if cached_raw:
+                        if isinstance(cached_raw, bytes):
+                            cached_raw = cached_raw.decode("utf-8")
+                        parsed = json.loads(cached_raw)
+                        if isinstance(parsed, list):
+                            return parsed
+                except Exception as cache_exc:
+                    logger.debug("github_discovery_cache_read_failed: %s", cache_exc)
+
+            gh_repos = await github_service.list_repositories(int(inst.installation_id))
+            serialized = [
+                {
+                    "github_repo_id": str(r.id),
+                    "owner": r.owner,
+                    "name": r.name,
+                    "full_name": r.full_name,
+                    "default_branch": r.default_branch,
+                    "language": r.language,
+                }
+                for r in gh_repos
+            ]
+            if redis_client is not None and hasattr(redis_client, "set"):
+                try:
+                    await redis_client.set(
+                        cache_key,
+                        json.dumps(serialized),
+                        ex=_DISCOVERY_CACHE_TTL_SECONDS,
                     )
-            except Exception as exc:
-                logger.error("github_list_repos_error: %s", exc, exc_info=True)
+                except Exception as cache_exc:
+                    logger.debug("github_discovery_cache_write_failed: %s", cache_exc)
+            return serialized
+
+        per_installation = await asyncio.gather(
+            *[_load_for_installation(inst) for inst in installations],
+            return_exceptions=True,
+        )
+        for batch_or_exc in per_installation:
+            if isinstance(batch_or_exc, Exception):
+                logger.error("github_list_repos_error: %s", batch_or_exc, exc_info=True)
+                continue
+            for item in batch_or_exc:
+                gh_id = str(item.get("github_repo_id", ""))
+                all_repos.append(
+                    AvailableRepository(
+                        github_repo_id=gh_id,
+                        owner=str(item.get("owner", "")),
+                        name=str(item.get("name", "")),
+                        full_name=str(item.get("full_name", "")),
+                        default_branch=str(item.get("default_branch", "main")),
+                        language=item.get("language") if isinstance(item.get("language"), str) else None,
+                        is_connected=gh_id in connected_github_ids,
+                    )
+                )
     else:
         # Fallback: return connected repos as available (no GitHub App configured)
         for r in connected_repos:
@@ -198,7 +262,7 @@ async def connect_repository(
     repo_repo = RepositoryRepository(db)
 
     # Check if already connected
-    existing = repo_repo.get_by_github_id_and_user(github_repo_id, user_id)
+    existing = await run_db(db, repo_repo.get_by_github_id_and_user, github_repo_id, user_id)
     if existing:
         raise APIError(
             409,
@@ -216,7 +280,7 @@ async def connect_repository(
 
     # Get user's installations
     installation_repo = GitHubInstallationRepository(db)
-    installations = installation_repo.list_by_user(user_id)
+    installations = await run_db(db, installation_repo.list_by_user, user_id)
     if not installations:
         raise APIError(
             400,
@@ -261,20 +325,21 @@ async def connect_repository(
             "GitHub App is not configured.",
         )
 
-    # Create repository record
-    repository = repo_repo.create(
-        user_id=user_id,
-        installation_id=installation.id,
-        github_repo_id=github_repo_id,
-        owner=owner,
-        name=name,
-        default_branch=default_branch,
-        language=language,
-    )
+    def _create_and_queue() -> tuple[Repository, Any]:
+        created_repo = repo_repo.create(
+            user_id=user_id,
+            installation_id=installation.id,
+            github_repo_id=github_repo_id,
+            owner=owner,
+            name=name,
+            default_branch=default_branch,
+            language=language,
+        )
+        sync_svc = RepositorySyncService(repo_repo, RedisSyncJobQueue(get_redis()))
+        queued_job = sync_svc.request_sync(created_repo.id, user_id)
+        return created_repo, queued_job
 
-    # Queue initial sync job
-    service = RepositorySyncService(repo_repo, RedisSyncJobQueue(get_redis()))
-    job = service.request_sync(repository.id, user_id)
+    repository, job = await run_db(db, _create_and_queue)
 
     logger.info(
         "repository_connected",
@@ -325,12 +390,13 @@ async def link_github_installation(
 ):
     """Link an installation after verifying with GitHub that it belongs to the caller's account."""
     user_id = _request_user_id(request)
-    user = UserRepository(db).get_by_id(user_id)
+    user = await run_db(db, UserRepository(db).get_by_id, user_id)
     if not user:
         raise APIError(401, ErrorCode.UNAUTHORIZED, "User account not found.")
 
     github_service = getattr(request.app.state, "github_service", None)
     inst = await link_installation_for_user(db, user, body.installation_id, github_service)
+    await _invalidate_discovery_cache(user_id, inst.installation_id)
     return {
         "status": "linked",
         "installation_id": inst.installation_id,
@@ -383,10 +449,11 @@ async def github_installation_callback(
     user_id_str = getattr(request.state, "user_id", None)
     if clean_id and user_id_str and setup_action != "request":
         try:
-            user = UserRepository(db).get_by_id(UUID(str(user_id_str)))
+            user = await run_db(db, UserRepository(db).get_by_id, UUID(str(user_id_str)))
             if user:
                 github_service = getattr(request.app.state, "github_service", None)
-                await link_installation_for_user(db, user, clean_id, github_service)
+                linked_inst = await link_installation_for_user(db, user, clean_id, github_service)
+                await _invalidate_discovery_cache(user.id, linked_inst.installation_id)
                 linked = True
         except APIError as exc:
             logger.warning(
@@ -508,31 +575,33 @@ async def github_webhook(
     repo_data = payload.get("repository") or {}
     github_repo_id = str(repo_data.get("id", "")) if repo_data.get("id") else None
 
-    # Resolve linked repository
-    linked_repo_id = None
-    if github_repo_id:
-        found_repo = db.query(Repository).filter(Repository.github_repo_id == github_repo_id).first()
-        if found_repo:
-            linked_repo_id = found_repo.id
-
-    effective_delivery_id = delivery_id or f"auto-{uuid.uuid4().hex}"
-
-    event_repo = WebhookEventRepository(db)
-    try:
-        event_record, created = event_repo.create_event(
-            delivery_id=effective_delivery_id,
+    # Resolve linked repository & persist webhook event durably off the event loop
+    def _lookup_repo_and_create_event():
+        linked_id = None
+        if github_repo_id:
+            found_repo = db.query(Repository).filter(Repository.github_repo_id == github_repo_id).first()
+            if found_repo:
+                linked_id = found_repo.id
+        effective_id = delivery_id or f"auto-{uuid.uuid4().hex}"
+        ev_repo = WebhookEventRepository(db)
+        ev_record, is_created = ev_repo.create_event(
+            delivery_id=effective_id,
             event_type=event,
             action=action,
             installation_id=inst_id,
-            repository_id=linked_repo_id,
+            repository_id=linked_id,
             github_repo_id=github_repo_id,
             payload=payload,
         )
+        return effective_id, ev_record, is_created
+
+    try:
+        effective_delivery_id, event_record, created = await run_db(db, _lookup_repo_and_create_event)
         if not created:
             logger.info("github_webhook_db_duplicate_delivery", extra={"delivery_id": effective_delivery_id, "event": event})
             return {"status": "duplicate_delivery_ignored", "delivery_id": effective_delivery_id}
     except Exception as db_exc:
-        db.rollback()
+        await run_db(db, db.rollback)
         logger.error("github_webhook_persistence_failed", extra={"error": str(db_exc)})
         if delivery_id:
             try:

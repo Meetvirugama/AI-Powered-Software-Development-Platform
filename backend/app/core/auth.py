@@ -10,8 +10,7 @@ import time
 from urllib.parse import urlparse
 
 from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.config import get_settings
 from app.core.errors import APIError, ErrorCode, error_response
@@ -26,9 +25,53 @@ _BLOCKLIST_CACHE: dict[str, tuple[bool, float]] = {}  # jti -> (is_revoked, expi
 _IN_FLIGHT_CHECKS: dict[str, asyncio.Future] = {}
 
 
+_REVOCATION_CHANNEL = "auth:revocations"
+
+
 def revoke_token_in_cache(jti: str) -> None:
     """Mark a token as revoked in the local memory cache."""
     _BLOCKLIST_CACHE[jti] = (True, time.monotonic() + 300.0)
+
+
+def publish_token_revocation(jti: str, redis_client: Any = None) -> None:
+    """Best-effort cross-worker revocation broadcast on Redis pub/sub."""
+    if not jti:
+        return
+    try:
+        client = redis_client or get_redis()
+        if client is not None and hasattr(client, "publish"):
+            client.publish(_REVOCATION_CHANNEL, jti)
+    except Exception as exc:
+        logger.debug("auth_revocation_publish_failed", extra={"error": str(exc)})
+
+
+async def revocation_subscriber_loop(stop_event: asyncio.Event | None = None) -> None:
+    """Listen for cross-worker token revocations and update the local blocklist cache."""
+    while stop_event is None or not stop_event.is_set():
+        pubsub = None
+        try:
+            redis = await get_redis_async()
+            pubsub = redis.pubsub()
+            await pubsub.subscribe(_REVOCATION_CHANNEL)
+            while stop_event is None or not stop_event.is_set():
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
+                if msg and msg.get("type") == "message":
+                    raw = msg.get("data")
+                    jti = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw or "")
+                    if jti:
+                        revoke_token_in_cache(jti)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.debug("auth_revocation_subscriber_backoff", extra={"error": str(exc)})
+            await asyncio.sleep(5.0)
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe(_REVOCATION_CHANNEL)
+                    await pubsub.close()
+                except Exception as exc:
+                    logger.debug("auth_revocation_pubsub_cleanup_failed", extra={"error": str(exc)})
 
 
 def clear_blocklist_cache() -> None:
@@ -85,8 +128,8 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
         if fut is not None and not fut.done():
             fut.set_result(res)
         if is_live_environment:
-            # Revoked tokens stay revoked (300s); valid tokens are cached 5s to absorb parallel bursts
-            ttl = 300.0 if res else 5.0
+            # Revoked tokens stay revoked (300s); valid tokens are cached 30s (invalidated via pub/sub on logout)
+            ttl = 300.0 if res else 30.0
             _BLOCKLIST_CACHE[jti] = (res, time.monotonic() + ttl)
         return res
     except Exception as exc:
@@ -119,7 +162,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
             logger.warning("auth_blocklist_missing_exists", extra={"jti": jti})
             raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
 
-        timeout_sec = 2.5
+        timeout_sec = 1.0
         if inspect.iscoroutinefunction(exists_fn):
             res = await asyncio.wait_for(exists_fn(key), timeout=timeout_sec)
         else:
@@ -133,7 +176,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 from app.core.redis import get_redis as sync_get_redis
                 sync_client = sync_get_redis()
                 if sync_client is not None:
-                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=2.0))
+                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=0.8))
             except Exception as sync_exc:
                 logger.debug("auth_blocklist_sync_check_failed", extra={"error": str(sync_exc)})
         logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
@@ -150,7 +193,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 from app.core.redis import get_redis as sync_get_redis
                 sync_client = sync_get_redis()
                 if sync_client is not None:
-                    return bool(await asyncio.to_thread(sync_client.exists, key))
+                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=0.8))
             except Exception as sync_err:
                 logger.debug("auth_blocklist_sync_fallback_failed", extra={"error": str(sync_err)})
 
@@ -161,23 +204,36 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True) from exc
 
 
-class JWTMiddleware(BaseHTTPMiddleware):
-    """Populate request state from a Bearer token or the HTTP-only auth cookie."""
+class JWTMiddleware:
+    """Pure ASGI middleware populating request state from Bearer tokens or auth cookies."""
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        scope.setdefault("state", {})
+        request = Request(scope)
+        path = request.url.path
         is_public = (
-            request.url.path in PUBLIC_PATHS
-            or request.url.path.startswith("/api/v1/auth/github/")
-            or request.url.path == "/api/v1/auth/dev-login"
-            or request.url.path == "/api/v1/auth/refresh"
+            path in PUBLIC_PATHS
+            or path.startswith("/api/v1/auth/github/")
+            or path == "/api/v1/auth/dev-login"
+            or path == "/api/v1/auth/refresh"
         )
         if is_public:
             await _try_populate_user_state(request)
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         token, auth_source = _get_token_and_source(request)
         if not token:
-            return error_response(401, ErrorCode.UNAUTHORIZED, "Authentication is required.")
+            resp = error_response(401, ErrorCode.UNAUTHORIZED, "Authentication is required.")
+            await resp(scope, receive, send)
+            return
 
         # CSRF Protection: For state-changing requests authenticated by cookies, validate Origin
         if auth_source == "cookie" and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -185,25 +241,34 @@ class JWTMiddleware(BaseHTTPMiddleware):
             if csrf_error is not None:
                 logger.warning(
                     "untrusted_origin_rejected",
-                    extra={"origin": request.headers.get("origin"), "path": request.url.path},
+                    extra={"origin": request.headers.get("origin"), "path": path},
                 )
-                return error_response(403, ErrorCode.FORBIDDEN, csrf_error)
+                resp = error_response(403, ErrorCode.FORBIDDEN, csrf_error)
+                await resp(scope, receive, send)
+                return
 
         try:
             claims = decode_access_token(token)
             jti = str(claims["jti"])
             if await _is_token_blocklisted_async(jti):
-                return error_response(401, ErrorCode.UNAUTHORIZED, "Access token has been revoked.")
+                resp = error_response(401, ErrorCode.UNAUTHORIZED, "Access token has been revoked.")
+                await resp(scope, receive, send)
+                return
             request.state.user_id = str(claims["sub"])
             request.state.token_jti = jti
             request.state.token_exp = int(claims["exp"])
             request.state.role = _claim_role(claims)
             request.state.permissions = list(claims.get("permissions", []))
         except APIError as exc:
-            return error_response(exc.status_code, exc.code, exc.message, retryable=exc.retryable)
+            resp = error_response(exc.status_code, exc.code, exc.message, retryable=exc.retryable)
+            await resp(scope, receive, send)
+            return
         except Exception:
-            return error_response(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
-        return await call_next(request)
+            resp = error_response(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
+            await resp(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
 
 
 async def _try_populate_user_state(request: Request) -> None:

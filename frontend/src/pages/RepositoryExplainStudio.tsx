@@ -510,8 +510,8 @@ export function RepositoryExplainStudio() {
               <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
                 <Sparkles className="h-6 w-6 animate-spin" />
               </div>
-              <h3 className="text-sm font-semibold text-foreground">
-                Synthesizing repository intelligence...
+              <h3 className="text-sm font-semibold text-foreground" aria-live="polite">
+                {explainMutation.stageMessage || 'Synthesizing repository intelligence...'}
               </h3>
               <p className="text-xs text-muted-foreground max-w-sm">
                 Evaluating selected code with {totalSelectedCount} contextual repository files,

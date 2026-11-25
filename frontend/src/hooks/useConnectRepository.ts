@@ -2,7 +2,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { connectRepository } from '../services/repositoryDiscovery';
 import { repositoryKeys } from './useRepositories';
 import { availableRepositoryKeys } from './useAvailableRepositories';
-import type { ConnectRepositoryResponse, ApiError } from '../types/api';
+import type {
+  ApiError,
+  ConnectRepositoryResponse,
+  PaginatedAvailableRepositoryResponse,
+} from '../types/api';
 
 /**
  * useConnectRepository — TanStack Query mutation hook for connecting a GitHub
@@ -51,11 +55,45 @@ import type { ConnectRepositoryResponse, ApiError } from '../types/api';
  *     });
  *   };
  */
+type ConnectMutationContext = {
+  previousQueries: Array<[readonly unknown[], PaginatedAvailableRepositoryResponse | undefined]>;
+};
+
 export function useConnectRepository() {
   const queryClient = useQueryClient();
 
-  return useMutation<ConnectRepositoryResponse, ApiError, string>({
+  return useMutation<ConnectRepositoryResponse, ApiError, string, ConnectMutationContext>({
     mutationFn: (githubRepoId: string) => connectRepository(githubRepoId),
+
+    onMutate: async (githubRepoId: string) => {
+      await queryClient.cancelQueries({ queryKey: availableRepositoryKeys.all });
+      const previousQueries = queryClient.getQueriesData<PaginatedAvailableRepositoryResponse>({
+        queryKey: availableRepositoryKeys.all,
+      });
+
+      queryClient.setQueriesData<PaginatedAvailableRepositoryResponse>(
+        { queryKey: availableRepositoryKeys.all },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.map((repo) =>
+              repo.github_repo_id === githubRepoId ? { ...repo, is_connected: true } : repo,
+            ),
+          };
+        },
+      );
+
+      return { previousQueries };
+    },
+
+    onError: (_err, _githubRepoId, context) => {
+      if (context?.previousQueries) {
+        for (const [key, data] of context.previousQueries) {
+          queryClient.setQueryData(key, data);
+        }
+      }
+    },
 
     onSuccess: async () => {
       // Invalidate both caches in parallel.

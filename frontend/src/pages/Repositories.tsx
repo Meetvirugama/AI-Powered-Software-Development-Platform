@@ -1,9 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { useAvailableRepositories } from '../hooks/useAvailableRepositories';
+import {
+  useAvailableRepositories,
+  useRefreshAvailableRepositories,
+} from '../hooks/useAvailableRepositories';
 import { useConnectRepository } from '../hooks/useConnectRepository';
 import { useRepositories } from '../hooks/useRepositories';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { RepositoryGridSkeleton } from '../components/shared/Skeletons';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { GitHubInstallButton } from '../components/shared/GitHubInstallButton';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
@@ -96,6 +100,13 @@ export function Repositories() {
       search: debouncedSearch,
       installationId: urlInstallationId,
     });
+  const { mutate: refreshFromGitHub, isPending: isManualRefreshing } =
+    useRefreshAvailableRepositories({
+      page,
+      pageSize: PAGE_SIZE,
+      search: debouncedSearch,
+      installationId: urlInstallationId,
+    });
 
   const { data: connectedData, isLoading: isLoadingConnected } = useRepositories(1, 100);
 
@@ -175,11 +186,23 @@ export function Repositories() {
               Repositories accessible through your GitHub App installation.
             </p>
           </div>
-          <GitHubInstallButton
-            label="Install / Manage GitHub App"
-            size="sm"
-            className="self-start sm:self-auto shrink-0"
-          />
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => refreshFromGitHub()}
+              disabled={isManualRefreshing || isFetching}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring cursor-pointer"
+              title="Bypass GitHub discovery cache and fetch latest repositories"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isManualRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isManualRefreshing ? 'Refreshing…' : 'Refresh from GitHub'}</span>
+            </button>
+            <GitHubInstallButton
+              label="Install / Manage GitHub App"
+              size="sm"
+              className="shrink-0"
+            />
+          </div>
         </div>
 
         {/* Search input & repo count row */}
@@ -257,11 +280,7 @@ export function Repositories() {
       {/* ---------------------------------------------------------------- */}
       <div className="flex-1 min-h-0 overflow-y-auto py-3 pr-1 space-y-4">
         {/* Loading skeleton */}
-        {isLoading && (
-          <div className="flex items-center justify-center py-16">
-            <LoadingSpinner size="lg" label="Loading repositories…" />
-          </div>
-        )}
+        {isLoading && <RepositoryGridSkeleton count={PAGE_SIZE} label="Loading repositories…" />}
 
         {/* Error state */}
         {isError && !isLoading && (

@@ -11,6 +11,7 @@
  */
 
 export const REPO_UPDATED = "repository.updated";
+export const REPO_SYNC_PROGRESS = "repository.sync.progress";
 export const TASK_STATUS_UPDATED = "task.status.updated";
 export const TASK_STEP_UPDATED = "task.step.updated";
 
@@ -37,6 +38,7 @@ export const SSE_GAP_DETECTED = "sse.stream.gap_detected";
 
 export const NAMED_SSE_EVENTS: readonly string[] = [
   REPO_UPDATED,
+  REPO_SYNC_PROGRESS,
   TASK_STATUS_UPDATED,
   TASK_STEP_UPDATED,
   CHAT_STREAM_STARTED,
@@ -70,6 +72,18 @@ export interface SseEnvelope {
 /** Payload for repository.updated events. */
 export interface RepoUpdatedPayload {
   repository_id: string;
+}
+
+/** Payload for repository.sync.progress live indexing events. */
+export interface RepoSyncProgressPayload {
+  repository_id: string;
+  job_id?: string | null;
+  stage: string;
+  files_processed: number;
+  files_total: number;
+  chunks_embedded?: number;
+  progress_pct: number;
+  message?: string | null;
 }
 
 /** Payload for chat.token and chat.stream.completed events. */
@@ -111,6 +125,7 @@ export interface SseGapDetectedPayload {
  */
 export type SseHandlers = Partial<{
   [REPO_UPDATED]: (payload: RepoUpdatedPayload) => void;
+  [REPO_SYNC_PROGRESS]: (payload: RepoSyncProgressPayload) => void;
   [TASK_STATUS_UPDATED]: (payload: Record<string, unknown>) => void;
   [TASK_STEP_UPDATED]: (payload: Record<string, unknown>) => void;
   [CHAT_STREAM_STARTED]: (payload: Record<string, unknown>) => void;

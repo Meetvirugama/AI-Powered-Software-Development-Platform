@@ -11,7 +11,9 @@ import {
 } from '../hooks/useRepositories';
 import { getRepositoryFiles, lookupRepositoryFileByPath } from '../services/repositories';
 import { findMatchingRepositoryFile } from '../lib/sourceReference';
-import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { StudioLayoutSkeleton } from '../components/shared/Skeletons';
+import { useSseConnectionStatus } from '../hooks/useSseConnectionStatus';
+import { useSyncProgressStore } from '../stores/useSyncProgressStore';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { FileTree } from '../components/explorer/FileTree';
 import { CodeViewer, CodeViewerEmptyState } from '../components/explorer/CodeViewer';
@@ -26,7 +28,7 @@ import { ArrowLeft } from 'lucide-react';
 import type { RepositoryFile } from '../types/api';
 import type { AnalysisTarget, SourceReference } from '../types/analysis';
 
-const SYNC_POLL_INTERVAL_MS = 3000;
+const SYNC_FALLBACK_POLL_INTERVAL_MS = 20_000;
 
 /**
  * Repository overview and code explorer.
@@ -55,6 +57,9 @@ export function RepositoryDetail() {
   });
   const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null>(null);
 
+  const { isConnected: isSseConnected } = useSseConnectionStatus();
+  const liveProgress = useSyncProgressStore((state) => (id ? state.progressByRepo[id] ?? null : null));
+
   // ------------------------------------------------------------------
   // Data Fetching
   // ------------------------------------------------------------------
@@ -65,8 +70,9 @@ export function RepositoryDetail() {
     error: repoErrorData,
   } = useRepository(id, {
     refetchInterval: (query: { state: { data?: { sync_status?: string } } }) => {
+      if (isSseConnected) return false;
       const status = query.state.data?.sync_status;
-      return status === 'SYNCING' ? SYNC_POLL_INTERVAL_MS : false;
+      return status === 'SYNCING' ? SYNC_FALLBACK_POLL_INTERVAL_MS : false;
     },
   });
 
@@ -244,11 +250,7 @@ export function RepositoryDetail() {
   }
 
   if (repoLoading) {
-    return (
-      <div className="flex h-[50vh] flex-col items-center justify-center gap-4">
-        <LoadingSpinner size="lg" label="Loading repository details…" />
-      </div>
-    );
+    return <StudioLayoutSkeleton />;
   }
 
   if (repoError || !repo || !progress) {
@@ -278,6 +280,7 @@ export function RepositoryDetail() {
           progress={progress}
           isSyncActive={isSyncActive}
           errorMessage={latestJob?.error_message ?? repo.last_sync_error ?? null}
+          liveProgress={liveProgress}
           onSync={() => handleSync(isSyncActive)}
         />
       ) : (

@@ -153,9 +153,41 @@ class RepositoryRepository:
             job.finished_at = datetime.now(timezone.utc)
             if error_message:
                 job.error_message = error_message[:SYNC_ERROR_MAX_CHARS]
+            repo = self.get_by_id(job.repository_id)
+            if repo is not None:
+                repo.last_sync_error = job.error_message
             self.session.commit()
             self.session.refresh(job)
         return job
+
+    def refresh_repository_counts(self, repository_id: uuid.UUID) -> tuple[int, int, int]:
+        """Recompute and persist denormalized file, symbol, and chunk counts for one repository."""
+        from app.models.code_chunk import CodeChunk
+
+        file_count = int(
+            self.session.scalar(
+                select(func.count(RepositoryFile.id)).where(RepositoryFile.repository_id == repository_id)
+            )
+            or 0
+        )
+        symbol_count = int(
+            self.session.scalar(
+                select(func.count(CodeSymbol.id)).where(CodeSymbol.repository_id == repository_id)
+            )
+            or 0
+        )
+        chunk_count = int(
+            self.session.scalar(
+                select(func.count(CodeChunk.id)).where(CodeChunk.repository_id == repository_id)
+            )
+            or 0
+        )
+        repo = self.get_by_id(repository_id)
+        if repo is not None:
+            repo.file_count = file_count
+            repo.symbol_count = symbol_count
+            repo.chunk_count = chunk_count
+        return file_count, symbol_count, chunk_count
 
     def list_sync_jobs(self, repository_id: uuid.UUID, limit: int = 20) -> list[SyncJob]:
         stmt = (
@@ -174,17 +206,24 @@ class RepositoryRepository:
         """Error message of the most recent job per repository, only when that job FAILED."""
         if not repository_ids:
             return {}
-        stmt = (
-            select(SyncJob.repository_id, SyncJob.status, SyncJob.error_message)
+        ranked = (
+            select(
+                SyncJob.repository_id.label("repository_id"),
+                SyncJob.status.label("status"),
+                SyncJob.error_message.label("error_message"),
+                func.row_number()
+                .over(
+                    partition_by=SyncJob.repository_id,
+                    order_by=(SyncJob.created_at.desc(), SyncJob.id.desc()),
+                )
+                .label("rn"),
+            )
             .where(SyncJob.repository_id.in_(repository_ids))
-            .order_by(SyncJob.repository_id, SyncJob.created_at.desc())
+            .subquery()
         )
+        stmt = select(ranked.c.repository_id, ranked.c.status, ranked.c.error_message).where(ranked.c.rn == 1)
         latest: dict[uuid.UUID, str] = {}
-        seen: set[uuid.UUID] = set()
         for repo_id, status, error in self.session.execute(stmt).all():
-            if repo_id in seen:
-                continue
-            seen.add(repo_id)
             if status == SyncJobStatus.FAILED:
                 latest[repo_id] = error or "Synchronization failed."
         return latest

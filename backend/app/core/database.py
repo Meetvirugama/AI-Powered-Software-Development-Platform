@@ -4,11 +4,12 @@ Models and migrations remain Om's responsibility; this file only provides the
 shared application infrastructure they will use.
 """
 
-from collections.abc import AsyncGenerator, Generator
+import asyncio
+from collections.abc import AsyncGenerator, Callable, Generator
 import logging
 import os
 import re
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -166,6 +167,26 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def _is_sqlite_or_mock_session(db: Any) -> bool:
+    if db is None or getattr(db, "_is_mock_db", False) is True:
+        return True
+    bind = getattr(db, "bind", None)
+    if bind is None:
+        return True
+    dialect = getattr(bind, "dialect", None)
+    return getattr(dialect, "name", "") == "sqlite"
+
+
+_T = TypeVar("_T")
+
+
+async def run_db(db: Any, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
+    """Execute a synchronous SQLAlchemy helper off the event loop for Postgres, inline for SQLite/mocks."""
+    if _is_sqlite_or_mock_session(db):
+        return fn(*args, **kwargs)
+    return await asyncio.to_thread(fn, *args, **kwargs)
 
 
 async def get_db_async() -> AsyncGenerator[AsyncSession, None]:

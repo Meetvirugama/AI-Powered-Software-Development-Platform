@@ -8,9 +8,8 @@ import time
 from contextvars import ContextVar
 from uuid import uuid4
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.datastructures import Headers, MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.secret_redaction import SecretRedactingFilter
 
@@ -102,26 +101,41 @@ def configure_logging(level: str) -> None:
     root_logger.setLevel(level.upper())
 
 
-class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Attach a request ID to logs and responses for each HTTP request."""
+class RequestIdMiddleware:
+    """Pure ASGI middleware attaching a request ID to logs and responses without streaming buffering."""
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        request_id = request.headers.get("X-Request-ID", str(uuid4()))
-        request.state.request_id = request_id
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        req_headers = Headers(scope=scope)
+        request_id = req_headers.get("X-Request-ID") or str(uuid4())
+        scope.setdefault("state", {})["request_id"] = request_id
         token = request_id_context.set(request_id)
         started_at = time.perf_counter()
-        logger = logging.getLogger("app.http")
+        http_logger = logging.getLogger("app.http")
+        status_code = 500
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = int(message.get("status", 0))
+                headers = MutableHeaders(scope=message)
+                headers["X-Request-ID"] = request_id
+            await send(message)
 
         try:
-            response = await call_next(request)
-            response.headers["X-Request-ID"] = request_id
-            logger.info(
+            await self.app(scope, receive, send_wrapper)
+            http_logger.info(
                 "request completed method=%s path=%s status_code=%s duration_ms=%.2f",
-                request.method,
-                request.url.path,
-                response.status_code,
+                scope.get("method", ""),
+                scope.get("path", ""),
+                status_code,
                 (time.perf_counter() - started_at) * 1000,
             )
-            return response
         finally:
             request_id_context.reset(token)

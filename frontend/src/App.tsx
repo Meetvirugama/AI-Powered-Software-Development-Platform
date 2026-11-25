@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ErrorBoundary } from './components/shared/ErrorBoundary';
 import { ProtectedRoute } from './layouts/ProtectedRoute';
 import { AppLayout } from './layouts/AppLayout';
-import { LoadingSpinner } from './components/shared/LoadingSpinner';
+import { PageShellSkeleton } from './components/shared/Skeletons';
 
 const Login = lazy(() => import('./pages/Login').then((m) => ({ default: m.Login })));
 const AuthCallback = lazy(() => import('./pages/AuthCallback').then((m) => ({ default: m.AuthCallback })));
@@ -39,11 +39,7 @@ const ToolsIntegrationsAdminPage = lazy(() =>
 
 /** Full-screen fallback for routes outside the app shell (login, auth callback, 404). */
 function RouteFallback() {
-  return (
-    <div className="flex min-h-screen w-full items-center justify-center bg-background">
-      <LoadingSpinner size="lg" label="Loading page..." />
-    </div>
-  );
+  return <PageShellSkeleton />;
 }
 
 export function App() {

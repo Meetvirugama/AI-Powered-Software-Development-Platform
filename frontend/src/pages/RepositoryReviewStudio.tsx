@@ -166,7 +166,9 @@ export function RepositoryReviewStudio() {
                 <div className="h-12 w-12 rounded-full bg-primary/10 border border-primary/20 flex items-center justify-center text-primary animate-pulse">
                   <FileCheck className="h-6 w-6 animate-spin" />
                 </div>
-                <h3 className="text-sm font-semibold text-foreground">Analyzing code quality & patterns...</h3>
+                <h3 className="text-sm font-semibold text-foreground" aria-live="polite">
+                  {reviewMutation.stageMessage || 'Analyzing code quality & patterns...'}
+                </h3>
                 <p className="text-xs text-muted-foreground max-w-sm">
                   Synthesizing AST syntax metrics, complexity factors, and LLM architectural patterns.
                 </p>

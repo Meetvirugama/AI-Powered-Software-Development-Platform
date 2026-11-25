@@ -73,19 +73,29 @@ GRACEFUL_TIMEOUT="${UVICORN_GRACEFUL_TIMEOUT:-15}"
 # Must exceed the Azure front-end / Vercel proxy idle reuse window to avoid reconnects and 502s.
 KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-75}"
 
+ENV_LOWER=$(echo "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')
+DEFAULT_WORKERS=1
+if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == *"postgres"* ]] && { [ "$ENV_LOWER" = "production" ] || [ "$ENV_LOWER" = "prod" ]; } && [ "${DISABLE_EMBEDDED_SYNC_WORKER:-false}" = "true" ]; then
+    DEFAULT_WORKERS=2
+fi
+WORKERS="${UVICORN_WORKERS:-$DEFAULT_WORKERS}"
+WORKER_ARGS=()
+if [ "$WORKERS" -gt 1 ] 2>/dev/null; then
+    WORKER_ARGS=(--workers "$WORKERS")
+fi
+
 PROXY_ARGS=()
 TRUST_PROXY_LOWER=$(echo "${TRUST_PROXY_HEADERS:-false}" | tr '[:upper:]' '[:lower:]')
 if [ "$TRUST_PROXY_LOWER" = "true" ] || [ "$TRUST_PROXY_LOWER" = "1" ] || [ "$TRUST_PROXY_LOWER" = "yes" ]; then
     DEFAULT_IPS="*"
-    ENV_LOWER=$(echo "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')
     if [ "$ENV_LOWER" = "production" ] || [ "$ENV_LOWER" = "prod" ]; then
         DEFAULT_IPS="127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     fi
     FORWARDED_IPS="${FORWARDED_ALLOW_IPS:-$DEFAULT_IPS}"
     PROXY_ARGS=(--proxy-headers --forwarded-allow-ips="$FORWARDED_IPS")
-    echo "Starting Uvicorn server on port $PORT_TO_USE (trusted proxy headers enabled: $FORWARDED_IPS)..."
+    echo "Starting Uvicorn server on port $PORT_TO_USE (workers=$WORKERS, trusted proxy headers enabled: $FORWARDED_IPS)..."
 else
-    echo "Starting Uvicorn server on port $PORT_TO_USE..."
+    echo "Starting Uvicorn server on port $PORT_TO_USE (workers=$WORKERS)..."
 fi
 
 exec $PY_BIN -m uvicorn main:app \
@@ -93,4 +103,5 @@ exec $PY_BIN -m uvicorn main:app \
     --port "$PORT_TO_USE" \
     --timeout-graceful-shutdown "$GRACEFUL_TIMEOUT" \
     --timeout-keep-alive "$KEEP_ALIVE" \
+    "${WORKER_ARGS[@]}" \
     "${PROXY_ARGS[@]}"

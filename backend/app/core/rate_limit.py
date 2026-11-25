@@ -29,9 +29,9 @@ import time
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import get_settings
 from app.core.errors import error_response
@@ -63,13 +63,13 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       # Covers the streaming variant (/chat/stream) too — same LLM cost per request.
                       re.compile(rf"^{p}/repositories/[^/]+/chat(?:/stream)?/?$"), 30, 60, "user"),
         RateLimitRule("repo_explain", frozenset({"POST"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/explain/?$"), 20, 60, "user"),
+                      re.compile(rf"^{p}/repositories/[^/]+/explain(?:/stream)?/?$"), 20, 60, "user"),
         RateLimitRule("repo_detect_bugs", frozenset({"POST"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/detect-bugs/?$"), 20, 60, "user"),
+                      re.compile(rf"^{p}/repositories/[^/]+/detect-bugs(?:/stream)?/?$"), 20, 60, "user"),
         RateLimitRule("repo_generate_tests", frozenset({"POST"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/generate-tests/?$"), 20, 60, "user"),
+                      re.compile(rf"^{p}/repositories/[^/]+/generate-tests(?:/stream)?/?$"), 20, 60, "user"),
         RateLimitRule("repo_review", frozenset({"POST", "PATCH"}),
-                      re.compile(rf"^{p}/repositories/[^/]+/review(?:/publish|/settings)?/?$"), 20, 60, "user"),
+                      re.compile(rf"^{p}/repositories/[^/]+/review(?:/stream|/publish|/settings)?/?$"), 20, 60, "user"),
         RateLimitRule("repo_analysis_export", frozenset({"GET"}),
                       re.compile(rf"^{p}/repositories/[^/]+/analysis-runs/export/?$"), 15, 60, "user"),
         RateLimitRule("analysis_feedback", frozenset({"POST"}),
@@ -114,6 +114,23 @@ class RedisRateLimitStore:
         except TypeError:
             pipe.expire(key, window_seconds + 5)
         count, _ = pipe.execute()
+        return int(count)
+
+
+class AsyncRedisRateLimitStore:
+    """Async Redis rate-limit counter avoiding asyncio.to_thread hops per request."""
+
+    def __init__(self, redis: object) -> None:
+        self.redis = redis
+
+    async def hit(self, key: str, window_seconds: int) -> int:
+        pipe = self.redis.pipeline()
+        pipe.incr(key)
+        try:
+            pipe.expire(key, window_seconds + 5, nx=True)
+        except TypeError:
+            pipe.expire(key, window_seconds + 5)
+        count, _ = await pipe.execute()
         return int(count)
 
 
@@ -181,6 +198,9 @@ def get_rate_limit_store() -> RateLimitStore:
     return RedisRateLimitStore(redis_module.get_redis())
 
 
+_DEFAULT_GET_RATE_LIMIT_STORE = get_rate_limit_store
+
+
 def client_ip(request: Request) -> str:
     """The caller's IP. X-Forwarded-For is trusted only behind a known proxy."""
     if get_settings().trust_proxy_headers:
@@ -190,23 +210,33 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, api_prefix: str = "/api/v1") -> None:
-        super().__init__(app)
+class RateLimitMiddleware:
+    """Pure ASGI rate-limiting middleware backed directly by async Redis."""
+
+    def __init__(self, app: ASGIApp, api_prefix: str = "/api/v1") -> None:
+        self.app = app
         self.rules = _rules(api_prefix)
 
-    async def dispatch(self, request: Request, call_next) -> Response:
-        if not get_settings().rate_limit_enabled:
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
+        if not get_settings().rate_limit_enabled:
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
         rule = self._match(request)
         if rule is None:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
         if rule.per == "user":
             user_id = getattr(request.state, "user_id", None)
             if not user_id:
-                return await call_next(request)
+                await self.app(scope, receive, send)
+                return
             identity = f"user:{user_id}"
         else:
             identity = f"ip:{client_ip(request)}"
@@ -219,21 +249,26 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         redis_failed = False
 
         try:
-            store = get_rate_limit_store()
-            hit_fn = getattr(store, "hit", None)
-            if hit_fn is None:
-                count = 1
-            elif inspect.iscoroutinefunction(hit_fn):
-                count = await asyncio.wait_for(hit_fn(key, rule.window_seconds), timeout=1.0)
+            if get_rate_limit_store is _DEFAULT_GET_RATE_LIMIT_STORE:
+                async_redis = await redis_module.get_redis_async()
+                store: Any = AsyncRedisRateLimitStore(async_redis)
+                count = await asyncio.wait_for(store.hit(key, rule.window_seconds), timeout=1.0)
             else:
-                res = await asyncio.wait_for(
-                    asyncio.to_thread(hit_fn, key, rule.window_seconds),
-                    timeout=1.0,
-                )
-                if inspect.isawaitable(res):
-                    count = await asyncio.wait_for(res, timeout=1.0)
+                store = get_rate_limit_store()
+                hit_fn = getattr(store, "hit", None)
+                if hit_fn is None:
+                    count = 1
+                elif inspect.iscoroutinefunction(hit_fn):
+                    count = await asyncio.wait_for(hit_fn(key, rule.window_seconds), timeout=1.0)
                 else:
-                    count = int(res)
+                    res = await asyncio.wait_for(
+                        asyncio.to_thread(hit_fn, key, rule.window_seconds),
+                        timeout=1.0,
+                    )
+                    if inspect.isawaitable(res):
+                        count = await asyncio.wait_for(res, timeout=1.0)
+                    else:
+                        count = int(res)
         except Exception as exc:  # noqa: BLE001
             redis_failed = True
             logger.warning(
@@ -248,7 +283,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             if is_ai_rule:
                 count = _fallback_ai_store.hit(key, rule.window_seconds)
             else:
-                return await call_next(request)
+                await self.app(scope, receive, send)
+                return
 
         remaining = max(0, rule.limit - count)
         reset_in = max(1, int((window + 1) * rule.window_seconds - now))
@@ -264,20 +300,31 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
             response = error_response(
-                429, RATE_LIMITED,
+                429,
+                RATE_LIMITED,
                 f"Too many requests. Try again in {reset_in} seconds.",
                 retryable=True,
             )
             response.headers["Retry-After"] = str(reset_in)
-        else:
-            response = await call_next(request)
+            response.headers["X-RateLimit-Limit"] = str(rule.limit)
+            response.headers["X-RateLimit-Remaining"] = str(remaining)
+            response.headers["X-RateLimit-Reset"] = str(reset_in)
+            if redis_failed and is_ai_rule:
+                response.headers["X-RateLimit-Fallback"] = "local-in-memory"
+            await response(scope, receive, send)
+            return
 
-        response.headers["X-RateLimit-Limit"] = str(rule.limit)
-        response.headers["X-RateLimit-Remaining"] = str(remaining)
-        response.headers["X-RateLimit-Reset"] = str(reset_in)
-        if redis_failed and is_ai_rule:
-            response.headers["X-RateLimit-Fallback"] = "local-in-memory"
-        return response
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["X-RateLimit-Limit"] = str(rule.limit)
+                headers["X-RateLimit-Remaining"] = str(remaining)
+                headers["X-RateLimit-Reset"] = str(reset_in)
+                if redis_failed and is_ai_rule:
+                    headers["X-RateLimit-Fallback"] = "local-in-memory"
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
     def _match(self, request: Request) -> RateLimitRule | None:
         path = request.url.path

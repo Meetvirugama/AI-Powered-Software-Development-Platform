@@ -5,12 +5,14 @@ Bug Detection API endpoint (POST /api/v1/repositories/{repository_id}/detect-bug
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import inspect
 import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -21,9 +23,12 @@ from app.api.v1.analysis.common import (
     _invoke_service_method,
     _owned_repository_async,
     _request_user_id,
+    fresh_analysis_session,
+    make_sse_response,
+    stream_analysis_events,
 )
 from app.api.v1.dependencies import ensure_min_role
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.models.user import UserRole
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
@@ -49,35 +54,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analysis"])
 
 
-@router.post(
-    "/repositories/{repository_id}/detect-bugs",
-    response_model=BugDetectionResponse,
-    responses=ANALYSIS_ERROR_RESPONSES,
-    summary="Detect potential bugs using static analysis and AI reasoning",
-    description=(
-        "Scan an authorized repository file, symbol, or line range using deterministic AST/static rules "
-        "and AI defect reasoning. Merges overlapping findings into `COMBINED`, redacts secret values, "
-        "and ranks findings by severity."
-    ),
-)
-async def detect_bugs(
+async def _execute_detect_bugs_pipeline(
     repository_id: UUID,
     payload: BugDetectionRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session,
+    *,
+    service: Any | None = None,
+    on_stage: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> BugDetectionResponse:
     """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
+    async def _stage(name: str, message: str) -> None:
+        if on_stage is not None:
+            await on_stage(name, message)
+
     ensure_min_role(request, UserRole.DEVELOPER)
     timer = StageExecutionTimer("detect_bugs", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)
 
+    await _stage("retrieving_context", "Resolving target and building bug detection context...")
     with timer.measure("target_resolution_and_context"):
-        resolved = resolve_bug_target_and_build_context(repository_id, repo, payload, db)
+        resolved = await run_db(db, resolve_bug_target_and_build_context, repository_id, repo, payload, db)
         payload.target = resolved.target
 
-    service = _get_service(request, "bug_detection_service", "Bug detection")
-    method = service.detect_bugs if hasattr(service, "detect_bugs") else service
+    resolved_service = service if service is not None else _get_service(request, "bug_detection_service", "Bug detection")
+    method = resolved_service.detect_bugs if hasattr(resolved_service, "detect_bugs") else resolved_service
 
     run_id = str(uuid4())
     try:
@@ -86,6 +88,7 @@ async def detect_bugs(
             # outage) for findings that filter_and_rank_findings drops anyway.
             raw_result: Any = []
         else:
+            await _stage("generating_output", "Analyzing code with AI defect reasoning...")
             with timer.measure("llm_inference"):
                 raw_result = await _invoke_service_method(
                     method,
@@ -104,7 +107,9 @@ async def detect_bugs(
                 )
     except APIError as exc:
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -120,7 +125,9 @@ async def detect_bugs(
     except Exception as exc:
         safe_err = redact(str(exc))
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -142,6 +149,7 @@ async def detect_bugs(
     extra_static_raw: list[Any] = []
     parser_warnings: list[str] = []
     if payload.include_static:
+        await _stage("running_static_rules", "Running static AST, security, and taint rules...")
         with timer.measure("static_analysis"):
             ext_scanner = getattr(request.app.state, "static_bug_scanner", None)
             if ext_scanner is not None:
@@ -236,7 +244,9 @@ async def detect_bugs(
 
         if status_val == "FAILED":
             if payload.options.persist_run:
-                record_analysis_run(
+                await run_db(
+                    db,
+                    record_analysis_run,
                     request.app.state,
                     db,
                     run_id=run_id,
@@ -255,6 +265,7 @@ async def detect_bugs(
                 retryable=True,
             )
 
+        await _stage("merging_findings", "Merging findings and validating counterevidence...")
         with timer.measure("grounding_and_ranking"):
             grounded_service, _ = normalize_and_ground_findings(
                 raw_findings_list,
@@ -324,7 +335,9 @@ async def detect_bugs(
     except (ValidationError, ValueError, TypeError) as exc:
         logger.error("detect_bugs_output_schema_invalid", extra={"error": str(exc)})
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -376,7 +389,9 @@ async def detect_bugs(
     response = BugDetectionResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
-        record_analysis_run(
+        await run_db(
+            db,
+            record_analysis_run,
             request.app.state,
             db,
             run_id=response.run_id,
@@ -392,4 +407,55 @@ async def detect_bugs(
         )
 
     return response
+
+
+@router.post(
+    "/repositories/{repository_id}/detect-bugs",
+    response_model=BugDetectionResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
+    summary="Detect potential bugs using static analysis and AI reasoning",
+    description=(
+        "Scan an authorized repository file, symbol, or line range using deterministic AST/static rules "
+        "and AI defect reasoning. Merges overlapping findings into `COMBINED`, redacts secret values, "
+        "and ranks findings by severity."
+    ),
+)
+async def detect_bugs(
+    repository_id: UUID,
+    payload: BugDetectionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> BugDetectionResponse:
+    """Execute the Week 2 Day 3 Dedicated Bug Detection pipeline."""
+    return await _execute_detect_bugs_pipeline(repository_id, payload, request, db)
+
+
+@router.post(
+    "/repositories/{repository_id}/detect-bugs/stream",
+    summary="Stream stage progress and result for bug detection via Server-Sent Events",
+    responses={**ANALYSIS_ERROR_RESPONSES, 200: {"content": {"text/event-stream": {}}}},
+)
+async def detect_bugs_stream(
+    repository_id: UUID,
+    payload: BugDetectionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Stream real-time stage progress events followed by the final BugDetectionResponse."""
+    ensure_min_role(request, UserRole.DEVELOPER)
+    await _owned_repository_async(repository_id, request, db)
+    service = _get_service(request, "bug_detection_service", "Bug detection")
+
+    async def _run(emit_stage: Callable[[str, str], Awaitable[None]]) -> BugDetectionResponse:
+        with fresh_analysis_session(request) as stream_db:
+            return await _execute_detect_bugs_pipeline(
+                repository_id,
+                payload,
+                request,
+                stream_db,
+                service=service,
+                on_stage=emit_stage,
+            )
+
+    return make_sse_response(stream_analysis_events(_run))
 

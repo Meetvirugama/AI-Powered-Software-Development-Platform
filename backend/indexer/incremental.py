@@ -131,12 +131,14 @@ class IncrementalIndexer:
         chunker: SymbolChunker | None = None,
         embedding_service: Any = None,
         extractor: SymbolExtractor | None = None,
+        file_batch_size: int = 32,
     ) -> None:
         self._db = db_session
         self.chunker = chunker or SymbolChunker()
         self.embedding_service = embedding_service
         self.detector = LanguageDetector()
         self.extractor = extractor or SymbolExtractor()
+        self._file_batch_size = max(1, int(file_batch_size))
         self._graph_is_complete = False
 
     async def _merge_unchanged_graph_inputs(
@@ -346,9 +348,10 @@ class IncrementalIndexer:
         scanned_files: list[Any],
         root_path: str = "",
         job_id: UUID | None = None,
+        progress_callback: Any = None,
     ) -> dict[str, int]:
         """
-        Incrementally index scanned repository files within a single atomic session transaction.
+        Incrementally index scanned repository files in cross-file batches.
         (task2.md §1.7, P0.1, P0.2, P0.3)
         """
         logger.info(
@@ -372,6 +375,7 @@ class IncrementalIndexer:
                 scanned_files=scanned_files,
                 root_path=root_path,
                 job_id=job_id,
+                progress_callback=progress_callback,
             )
         except Exception:
             if session is not None and hasattr(session, "rollback"):
@@ -387,6 +391,42 @@ class IncrementalIndexer:
                 else:
                     session.close()
 
+    async def _embed_and_normalize_texts(self, texts: list[str]) -> tuple[list[list[float]], bool]:
+        """Embed a list of chunk texts and return L2-normalized vectors plus validity flag."""
+        if not texts or self.embedding_service is None:
+            return [], True
+
+        vectors: list[list[float]] = []
+        try:
+            if _should_use_embed_documents(self.embedding_service):
+                vectors = await self.embedding_service.embed_documents(texts)
+            else:
+                vectors = await self.embedding_service.embed_batch(texts)
+        except Exception as exc:
+            logger.warning("Batch embedding failed (%d texts): %s", len(texts), exc)
+            return [], False
+
+        expected_dim = getattr(self.embedding_service, "dimensions", 768)
+        if not isinstance(expected_dim, int):
+            expected_dim = 768
+
+        if (
+            not vectors
+            or len(vectors) != len(texts)
+            or any(v is None or len(v) == 0 for v in vectors)
+        ):
+            return [], False
+
+        normalized_vectors: list[list[float]] = []
+        try:
+            for raw_vec in vectors:
+                normalized_vectors.append(l2_normalize_vector(raw_vec, expected_dim=expected_dim))
+        except Exception as norm_exc:
+            logger.error("Vector L2 normalization/validation failed: %s", norm_exc)
+            return [], False
+
+        return normalized_vectors, True
+
     async def _run_sync(
         self,
         session: Any,
@@ -394,8 +434,9 @@ class IncrementalIndexer:
         scanned_files: list[Any],
         root_path: str = "",
         job_id: UUID | None = None,
+        progress_callback: Any = None,
     ) -> dict[str, int]:
-        """Internal worker executing indexing and deletion reconciliation inside the active transaction."""
+        """Internal worker executing cross-file batched indexing and deletion reconciliation."""
         # Safeguard (Issue #183): Check repository existence before doing any work
         repo_check = await self._execute(
             text("SELECT 1 FROM repositories WHERE id = :repo_id"),
@@ -459,391 +500,401 @@ class IncrementalIndexer:
         indexed_count = 0
         skipped_count = 0
         embedding_failed_count = 0
+        chunks_embedded_count = 0
         graph_dirty = False
         all_extracted_symbols: list[Any] = []
         file_contents_by_id: dict[UUID, str] = {}
         file_id_to_path: dict[UUID, str] = {}
 
+        prof_version = getattr(self.embedding_service, "profile_version", "v1")
+        if not isinstance(prof_version, str):
+            prof_version = "v1"
+        service_profile = getattr(self.embedding_service, "profile", None)
+        doc_task_type = (
+            getattr(service_profile, "document_task_type", None)
+            or (GeminiTaskType.RETRIEVAL_DOCUMENT.value if prof_version == "v2" else None)
+        )
+        embedding_model_name = getattr(self.embedding_service, "model_name", "models/gemini-embedding-001")
+
+        symbol_insert_query = text(
+            """
+            INSERT INTO code_symbols
+            (id, file_id, repository_id, name, kind, start_line, end_line, signature, parent_id)
+            VALUES (:id, :file_id, :repo_id, :name, :kind, :start_line, :end_line, :signature, :parent_id)
+            """
+        )
+        file_insert_query = text(
+            """
+            INSERT INTO repository_files (id, repository_id, path, language, size_bytes, line_count, content_hash, last_indexed_at)
+            VALUES (:id, :repo_id, :path, :language, :size_bytes, :line_count, :hash, CURRENT_TIMESTAMP)
+            """
+        )
+        file_update_query = text(
+            """
+            UPDATE repository_files
+            SET content_hash = :hash,
+                size_bytes = :size_bytes,
+                line_count = :line_count,
+                language = :language,
+                last_indexed_at = CURRENT_TIMESTAMP
+            WHERE id = :file_id
+            """
+        )
+        chunk_query = text(
+            """
+            INSERT INTO code_chunks
+            (id, repository_id, file_id, symbol_id, content, code_search_text, token_count, embedding, start_line, end_line, content_hash, metadata)
+            VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :code_search_text, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
+            """
+        )
+
         total_scanned = len(scanned_files)
-        for idx, file_info in enumerate(scanned_files, 1):
-            raw_rel_path = getattr(file_info, "path", str(file_info))
-            file_rel_path = raw_rel_path.replace("\\", "/")
-            full_path = (
-                os.path.join(root_path, file_rel_path)
-                if root_path and not os.path.isabs(file_rel_path)
-                else file_rel_path
-            )
+        file_batches = [
+            scanned_files[i : i + self._file_batch_size]
+            for i in range(0, total_scanned, self._file_batch_size)
+        ]
 
-            content = await asyncio.to_thread(_read_file_safe, full_path)
-            if not content or not content.strip():
-                continue
-
-            new_hash = compute_content_hash(content)
-            file_data = existing_files.get(file_rel_path, {})
-            old_hash = file_data.get("hash")
-            file_id = file_data.get("file_id")
-            existing_prof_ver = existing_profile_by_file_id.get(file_id) if file_id else None
-
-            # 2 & 3. Compare hashes and profile versions -> Skip only when both content & profile match
-            if not should_reindex(
-                content,
-                old_hash,
-                existing_profile_version=existing_prof_ver,
-                target_profile_version=target_prof_ver,
-            ):
-                skipped_count += 1
-                continue
-
-            # 4. Changed, new, or profile-upgraded
-            size_bytes = len(content.encode("utf-8"))
-            line_count = max(1, len(content.splitlines()))
-            language = getattr(file_info, "language", None)
-            if not language or language == "unknown":
-                language = self.detector.detect(file_info)
-
-            logger.info("Indexing changed/new file: %s (%s)", file_rel_path, language)
-            graph_dirty = True
-
-            if file_id:
-                # Reconcile obsolete chunks and old symbols for this file before re-inserting
-                await self._execute(
-                    text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
-                    {"repo_id": repository_id, "file_id": file_id},
-                    sess=session,
-                )
-                await self._execute(
-                    text(
-                        "DELETE FROM symbol_edges WHERE repository_id = :repo_id "
-                        "AND (source_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id) "
-                        "OR target_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id))"
-                    ),
-                    {"repo_id": repository_id, "file_id": file_id},
-                    sess=session,
-                )
-                await self._execute(
-                    text("DELETE FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id"),
-                    {"repo_id": repository_id, "file_id": file_id},
-                    sess=session,
+        for batch_idx, file_batch in enumerate(file_batches):
+            # Step A: Read files in batch, filter unchanged, parse symbols & chunk in memory
+            prepared_files: list[dict[str, Any]] = []
+            for file_info in file_batch:
+                raw_rel_path = getattr(file_info, "path", str(file_info))
+                file_rel_path = raw_rel_path.replace("\\", "/")
+                full_path = (
+                    os.path.join(root_path, file_rel_path)
+                    if root_path and not os.path.isabs(file_rel_path)
+                    else file_rel_path
                 )
 
-                # Update the record in repository_files
-                update_query = text(
-                    """
-                    UPDATE repository_files 
-                    SET content_hash = :hash,
-                        size_bytes = :size_bytes,
-                        line_count = :line_count,
-                        language = :language,
-                        last_indexed_at = CURRENT_TIMESTAMP
-                    WHERE id = :file_id
-                    """
-                )
-                await self._execute(
-                    update_query,
-                    {
-                        "hash": new_hash,
-                        "size_bytes": size_bytes,
-                        "line_count": line_count,
-                        "language": language,
-                        "file_id": file_id,
-                    },
-                    sess=session,
-                )
-            else:
-                file_id = uuid.uuid4()
-                insert_query = text(
-                    """
-                    INSERT INTO repository_files (id, repository_id, path, language, size_bytes, line_count, content_hash, last_indexed_at)
-                    VALUES (:id, :repo_id, :path, :language, :size_bytes, :line_count, :hash, CURRENT_TIMESTAMP)
-                    """
-                )
-                await self._execute(
-                    insert_query,
-                    {
-                        "id": file_id,
-                        "repo_id": repository_id,
-                        "path": file_rel_path,
-                        "language": language,
-                        "size_bytes": size_bytes,
-                        "line_count": line_count,
-                        "hash": new_hash,
-                    },
-                    sess=session,
-                )
-
-            # Extract symbols if language is supported and persist them to code_symbols
-            symbols = []
-            try:
-                if hasattr(file_info, "language"):
-                    file_info.language = language
-                symbols = self.extractor.extract(file_info, content, file_id=file_id)
-            except Exception as e:
-                logger.debug("Symbol extraction skipped for %s: %s", file_rel_path, e)
-
-            persisted_symbol_ids: set[UUID] = set()
-            if symbols:
-                symbol_insert_query = text(
-                    """
-                    INSERT INTO code_symbols
-                    (id, file_id, repository_id, name, kind, start_line, end_line, signature, parent_id)
-                    VALUES (:id, :file_id, :repo_id, :name, :kind, :start_line, :end_line, :signature, :parent_id)
-                    """
-                )
-                # Collect all symbols for this file into a single batch list
-                # This prepares all rows in memory first so we can save them in one trip
-                symbols_data: list[dict[str, Any]] = []
-                for sym in symbols:
-                    sym_uuid = sym.id if isinstance(sym.id, UUID) else uuid.uuid4()
-                    sym.id = sym_uuid
-                    parent_uuid = sym.parent_id if sym.parent_id in persisted_symbol_ids else None
-                    symbols_data.append(
-                        {
-                            "id": sym_uuid,
-                            "file_id": file_id,
-                            "repo_id": repository_id,
-                            "name": (sym.name or "anonymous")[:255],
-                            "kind": (sym.kind or "symbol")[:50],
-                            "start_line": max(1, int(sym.start_line or 1)),
-                            "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
-                            "signature": redact(sym.signature) if sym.signature else None,
-                            "parent_id": parent_uuid,
-                        }
-                    )
-                    persisted_symbol_ids.add(sym_uuid)
-                    all_extracted_symbols.append(sym)
-                    file_contents_by_id[file_id] = content
-                    file_id_to_path[file_id] = file_rel_path
-
-                # Execute batch insert for all symbols instead of doing one query per symbol
-                if symbols_data:
-                    try:
-                        await self._execute_batch(
-                            symbol_insert_query,
-                            symbols_data,
-                            sess=session,
-                            batch_size=250,
-                        )
-                    except Exception as sym_exc:
-                        logger.debug("Symbol batch persistence failed in %s: %s", file_rel_path, sym_exc)
-
-            # Chunk the file using SymbolChunker (cAST symbol-aware or fallback line blocks)
-            try:
-                chunks = self.chunker.chunk_symbols(
-                    repository_id=repository_id,
-                    file_id=file_id,
-                    symbols=symbols,
-                    content=content,
-                    language=language,
-                    file_path=file_rel_path,
-                )
-            except TypeError:
-                chunks = self.chunker.chunk_symbols(
-                    repository_id=repository_id,
-                    file_id=file_id,
-                    symbols=symbols,
-                    content=content,
-                    language=language,
-                )
-
-            if not chunks:
-                continue
-
-            # Security (W2-S1): Guarantee all chunk contents & contextual embedding inputs are redacted
-            for c in chunks:
-                c.content = redact(c.content)
-                if getattr(c, "embedding_text", None):
-                    c.embedding_text = redact(c.embedding_text)
-
-            # Embed the contextual embedding inputs while keeping `c.content` free of synthetic headers
-            chunk_texts = [getattr(c, "embedding_text", None) or c.content for c in chunks]
-            vectors: list[list[float]] = []
-
-            if self.embedding_service is not None:
-                try:
-                    if _should_use_embed_documents(self.embedding_service):
-                        vectors = await self.embedding_service.embed_documents(chunk_texts)
-                    else:
-                        vectors = await self.embedding_service.embed_batch(chunk_texts)
-                except Exception as exc:
-                    logger.warning(
-                        "Embedding failed for file %s: %s",
-                        file_rel_path,
-                        exc,
-                    )
-                    vectors = []
-
-                # Validate embedding batch integrity (task2.md §1.7, P0.3) and L2-normalize on write:
-                expected_dim = getattr(self.embedding_service, "dimensions", 768)
-                if not isinstance(expected_dim, int):
-                    expected_dim = 768
-
-                normalized_vectors: list[list[float]] = []
-                batch_valid = (
-                    bool(vectors)
-                    and len(vectors) == len(chunks)
-                    and all(v is not None and len(v) > 0 for v in vectors)
-                )
-                if batch_valid:
-                    try:
-                        for raw_vec in vectors:
-                            normalized_vectors.append(
-                                l2_normalize_vector(raw_vec, expected_dim=expected_dim)
-                            )
-                    except Exception as norm_exc:
-                        logger.error(
-                            "Vector L2 normalization/validation failed for %s: %s",
-                            file_rel_path,
-                            norm_exc,
-                        )
-                        batch_valid = False
-
-                if not batch_valid:
-                    logger.error(
-                        "Embedding batch validation failed for %s: expected %d valid vectors, got %d. Skipping chunk persistence to prevent corrupted partial index.",
-                        file_rel_path,
-                        len(chunks),
-                        len(vectors) if vectors else 0,
-                    )
-                    # The file row already carries the *new* content hash. Left as-is, the next sync
-                    # would see "unchanged" and skip it forever, so the file would silently never be
-                    # searchable. Clear the hash so the next sync retries the embedding.
-                    await self._execute(
-                        text("UPDATE repository_files SET content_hash = '' WHERE id = :file_id"),
-                        {"file_id": file_id},
-                        sess=session,
-                    )
-                    embedding_failed_count += 1
-                    await asyncio.sleep(0.05)
+                content = await asyncio.to_thread(_read_file_safe, full_path)
+                if not content or not content.strip():
                     continue
 
-                vectors = normalized_vectors
+                new_hash = compute_content_hash(content)
+                file_data = existing_files.get(file_rel_path, {})
+                old_hash = file_data.get("hash")
+                existing_fid = file_data.get("file_id")
+                existing_prof_ver = existing_profile_by_file_id.get(existing_fid) if existing_fid else None
 
-            # Insert chunks into code_chunks
-            chunk_query = text(
-                """
-                INSERT INTO code_chunks 
-                (id, repository_id, file_id, symbol_id, content, code_search_text, token_count, embedding, start_line, end_line, content_hash, metadata)
-                VALUES (:id, :repo_id, :file_id, :symbol_id, :content, :code_search_text, :tokens, CAST(:embedding AS vector), :start, :end, :hash, CAST(:metadata AS jsonb))
-                """
-            )
+                if not should_reindex(
+                    content,
+                    old_hash,
+                    existing_profile_version=existing_prof_ver,
+                    target_profile_version=target_prof_ver,
+                ):
+                    skipped_count += 1
+                    continue
 
-            prof_version = getattr(self.embedding_service, "profile_version", "v1")
-            if not isinstance(prof_version, str):
-                prof_version = "v1"
-            service_profile = getattr(self.embedding_service, "profile", None)
-            doc_task_type = (
-                getattr(service_profile, "document_task_type", None)
-                or (GeminiTaskType.RETRIEVAL_DOCUMENT.value if prof_version == "v2" else None)
-            )
+                size_bytes = len(content.encode("utf-8"))
+                line_count = max(1, len(content.splitlines()))
+                language = getattr(file_info, "language", None)
+                if not language or language == "unknown":
+                    language = self.detector.detect(file_info)
 
-            seen_chunk_ids: set[UUID] = set()
-            # Collect all chunk payloads for this file into a single batch list
-            # Preparing all chunks in memory lets us insert hundreds of rows in one batch query
-            chunks_data: list[dict[str, Any]] = []
-            for i, chunk in enumerate(chunks):
-                chunk_meta = dict(chunk.metadata or {})
-                sym_ids_list = [str(x) for x in chunk_meta.get("symbol_ids", [])]
-                chunk_id = compute_stable_chunk_id(
-                    repository_id=repository_id,
-                    file_id=file_id,
-                    chunk_type=chunk.chunk_type,
-                    start_line=chunk.start_line,
-                    end_line=chunk.end_line,
-                    content_hash=chunk.content_hash,
-                    symbol_id=chunk.symbol_id,
-                    symbol_ids=sym_ids_list,
-                )
-                if chunk_id in seen_chunk_ids:
-                    chunk_id = uuid.uuid5(chunk_id, str(i))
-                seen_chunk_ids.add(chunk_id)
-                vec = vectors[i] if (vectors and i < len(vectors)) else None
-                if vec is None or len(vec) == 0:
-                    dim = getattr(self.embedding_service, "dimensions", 768)
-                    if not isinstance(dim, int):
-                        dim = 768
-                    vec = [0.0] * dim
-                vec_literal = _vec_to_pg_literal(vec)
-                safe_symbol_id = chunk.symbol_id if chunk.symbol_id in persisted_symbol_ids else None
+                logger.info("Indexing changed/new file: %s (%s)", file_rel_path, language)
+                graph_dirty = True
 
-                sym_name = ""
-                sym_kind = ""
-                if safe_symbol_id:
-                    matching_sym = next((s for s in symbols if getattr(s, "id", None) == safe_symbol_id), None)
-                    if matching_sym:
-                        sym_name = getattr(matching_sym, "name", "")
-                        sym_kind = getattr(matching_sym, "kind", "")
+                is_existing = existing_fid is not None
+                file_id = existing_fid if existing_fid is not None else uuid.uuid4()
 
-                code_search_text = generate_code_search_text(
-                    content=chunk.content,
-                    file_path=file_rel_path,
-                    symbol_name=sym_name,
-                    symbol_kind=sym_kind,
-                )
+                symbols = []
+                try:
+                    if hasattr(file_info, "language"):
+                        file_info.language = language
+                    symbols = self.extractor.extract(file_info, content, file_id=file_id)
+                except Exception as e:
+                    logger.debug("Symbol extraction skipped for %s: %s", file_rel_path, e)
 
-                header_str = str(chunk_meta.get("contextual_header", ""))
-                metadata = {
-                    **chunk_meta,
-                    "file_path": file_rel_path,
-                    "language": language,
-                    "chunk_type": chunk.chunk_type,
-                    "embedding_model": getattr(self.embedding_service, "model_name", "models/gemini-embedding-001"),
-                    "embedding_dim": len(vec),
-                    "embedding_profile_version": prof_version,
-                    "task_type": doc_task_type,
-                    "l2_normalized": bool(vectors),
-                    "index_fingerprint": compute_chunk_index_fingerprint(
-                        chunk.content_hash,
-                        chunker_version=str(chunk_meta.get("chunker_version", CHUNKER_VERSION)),
-                        profile_version=prof_version,
-                        contextual_header=header_str,
-                    ),
-                }
+                try:
+                    chunks = self.chunker.chunk_symbols(
+                        repository_id=repository_id,
+                        file_id=file_id,
+                        symbols=symbols,
+                        content=content,
+                        language=language,
+                        file_path=file_rel_path,
+                    )
+                except TypeError:
+                    chunks = self.chunker.chunk_symbols(
+                        repository_id=repository_id,
+                        file_id=file_id,
+                        symbols=symbols,
+                        content=content,
+                        language=language,
+                    )
 
-                chunks_data.append(
+                for c in chunks or []:
+                    c.content = redact(c.content)
+                    if getattr(c, "embedding_text", None):
+                        c.embedding_text = redact(c.embedding_text)
+
+                chunk_texts = [getattr(c, "embedding_text", None) or c.content for c in (chunks or [])]
+                prepared_files.append(
                     {
-                        "id": chunk_id,
-                        "repo_id": repository_id,
+                        "rel_path": file_rel_path,
+                        "is_existing": is_existing,
                         "file_id": file_id,
-                        "symbol_id": safe_symbol_id,
-                        "content": chunk.content,
-                        "code_search_text": code_search_text,
-                        "tokens": chunk.token_count,
-                        "embedding": vec_literal,
-                        "start": chunk.start_line,
-                        "end": chunk.end_line,
-                        "hash": chunk.content_hash,
-                        "metadata": json.dumps(metadata),
+                        "new_hash": new_hash,
+                        "size_bytes": size_bytes,
+                        "line_count": line_count,
+                        "language": language,
+                        "content": content,
+                        "symbols": symbols,
+                        "chunks": chunks or [],
+                        "chunk_texts": chunk_texts,
+                        "vectors": [],
+                        "embed_ok": True,
                     }
                 )
 
-            # Insert all code chunks and vector embeddings in batched network roundtrips
-            if chunks_data:
-                await self._execute_batch(
-                    chunk_query,
-                    chunks_data,
+            if prepared_files:
+                # Step B: Embed all chunk texts across the entire batch in one call
+                all_batch_texts: list[str] = []
+                for pf in prepared_files:
+                    all_batch_texts.extend(pf["chunk_texts"])
+
+                if self.embedding_service is not None and all_batch_texts:
+                    batch_vectors, batch_ok = await self._embed_and_normalize_texts(all_batch_texts)
+                    if batch_ok:
+                        offset = 0
+                        for pf in prepared_files:
+                            n_chunks = len(pf["chunk_texts"])
+                            pf["vectors"] = batch_vectors[offset : offset + n_chunks]
+                            pf["embed_ok"] = True
+                            offset += n_chunks
+                    else:
+                        # Isolate failures per file so valid files in the batch still persist
+                        for pf in prepared_files:
+                            if not pf["chunk_texts"]:
+                                continue
+                            f_vecs, f_ok = await self._embed_and_normalize_texts(pf["chunk_texts"])
+                            pf["vectors"] = f_vecs
+                            pf["embed_ok"] = f_ok
+                            if not f_ok:
+                                embedding_failed_count += 1
+                                await asyncio.sleep(0.02)
+
+                # Step C: Persist repository_files, code_symbols, and code_chunks in batch trips
+                update_file_rows: list[dict[str, Any]] = []
+                insert_file_rows: list[dict[str, Any]] = []
+                batch_symbols_data: list[dict[str, Any]] = []
+                batch_chunks_data: list[dict[str, Any]] = []
+
+                for pf in prepared_files:
+                    file_id = pf["file_id"]
+                    file_rel_path = pf["rel_path"]
+                    language = pf["language"]
+                    content = pf["content"]
+                    symbols = pf["symbols"]
+                    chunks = pf["chunks"]
+
+                    if pf["is_existing"]:
+                        await self._execute(
+                            text("DELETE FROM code_chunks WHERE repository_id = :repo_id AND file_id = :file_id"),
+                            {"repo_id": repository_id, "file_id": file_id},
+                            sess=session,
+                        )
+                        await self._execute(
+                            text(
+                                "DELETE FROM symbol_edges WHERE repository_id = :repo_id "
+                                "AND (source_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id) "
+                                "OR target_symbol_id IN (SELECT id FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id))"
+                            ),
+                            {"repo_id": repository_id, "file_id": file_id},
+                            sess=session,
+                        )
+                        await self._execute(
+                            text("DELETE FROM code_symbols WHERE repository_id = :repo_id AND file_id = :file_id"),
+                            {"repo_id": repository_id, "file_id": file_id},
+                            sess=session,
+                        )
+                        update_file_rows.append(
+                            {
+                                "hash": pf["new_hash"] if pf["embed_ok"] else "",
+                                "size_bytes": pf["size_bytes"],
+                                "line_count": pf["line_count"],
+                                "language": language,
+                                "file_id": file_id,
+                            }
+                        )
+                    else:
+                        insert_file_rows.append(
+                            {
+                                "id": file_id,
+                                "repo_id": repository_id,
+                                "path": file_rel_path,
+                                "language": language,
+                                "size_bytes": pf["size_bytes"],
+                                "line_count": pf["line_count"],
+                                "hash": pf["new_hash"] if pf["embed_ok"] else "",
+                            }
+                        )
+
+                    persisted_symbol_ids: set[UUID] = set()
+                    for sym in symbols:
+                        sym_uuid = sym.id if isinstance(sym.id, UUID) else uuid.uuid4()
+                        sym.id = sym_uuid
+                        parent_uuid = sym.parent_id if sym.parent_id in persisted_symbol_ids else None
+                        batch_symbols_data.append(
+                            {
+                                "id": sym_uuid,
+                                "file_id": file_id,
+                                "repo_id": repository_id,
+                                "name": (sym.name or "anonymous")[:255],
+                                "kind": (sym.kind or "symbol")[:50],
+                                "start_line": max(1, int(sym.start_line or 1)),
+                                "end_line": max(1, int(sym.end_line or sym.start_line or 1)),
+                                "signature": redact(sym.signature) if sym.signature else None,
+                                "parent_id": parent_uuid,
+                            }
+                        )
+                        persisted_symbol_ids.add(sym_uuid)
+                        all_extracted_symbols.append(sym)
+                        file_contents_by_id[file_id] = content
+                        file_id_to_path[file_id] = file_rel_path
+
+                    if not chunks or not pf["embed_ok"]:
+                        continue
+
+                    vectors = pf["vectors"]
+                    seen_chunk_ids: set[UUID] = set()
+                    for i, chunk in enumerate(chunks):
+                        chunk_meta = dict(chunk.metadata or {})
+                        sym_ids_list = [str(x) for x in chunk_meta.get("symbol_ids", [])]
+                        chunk_id = compute_stable_chunk_id(
+                            repository_id=repository_id,
+                            file_id=file_id,
+                            chunk_type=chunk.chunk_type,
+                            start_line=chunk.start_line,
+                            end_line=chunk.end_line,
+                            content_hash=chunk.content_hash,
+                            symbol_id=chunk.symbol_id,
+                            symbol_ids=sym_ids_list,
+                        )
+                        if chunk_id in seen_chunk_ids:
+                            chunk_id = uuid.uuid5(chunk_id, str(i))
+                        seen_chunk_ids.add(chunk_id)
+                        vec = vectors[i] if (vectors and i < len(vectors)) else None
+                        if vec is None or len(vec) == 0:
+                            dim = getattr(self.embedding_service, "dimensions", 768)
+                            if not isinstance(dim, int):
+                                dim = 768
+                            vec = [0.0] * dim
+                        vec_literal = _vec_to_pg_literal(vec)
+                        safe_symbol_id = chunk.symbol_id if chunk.symbol_id in persisted_symbol_ids else None
+
+                        sym_name = ""
+                        sym_kind = ""
+                        if safe_symbol_id:
+                            matching_sym = next((s for s in symbols if getattr(s, "id", None) == safe_symbol_id), None)
+                            if matching_sym:
+                                sym_name = getattr(matching_sym, "name", "")
+                                sym_kind = getattr(matching_sym, "kind", "")
+
+                        code_search_text = generate_code_search_text(
+                            content=chunk.content,
+                            file_path=file_rel_path,
+                            symbol_name=sym_name,
+                            symbol_kind=sym_kind,
+                        )
+
+                        header_str = str(chunk_meta.get("contextual_header", ""))
+                        metadata = {
+                            **chunk_meta,
+                            "file_path": file_rel_path,
+                            "language": language,
+                            "chunk_type": chunk.chunk_type,
+                            "embedding_model": embedding_model_name,
+                            "embedding_dim": len(vec),
+                            "embedding_profile_version": prof_version,
+                            "task_type": doc_task_type,
+                            "l2_normalized": bool(vectors),
+                            "index_fingerprint": compute_chunk_index_fingerprint(
+                                chunk.content_hash,
+                                chunker_version=str(chunk_meta.get("chunker_version", CHUNKER_VERSION)),
+                                profile_version=prof_version,
+                                contextual_header=header_str,
+                            ),
+                        }
+
+                        batch_chunks_data.append(
+                            {
+                                "id": chunk_id,
+                                "repo_id": repository_id,
+                                "file_id": file_id,
+                                "symbol_id": safe_symbol_id,
+                                "content": chunk.content,
+                                "code_search_text": code_search_text,
+                                "tokens": chunk.token_count,
+                                "embedding": vec_literal,
+                                "start": chunk.start_line,
+                                "end": chunk.end_line,
+                                "hash": chunk.content_hash,
+                                "metadata": json.dumps(metadata),
+                            }
+                        )
+
+                    indexed_count += 1
+
+                if update_file_rows:
+                    await self._execute_batch(file_update_query, update_file_rows, sess=session, batch_size=250)
+                if insert_file_rows:
+                    await self._execute_batch(file_insert_query, insert_file_rows, sess=session, batch_size=250)
+                if batch_symbols_data:
+                    try:
+                        await self._execute_batch(symbol_insert_query, batch_symbols_data, sess=session, batch_size=250)
+                    except Exception as sym_exc:
+                        logger.debug("Symbol batch persistence failed in batch %d: %s", batch_idx, sym_exc)
+                if batch_chunks_data:
+                    await self._execute_batch(chunk_query, batch_chunks_data, sess=session, batch_size=250)
+                    chunks_embedded_count += len(batch_chunks_data)
+
+            processed_so_far = min((batch_idx + 1) * self._file_batch_size, total_scanned)
+            if processed_so_far < total_scanned and prepared_files:
+                batch_repo_check = await self._execute(
+                    text("SELECT 1 FROM repositories WHERE id = :repo_id"),
+                    {"repo_id": repository_id},
                     sess=session,
-                    batch_size=250,
                 )
+                batch_repo_exists = (
+                    (batch_repo_check.first() is not None)
+                    if hasattr(batch_repo_check, "first")
+                    else True
+                )
+                if not batch_repo_exists:
+                    await self._rollback(sess=session)
+                    return {"indexed": 0, "skipped": 0, "reconciled_removed": 0, "graph_edges": 0}
+                await self._commit(sess=session)
 
-            indexed_count += 1
-            if job_id and (indexed_count % 5 == 0 or idx == total_scanned):
-                try:
-                    from app.services.sync_worker import _set_job_progress
-                    from app.models.sync_job import SyncJobStage
+            if prepared_files or processed_so_far == total_scanned:
+                progress_stats = {
+                    "files_scanned": total_scanned,
+                    "files_indexed": indexed_count,
+                    "files_skipped": skipped_count,
+                    "chunks_embedded": chunks_embedded_count,
+                    "current_file_index": processed_so_far,
+                }
+                if job_id:
+                    try:
+                        from app.services.sync_worker import _set_job_progress
+                        from app.models.sync_job import SyncJobStage
 
-                    _set_job_progress(
-                        job_id,
-                        stage=SyncJobStage.INDEXING.value,
-                        stats={
-                            "files_scanned": total_scanned,
-                            "files_indexed": indexed_count,
-                            "files_skipped": skipped_count,
-                            "current_file_index": idx,
-                        },
-                    )
-                except Exception as prog_exc:
-                    logger.debug("Progress update skipped: %s", prog_exc)
-            await asyncio.sleep(0.01)
+                        await asyncio.to_thread(
+                            _set_job_progress,
+                            job_id,
+                            stage=SyncJobStage.INDEXING.value,
+                            stats=progress_stats,
+                        )
+                    except Exception as prog_exc:
+                        logger.debug("Progress update skipped: %s", prog_exc)
+                if progress_callback is not None:
+                    try:
+                        cb_res = progress_callback({"stage": "INDEXING", **progress_stats})
+                        if inspect.isawaitable(cb_res):
+                            await cb_res
+                    except Exception as cb_exc:
+                        logger.debug("Progress callback skipped: %s", cb_exc)
+                await asyncio.sleep(0.01)
 
         # Reconcile removed/deleted files (task2.md §1.7, P0.2)
         scanned_rel_paths = {
@@ -1116,6 +1167,7 @@ class IncrementalIndexer:
             "reconciled_removed": reconciled_removed_count,
             "graph_edges": persisted_edges_count,
             "embedding_failed": embedding_failed_count,
+            "chunks_embedded": chunks_embedded_count,
         }
 
 

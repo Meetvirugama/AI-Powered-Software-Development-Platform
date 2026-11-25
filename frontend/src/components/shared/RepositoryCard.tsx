@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { cn } from '../../lib/utils';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -11,7 +12,8 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { Repository, SyncStatus } from '../../types/api';
-import { useSyncRepository, useDeleteRepository } from '../../hooks/useRepositories';
+import { getRepository } from '../../services/repositories';
+import { repositoryKeys, useSyncRepository, useDeleteRepository } from '../../hooks/useRepositories';
 
 // ---------------------------------------------------------------------------
 // Sync status presentation
@@ -80,7 +82,17 @@ interface RepositoryCardProps {
 
 export function RepositoryCard({ repo }: RepositoryCardProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+
+  function handlePrefetch() {
+    void queryClient.prefetchQuery({
+      queryKey: repositoryKeys.detail(repo.id),
+      queryFn: () => getRepository(repo.id),
+      staleTime: 60_000,
+    });
+    void import('../../layouts/RepositoryStudioLayout');
+  }
 
   const { mutate: triggerSync, isPending: isSyncPending } = useSyncRepository();
   const { mutate: deleteRepo, isPending: isDeletePending, error: deleteError } = useDeleteRepository();
@@ -107,6 +119,8 @@ export function RepositoryCard({ repo }: RepositoryCardProps) {
 
   return (
     <article
+      onMouseEnter={handlePrefetch}
+      onFocus={handlePrefetch}
       className="group relative flex flex-col gap-3.5 rounded-xl border border-border bg-card p-4 transition-colors hover:border-foreground/20"
       aria-label={`Repository ${repo.full_name}`}
     >

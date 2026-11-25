@@ -8,7 +8,11 @@
 ## 1. Azure Resources to Create
 
 > [!NOTE]
-> All resources should be created in the same Resource Group and region for lowest latency and no egress costs.
+> Co-locate all cloud dependencies in the closest regions for lowest RTT latency and no cross-region egress:
+> - **Azure App Service**: **Central India** (or **South India**)
+> - **Supabase PostgreSQL**: `ap-south-1` (Mumbai)
+> - **Upstash Redis**: `ap-south-1` (Mumbai)
+> - **Vercel Frontend Functions / Edge**: `bom1` (Mumbai)
 
 - [ ] **Resource Group:** `ai-platform-rg` (region: **Central India** — matches existing deployment)
 - [ ] **Azure Database for PostgreSQL Flexible Server**
@@ -71,6 +75,8 @@ Set these in **Azure Portal → App Service → Configuration → Application Se
 | `WEBSITES_PORT` | `8000` |
 | `RUN_MIGRATIONS_ON_STARTUP` | `false` on API once `PRODUCTION_DATABASE_URL` GitHub secret is set (`true` until then) |
 | `UVICORN_GRACEFUL_TIMEOUT` | `15` |
+| `UVICORN_WORKERS` | `2` on API (`DISABLE_EMBEDDED_SYNC_WORKER=true`, B2/P1v3+), `1` on worker |
+| `UVICORN_KEEP_ALIVE` | `65` |
 | `DISABLE_EMBEDDED_SYNC_WORKER` | `true` (API app) / `false` (worker app) |
 | `SERVICE_ROLE` | _(not set on API)_ / `sync_worker_web` (worker app) |
 | `RERANKER_MODEL_PATH` | _(auto-set by `startup.sh` when `model_cache/reranker` or `/opt/models/reranker` exists)_ |
@@ -140,6 +146,7 @@ Set these in **Azure Portal → App Service → Configuration → Application Se
 | `AI_EMBEDDING_PROVIDER` | `gemini` |
 | `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` |
 | `EMBEDDING_DIMENSIONS` | `768` |
+| `EMBEDDING_MAX_REQUESTS_PER_MINUTE` | `1500`–`3000` (match your Gemini tier quota and key count) |
 | `ALLOW_LOCAL_EMBEDDINGS` | `false` |
 | `GROQ_API_KEY` | `REPLACE_ME` |
 | `GROQ_API_KEYS` | `REPLACE_ME` |
@@ -195,9 +202,12 @@ Set these **environment variables in Vercel Project Settings**:
 
 | Variable | Value |
 |---|---|
-| `VITE_API_BASE_URL` | _(leave blank to use `/api/v1` Vercel rewrite, recommended)_ |
+| `VITE_API_BASE_URL` | Leave blank for same-origin `/api/v1` proxy, or set `https://api.[YOUR-DOMAIN]/api/v1` for direct SSE streaming |
 | `VITE_GITHUB_APP_SLUG` | `[YOUR-GITHUB-APP-SLUG]` |
 | `VITE_ENABLE_MSW` | `false` |
+
+> [!TIP]
+> **Eliminate Vercel proxy hops on SSE streams:** Pointing `VITE_API_BASE_URL` at a custom API subdomain (`https://api.[YOUR-DOMAIN]/api/v1`) removes Vercel's reverse-proxy latency and Hobby function timeout ceiling for long-lived `EventSource` (`/events`), chat, and studio `/stream` responses. When doing so, add `https://api.[YOUR-DOMAIN]` to `connect-src` in `vercel.json` and `CORS_ALLOWED_ORIGINS` on Azure.
 
 ---
 
