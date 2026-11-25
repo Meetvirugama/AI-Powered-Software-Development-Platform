@@ -421,10 +421,7 @@ def fresh_analysis_session(request: Request) -> Iterator[Session]:
         try:
             yield next(gen)
         finally:
-            try:
-                next(gen)
-            except StopIteration:
-                pass
+            gen.close()
     else:
         yield gen
 

@@ -105,14 +105,63 @@ async def _publish_sync_progress(
     if redis is None or not hasattr(redis, "publish"):
         return
     try:
+        raw_stats = dict(stats or {})
+        files_total = int(raw_stats.get("files_total") or raw_stats.get("files_scanned") or 0)
+        files_processed = int(
+            raw_stats["files_processed"]
+            if "files_processed" in raw_stats and raw_stats["files_processed"] is not None
+            else (raw_stats.get("current_file_index") or 0)
+        )
+        chunks_embedded = int(raw_stats.get("chunks_embedded") or 0)
+
+        if "progress_pct" in raw_stats and raw_stats["progress_pct"] is not None:
+            progress_pct = max(0, min(100, int(round(float(raw_stats["progress_pct"])))))
+        elif stage == SyncJobStage.COMPLETED.value:
+            progress_pct = 100
+        elif stage == SyncJobStage.FINALIZING.value:
+            progress_pct = 98
+        elif stage == SyncJobStage.INDEXING.value:
+            if files_total > 0:
+                progress_pct = min(99, max(25, int(round(25 + (files_processed / files_total) * 70))))
+            else:
+                progress_pct = 25
+        elif stage == SyncJobStage.SCANNING.value:
+            progress_pct = 20
+        elif stage == SyncJobStage.CLONING.value:
+            progress_pct = 10
+        else:
+            progress_pct = 0
+
+        message = raw_stats.get("message")
+        if not message:
+            if stage == SyncJobStage.CLONING.value:
+                message = "Cloning repository…"
+            elif stage == SyncJobStage.SCANNING.value:
+                message = "Scanning repository files…"
+            elif stage == SyncJobStage.INDEXING.value:
+                message = (
+                    f"Indexing {files_processed} / {files_total} files…"
+                    if files_total > 0
+                    else "Indexing repository files and embeddings…"
+                )
+            elif stage == SyncJobStage.FINALIZING.value:
+                message = "Finalizing repository index…"
+
         payload: dict[str, Any] = {
             "repository_id": str(repository_id),
             "user_id": str(user_id),
             "job_id": str(job_id),
             "stage": stage,
+            "files_processed": files_processed,
+            "files_total": files_total,
+            "chunks_embedded": chunks_embedded,
+            "progress_pct": progress_pct,
+            "message": message,
         }
-        if stats:
-            payload.update(stats)
+        if raw_stats:
+            for k, v in raw_stats.items():
+                if k not in payload:
+                    payload[k] = v
         await redis.publish(
             "platform_events",
             json.dumps(

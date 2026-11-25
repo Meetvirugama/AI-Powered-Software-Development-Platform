@@ -65,11 +65,12 @@ def repository_index_token(repo: Any) -> str | None:
     if commit_sha is None and last_synced_at is None:
         return None
     generation = getattr(repo, "active_index_generation", None)
+    default_branch = getattr(repo, "default_branch", None)
     sync_status = getattr(repo, "sync_status", None)
     if hasattr(sync_status, "value"):
         sync_status = sync_status.value
     synced_str = last_synced_at.isoformat() if hasattr(last_synced_at, "isoformat") else last_synced_at
-    return f"{commit_sha or ''}|{generation or ''}|{synced_str or ''}|{sync_status or ''}"
+    return f"{default_branch or ''}|{commit_sha or ''}|{generation or ''}|{synced_str or ''}|{sync_status or ''}"
 
 
 __all__ = [

@@ -45,11 +45,12 @@ export function SyncProgressIndicator({
     }
   }
 
+  const rawPct = liveProgress ? Number(liveProgress.progress_pct) : NaN;
   const pct =
     effectiveStage === 'READY'
       ? 100
-      : liveProgress
-      ? Math.min(100, Math.max(0, Math.round(liveProgress.progress_pct)))
+      : Number.isFinite(rawPct)
+      ? Math.min(100, Math.max(0, Math.round(rawPct)))
       : currentIndex > 0
       ? Math.round((currentIndex / (STAGES.length - 1)) * 100)
       : 0;

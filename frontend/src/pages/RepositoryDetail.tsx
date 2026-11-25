@@ -101,10 +101,11 @@ export function RepositoryDetail() {
     isError: filesError,
   } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
-  // Reset extra pages and file selection state when repository ID changes
-  const [prevId, setPrevId] = useState(id);
-  if (prevId !== id) {
-    setPrevId(id);
+  // Reset extra pages and file selection state when repository ID, branch, or indexed commit changes
+  const repoRevisionKey = `${id ?? ''}:${repo?.default_branch ?? ''}:${repo?.last_indexed_commit_sha ?? ''}`;
+  const [prevRevisionKey, setPrevRevisionKey] = useState(repoRevisionKey);
+  if (prevRevisionKey !== repoRevisionKey) {
+    setPrevRevisionKey(repoRevisionKey);
     setExtraLoadedFiles([]);
     setCurrentPage(1);
     setLookupAttemptedPath(null);
@@ -202,7 +203,13 @@ export function RepositoryDetail() {
   }, [fileParam, filesLoading, isLookingUpPath, queryMatchedFile]);
 
   const selectedFile = useMemo(() => {
-    if (userSelectedFile) return userSelectedFile;
+    if (userSelectedFile) {
+      if (loadedFiles.length === 0) return userSelectedFile;
+      const matchingCurrent = loadedFiles.find(
+        (f) => f.id === userSelectedFile.id || f.path === userSelectedFile.path
+      );
+      if (matchingCurrent) return matchingCurrent;
+    }
     if (queryMatchedFile) return queryMatchedFile;
     if (storedMatchedFile) return storedMatchedFile;
     return loadedFiles.length > 0 ? loadedFiles[0] : null;

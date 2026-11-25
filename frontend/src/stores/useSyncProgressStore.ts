@@ -18,15 +18,32 @@ export const useSyncProgressStore = create<SyncProgressState>((set) => ({
     set((state) => {
       const now = Date.now();
       const prev = state.progressByRepo[payload.repository_id];
+      const filesProcessed = Number.isFinite(Number(payload.files_processed))
+        ? Number(payload.files_processed)
+        : (prev?.files_processed ?? 0);
+      const filesTotal = Number.isFinite(Number(payload.files_total))
+        ? Number(payload.files_total)
+        : (prev?.files_total ?? 0);
+      const progressPct = Number.isFinite(Number(payload.progress_pct))
+        ? Number(payload.progress_pct)
+        : (prev?.progress_pct ?? 0);
+      const chunksEmbedded = Number.isFinite(Number(payload.chunks_embedded))
+        ? Number(payload.chunks_embedded)
+        : prev?.chunks_embedded;
+
       const sameRun =
         prev &&
         (!payload.job_id || !prev.job_id || prev.job_id === payload.job_id) &&
-        payload.files_processed >= prev.files_processed;
+        filesProcessed >= prev.files_processed;
       return {
         progressByRepo: {
           ...state.progressByRepo,
           [payload.repository_id]: {
             ...payload,
+            files_processed: filesProcessed,
+            files_total: filesTotal,
+            chunks_embedded: chunksEmbedded,
+            progress_pct: progressPct,
             startedAt: sameRun ? prev.startedAt : now,
             updatedAt: now,
           },

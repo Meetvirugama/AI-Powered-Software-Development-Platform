@@ -151,8 +151,14 @@ export async function streamAnalysisEndpoint<T>(
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+      if (done) {
+        const flushed = decoder.decode();
+        if (flushed) {
+          buffer = (buffer + flushed).replace(/\r\n/g, '\n');
+        }
+        break;
+      }
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
       let sep: number;
       while ((sep = buffer.indexOf('\n\n')) !== -1) {
         const rawFrame = buffer.slice(0, sep);

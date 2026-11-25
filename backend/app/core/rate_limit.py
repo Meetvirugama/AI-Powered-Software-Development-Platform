@@ -59,6 +59,8 @@ def _rules(prefix: str) -> tuple[RateLimitRule, ...]:
                       re.compile(rf"^{p}/auth/github/callback/?$"), 10, 60, "ip"),
         RateLimitRule("repo_sync", frozenset({"POST"}),
                       re.compile(rf"^{p}/repositories/[^/]+/sync/?$"), 5, 60, "user"),
+        RateLimitRule("repo_branch_switch", frozenset({"PATCH"}),
+                      re.compile(rf"^{p}/repositories/[^/]+/branch/?$"), 5, 60, "user"),
         RateLimitRule("repo_chat", frozenset({"POST"}),
                       # Covers the streaming variant (/chat/stream) too — same LLM cost per request.
                       re.compile(rf"^{p}/repositories/[^/]+/chat(?:/stream)?/?$"), 30, 60, "user"),

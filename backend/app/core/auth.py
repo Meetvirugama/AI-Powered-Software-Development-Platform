@@ -23,15 +23,28 @@ logger = logging.getLogger(__name__)
 # Short-lived in-memory cache and in-flight deduplicator for token revocation checks
 # Prevents connection pool starvation and timeout errors when browsers fire parallel requests
 _BLOCKLIST_CACHE: dict[str, tuple[bool, float]] = {}  # jti -> (is_revoked, expires_at)
+_MAX_BLOCKLIST_CACHE_ENTRIES = 10_000
 _IN_FLIGHT_CHECKS: dict[str, asyncio.Future] = {}
 
 
 _REVOCATION_CHANNEL = "auth:revocations"
 
 
+def _cache_blocklist_entry(jti: str, is_revoked: bool, ttl_seconds: float) -> None:
+    now = time.monotonic()
+    if len(_BLOCKLIST_CACHE) >= _MAX_BLOCKLIST_CACHE_ENTRIES:
+        expired = [k for k, (_, exp) in _BLOCKLIST_CACHE.items() if now >= exp]
+        for k in expired:
+            _BLOCKLIST_CACHE.pop(k, None)
+        if len(_BLOCKLIST_CACHE) >= _MAX_BLOCKLIST_CACHE_ENTRIES:
+            for k in list(_BLOCKLIST_CACHE.keys())[: _MAX_BLOCKLIST_CACHE_ENTRIES // 4]:
+                _BLOCKLIST_CACHE.pop(k, None)
+    _BLOCKLIST_CACHE[jti] = (is_revoked, now + ttl_seconds)
+
+
 def revoke_token_in_cache(jti: str) -> None:
     """Mark a token as revoked in the local memory cache."""
-    _BLOCKLIST_CACHE[jti] = (True, time.monotonic() + 300.0)
+    _cache_blocklist_entry(jti, True, 300.0)
 
 
 def publish_token_revocation(jti: str, redis_client: Any = None) -> None:
@@ -131,7 +144,7 @@ async def _is_token_blocklisted_async(jti: str) -> bool:
         if is_live_environment:
             # Revoked tokens stay revoked (300s); valid tokens are cached 30s (invalidated via pub/sub on logout)
             ttl = 300.0 if res else 30.0
-            _BLOCKLIST_CACHE[jti] = (res, time.monotonic() + ttl)
+            _cache_blocklist_entry(jti, res, ttl)
         return res
     except Exception as exc:
         if fut is not None and not fut.done():

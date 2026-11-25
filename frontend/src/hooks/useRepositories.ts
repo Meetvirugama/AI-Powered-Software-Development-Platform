@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { realtimeClient } from '../realtime/index';
+import { useSelectedFileStore } from '../stores/useSelectedFileStore';
 import { useSyncProgressStore } from '../stores/useSyncProgressStore';
 import {
   listRepositories,
@@ -466,6 +467,7 @@ export function useSwitchRepositoryBranch() {
       );
 
       useSyncProgressStore.getState().clearProgress(id);
+      useSelectedFileStore.getState().clearSelectedFilePath(id);
       return { previousDetail, previousLists };
     },
     onError: (_err, { id }, context) => {
@@ -489,6 +491,8 @@ export function useSwitchRepositoryBranch() {
       queryClient.invalidateQueries({ queryKey: repositoryKeys.branches(id) });
       queryClient.invalidateQueries({ queryKey: repositoryKeys.syncJobs(id) });
       queryClient.invalidateQueries({ queryKey: [...repositoryKeys.detail(id), 'files'] });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.dependencies(id) });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.metrics(id) });
       queryClient.invalidateQueries({ queryKey: [...repositoryKeys.detail(id), 'commits'] });
     },
   });

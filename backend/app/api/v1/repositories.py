@@ -808,6 +808,11 @@ async def switch_repository_branch(
 
     def _switch_and_queue():
         repo_row = _owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
+        prev_branch = repo_row.default_branch
+        prev_indexed_sha = repo_row.last_indexed_commit_sha
+        prev_active_sha = repo_row.active_commit_sha
+        prev_sync_error = repo_row.last_sync_error
+
         repo_row.default_branch = target_branch
         repo_row.last_indexed_commit_sha = None
         repo_row.active_commit_sha = None
@@ -815,27 +820,38 @@ async def switch_repository_branch(
         db.commit()
         db.refresh(repo_row)
 
-        sync_service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
-        queued_job = sync_service.request_sync(repository_id, user_id, force=True)
+        try:
+            sync_service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
+            queued_job = sync_service.request_sync(repository_id, user_id, force=True)
+        except Exception:
+            # Roll back the branch metadata change if queueing the sync job fails so the DB
+            # does not claim to track the new branch while still serving the old branch's index.
+            repo_row.default_branch = prev_branch
+            repo_row.last_indexed_commit_sha = prev_indexed_sha
+            repo_row.active_commit_sha = prev_active_sha
+            repo_row.last_sync_error = prev_sync_error
+            db.commit()
+            raise
+
         db.refresh(repo_row)
         return repo_row, queued_job
 
     updated_repo, job = await run_db(db, _switch_and_queue)
     try:
-        get_redis().publish(
-            "platform_events",
-            json.dumps(
-                {
-                    "type": "repository.updated",
+        import asyncio
+
+        event_payload = json.dumps(
+            {
+                "type": "repository.updated",
+                "user_id": str(user_id),
+                "data": {
+                    "repository_id": str(repository_id),
                     "user_id": str(user_id),
-                    "data": {
-                        "repository_id": str(repository_id),
-                        "user_id": str(user_id),
-                        "branch": target_branch,
-                    },
-                }
-            ),
+                    "branch": target_branch,
+                },
+            }
         )
+        await asyncio.to_thread(get_redis().publish, "platform_events", event_payload)
     except Exception as pub_exc:
         logger.warning(
             "event_publication_failed",

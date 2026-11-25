@@ -842,9 +842,28 @@ class IncrementalIndexer:
                     await self._execute_batch(file_insert_query, insert_file_rows, sess=session, batch_size=250)
                 if batch_symbols_data:
                     try:
-                        await self._execute_batch(symbol_insert_query, batch_symbols_data, sess=session, batch_size=250)
+                        begin_nested = getattr(session, "begin_nested", None)
+                        if callable(begin_nested):
+                            nested_cm = begin_nested()
+                            if hasattr(nested_cm, "__aenter__"):
+                                async with nested_cm:
+                                    await self._execute_batch(
+                                        symbol_insert_query, batch_symbols_data, sess=session, batch_size=250
+                                    )
+                            else:
+                                with nested_cm:
+                                    await self._execute_batch(
+                                        symbol_insert_query, batch_symbols_data, sess=session, batch_size=250
+                                    )
+                        else:
+                            await self._execute_batch(
+                                symbol_insert_query, batch_symbols_data, sess=session, batch_size=250
+                            )
                     except Exception as sym_exc:
                         logger.debug("Symbol batch persistence failed in batch %d: %s", batch_idx, sym_exc)
+                        # Clear symbol_id on chunks in this batch so chunk inserts do not hit FK violations
+                        for chunk_row in batch_chunks_data:
+                            chunk_row["symbol_id"] = None
                 if batch_chunks_data:
                     await self._execute_batch(chunk_query, batch_chunks_data, sess=session, batch_size=250)
                     chunks_embedded_count += len(batch_chunks_data)

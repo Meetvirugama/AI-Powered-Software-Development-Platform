@@ -40,6 +40,15 @@ export function useRealtimeRepositories() {
             queryClient.invalidateQueries({
               queryKey: repositoryKeys.syncJobs(payload.repository_id),
             });
+            queryClient.invalidateQueries({
+              queryKey: [...repositoryKeys.detail(payload.repository_id), 'files'],
+            });
+            queryClient.invalidateQueries({
+              queryKey: repositoryKeys.dependencies(payload.repository_id),
+            });
+            queryClient.invalidateQueries({
+              queryKey: repositoryKeys.metrics(payload.repository_id),
+            });
           } else {
             queryClient.invalidateQueries({ queryKey: repositoryKeys.all });
           }
