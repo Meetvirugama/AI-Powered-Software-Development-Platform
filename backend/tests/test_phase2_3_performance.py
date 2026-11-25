@@ -575,3 +575,114 @@ def test_all_four_analysis_stream_endpoints_emit_status_and_done(
     finally:
         for attr, val in saved.items():
             setattr(app.state, attr, val)
+
+
+def test_switch_repository_branch_endpoint(
+    client: TestClient,
+    db_session: Session,
+    test_user: User,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inst = GitHubInstallation(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id="998877",
+        account_login=test_user.login,
+        permissions={"contents": "read"},
+    )
+    db_session.add(inst)
+    db_session.commit()
+
+    repo = Repository(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        installation_id=inst.id,
+        github_repo_id="gh-branch-switch-1",
+        owner=test_user.login,
+        name="branch-repo",
+        default_branch="main",
+        language="Python",
+        sync_status=SyncStatus.SYNCED,
+        last_indexed_commit_sha="deadbeef1234",
+    )
+    db_session.add(repo)
+    db_session.commit()
+
+    class FakeGitHubService:
+        async def list_branches(self, owner: str, name: str, installation_id: int) -> list[Any]:  # noqa: ARG002
+            return [
+                SimpleNamespace(name="main", sha="aaa111", protected=True),
+                SimpleNamespace(name="feature/new-ui", sha="bbb222", protected=False),
+            ]
+
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.pushed: list[tuple[str, Any]] = []
+            self.published: list[tuple[str, Any]] = []
+
+        def rpush(self, key: str, val: Any) -> int:
+            self.pushed.append((key, val))
+            return 1
+
+        def lpush(self, key: str, val: Any) -> int:
+            self.pushed.append((key, val))
+            return 1
+
+        def publish(self, channel: str, msg: Any) -> int:
+            self.published.append((channel, msg))
+            return 1
+
+    import app.api.v1.repositories as repos_api
+
+    fake_redis = FakeRedis()
+    monkeypatch.setattr(repos_api, "get_redis", lambda: fake_redis)
+    prev_service = getattr(app.state, "github_service", None)
+    app.state.github_service = FakeGitHubService()
+
+    try:
+        # 1. Invalid branch name -> 422
+        r_invalid = client.patch(
+            f"/api/v1/repositories/{repo.id}/branch",
+            json={"branch": "../escape"},
+            headers=auth_headers,
+        )
+        assert r_invalid.status_code == 422
+
+        # 2. Same branch -> no-op, switched=False
+        r_same = client.patch(
+            f"/api/v1/repositories/{repo.id}/branch",
+            json={"branch": "main"},
+            headers=auth_headers,
+        )
+        assert r_same.status_code == 200
+        assert r_same.json()["switched"] is False
+        assert r_same.json()["job_id"] is None
+
+        # 3. Missing branch on GitHub -> 404
+        r_missing = client.patch(
+            f"/api/v1/repositories/{repo.id}/branch",
+            json={"branch": "does-not-exist"},
+            headers=auth_headers,
+        )
+        assert r_missing.status_code == 404
+
+        # 4. Valid branch switch -> updates default_branch, clears commit sha, queues sync
+        r_ok = client.patch(
+            f"/api/v1/repositories/{repo.id}/branch",
+            json={"branch": "feature/new-ui"},
+            headers=auth_headers,
+        )
+        assert r_ok.status_code == 200, r_ok.text
+        data = r_ok.json()
+        assert data["switched"] is True
+        assert data["branch"] == "feature/new-ui"
+        assert data["job_id"] is not None
+        assert data["repository"]["default_branch"] == "feature/new-ui"
+        assert data["repository"]["sync_status"] == "SYNCING"
+
+        db_session.refresh(repo)
+        assert repo.default_branch == "feature/new-ui"
+        assert repo.last_indexed_commit_sha is None
+    finally:
+        app.state.github_service = prev_service

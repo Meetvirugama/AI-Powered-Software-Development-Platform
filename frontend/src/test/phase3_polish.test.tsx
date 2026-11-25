@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, renderHook, act, waitFor } from '@testing-library/react';
+import { render, screen, renderHook, act, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { SyncProgressIndicator } from '../components/explorer/SyncProgressIndicator';
+import { StudioSubNav } from '../components/studios/StudioSubNav';
 import {
   PageShellSkeleton,
   RepositoryGridSkeleton,
@@ -210,5 +212,60 @@ describe('Phase 3 Polish & Responsiveness', () => {
     expect(screen.getByRole('status', { name: /Loading repositories/i })).toBeInTheDocument();
     expect(screen.getByRole('status', { name: /Loading tasks/i })).toBeInTheDocument();
     expect(screen.getByRole('status', { name: /Loading repository…/i })).toBeInTheDocument();
+  });
+
+  it('opens branch switcher dropdown in StudioSubNav and triggers branch switch', async () => {
+    const repo: Repository = {
+      id: 'repo-branch-1',
+      github_repo_id: 'gh-b1',
+      owner: 'octo',
+      name: 'branch-demo',
+      full_name: 'octo/branch-demo',
+      default_branch: 'main',
+      language: 'TypeScript',
+      sync_status: 'SYNCED',
+      last_synced_at: '2026-01-01T00:00:00Z',
+      file_count: 12,
+    };
+
+    const branchesSpy = vi.spyOn(repositoriesService, 'getRepositoryBranches').mockResolvedValueOnce([
+      { name: 'main', sha: '111', protected: true, is_default: true },
+      { name: 'develop', sha: '222', protected: false, is_default: false },
+    ]);
+    const switchSpy = vi.spyOn(repositoriesService, 'switchRepositoryBranch').mockResolvedValueOnce({
+      repository: { ...repo, default_branch: 'develop', sync_status: 'SYNCING' },
+      branch: 'develop',
+      switched: true,
+      job_id: 'job-branch-1',
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/app/repositories/repo-branch-1']}>
+          <Routes>
+            <Route path="/app/repositories/:id" element={<StudioSubNav repository={repo} />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Branches are not fetched until the user opens the branch switcher
+    expect(branchesSpy).not.toHaveBeenCalled();
+
+    const trigger = screen.getByRole('button', { name: /Switch branch \(current: main\)/i });
+    fireEvent.click(trigger);
+
+    const developOption = await screen.findByRole('option', { name: /develop/i });
+    expect(branchesSpy).toHaveBeenCalledWith('repo-branch-1');
+
+    fireEvent.click(developOption);
+
+    await waitFor(() => {
+      expect(switchSpy).toHaveBeenCalledWith('repo-branch-1', 'develop');
+    });
   });
 });

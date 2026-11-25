@@ -403,31 +403,41 @@ async def process_sync_job(
         if github_service is None:
             raise RuntimeError("GitHubService is not initialized on app.state")
 
-        # Default branch detection: GitHub repos can rename their default branch after they were
-        # connected (e.g. master -> main). Re-read it so we never clone a stale/deleted branch.
+        # Resolve HEAD SHA for the repository's selected branch first so user-switched branches
+        # are respected. Only fall back to GitHub's default branch if the configured branch no
+        # longer resolves (e.g. a remote default branch rename such as master -> main).
         head_sha = target_commit_sha
-        try:
-            live_branch = await github_service.get_default_branch(owner, name, installation_id=installation_id)
-            if isinstance(live_branch, str) and live_branch and live_branch != branch:
-                logger.info(
-                    "sync_default_branch_changed",
-                    extra={"repo_id": str(repository_id), "old": branch, "new": live_branch},
-                )
-                branch = live_branch
-                with SessionLocal() as db:
-                    repo_row = db.get(Repository, repository_id)
-                    if repo_row is not None:
-                        repo_row.default_branch = live_branch
-                        db.commit()
-        except Exception as branch_exc:
-            logger.debug("sync_default_branch_refresh_skipped", extra={"error": str(branch_exc)})
         if not head_sha:
             try:
-                live_sha = await github_service.get_branch_head_sha(owner, name, branch, installation_id=installation_id)
+                live_sha = await github_service.get_branch_head_sha(
+                    owner, name, branch, installation_id=installation_id
+                )
                 if isinstance(live_sha, str) and live_sha:
                     head_sha = live_sha
             except Exception as sha_exc:
                 logger.debug("sync_head_sha_lookup_skipped", extra={"error": str(sha_exc)})
+                try:
+                    live_branch = await github_service.get_default_branch(
+                        owner, name, installation_id=installation_id
+                    )
+                    if isinstance(live_branch, str) and live_branch and live_branch != branch:
+                        logger.info(
+                            "sync_default_branch_changed",
+                            extra={"repo_id": str(repository_id), "old": branch, "new": live_branch},
+                        )
+                        branch = live_branch
+                        with SessionLocal() as db:
+                            repo_row = db.get(Repository, repository_id)
+                            if repo_row is not None:
+                                repo_row.default_branch = live_branch
+                                db.commit()
+                        live_sha = await github_service.get_branch_head_sha(
+                            owner, name, branch, installation_id=installation_id
+                        )
+                        if isinstance(live_sha, str) and live_sha:
+                            head_sha = live_sha
+                except Exception as branch_exc:
+                    logger.debug("sync_default_branch_refresh_skipped", extra={"error": str(branch_exc)})
 
         # Step 5: Shallow clone workspace
         temp_root = Path(tempfile.gettempdir()) / "ai_platform_workspaces"

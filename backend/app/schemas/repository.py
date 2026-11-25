@@ -107,6 +107,30 @@ class BranchResponse(BaseModel):
     is_default: bool = False
 
 
+class SwitchBranchRequest(BaseModel):
+    branch: str = Field(..., min_length=1, max_length=255)
+
+    @field_validator("branch")
+    @classmethod
+    def validate_branch_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if (
+            not cleaned
+            or cleaned.startswith("-")
+            or ".." in cleaned
+            or any(ch.isspace() or ord(ch) < 32 for ch in cleaned)
+        ):
+            raise ValueError("Invalid Git branch name.")
+        return cleaned
+
+
+class SwitchBranchResponse(BaseModel):
+    repository: RepositoryResponse
+    branch: str
+    switched: bool
+    job_id: str | None = None
+
+
 class CommitResponse(BaseModel):
     sha: str
     message: str

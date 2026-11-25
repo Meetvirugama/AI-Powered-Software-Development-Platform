@@ -61,6 +61,8 @@ from app.schemas.repository import (
     RepositorySearchResult,
     SyncJobResponse,
     BranchResponse,
+    SwitchBranchRequest,
+    SwitchBranchResponse,
     CommitResponse,
     LanguageMetric,
     PullRequestSummaryResponse,
@@ -754,6 +756,109 @@ async def list_branches(repository_id: UUID, request: Request, db: Session = Dep
     ]
     items.sort(key=lambda b: (not b.is_default, b.name.lower()))
     return items
+
+
+@router.patch(
+    "/{repository_id}/branch",
+    response_model=SwitchBranchResponse,
+    summary="Switch the active tracked branch and queue re-indexing",
+)
+async def switch_repository_branch(
+    repository_id: UUID,
+    payload: SwitchBranchRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SwitchBranchResponse:
+    """Switch the repository's active tracked branch and trigger a fresh sync on that branch."""
+    user_id = _request_user_id(request)
+
+    def _load_context():
+        owned = _owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
+        return owned, _github_context(owned, request, db)
+
+    repo, (github_service, inst_id) = await run_db(db, _load_context)
+    target_branch = payload.branch
+
+    if target_branch == (repo.default_branch or "main"):
+        return SwitchBranchResponse(
+            repository=_repository_response(
+                repo,
+                file_count=int(getattr(repo, "file_count", 0) or 0),
+                symbol_count=int(getattr(repo, "symbol_count", 0) or 0),
+                chunk_count=int(getattr(repo, "chunk_count", 0) or 0),
+                last_sync_error=getattr(repo, "last_sync_error", None)
+                if getattr(repo, "sync_status", None) == SyncStatus.FAILED
+                else None,
+            ),
+            branch=target_branch,
+            switched=False,
+            job_id=None,
+        )
+
+    branches = await _call_github(
+        lambda: github_service.list_branches(repo.owner, repo.name, installation_id=inst_id),
+        "branches",
+    )
+    if not any(b.name == target_branch for b in branches):
+        raise APIError(
+            404,
+            ErrorCode.NOT_FOUND,
+            f"Branch '{target_branch}' was not found in {repo.owner}/{repo.name}.",
+        )
+
+    def _switch_and_queue():
+        repo_row = _owned_repository(repository_id, request, db, min_role=UserRole.DEVELOPER)
+        repo_row.default_branch = target_branch
+        repo_row.last_indexed_commit_sha = None
+        repo_row.active_commit_sha = None
+        repo_row.last_sync_error = None
+        db.commit()
+        db.refresh(repo_row)
+
+        sync_service = RepositorySyncService(RepositoryRepository(db), RedisSyncJobQueue(get_redis()))
+        queued_job = sync_service.request_sync(repository_id, user_id, force=True)
+        db.refresh(repo_row)
+        return repo_row, queued_job
+
+    updated_repo, job = await run_db(db, _switch_and_queue)
+    try:
+        get_redis().publish(
+            "platform_events",
+            json.dumps(
+                {
+                    "type": "repository.updated",
+                    "user_id": str(user_id),
+                    "data": {
+                        "repository_id": str(repository_id),
+                        "user_id": str(user_id),
+                        "branch": target_branch,
+                    },
+                }
+            ),
+        )
+    except Exception as pub_exc:
+        logger.warning(
+            "event_publication_failed",
+            extra={
+                "event": "repository.updated",
+                "repository_id": str(repository_id),
+                "branch": target_branch,
+                "error": str(pub_exc),
+            },
+        )
+
+    return SwitchBranchResponse(
+        repository=_repository_response(
+            updated_repo,
+            file_count=int(getattr(updated_repo, "file_count", 0) or 0),
+            symbol_count=int(getattr(updated_repo, "symbol_count", 0) or 0),
+            chunk_count=int(getattr(updated_repo, "chunk_count", 0) or 0),
+            last_sync_error=None,
+        ),
+        branch=target_branch,
+        switched=True,
+        job_id=str(job.id),
+    )
 
 
 @router.get("/{repository_id}/commits", response_model=list[CommitResponse], summary="List recent commits")

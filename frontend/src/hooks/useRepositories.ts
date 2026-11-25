@@ -12,6 +12,7 @@ import {
   getRepositorySyncJobs,
   getRepositoryMetrics,
   getRepositoryBranches,
+  switchRepositoryBranch,
   getRepositoryCommits,
   getRepositoryPullRequests,
 } from '../services/repositories';
@@ -27,6 +28,7 @@ import type {
   SyncJob,
   RepositoryMetrics,
   RepositoryBranch,
+  SwitchBranchResponse,
   RepositoryCommit,
   RepositoryPullRequest,
 } from '../types/api';
@@ -398,12 +400,97 @@ export function useRepositoryMetrics(id: string | undefined) {
 /** Live GitHub data: a missing GitHub App (503/409) is not worth retrying. */
 const githubQueryDefaults = { staleTime: 60_000, retry: 1 } as const;
 
-export function useRepositoryBranches(id: string | undefined) {
+export function useRepositoryBranches(
+  id: string | undefined,
+  options?: { enabled?: boolean },
+) {
   return useQuery<RepositoryBranch[], ApiError>({
     queryKey: repositoryKeys.branches(id ?? ''),
     queryFn: () => getRepositoryBranches(id!),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && (options?.enabled ?? true),
     ...githubQueryDefaults,
+  });
+}
+
+type SwitchBranchContext = {
+  previousDetail?: Repository;
+  previousLists: Array<[readonly unknown[], PaginatedRepositoryResponse | undefined]>;
+};
+
+/**
+ * useSwitchRepositoryBranch — Switches the active tracked branch and queues re-indexing.
+ * Optimistically updates default_branch and sync_status to SYNCING, rolling back on error.
+ */
+export function useSwitchRepositoryBranch() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    SwitchBranchResponse,
+    ApiError,
+    { id: string; branch: string },
+    SwitchBranchContext
+  >({
+    mutationFn: ({ id, branch }) => switchRepositoryBranch(id, branch),
+    onMutate: async ({ id, branch }) => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: repositoryKeys.detail(id) }),
+        queryClient.cancelQueries({ queryKey: repositoryKeys.lists() }),
+      ]);
+
+      const previousDetail = queryClient.getQueryData<Repository>(repositoryKeys.detail(id));
+      const previousLists = queryClient.getQueriesData<PaginatedRepositoryResponse>({
+        queryKey: repositoryKeys.lists(),
+      });
+
+      if (previousDetail && previousDetail.default_branch !== branch) {
+        queryClient.setQueryData<Repository>(repositoryKeys.detail(id), {
+          ...previousDetail,
+          default_branch: branch,
+          sync_status: 'SYNCING',
+          last_sync_error: null,
+        });
+      }
+
+      queryClient.setQueriesData<PaginatedRepositoryResponse>(
+        { queryKey: repositoryKeys.lists() },
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            items: old.items.map((repo) =>
+              repo.id === id && repo.default_branch !== branch
+                ? { ...repo, default_branch: branch, sync_status: 'SYNCING', last_sync_error: null }
+                : repo,
+            ),
+          };
+        },
+      );
+
+      useSyncProgressStore.getState().clearProgress(id);
+      return { previousDetail, previousLists };
+    },
+    onError: (_err, { id }, context) => {
+      if (context?.previousDetail) {
+        queryClient.setQueryData(repositoryKeys.detail(id), context.previousDetail);
+      }
+      if (context?.previousLists) {
+        for (const [key, data] of context.previousLists) {
+          queryClient.setQueryData(key, data);
+        }
+      }
+    },
+    onSuccess: (data, { id }) => {
+      if (data?.repository) {
+        queryClient.setQueryData(repositoryKeys.detail(id), data.repository);
+      }
+    },
+    onSettled: (_data, _err, { id }) => {
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.detail(id) });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.branches(id) });
+      queryClient.invalidateQueries({ queryKey: repositoryKeys.syncJobs(id) });
+      queryClient.invalidateQueries({ queryKey: [...repositoryKeys.detail(id), 'files'] });
+      queryClient.invalidateQueries({ queryKey: [...repositoryKeys.detail(id), 'commits'] });
+    },
   });
 }
 
