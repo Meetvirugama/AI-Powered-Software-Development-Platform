@@ -23,6 +23,12 @@ COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --upgrade pip && \
     pip install -r backend/requirements.txt
 
+ARG RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+ENV HF_HOME=/opt/hf_cache
+RUN mkdir -p /opt/models && \
+    python -c "import os; from sentence_transformers import CrossEncoder; CrossEncoder(os.environ['RERANKER_MODEL']).save_pretrained('/opt/models/reranker')" && \
+    test -f /opt/models/reranker/config.json
+
 
 # =============================================================================
 # Stage 2: Minimal Hardened Production Runtime (no compilers, non-root user)
@@ -42,18 +48,24 @@ RUN groupadd --gid 10001 appuser && \
 WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appuser /opt/models /opt/models
 COPY --chown=appuser:appuser . .
 
 RUN chmod +x /app/startup.sh && \
-    mkdir -p /app/.workspaces && \
-    chown -R appuser:appuser /app/.workspaces
+    mkdir -p /app/.workspaces /opt/hf_cache && \
+    chown -R appuser:appuser /app/.workspaces /opt/hf_cache
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH="/app/backend:/app" \
     PORT=8000 \
-    APP_ENV=production
+    APP_ENV=production \
+    HF_HOME=/opt/hf_cache \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    RERANKER_MODEL_PATH=/opt/models/reranker
 
 USER appuser
 

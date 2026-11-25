@@ -12,6 +12,15 @@ else
     exit 1
 fi
 
+if [ -z "${RERANKER_MODEL_PATH:-}" ] && [ -f "$(pwd)/model_cache/reranker/config.json" ]; then
+    export RERANKER_MODEL_PATH="$(pwd)/model_cache/reranker"
+fi
+if [ -n "${RERANKER_MODEL_PATH:-}" ] && [ -f "${RERANKER_MODEL_PATH}/config.json" ]; then
+    export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+    export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+fi
+export HF_HUB_DISABLE_TELEMETRY="${HF_HUB_DISABLE_TELEMETRY:-1}"
+
 echo "Starting AI-Powered Software Development Platform..."
 
 # Locate alembic.ini (check backend/alembic.ini first, then ./alembic.ini)
@@ -61,7 +70,8 @@ fi
 # Prefer Azure's explicit WEBSITES_PORT when provided, then PORT (Dockerfile default 8000)
 PORT_TO_USE="${WEBSITES_PORT:-${PORT:-8000}}"
 GRACEFUL_TIMEOUT="${UVICORN_GRACEFUL_TIMEOUT:-15}"
-KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-5}"
+# Must exceed the Azure front-end / Vercel proxy idle reuse window to avoid reconnects and 502s.
+KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-75}"
 
 PROXY_ARGS=()
 TRUST_PROXY_LOWER=$(echo "${TRUST_PROXY_HEADERS:-false}" | tr '[:upper:]' '[:lower:]')

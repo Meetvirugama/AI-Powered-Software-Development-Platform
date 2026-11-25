@@ -33,6 +33,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.http_client import get_shared_http_client
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import is_within
 from app.integrations.github.cache import SourceRevisionCache
@@ -150,8 +151,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         installation_id: int | None = None,
     ) -> Any:
         """Perform a POST request and handle errors uniformly."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(url, headers=headers, json=json_body)
+        client = get_shared_http_client()
+        response = await client.post(url, headers=headers, json=json_body, timeout=30.0)
         await self._handle_response_errors(response, installation_id)
         return response.json()
 
@@ -238,8 +239,8 @@ class GitHubService(GitHubIntegrationBase, GitHubSourceService):
         installation_id: int | None = None,
     ) -> dict:
         """Perform a GET request and handle errors uniformly."""
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers)
+        client = get_shared_http_client()
+        response = await client.get(url, headers=headers, timeout=30.0)
         await self._handle_response_errors(response, installation_id)
         return response.json()
 

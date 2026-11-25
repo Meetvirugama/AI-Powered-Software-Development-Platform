@@ -24,3 +24,15 @@ az webapp config appsettings set \
 ## Service checks
 
 Use the staging deployment to confirm PostgreSQL and Redis connectivity, GitHub App contents and pull-request permissions, model availability, runner timeouts, and release migration configuration. The existing sync worker handles repository sync. It does not run native Task Planner jobs.
+
+## Phase 1 performance rollout (manual Azure steps)
+
+1. **Enable Always On** on both App Services so Azure never unloads idle containers:
+   ```sh
+   az webapp config set --name ai-powered-dev-platform-api --resource-group ai-platform-rg --always-on true --output none
+   az webapp config set --name ai-powered-dev-platform-worker --resource-group ai-platform-rg --always-on true --output none
+   ```
+2. **Confirm the sync worker `SERVICE_ROLE`**: ensure `ai-powered-dev-platform-worker` uses `SERVICE_ROLE=sync_worker_web` and `WEBSITES_PORT=8000` (also enforced by `.github/workflows/azure-sync-worker.yml`) so Azure's HTTP `/health` probe succeeds and stops ~230s probe-induced restarts.
+3. **Decouple Alembic migrations from API startup**:
+   - Add the `PRODUCTION_DATABASE_URL` GitHub Actions repository secret (matching the production `DATABASE_URL` used by `ai-powered-dev-platform-api`) so the CI `migrate-database` job runs `bash startup.sh migrate` before deploy.
+   - Once `PRODUCTION_DATABASE_URL` is configured, set `RUN_MIGRATIONS_ON_STARTUP=false` on `ai-powered-dev-platform-api`.

@@ -21,6 +21,7 @@ from fastapi import FastAPI, Response, status
 from redis.exceptions import RedisError
 
 from app.core.config import get_settings
+from app.core.http_client import close_shared_http_client
 from app.core.logging import configure_logging
 from app.core.redis import close_redis, close_redis_async, get_redis_async
 from app.integrations.github.service import GitHubService
@@ -226,6 +227,11 @@ async def run_worker(worker_id: str | None = None, *, stop_event: asyncio.Event 
             await heartbeat_task
         except (asyncio.CancelledError, OSError, RuntimeError):
             pass
+
+    try:
+        await close_shared_http_client()
+    except (OSError, RuntimeError) as exc:
+        logger.debug("Shared HTTP client close notice: %s", exc)
 
     try:
         close_redis()

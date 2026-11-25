@@ -23,6 +23,7 @@ from app.api.v1.dependencies import require_role
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode, error_response
+from app.core.http_client import get_shared_http_client
 from app.core.redis import get_redis as _default_get_redis
 from app.core.security import create_access_token, create_refresh_token, decode_refresh_token
 from app.models.user import UserRole
@@ -448,31 +449,32 @@ async def _github_user_for_code(code: str, code_verifier: str | None = None) -> 
         data["code_verifier"] = code_verifier
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            token_response = await client.post(
-                "https://github.com/login/oauth/access_token",
-                headers={"Accept": "application/json"},
-                data=data,
-            )
-            token_response.raise_for_status()
-            token_payload = token_response.json()
-            # GitHub reports bad/expired codes and PKCE mismatches with HTTP 200 + an "error" field.
-            if isinstance(token_payload, dict) and token_payload.get("error"):
-                logger.info("github_oauth_exchange_rejected", extra={"error": str(token_payload.get("error"))})
-                raise APIError(401, ErrorCode.OAUTH_EXCHANGE_FAILED, "GitHub rejected the authorization code.")
-            access_token = token_payload.get("access_token") if isinstance(token_payload, dict) else None
-            if not isinstance(access_token, str) or not access_token:
-                raise APIError(401, ErrorCode.OAUTH_EXCHANGE_FAILED, "GitHub rejected the authorization code.")
-            gh_headers = {
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {access_token}",
-            }
-            profile_response = await client.get("https://api.github.com/user", headers=gh_headers)
-            profile_response.raise_for_status()
-            profile = profile_response.json()
-            if isinstance(profile, dict) and not profile.get("email"):
-                # /user only exposes a *public* email; the user:email scope lets us read the primary one.
-                profile["email"] = await _primary_verified_email(client, gh_headers)
+        client = get_shared_http_client()
+        token_response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data=data,
+            timeout=10.0,
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        # GitHub reports bad/expired codes and PKCE mismatches with HTTP 200 + an "error" field.
+        if isinstance(token_payload, dict) and token_payload.get("error"):
+            logger.info("github_oauth_exchange_rejected", extra={"error": str(token_payload.get("error"))})
+            raise APIError(401, ErrorCode.OAUTH_EXCHANGE_FAILED, "GitHub rejected the authorization code.")
+        access_token = token_payload.get("access_token") if isinstance(token_payload, dict) else None
+        if not isinstance(access_token, str) or not access_token:
+            raise APIError(401, ErrorCode.OAUTH_EXCHANGE_FAILED, "GitHub rejected the authorization code.")
+        gh_headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {access_token}",
+        }
+        profile_response = await client.get("https://api.github.com/user", headers=gh_headers, timeout=10.0)
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+        if isinstance(profile, dict) and not profile.get("email"):
+            # /user only exposes a *public* email; the user:email scope lets us read the primary one.
+            profile["email"] = await _primary_verified_email(client, gh_headers)
     except APIError:
         raise
     except httpx.HTTPStatusError as exc:
@@ -484,7 +486,7 @@ async def _github_user_for_code(code: str, code_verifier: str | None = None) -> 
 
 async def _primary_verified_email(client: httpx.AsyncClient, headers: dict[str, str]) -> str | None:
     try:
-        resp = await client.get("https://api.github.com/user/emails", headers=headers)
+        resp = await client.get("https://api.github.com/user/emails", headers=headers, timeout=10.0)
         if not resp.is_success:
             return None
         for entry in resp.json() or []:

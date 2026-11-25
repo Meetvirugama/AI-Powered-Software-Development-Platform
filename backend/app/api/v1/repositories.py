@@ -15,6 +15,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.errors import APIError, ErrorCode
+from app.core.http_cache import (
+    apply_cache_headers,
+    compute_etag,
+    etag_matches,
+    not_modified,
+    repository_index_token,
+)
 from app.core.redis import get_redis
 from app.api.v1.dependencies import (
     get_owned_repository,
@@ -319,15 +326,23 @@ async def search_repository(
 def list_files(
     repository_id: UUID,
     request: Request,
+    response: Response,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=1000),
     path: Optional[str] = Query(default=None, description="Optional path pattern to filter files"),
     db: Session = Depends(get_db),
-) -> PaginatedResponse:
-    _owned_repository(repository_id, request, db)
+) -> PaginatedResponse | Response:
+    repo = _owned_repository(repository_id, request, db)
+    token = repository_index_token(repo)
+    etag = compute_etag("files", repository_id, token, page, page_size, path) if token is not None else None
+    if etag is not None and etag_matches(request, etag):
+        return not_modified(etag)
+
     files, total = RepositoryRepository(db).list_files(
         repository_id, (page - 1) * page_size, page_size, path=path
     )
+    if etag is not None:
+        apply_cache_headers(response, etag)
     return PaginatedResponse(page=page, page_size=page_size, total=total, items=[_file_response(item) for item in files])
 
 
@@ -358,8 +373,9 @@ async def get_file_content(
     repository_id: UUID,
     file_id: UUID,
     request: Request,
+    response: Response,
     db: Session = Depends(get_db),
-) -> RepositoryFileContentResponse:
+) -> RepositoryFileContentResponse | Response:
     from app.core.secret_redaction import redact
     from indexer.chunker import reconstruct_file_from_chunks
 
@@ -371,6 +387,20 @@ async def get_file_content(
     )
     if not file_record:
         raise APIError(404, ErrorCode.RESOURCE_NOT_FOUND, "File not found.")
+
+    token = repository_index_token(repo)
+    last_indexed = (
+        file_record.last_indexed_at.isoformat()
+        if hasattr(file_record.last_indexed_at, "isoformat")
+        else file_record.last_indexed_at
+    )
+    etag = (
+        compute_etag("file-content", repository_id, token, file_id, file_record.content_hash, last_indexed)
+        if token is not None
+        else None
+    )
+    if etag is not None and etag_matches(request, etag):
+        return not_modified(etag)
 
     chunks = (
         db.query(CodeChunk)
@@ -408,6 +438,9 @@ async def get_file_content(
         .all()
     )
 
+    if etag is not None and (content or (file_record.size_bytes or 0) == 0):
+        apply_cache_headers(response, etag)
+
     return RepositoryFileContentResponse(
         id=str(file_record.id),
         path=file_record.path,
@@ -423,20 +456,32 @@ async def get_file_content(
 def list_symbols(
     repository_id: UUID,
     request: Request,
+    response: Response,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=1000),
     kind: Optional[str] = Query(default=None, max_length=50, description="Filter by symbol kind, e.g. function"),
     file_id: Optional[UUID] = Query(default=None, description="Only symbols defined in this file"),
     q: Optional[str] = Query(default=None, max_length=200, description="Case-insensitive name search"),
     db: Session = Depends(get_db),
-) -> PaginatedResponse:
-    _owned_repository(repository_id, request, db)
+) -> PaginatedResponse | Response:
+    repo = _owned_repository(repository_id, request, db)
+    token = repository_index_token(repo)
+    etag = (
+        compute_etag("symbols", repository_id, token, page, page_size, kind, file_id, q)
+        if token is not None
+        else None
+    )
+    if etag is not None and etag_matches(request, etag):
+        return not_modified(etag)
+
     repo_repo = RepositoryRepository(db)
     offset = (page - 1) * page_size
     if kind or file_id or q:
         symbols, total = repo_repo.list_symbols(repository_id, offset, page_size, kind=kind, file_id=file_id, query=q)
     else:
         symbols, total = repo_repo.list_symbols(repository_id, offset, page_size)
+    if etag is not None:
+        apply_cache_headers(response, etag)
     return PaginatedResponse(page=page, page_size=page_size, total=total, items=[_symbol_response(item) for item in symbols])
 
 

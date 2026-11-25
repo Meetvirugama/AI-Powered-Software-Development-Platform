@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 import httpx
 import jwt  # PyJWT
 
+from app.core.http_client import get_shared_http_client
+
 if TYPE_CHECKING:
     from redis.asyncio import Redis
 
@@ -185,10 +187,10 @@ class InstallationTokenManager:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        client = get_shared_http_client()
+        response = await client.post(url, headers=headers, timeout=15.0)
+        response.raise_for_status()
+        data = response.json()
 
         token: str = data["token"]
         logger.debug("Minted new installation token for installation %d", installation_id)
