@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { listAvailableRepositories } from '../services/repositoryDiscovery';
-import type { PaginatedAvailableRepositoryResponse } from '../types/api';
+import type { ApiError, PaginatedAvailableRepositoryResponse } from '../types/api';
 
 // ---------------------------------------------------------------------------
 // Query key factory
@@ -93,5 +93,34 @@ export function useAvailableRepositories({
   return useQuery<PaginatedAvailableRepositoryResponse>({
     queryKey: availableRepositoryKeys.list(page, pageSize, search, installationId),
     queryFn: () => listAvailableRepositories({ page, pageSize, search, installationId }),
+    placeholderData: keepPreviousData,
+  });
+}
+
+/**
+ * Force-refresh GitHub discovery from the GitHub API (bypassing backend Redis cache)
+ * and update the active page's TanStack Query cache entry immediately.
+ */
+export function useRefreshAvailableRepositories({
+  page = 1,
+  pageSize = 20,
+  search = '',
+  installationId,
+}: UseAvailableRepositoriesParams = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<PaginatedAvailableRepositoryResponse, ApiError, void>({
+    mutationFn: () =>
+      listAvailableRepositories({ page, pageSize, search, installationId, refresh: true }),
+    onSuccess: async (freshData) => {
+      queryClient.setQueryData(
+        availableRepositoryKeys.list(page, pageSize, search, installationId),
+        freshData,
+      );
+      await queryClient.invalidateQueries({
+        queryKey: availableRepositoryKeys.all,
+        refetchType: 'none',
+      });
+    },
   });
 }

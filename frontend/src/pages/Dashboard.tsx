@@ -6,6 +6,8 @@ import { TaskStatusBadge } from '../components/tasks/TaskStatusBadge';
 import { TaskStatus } from '../types/task';
 import { RepositoryCard } from '../components/shared/RepositoryCard';
 import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { DashboardTasksSkeleton, RepositoryGridSkeleton } from '../components/shared/Skeletons';
+import { useSseConnectionStatus } from '../hooks/useSseConnectionStatus';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import type { PaginatedRepositoryResponse, Repository } from '../types/api';
 import { PlusCircle, ChevronLeft, ChevronRight, GitBranch, RefreshCw, ListTodo, ArrowRight } from 'lucide-react';
@@ -25,15 +27,17 @@ const DONE_STATUSES = new Set<string>([TaskStatus.DRAFT_PR_CREATED, TaskStatus.C
 export function Dashboard() {
   const [page, setPage] = useState(1);
   const navigate = useNavigate();
+  const { isConnected: isSseConnected } = useSseConnectionStatus();
 
   const { data, isLoading, isFetching, isError, error, refetch } = useRepositories(
     page,
     PAGE_SIZE,
     {
       refetchInterval: (query: { state: { data?: PaginatedRepositoryResponse } }) => {
+        if (isSseConnected) return false;
         const items = query.state.data?.items;
         const hasSyncing = items?.some((r: Repository) => r.sync_status === 'SYNCING');
-        return hasSyncing ? 3000 : false;
+        return hasSyncing ? 20_000 : false;
       },
     },
   );
@@ -113,11 +117,7 @@ export function Dashboard() {
             )}
           </div>
 
-          {isLoading && (
-            <div className="flex items-center justify-center py-16">
-              <LoadingSpinner size="lg" label="Loading repositories…" />
-            </div>
-          )}
+          {isLoading && <RepositoryGridSkeleton count={PAGE_SIZE} label="Loading repositories…" />}
 
           {isError && !isLoading && (
             <div className="flex flex-col items-center gap-4 py-12">
@@ -242,11 +242,7 @@ function TaskOverview({
       </div>
 
       <div className="rounded-xl border border-border bg-card overflow-hidden">
-        {isLoading && (
-          <div className="p-5">
-            <LoadingSpinner size="sm" label="Loading tasks…" />
-          </div>
-        )}
+        {isLoading && <DashboardTasksSkeleton />}
 
         {isError && !isLoading && (
           <div className="flex items-center gap-3 p-4 text-xs text-muted-foreground">

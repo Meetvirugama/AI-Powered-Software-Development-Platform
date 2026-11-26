@@ -1,25 +1,24 @@
 import { useParams, Outlet } from 'react-router-dom';
 import { useRepository } from '../hooks/useRepositories';
+import { useSseConnectionStatus } from '../hooks/useSseConnectionStatus';
 import { StudioSubNav } from '../components/studios/StudioSubNav';
 import { useAppStore } from '../stores/useAppStore';
-import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { StudioLayoutSkeleton } from '../components/shared/Skeletons';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 
 export function RepositoryStudioLayout() {
   const { id } = useParams<{ id: string }>();
-  // Poll while a sync is running so the studio header leaves "Syncing…" without a manual reload.
+  const { isConnected: isSseConnected } = useSseConnectionStatus();
+  // Fall back to 20s polling only when SSE is disconnected and a sync is running.
   const { data: repo, isLoading, isError, error, refetch } = useRepository(id, {
-    refetchInterval: (query) => (query.state.data?.sync_status === 'SYNCING' ? 3000 : false),
+    refetchInterval: (query) =>
+      isSseConnected ? false : query.state.data?.sync_status === 'SYNCING' ? 20_000 : false,
   });
   // The command palette (and its Ctrl/Cmd+K shortcut) is global and lives in AppLayout.
   const setCommandPaletteOpen = useAppStore((state) => state.setCommandPaletteOpen);
 
   if (isLoading) {
-    return (
-      <div className="flex h-full w-full items-center justify-center">
-        <LoadingSpinner size="lg" label="Loading repository workspace..." />
-      </div>
-    );
+    return <StudioLayoutSkeleton />;
   }
 
   if (isError || !repo) {

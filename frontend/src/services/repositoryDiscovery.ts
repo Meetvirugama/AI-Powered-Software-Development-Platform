@@ -45,6 +45,8 @@ export interface ListAvailableRepositoriesParams {
   search: string;
   /** Optional installation ID to ensure linkage. */
   installationId?: string;
+  /** Bypass backend Redis discovery cache and fetch fresh from GitHub. */
+  refresh?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +125,7 @@ function adaptResponse(raw: RawDiscoveryResponse): PaginatedAvailableRepositoryR
 export async function listAvailableRepositories(
   params: ListAvailableRepositoriesParams,
 ): Promise<PaginatedAvailableRepositoryResponse> {
-  const { page, pageSize, search, installationId } = params;
+  const { page, pageSize, search, installationId, refresh } = params;
 
   const queryParams: Record<string, string | number> = {
     page,
@@ -137,6 +139,10 @@ export async function listAvailableRepositories(
 
   if (installationId && installationId.trim()) {
     queryParams.installation_id = installationId.trim();
+  }
+
+  if (refresh) {
+    queryParams.refresh = 'true';
   }
 
   const response = await apiClient.get<RawDiscoveryResponse>('/github/repositories', {

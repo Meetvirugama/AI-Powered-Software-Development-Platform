@@ -23,6 +23,7 @@ import type {
   SyncJob,
   RepositoryMetrics,
   RepositoryBranch,
+  SwitchBranchResponse,
   RepositoryCommit,
   RepositoryPullRequest,
 } from '../types/api';
@@ -285,6 +286,17 @@ export async function getRepositoryMetrics(id: string, top = 10): Promise<Reposi
 /** GET /api/v1/repositories/:id/branches */
 export async function getRepositoryBranches(id: string): Promise<RepositoryBranch[]> {
   const response = await apiClient.get<RepositoryBranch[]>(`/repositories/${id}/branches`);
+  return response.data;
+}
+
+/** PATCH /api/v1/repositories/:id/branch — switch active tracked branch & trigger re-index. */
+export async function switchRepositoryBranch(
+  id: string,
+  branch: string,
+): Promise<SwitchBranchResponse> {
+  const response = await apiClient.patch<SwitchBranchResponse>(`/repositories/${id}/branch`, {
+    branch,
+  });
   return response.data;
 }
 

@@ -159,6 +159,9 @@ class Settings(BaseSettings):
     reranker_onnx_enabled: bool = False
     reranker_onnx_model_path: str | None = None
     reranker_quantization: str = "none"
+    reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_model_path: str | None = None
+    reranker_warm_up_on_startup: bool | None = None
 
     # --- Distributed Tracing & Observability (F31 - Issue #212) -----------
     otel_enabled: bool = False

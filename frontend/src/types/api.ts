@@ -154,6 +154,13 @@ export interface RepositoryBranch {
   is_default: boolean;
 }
 
+export interface SwitchBranchResponse {
+  repository: Repository;
+  branch: string;
+  switched: boolean;
+  job_id: string | null;
+}
+
 export interface RepositoryCommit {
   sha: string;
   message: string;

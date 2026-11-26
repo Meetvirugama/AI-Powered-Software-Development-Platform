@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useSearchParams, useNavigate, useParams } from 'react-router-dom';
 import { useStudioFile } from '../hooks/useStudioFile';
+import { useSelectedFileStore } from '../stores/useSelectedFileStore';
 import type { RepositoryFile } from '../types/api';
 
 const repo1Files: RepositoryFile[] = [
@@ -90,6 +91,10 @@ function TestStudioComponent({
 }
 
 describe('useStudioFile hook (F-05)', () => {
+  afterEach(() => {
+    useSelectedFileStore.getState().reset();
+  });
+
   it('selects first non-hidden file by default', () => {
     render(
       <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
@@ -248,5 +253,40 @@ describe('useStudioFile hook (F-05)', () => {
 
     fireEvent.click(screen.getByTestId('select-last-file'));
     expect(fileChangeCalls).toBe(1);
+  });
+
+  it('persists selected file when switching between studio sections in the same repository', () => {
+    function MultiSectionApp() {
+      const navigate = useNavigate();
+      return (
+        <div>
+          <button
+            type="button"
+            data-testid="goto-bugs"
+            onClick={() => navigate('/repositories/repo-1/bugs')}
+          >
+            Go to Bugs
+          </button>
+          <Routes>
+            <Route path="/repositories/:id/explain" element={<TestStudioComponent files={repo1Files} />} />
+            <Route path="/repositories/:id/bugs" element={<TestStudioComponent files={repo1Files} />} />
+          </Routes>
+        </div>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/repositories/repo-1/explain']}>
+        <MultiSectionApp />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByTestId('selected-file').textContent).toBe('src/App.tsx');
+    fireEvent.click(screen.getByTestId('select-last-file'));
+    expect(screen.getByTestId('selected-file').textContent).toBe('src/utils.ts');
+
+    // Switch to Bug Hunter tab without ?file= query param
+    fireEvent.click(screen.getByTestId('goto-bugs'));
+    expect(screen.getByTestId('selected-file').textContent).toBe('src/utils.ts');
   });
 });

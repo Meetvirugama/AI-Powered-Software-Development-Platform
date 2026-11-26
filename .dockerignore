@@ -24,6 +24,7 @@ venv/
 htmlcov/
 .coverage
 coverage.xml
+model_cache/
 
 # Frontend & node artifacts (deployed separately on Vercel)
 frontend/

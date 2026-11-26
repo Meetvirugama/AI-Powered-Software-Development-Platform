@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from app.core.errors import APIError, ErrorCode
+from app.core.http_client import get_shared_http_client
 from app.models.github_installation import GitHubInstallation
 from app.repositories.github_installation_repository import GitHubInstallationRepository
 
@@ -55,8 +56,12 @@ async def fetch_installation(github_service: Any, installation_id: str) -> dict[
     except Exception as exc:  # token manager not configured
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "GitHub App is not configured.", retryable=True) from exc
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{GITHUB_API_BASE}/app/installations/{installation_id}", headers=headers)
+        client = get_shared_http_client()
+        resp = await client.get(
+            f"{GITHUB_API_BASE}/app/installations/{installation_id}",
+            headers=headers,
+            timeout=10.0,
+        )
     except httpx.HTTPError as exc:
         raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "GitHub is unavailable.", retryable=True) from exc
     if resp.status_code == 404:
@@ -135,8 +140,12 @@ async def sync_user_installations(db: Any, user: Any, github_service: Any) -> li
         return repo.list_by_user(user.id)
     try:
         headers = github_service._app_auth_headers()
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(f"{GITHUB_API_BASE}/app/installations?per_page=100", headers=headers)
+        client = get_shared_http_client()
+        resp = await client.get(
+            f"{GITHUB_API_BASE}/app/installations?per_page=100",
+            headers=headers,
+            timeout=10.0,
+        )
         if resp.is_success:
             for inst in resp.json() or []:
                 if not isinstance(inst, dict) or not installation_belongs_to_user(inst, user):

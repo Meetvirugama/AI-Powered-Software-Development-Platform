@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -34,6 +34,10 @@ class Repository(TimestampedModel, Base):
     auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     pr_review_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     pr_review_drafts: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    symbol_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_sync_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     # Composite index to accelerate looking up repositories by GitHub owner and repo name (owner/name)
     __table_args__ = (

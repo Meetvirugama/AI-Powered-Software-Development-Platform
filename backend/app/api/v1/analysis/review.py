@@ -5,12 +5,14 @@ AI Code Review API endpoint (POST /api/v1/repositories/{repository_id}/review).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import inspect
 import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -22,9 +24,12 @@ from app.api.v1.analysis.common import (
     _owned_repository,
     _owned_repository_async,
     _request_user_id,
+    fresh_analysis_session,
+    make_sse_response,
+    stream_analysis_events,
 )
 from app.api.v1.dependencies import ensure_min_role
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.models.user import UserRole
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
@@ -57,29 +62,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analysis"])
 
 
-@router.post(
-    "/repositories/{repository_id}/review",
-    response_model=ReviewReportResponse,
-    responses=ANALYSIS_ERROR_RESPONSES,
-    summary="Run a standalone AI and static code review on a file, commit, PR, or diff",
-    description=(
-        "Execute a standalone code review across `correctness`, `security`, `performance`, "
-        "`reliability`, and `maintainability` for a single file, commit SHA, GitHub Pull Request, "
-        "or unified diff without starting an autonomous coding task."
-    ),
-)
-async def review_code(
+async def _execute_review_pipeline(
     repository_id: UUID,
     payload: CodeReviewRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session,
+    *,
+    service: Any | None = None,
+    on_stage: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> ReviewReportResponse:
     """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
+    async def _stage(name: str, message: str) -> None:
+        if on_stage is not None:
+            await on_stage(name, message)
+
     ensure_min_role(request, UserRole.DEVELOPER)
     timer = StageExecutionTimer("review", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)
 
+    await _stage("retrieving_context", "Resolving review target, diff, and repository context...")
     with timer.measure("target_resolution_and_diff_mapping"):
         resolved = await resolve_review_target_and_build_context(
             repository_id=repository_id,
@@ -97,10 +99,11 @@ async def review_code(
         revision=resolved.revision,
     )
 
-    service = _get_service(request, "code_review_service", "AI code review")
-    method = service.review if hasattr(service, "review") else service
+    resolved_service = service if service is not None else _get_service(request, "code_review_service", "AI code review")
+    method = resolved_service.review if hasattr(resolved_service, "review") else resolved_service
 
     run_id = str(uuid4())
+    await _stage("generating_output", "Running AI architectural and correctness review...")
     try:
         with timer.measure("llm_inference"):
             raw_result = await _invoke_service_method(
@@ -118,7 +121,9 @@ async def review_code(
             )
     except APIError as exc:
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -134,7 +139,9 @@ async def review_code(
     except Exception as exc:
         safe_err = redact(str(exc))
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -156,6 +163,7 @@ async def review_code(
     extra_static_raw: list[Any] = []
     scanner_warnings: list[str] = []
     if payload.include_static:
+        await _stage("running_static_rules", "Running static code review rules...")
         with timer.measure("static_analysis"):
             ext_reviewer = getattr(request.app.state, "static_reviewer", None)
             if ext_reviewer is not None:
@@ -207,7 +215,9 @@ async def review_code(
     except (ValidationError, ValueError, TypeError) as exc:
         logger.error("review_output_schema_invalid", extra={"error": str(exc)})
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -228,7 +238,9 @@ async def review_code(
 
     if status_val == "FAILED":
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -247,6 +259,7 @@ async def review_code(
             retryable=True,
         )
 
+    await _stage("validating_grounding", "Grounding citations and ranking review findings...")
     with timer.measure("grounding_and_ranking"):
         grounded_ai = normalize_and_ground_review_findings(
             list(raw_report.findings),
@@ -310,7 +323,9 @@ async def review_code(
     response = ReviewReportResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
-        record_analysis_run(
+        await run_db(
+            db,
+            record_analysis_run,
             request.app.state,
             db,
             run_id=response.run_id,
@@ -326,6 +341,57 @@ async def review_code(
         )
 
     return response
+
+
+@router.post(
+    "/repositories/{repository_id}/review",
+    response_model=ReviewReportResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
+    summary="Run a standalone AI and static code review on a file, commit, PR, or diff",
+    description=(
+        "Execute a standalone code review across `correctness`, `security`, `performance`, "
+        "`reliability`, and `maintainability` for a single file, commit SHA, GitHub Pull Request, "
+        "or unified diff without starting an autonomous coding task."
+    ),
+)
+async def review_code(
+    repository_id: UUID,
+    payload: CodeReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ReviewReportResponse:
+    """Execute the 10-step Week 2 Day 5 Standalone AI Code Review pipeline."""
+    return await _execute_review_pipeline(repository_id, payload, request, db)
+
+
+@router.post(
+    "/repositories/{repository_id}/review/stream",
+    summary="Stream stage progress and result for code review via Server-Sent Events",
+    responses={**ANALYSIS_ERROR_RESPONSES, 200: {"content": {"text/event-stream": {}}}},
+)
+async def review_code_stream(
+    repository_id: UUID,
+    payload: CodeReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Stream real-time stage progress events followed by the final ReviewReportResponse."""
+    ensure_min_role(request, UserRole.DEVELOPER)
+    await _owned_repository_async(repository_id, request, db)
+    service = _get_service(request, "code_review_service", "AI code review")
+
+    async def _run(emit_stage: Callable[[str, str], Awaitable[None]]) -> ReviewReportResponse:
+        with fresh_analysis_session(request) as stream_db:
+            return await _execute_review_pipeline(
+                repository_id,
+                payload,
+                request,
+                stream_db,
+                service=service,
+                on_stage=emit_stage,
+            )
+
+    return make_sse_response(stream_analysis_events(_run))
 
 
 # ---------------------------------------------------------------------------

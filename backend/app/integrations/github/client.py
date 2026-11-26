@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from app.core.config import get_settings
+from app.core.http_client import get_shared_http_client
 from app.core.secret_redaction import redact
 
 logger = logging.getLogger(__name__)
@@ -99,14 +100,15 @@ class GitHubClient:
         last_exc: Exception | None = None
         for attempt in range(max_attempts):
             try:
-                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                    response = await client.request(
-                        method,
-                        url,
-                        headers=headers,
-                        params=params,
-                        json=json_body,
-                    )
+                client = get_shared_http_client()
+                response = await client.request(
+                    method,
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json_body,
+                    timeout=REQUEST_TIMEOUT,
+                )
 
                 if response.status_code == 403:
                     remaining = response.headers.get("x-ratelimit-remaining", "")
@@ -548,22 +550,23 @@ class GitHubClient:
         if isinstance(app_jwt, bytes):
             app_jwt = app_jwt.decode("utf-8")
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            response = await client.post(
-                f"{GITHUB_API_BASE}/app/installations/{installation_id}/access_tokens",
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "Authorization": f"Bearer {app_jwt}",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
+        client = get_shared_http_client()
+        response = await client.post(
+            f"{GITHUB_API_BASE}/app/installations/{installation_id}/access_tokens",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {app_jwt}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code != 201:
+            raise GitHubAPIError(
+                f"Failed to obtain installation token: {redact(response.text[:200])}",
+                status_code=response.status_code,
+                retryable=response.status_code >= 500,
             )
-            if response.status_code != 201:
-                raise GitHubAPIError(
-                    f"Failed to obtain installation token: {redact(response.text[:200])}",
-                    status_code=response.status_code,
-                    retryable=response.status_code >= 500,
-                )
-            data = response.json()
+        data = response.json()
 
         token = data.get("token")
         if not isinstance(token, str) or not token:

@@ -10,7 +10,8 @@
  *   - GET  /api/v1/analysis-runs/{run_id}
  */
 
-import { apiClient } from './api';
+import { apiClient, API_BASE_URL, getStoredToken } from './api';
+import type { ApiError } from '../types/api';
 import type {
   ExplainCodeRequest,
   CodeExplanationResponse,
@@ -37,6 +38,207 @@ import type {
 export interface AnalysisRequestOptions {
   signal?: AbortSignal;
   timeout?: number;
+}
+
+export interface AnalysisStageEvent {
+  stage: string;
+  message: string;
+}
+
+export interface AnalysisStreamHandlers {
+  onStage?: (event: AnalysisStageEvent) => void;
+}
+
+export class AnalysisStreamUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalysisStreamUnavailableError';
+  }
+}
+
+export async function streamAnalysisEndpoint<T>(
+  endpointPath: string,
+  payload: unknown,
+  handlers: AnalysisStreamHandlers = {},
+  options?: AnalysisRequestOptions,
+): Promise<T> {
+  if (typeof fetch !== 'function' || typeof TextDecoder === 'undefined') {
+    throw new AnalysisStreamUnavailableError('Streaming is not supported in this environment.');
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  };
+  const token = getStoredToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpointPath}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      credentials: 'include',
+      signal: options?.signal,
+    });
+  } catch (err) {
+    if (options?.signal?.aborted) throw err;
+    throw new AnalysisStreamUnavailableError(err instanceof Error ? err.message : 'Network error');
+  }
+
+  if ([401, 404, 405, 501].includes(response.status)) {
+    throw new AnalysisStreamUnavailableError(`Streaming endpoint unavailable (HTTP ${response.status}).`);
+  }
+
+  if (!response.ok) {
+    let message = `Request failed (HTTP ${response.status}).`;
+    let code = 'ANALYSIS_FAILED';
+    let retryable = response.status >= 500 || response.status === 429;
+    try {
+      const body = await response.json();
+      message = body?.error?.message ?? body?.detail ?? message;
+      code = body?.error?.code ?? code;
+      retryable = body?.error?.retryable ?? retryable;
+    } catch {
+      // Keep defaults
+    }
+    throw { message, status: response.status, code, retryable } as ApiError;
+  }
+
+  const contentType = response.headers?.get?.('content-type') ?? '';
+  if (!response.body || (contentType && !contentType.includes('text/event-stream'))) {
+    throw new AnalysisStreamUnavailableError('Response did not return an SSE stream.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult: T | null = null;
+
+  const processFrame = (rawFrame: string) => {
+    let eventName = 'message';
+    const dataLines: string[] = [];
+    for (const line of rawFrame.split('\n')) {
+      if (line.startsWith('event:')) eventName = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+    }
+    if (!dataLines.length) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(dataLines.join('\n'));
+    } catch {
+      return;
+    }
+    const obj = (parsed ?? {}) as Record<string, unknown>;
+    if (eventName === 'status') {
+      handlers.onStage?.({
+        stage: String(obj.stage ?? ''),
+        message: String(obj.message ?? ''),
+      });
+    } else if (eventName === 'done') {
+      finalResult = parsed as T;
+    } else if (eventName === 'error') {
+      throw {
+        message: String(obj.message ?? 'Analysis failed during execution.'),
+        status: 500,
+        code: String(obj.code ?? 'ANALYSIS_FAILED'),
+        retryable: Boolean(obj.retryable ?? false),
+      } as ApiError;
+    }
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        const flushed = decoder.decode();
+        if (flushed) {
+          buffer = (buffer + flushed).replace(/\r\n/g, '\n');
+        }
+        break;
+      }
+      buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+      let sep: number;
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const rawFrame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        processFrame(rawFrame);
+      }
+    }
+    if (buffer.trim()) {
+      processFrame(buffer.trim());
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+
+  if (!finalResult) {
+    throw {
+      message: 'Analysis stream closed before completion.',
+      status: 502,
+      code: 'ANALYSIS_STREAM_INCOMPLETE',
+      retryable: true,
+    } as ApiError;
+  }
+
+  return finalResult;
+}
+
+export async function streamExplainCode(
+  repositoryId: string,
+  payload: ExplainCodeRequest,
+  handlers?: AnalysisStreamHandlers,
+  options?: AnalysisRequestOptions,
+): Promise<CodeExplanationResponse> {
+  return streamAnalysisEndpoint<CodeExplanationResponse>(
+    `/repositories/${repositoryId}/explain/stream`,
+    payload,
+    handlers,
+    options,
+  );
+}
+
+export async function streamDetectBugs(
+  repositoryId: string,
+  payload: BugDetectionRequest,
+  handlers?: AnalysisStreamHandlers,
+  options?: AnalysisRequestOptions,
+): Promise<BugDetectionResponse> {
+  return streamAnalysisEndpoint<BugDetectionResponse>(
+    `/repositories/${repositoryId}/detect-bugs/stream`,
+    payload,
+    handlers,
+    options,
+  );
+}
+
+export async function streamGenerateTests(
+  repositoryId: string,
+  payload: TestGenerationRequest,
+  handlers?: AnalysisStreamHandlers,
+  options?: AnalysisRequestOptions,
+): Promise<TestGenerationResponse> {
+  return streamAnalysisEndpoint<TestGenerationResponse>(
+    `/repositories/${repositoryId}/generate-tests/stream`,
+    payload,
+    handlers,
+    options,
+  );
+}
+
+export async function streamReviewCode(
+  repositoryId: string,
+  payload: CodeReviewRequest,
+  handlers?: AnalysisStreamHandlers,
+  options?: AnalysisRequestOptions,
+): Promise<ReviewReportResponse> {
+  return streamAnalysisEndpoint<ReviewReportResponse>(
+    `/repositories/${repositoryId}/review/stream`,
+    payload,
+    handlers,
+    options,
+  );
 }
 
 export async function explainCode(

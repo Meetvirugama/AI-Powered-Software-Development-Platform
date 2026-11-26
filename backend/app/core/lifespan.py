@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -162,13 +163,14 @@ def init_rag_pipeline(app: FastAPI) -> bool:
             except Exception as emb_exc:
                 logger.warning("vector_retriever_init_failed_falling_back_to_lexical", extra={"error": str(emb_exc)})
 
-        # Reranker independently created via factory (ISS-008)
+        # Reranker independently created via factory (ISS-008); warmed in background on startup
         reranker = None
         try:
-            from ai.retrieval.reranker_factory import create_reranker, create_serving_reranker
-            reranker = create_serving_reranker() if settings.is_production else create_reranker()
+            from ai.retrieval.reranker_factory import create_reranker
+            reranker = create_reranker()
         except Exception as r_exc:  # noqa: BLE001
             logger.warning("reranker_init_failed_falling_back_to_none", extra={"error": str(r_exc)})
+        app.state.reranker = reranker
 
         cache = None
         if getattr(settings, "retrieval_cache_enabled", False):
@@ -454,6 +456,60 @@ async def init_github_service(app: FastAPI) -> bool:
         return False
 
 
+def start_reranker_warm_up(app: FastAPI) -> asyncio.Task | None:
+    """Launch CrossEncoder warm-up off the startup path so HTTP readiness is immediate."""
+    warm_up_setting = getattr(settings, "reranker_warm_up_on_startup", None)
+    should_warm_up = settings.is_production if warm_up_setting is None else bool(warm_up_setting)
+    if not should_warm_up:
+        return None
+
+    reranker = getattr(app.state, "reranker", None)
+    warm_up = getattr(reranker, "warm_up", None)
+    if not callable(warm_up):
+        return None
+
+    async def _run() -> None:
+        started = time.monotonic()
+        try:
+            await asyncio.to_thread(warm_up)
+            duration_ms = round((time.monotonic() - started) * 1000, 1)
+            logger.info("reranker_warm_up_complete", extra={"duration_ms": duration_ms})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reranker_warm_up_failed", extra={"error": str(exc)})
+
+    return asyncio.create_task(_run(), name="reranker-warm-up")
+
+
+def _run_startup_reconciliation(app: FastAPI) -> None:
+    """Reconcile stale sync jobs, interrupted tasks, and workspaces in a worker thread."""
+    try:
+        from app.core.database import SessionLocal
+        from app.repositories.task_repository import TaskRepository
+        from app.services.repository_sync import reconcile_stale_sync_jobs
+
+        with SessionLocal() as db_session:
+            reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
+            if reconciled:
+                logger.info(
+                    "startup_stale_sync_jobs_reconciled",
+                    extra={"count": len(reconciled), "job_ids": [str(jid) for jid in reconciled]},
+                )
+
+            task_repo = TaskRepository(db_session)
+            interrupted_tasks = task_repo.reconcile_interrupted_tasks()
+            if interrupted_tasks:
+                logger.info(
+                    "startup_interrupted_tasks_reconciled",
+                    extra={"count": len(interrupted_tasks), "task_ids": [str(tid) for tid in interrupted_tasks]},
+                )
+
+        orch = getattr(app.state, "task_execution_orchestrator", None)
+        if orch is not None:
+            orch.workspace_manager.recover_workspaces(auto_reconcile=True)
+    except Exception as exc:
+        logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize process-wide infrastructure before serving requests."""
@@ -478,6 +534,7 @@ async def lifespan(app: FastAPI):
     init_intelligence_services(app)
     init_history_services(app)
     await init_github_service(app)
+    reranker_warm_up_task = start_reranker_warm_up(app)
 
     # Initialize OpenTelemetry & Observability (F31 - Issue #212)
     try:
@@ -503,34 +560,26 @@ async def lifespan(app: FastAPI):
     except Exception as obs_exc:
         logger.warning("observability_startup_warning", extra={"error": str(obs_exc)})
 
-    # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks on Startup ──────
+    # ── Reconcile Stale Sync Jobs & Interrupted Week 3 Tasks in Background ───
+    reconciliation_task = None
     if settings.run_startup_reconciliation:
+        reconciliation_task = asyncio.create_task(
+            asyncio.to_thread(_run_startup_reconciliation, app),
+            name="startup-reconciliation",
+        )
+
+    # ── Background Auth Revocation Subscriber ────────────────────────────────
+    auth_revocation_task = None
+    if settings.app_env.strip().lower() not in {"testing", "test"}:
         try:
-            from app.core.database import SessionLocal
-            from app.repositories.task_repository import TaskRepository
-            from app.services.repository_sync import reconcile_stale_sync_jobs
+            from app.core.auth import revocation_subscriber_loop
 
-            with SessionLocal() as db_session:
-                reconciled = reconcile_stale_sync_jobs(db_session, timeout_seconds=600)
-                if reconciled:
-                    logger.info(
-                        "startup_stale_sync_jobs_reconciled",
-                        extra={"count": len(reconciled), "job_ids": [str(jid) for jid in reconciled]},
-                    )
-
-                task_repo = TaskRepository(db_session)
-                interrupted_tasks = task_repo.reconcile_interrupted_tasks()
-                if interrupted_tasks:
-                    logger.info(
-                        "startup_interrupted_tasks_reconciled",
-                        extra={"count": len(interrupted_tasks), "task_ids": [str(tid) for tid in interrupted_tasks]},
-                    )
-
-            orch = getattr(app.state, "task_execution_orchestrator", None)
-            if orch is not None:
-                orch.workspace_manager.recover_workspaces(auto_reconcile=True)
+            auth_revocation_task = asyncio.create_task(
+                revocation_subscriber_loop(),
+                name="auth-revocation-subscriber",
+            )
         except Exception as exc:
-            logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
+            logger.debug("auth_revocation_subscriber_skipped: %s", exc)
 
     # ── Background Webhook Worker Task ───────────────────────────────────────
     webhook_worker_task = None
@@ -558,6 +607,20 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    if auth_revocation_task is not None and not auth_revocation_task.done():
+        auth_revocation_task.cancel()
+        try:
+            await auth_revocation_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    if reranker_warm_up_task is not None and not reranker_warm_up_task.done():
+        reranker_warm_up_task.cancel()
+        try:
+            await reranker_warm_up_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
     if webhook_worker_task:
         webhook_worker_task.cancel()
         try:
@@ -571,6 +634,9 @@ async def lifespan(app: FastAPI):
             await sync_worker_task
         except (asyncio.CancelledError, Exception):
             pass
+
+    if reconciliation_task is not None and not reconciliation_task.done():
+        await asyncio.wait({reconciliation_task}, timeout=10)
 
     # Clean shutdown of infrastructure
     gw = getattr(app.state, "llm_gateway", None)
@@ -586,6 +652,12 @@ async def lifespan(app: FastAPI):
             await emb.aclose()
         except Exception as exc:
             logger.debug("embedding_service_cleanup_error", extra={"error": str(exc)})
+
+    try:
+        from app.core.http_client import close_shared_http_client
+        await close_shared_http_client()
+    except Exception as exc:
+        logger.debug("shared_http_client_cleanup_error", extra={"error": str(exc)})
 
     try:
         from app.core.redis import close_redis, close_redis_async

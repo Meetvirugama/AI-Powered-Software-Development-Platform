@@ -31,7 +31,7 @@ from app.api.v1.dependencies import (
     get_request_user_role,
     require_min_role,
 )
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact, redact_obj
 from app.models.repository import Repository
@@ -605,7 +605,7 @@ async def prompt_to_plan(
     db: Session = Depends(get_db),
 ) -> PromptToPlanResponse:
     user_id = _request_user_id(request)
-    repo = _owned_repository(payload.repository_id, user_id, db)
+    repo = await run_db(db, _owned_repository, payload.repository_id, user_id, db)
 
     # 1. Intent Analysis & Ambiguity Detection (Phase 2)
     router_svc = IntentRouter()
@@ -641,7 +641,7 @@ async def prompt_to_plan(
             source=TaskSourceReference(type="USER_PROMPT"),
             requirements=reqs_intake,
         )
-        created_task = task_repo.create_task(user_id=user_id, intake=task_intake)
+        created_task = await run_db(db, task_repo.create_task, user_id=user_id, intake=task_intake)
         target_task = created_task
     else:
         target_task = AgentTask(
@@ -663,11 +663,13 @@ async def prompt_to_plan(
 
     structured_plan = await planner.generate_plan(target_task, db=db)
     # 4. Adversarial Plan Critic Review
-    critic_review = _review_task_plan(db, target_task, structured_plan, base_rev)
+    critic_review = await run_db(db, _review_task_plan, db, target_task, structured_plan, base_rev)
 
     # 5. Save plan record if task was persisted
     if created_task:
-        task_repo.save_plan(
+        await run_db(
+            db,
+            task_repo.save_plan,
             task=created_task,
             plan_schema=structured_plan,
             base_revision=base_rev,
@@ -763,7 +765,7 @@ async def generate_task_plan(
     body: TaskPlanGenerateRequest | None = None,
     db: Session = Depends(get_db),
 ) -> TaskPlanResponse:
-    task, user_id = _owned_task(task_id, request, db, min_role=UserRole.DEVELOPER)
+    task, user_id = await run_db(db, _owned_task, task_id, request, db, min_role=UserRole.DEVELOPER)
     task_repo = TaskRepository(db)
 
     if body and body.custom_plan is not None:
@@ -780,16 +782,19 @@ async def generate_task_plan(
             revision_notes=effective_notes,
         )
 
-    effective_base_rev = (body.base_revision if body and body.base_revision else None) or task.base_revision
-    repository = task.repository
-    if repository:
-        effective_base_rev = _plan_revision(repository, effective_base_rev)
-    plan_record = task_repo.save_plan(
-        task=task,
-        plan_schema=plan_schema,
-        base_revision=effective_base_rev,
-        actor_id=user_id,
-    )
+    def _save_generated_plan():
+        effective_base_rev = (body.base_revision if body and body.base_revision else None) or task.base_revision
+        repository = task.repository
+        if repository:
+            effective_base_rev = _plan_revision(repository, effective_base_rev)
+        return task_repo.save_plan(
+            task=task,
+            plan_schema=plan_schema,
+            base_revision=effective_base_rev,
+            actor_id=user_id,
+        )
+
+    plan_record = await run_db(db, _save_generated_plan)
     return _serialize_plan_record(plan_record, task)
 
 

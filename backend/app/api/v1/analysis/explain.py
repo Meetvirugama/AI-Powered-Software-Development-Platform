@@ -4,7 +4,9 @@ Code Explanation API endpoint (POST /api/v1/repositories/{repository_id}/explain
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 import logging
+from typing import Any
 from uuid import UUID, uuid4
 
 from ai.intelligence.related_files import (
@@ -13,6 +15,7 @@ from ai.intelligence.related_files import (
 )
 from ai.intelligence.snapshot_manager import RepositoryIntelligenceSnapshotManager
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -23,8 +26,11 @@ from app.api.v1.analysis.common import (
     _owned_repository,
     _owned_repository_async,
     _request_user_id,
+    fresh_analysis_session,
+    make_sse_response,
+    stream_analysis_events,
 )
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.input_security import require_safe_repo_path
 from app.core.secret_redaction import redact, redact_obj
@@ -92,36 +98,35 @@ def get_related_files(
     )
 
 
-@router.post(
-    "/repositories/{repository_id}/explain",
-    response_model=CodeExplanationResponse,
-    responses=ANALYSIS_ERROR_RESPONSES,
-    summary="Explain a file, symbol, or line range using repository context",
-    description=(
-        "Generate a structured, source-grounded explanation (`purpose`, `logic_flow`, `key_symbols`, "
-        "`inputs_and_outputs`, `dependencies`, `assumptions_and_limitations`, `sources`) for a file, "
-        "symbol, or 1-indexed inclusive line range in an authorized repository."
-    ),
-)
-async def explain_code(
+async def _execute_explain_pipeline(
     repository_id: UUID,
     payload: ExplainCodeRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session,
+    *,
+    service: Any | None = None,
+    on_stage: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> CodeExplanationResponse:
     """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
+    async def _stage(name: str, message: str) -> None:
+        if on_stage is not None:
+            await on_stage(name, message)
+
     timer = StageExecutionTimer("explain", context_budget=payload.options.max_context_tokens)
     user_id = _request_user_id(request)
     repo = await _owned_repository_async(repository_id, request, db)
 
+    await _stage("retrieving_context", "Resolving target and building repository context...")
     with timer.measure("target_resolution_and_context"):
-        resolved = resolve_target_and_build_context(repository_id, repo, payload, db)
+        resolved = await run_db(db, resolve_target_and_build_context, repository_id, repo, payload, db)
         payload.target = resolved.target
 
-    service = _get_service(request, "explanation_service", "Code explanation")
-    method = service.explain if hasattr(service, "explain") else service
+    await _stage("analyzing_ast", "Analyzing symbol graph and code dependencies...")
+    resolved_service = service if service is not None else _get_service(request, "explanation_service", "Code explanation")
+    method = resolved_service.explain if hasattr(resolved_service, "explain") else resolved_service
 
     run_id = str(uuid4())
+    await _stage("generating_output", "Synthesizing structured explanation...")
     try:
         with timer.measure("llm_inference"):
             raw_result = await _invoke_service_method(
@@ -139,7 +144,9 @@ async def explain_code(
             )
     except APIError as exc:
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -155,7 +162,9 @@ async def explain_code(
     except Exception as exc:
         safe_err = redact(str(exc))
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -196,7 +205,9 @@ async def explain_code(
     except ValidationError as exc:
         logger.error("explain_output_schema_invalid", extra={"error": str(exc)})
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -217,7 +228,9 @@ async def explain_code(
 
     if status_val == "FAILED":
         if payload.options.persist_run:
-            record_analysis_run(
+            await run_db(
+                db,
+                record_analysis_run,
                 request.app.state,
                 db,
                 run_id=run_id,
@@ -236,6 +249,7 @@ async def explain_code(
             retryable=True,
         )
 
+    await _stage("validating_grounding", "Grounding source citations and validating output...")
     with timer.measure("grounding_and_redaction"):
         grounded_explanation = ground_explanation_sources(
             explanation,
@@ -261,7 +275,9 @@ async def explain_code(
     response = CodeExplanationResponse.model_validate(redact_obj(response.model_dump(mode="json")))
 
     if payload.options.persist_run:
-        record_analysis_run(
+        await run_db(
+            db,
+            record_analysis_run,
             request.app.state,
             db,
             run_id=response.run_id,
@@ -276,4 +292,54 @@ async def explain_code(
         )
 
     return response
+
+
+@router.post(
+    "/repositories/{repository_id}/explain",
+    response_model=CodeExplanationResponse,
+    responses=ANALYSIS_ERROR_RESPONSES,
+    summary="Explain a file, symbol, or line range using repository context",
+    description=(
+        "Generate a structured, source-grounded explanation (`purpose`, `logic_flow`, `key_symbols`, "
+        "`inputs_and_outputs`, `dependencies`, `assumptions_and_limitations`, `sources`) for a file, "
+        "symbol, or 1-indexed inclusive line range in an authorized repository."
+    ),
+)
+async def explain_code(
+    repository_id: UUID,
+    payload: ExplainCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> CodeExplanationResponse:
+    """Execute the 9-step Week 2 Day 2 Code Explanation pipeline."""
+    return await _execute_explain_pipeline(repository_id, payload, request, db)
+
+
+@router.post(
+    "/repositories/{repository_id}/explain/stream",
+    summary="Stream stage progress and result for code explanation via Server-Sent Events",
+    responses={**ANALYSIS_ERROR_RESPONSES, 200: {"content": {"text/event-stream": {}}}},
+)
+async def explain_code_stream(
+    repository_id: UUID,
+    payload: ExplainCodeRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    """Stream real-time stage progress events followed by the final CodeExplanationResponse."""
+    await _owned_repository_async(repository_id, request, db)
+    service = _get_service(request, "explanation_service", "Code explanation")
+
+    async def _run(emit_stage: Callable[[str, str], Awaitable[None]]) -> CodeExplanationResponse:
+        with fresh_analysis_session(request) as stream_db:
+            return await _execute_explain_pipeline(
+                repository_id,
+                payload,
+                request,
+                stream_db,
+                service=service,
+                on_stage=emit_stage,
+            )
+
+    return make_sse_response(stream_analysis_events(_run))
 

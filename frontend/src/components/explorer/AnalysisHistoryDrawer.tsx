@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   History,
   X,
@@ -186,6 +186,7 @@ export function AnalysisHistoryDrawer({
     queryKey: ['analysis-runs', repositoryId, queryParams],
     queryFn: () => getAnalysisRuns(repositoryId!, queryParams),
     enabled: Boolean(isOpen && repositoryId),
+    placeholderData: keepPreviousData,
   });
 
   const runs: AnalysisRunSummary[] = historyData?.items || [];

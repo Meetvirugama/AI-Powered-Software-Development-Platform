@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useParams, Link } from 'react-router-dom';
 import {
   FolderGit2,
@@ -12,10 +13,17 @@ import {
   GitBranch,
   CheckCircle2,
   Search,
+  ChevronDown,
+  Check,
+  Lock,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import type { Repository } from '../../types/api';
-import { useSyncRepository } from '../../hooks/useRepositories';
+import {
+  useRepositoryBranches,
+  useSwitchRepositoryBranch,
+  useSyncRepository,
+} from '../../hooks/useRepositories';
 
 interface StudioSubNavProps {
   repository?: Repository;
@@ -27,12 +35,57 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
   const { id } = useParams<{ id: string }>();
   const repoId = id ?? repository?.id ?? '';
   const syncMutation = useSyncRepository();
+  const switchBranchMutation = useSwitchRepositoryBranch();
+
+  const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
+  const [branchSearch, setBranchSearch] = useState('');
+  const branchMenuRef = useRef<HTMLDivElement>(null);
+
+  const {
+    data: branches = [],
+    isLoading: branchesLoading,
+    isError: branchesError,
+    refetch: refetchBranches,
+  } = useRepositoryBranches(repoId || undefined, { enabled: isBranchMenuOpen && Boolean(repoId) });
+
+  const filteredBranches = useMemo(() => {
+    const q = branchSearch.trim().toLowerCase();
+    if (!q) return branches;
+    return branches.filter((b) => b.name.toLowerCase().includes(q));
+  }, [branches, branchSearch]);
+
+  useEffect(() => {
+    if (!isBranchMenuOpen) return;
+    function handleOutsideClick(event: MouseEvent) {
+      if (branchMenuRef.current && !branchMenuRef.current.contains(event.target as Node)) {
+        setIsBranchMenuOpen(false);
+      }
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsBranchMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isBranchMenuOpen]);
 
   const syncStatus = repository?.sync_status;
-  const isSyncing = syncStatus === 'SYNCING' || syncMutation.isPending;
+  const isSyncing = syncStatus === 'SYNCING' || syncMutation.isPending || switchBranchMutation.isPending;
 
   const repoName = repository?.name ?? repository?.full_name?.split('/')[1] ?? (isLoading ? 'Loading...' : 'Repository');
   const repoOrg = repository?.full_name?.split('/')[0] ?? '';
+
+  function handleSelectBranch(branchName: string) {
+    setIsBranchMenuOpen(false);
+    setBranchSearch('');
+    if (!repoId || branchName === repository?.default_branch) return;
+    switchBranchMutation.mutate({ id: repoId, branch: branchName });
+  }
 
   const navItems = [
     {
@@ -105,9 +158,118 @@ export function StudioSubNav({ repository, isLoading, onOpenCommandPalette }: St
           </div>
 
           {repository?.default_branch && (
-            <div className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent text-[11px] font-mono text-muted-foreground border border-border">
-              <GitBranch className="h-3 w-3" />
-              <span>{repository.default_branch}</span>
+            <div ref={branchMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setIsBranchMenuOpen((prev) => !prev)}
+                disabled={switchBranchMutation.isPending}
+                aria-haspopup="listbox"
+                aria-expanded={isBranchMenuOpen}
+                aria-label={`Switch branch (current: ${repository.default_branch})`}
+                title="Switch active repository branch"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent hover:bg-accent/80 text-[11px] font-mono text-muted-foreground hover:text-foreground border border-border transition-colors cursor-pointer disabled:opacity-60"
+              >
+                {switchBranchMutation.isPending ? (
+                  <RefreshCw className="h-3 w-3 animate-spin" />
+                ) : (
+                  <GitBranch className="h-3 w-3" />
+                )}
+                <span className="max-w-[140px] truncate">{repository.default_branch}</span>
+                <ChevronDown className="h-3 w-3 opacity-70" />
+              </button>
+
+              {isBranchMenuOpen && (
+                <div
+                  role="listbox"
+                  aria-label="Repository branches"
+                  className="absolute left-0 mt-1.5 w-64 rounded-xl border border-border bg-card shadow-lg z-50 overflow-hidden"
+                >
+                  <div className="px-3 py-2 border-b border-border/60 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-foreground">Switch branch</span>
+                    <span className="text-[10px] text-muted-foreground">Re-indexes workspace</span>
+                  </div>
+
+                  {branches.length > 6 && (
+                    <div className="p-2 border-b border-border/60">
+                      <input
+                        type="search"
+                        value={branchSearch}
+                        onChange={(e) => setBranchSearch(e.target.value)}
+                        placeholder="Filter branches…"
+                        aria-label="Filter branches"
+                        autoFocus
+                        className="w-full rounded-md border border-border bg-background px-2.5 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                    </div>
+                  )}
+
+                  {switchBranchMutation.isError && (
+                    <div className="px-3 py-2 text-[11px] text-destructive bg-destructive/5 border-b border-destructive/20">
+                      {switchBranchMutation.error?.message || 'Failed to switch branch.'}
+                    </div>
+                  )}
+
+                  <div className="max-h-60 overflow-y-auto py-1">
+                    {branchesLoading ? (
+                      <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
+                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        <span>Loading branches…</span>
+                      </div>
+                    ) : branchesError ? (
+                      <div className="px-3 py-2.5 space-y-2 text-xs text-muted-foreground">
+                        <p>Could not fetch branches from GitHub.</p>
+                        <button
+                          type="button"
+                          onClick={() => refetchBranches()}
+                          className="inline-flex items-center gap-1 text-primary hover:underline font-medium cursor-pointer"
+                        >
+                          <RefreshCw className="h-3 w-3" />
+                          Retry
+                        </button>
+                      </div>
+                    ) : filteredBranches.length === 0 ? (
+                      <div className="px-3 py-3 text-xs text-muted-foreground">
+                        No matching branches found.
+                      </div>
+                    ) : (
+                      filteredBranches.map((branch) => {
+                        const isCurrent = branch.name === repository.default_branch;
+                        return (
+                          <button
+                            key={branch.name}
+                            type="button"
+                            role="option"
+                            aria-selected={isCurrent}
+                            onClick={() => handleSelectBranch(branch.name)}
+                            className={cn(
+                              'w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer',
+                              isCurrent
+                                ? 'bg-primary/10 text-primary font-medium'
+                                : 'text-foreground hover:bg-accent',
+                            )}
+                          >
+                            <span className="flex items-center gap-1.5 min-w-0 font-mono">
+                              <Check
+                                className={cn(
+                                  'h-3.5 w-3.5 shrink-0',
+                                  isCurrent ? 'opacity-100' : 'opacity-0',
+                                )}
+                              />
+                              <span className="truncate">{branch.name}</span>
+                            </span>
+                            {branch.protected && (
+                              <Lock
+                                className="h-3 w-3 shrink-0 text-muted-foreground"
+                                aria-label="Protected branch"
+                              />
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

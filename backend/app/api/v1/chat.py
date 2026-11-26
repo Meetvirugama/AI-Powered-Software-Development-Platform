@@ -32,7 +32,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.v1.dependencies import get_owned_repository
-from app.core.database import get_db
+from app.core.database import get_db, run_db
 from app.core.errors import APIError, ErrorCode
 from app.core.secret_redaction import redact_obj
 from app.models.repository import Repository
@@ -165,7 +165,7 @@ async def _run_agentic(
     }
     # Agentic answers now get the same project memory as normal chat.
     if _accepts_kwarg(orchestrator.run, "memory"):
-        memories = _project_memories(db, repository_id)
+        memories = await run_db(db, _project_memories, db, repository_id)
         if memories:
             kwargs["memory"] = memories
     return await orchestrator.run(**kwargs)
@@ -179,7 +179,7 @@ async def _run_normal(
     db: Session,
 ) -> RepositoryAnswer:
     # Fetch active project memories for the repository (ISS-036 / TST-40)
-    project_memories = _project_memories(db, repository_id)
+    project_memories = await run_db(db, _project_memories, db, repository_id)
     if project_memories and _accepts_kwarg(pipeline.chat, "memory"):
         return await pipeline.chat(question, repository_id, history, memory=project_memories)
     try:
@@ -259,9 +259,9 @@ async def chat_with_repository(
     db: Session = Depends(get_db),
 ) -> RepositoryAnswer:
     """Return a source-cited answer only for a repository owned by the caller (F-03)."""
-    await asyncio.to_thread(_owned_repository, repository_id, request, db)
+    await run_db(db, _owned_repository, repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
-    history, conv = _resolve_history(payload, request, repository_id, db)
+    history, conv = await run_db(db, _resolve_history, payload, request, repository_id, db)
 
     if payload.mode == "agentic":
         answer = await _run_agentic(request, pipeline, payload.question, repository_id, history, db)
@@ -270,7 +270,7 @@ async def chat_with_repository(
 
     sanitized = _sanitize(answer)
     if conv is not None:
-        _persist_exchange(db, conv, payload.question, sanitized, payload.mode)
+        await run_db(db, _persist_exchange, db, conv, payload.question, sanitized, payload.mode)
     await _publish_completion(request, repository_id, sanitized)
     return sanitized
 
@@ -319,11 +319,11 @@ async def chat_with_repository_stream(
     Agentic mode streams status events and then the final answer.
     """
     # Everything that can fail with a normal HTTP error happens before the stream starts.
-    await asyncio.to_thread(_owned_repository, repository_id, request, db)
+    await run_db(db, _owned_repository, repository_id, request, db)
     pipeline = get_rag_chat_pipeline(request)
-    history, conv = _resolve_history(payload, request, repository_id, db)
+    history, conv = await run_db(db, _resolve_history, payload, request, repository_id, db)
     agent_orchestrator = _resolve_orchestrator(request, pipeline) if payload.mode == "agentic" else None
-    memories = _project_memories(db, repository_id) if payload.mode != "agentic" else []
+    memories = await run_db(db, _project_memories, db, repository_id) if payload.mode != "agentic" else []
     conv_id = conv.id if conv is not None else None
 
     async def event_stream() -> AsyncIterator[str]:

@@ -218,7 +218,9 @@ export function RepositoryBugStudio() {
                   <ShieldAlert className="h-6 w-6 animate-spin" />
                 </div>
                 <div className="space-y-1">
-                  <h3 className="text-sm font-semibold text-foreground">Repository Bug Intelligence Engine Active</h3>
+                  <h3 className="text-sm font-semibold text-foreground" aria-live="polite">
+                    {bugMutation.stageMessage || 'Repository Bug Intelligence Engine Active'}
+                  </h3>
                   <p className="text-xs text-muted-foreground">
                     Executing multi-phase repository context investigation ({scanMode.toUpperCase()} mode).
                   </p>

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import threading
+import time
 
 from .base import CodeChunk
 
@@ -23,6 +25,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TOP_N = 8
 _DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_LOAD_RETRY_COOLDOWN_SECONDS = 300.0
+
+
+class RerankerWarmingUpError(RuntimeError):
+    """Raised on non-blocking model lookup while another thread is loading weights."""
 
 
 class CrossEncoderReranker:
@@ -60,7 +67,15 @@ class CrossEncoderReranker:
         self._model: object | None = model  # Supports dependency injection
         self._min_logit = min_logit
         self._max_chars = max_chars
+        self._load_lock = threading.Lock()
+        self._load_error: str | None = None
+        self._load_failed_at: float | None = None
         self.last_status: str = "initialized"
+
+    @property
+    def is_loaded(self) -> bool:
+        """Return True once the underlying CrossEncoder model is resident in memory."""
+        return self._model is not None
 
     def warm_up(self) -> None:
         """Load weights and initialize the inference runtime before accepting requests."""
@@ -113,7 +128,14 @@ class CrossEncoderReranker:
             return candidates[:top_n]
 
         try:
-            model = self._get_model()
+            model = self._get_model(blocking=False)
+        except RerankerWarmingUpError:
+            self.last_status = "fallback_warming_up"
+            logger.info(
+                "reranker_warming_up_falling_back",
+                extra={"candidates_count": len(candidates), "status": self.last_status},
+            )
+            return candidates[:top_n]
         except RuntimeError as exc:
             self.last_status = "fallback_model_missing"
             logger.warning(
@@ -182,34 +204,77 @@ class CrossEncoderReranker:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _get_model(self) -> object:
+    def _load_model(self) -> object:
         """
-        Lazily load the CrossEncoder model on first use.
-
-        This avoids importing sentence-transformers at module load time,
-        which would add ~2 s to startup and would fail in environments
-        where the library is not installed.
+        Load the CrossEncoder model and weights.
 
         Raises:
             RuntimeError: If sentence-transformers is not installed.
         """
-        if self._model is None:
+        try:
+            from sentence_transformers import CrossEncoder  # type: ignore[import]
+        except ImportError as exc:
+            raise RuntimeError(
+                "sentence-transformers is required for CrossEncoderReranker. "
+                "Install it with: pip install sentence-transformers"
+            ) from exc
+
+        logger.info(
+            "reranker_model_loading",
+            extra={"model": self._model_name},
+        )
+        model = CrossEncoder(self._model_name)
+        logger.info(
+            "reranker_model_loaded",
+            extra={"model": self._model_name},
+        )
+        return model
+
+    def _get_model(self, *, blocking: bool = True) -> object:
+        """
+        Lazily load the CrossEncoder model on first use.
+
+        When ``blocking=False`` and another thread is currently loading the model
+        (e.g. startup background warm-up), raises ``RerankerWarmingUpError`` so
+        retrieval requests fall back immediately instead of stalling on the lock.
+        """
+        if self._model is not None:
+            return self._model
+
+        if (
+            self._load_error is not None
+            and self._load_failed_at is not None
+            and (time.monotonic() - self._load_failed_at) < _LOAD_RETRY_COOLDOWN_SECONDS
+        ):
+            raise RuntimeError(f"reranker model load failed recently: {self._load_error}")
+
+        acquired = self._load_lock.acquire(blocking=blocking)
+        if not acquired:
+            raise RerankerWarmingUpError("reranker model is warming up")
+
+        try:
+            if self._model is not None:
+                return self._model
+            if (
+                self._load_error is not None
+                and self._load_failed_at is not None
+                and (time.monotonic() - self._load_failed_at) < _LOAD_RETRY_COOLDOWN_SECONDS
+            ):
+                raise RuntimeError(f"reranker model load failed recently: {self._load_error}")
             try:
-                from sentence_transformers import CrossEncoder  # type: ignore[import]
-            except ImportError as exc:
+                self._model = self._load_model()
+            except RuntimeError as exc:
+                self._load_error = str(exc)
+                self._load_failed_at = time.monotonic()
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._load_error = str(exc)
+                self._load_failed_at = time.monotonic()
                 raise RuntimeError(
-                    "sentence-transformers is required for CrossEncoderReranker. "
-                    "Install it with: pip install sentence-transformers"
+                    f"Failed to load cross-encoder model {self._model_name}: {exc}"
                 ) from exc
-
-            logger.info(
-                "reranker_model_loading",
-                extra={"model": self._model_name},
-            )
-            self._model = CrossEncoder(self._model_name)
-            logger.info(
-                "reranker_model_loaded",
-                extra={"model": self._model_name},
-            )
-
-        return self._model
+            self._load_error = None
+            self._load_failed_at = None
+            return self._model
+        finally:
+            self._load_lock.release()

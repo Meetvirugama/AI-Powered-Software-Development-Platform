@@ -11,7 +11,10 @@ import {
 } from '../hooks/useRepositories';
 import { getRepositoryFiles, lookupRepositoryFileByPath } from '../services/repositories';
 import { findMatchingRepositoryFile } from '../lib/sourceReference';
-import { LoadingSpinner } from '../components/shared/LoadingSpinner';
+import { StudioLayoutSkeleton } from '../components/shared/Skeletons';
+import { useSseConnectionStatus } from '../hooks/useSseConnectionStatus';
+import { useSyncProgressStore } from '../stores/useSyncProgressStore';
+import { useSelectedFileStore } from '../stores/useSelectedFileStore';
 import { ErrorMessage } from '../components/shared/ErrorMessage';
 import { FileTree } from '../components/explorer/FileTree';
 import { CodeViewer, CodeViewerEmptyState } from '../components/explorer/CodeViewer';
@@ -26,7 +29,7 @@ import { ArrowLeft } from 'lucide-react';
 import type { RepositoryFile } from '../types/api';
 import type { AnalysisTarget, SourceReference } from '../types/analysis';
 
-const SYNC_POLL_INTERVAL_MS = 3000;
+const SYNC_FALLBACK_POLL_INTERVAL_MS = 20_000;
 
 /**
  * Repository overview and code explorer.
@@ -55,6 +58,11 @@ export function RepositoryDetail() {
   });
   const [userHighlightedSource, setUserHighlightedSource] = useState<SourceReference | null>(null);
 
+  const { isConnected: isSseConnected } = useSseConnectionStatus();
+  const liveProgress = useSyncProgressStore((state) => (id ? state.progressByRepo[id] ?? null : null));
+  const storedFilePath = useSelectedFileStore((state) => (id ? state.selectedPathByRepo[id] ?? null : null));
+  const setStoredFilePath = useSelectedFileStore((state) => state.setSelectedFilePath);
+
   // ------------------------------------------------------------------
   // Data Fetching
   // ------------------------------------------------------------------
@@ -65,8 +73,9 @@ export function RepositoryDetail() {
     error: repoErrorData,
   } = useRepository(id, {
     refetchInterval: (query: { state: { data?: { sync_status?: string } } }) => {
+      if (isSseConnected) return false;
       const status = query.state.data?.sync_status;
-      return status === 'SYNCING' ? SYNC_POLL_INTERVAL_MS : false;
+      return status === 'SYNCING' ? SYNC_FALLBACK_POLL_INTERVAL_MS : false;
     },
   });
 
@@ -92,10 +101,11 @@ export function RepositoryDetail() {
     isError: filesError,
   } = useRepositoryFiles(id, 1, 500, { enabled: isReady });
 
-  // Reset extra pages and file selection state when repository ID changes
-  const [prevId, setPrevId] = useState(id);
-  if (prevId !== id) {
-    setPrevId(id);
+  // Reset extra pages and file selection state when repository ID, branch, or indexed commit changes
+  const repoRevisionKey = `${id ?? ''}:${repo?.default_branch ?? ''}:${repo?.last_indexed_commit_sha ?? ''}`;
+  const [prevRevisionKey, setPrevRevisionKey] = useState(repoRevisionKey);
+  if (prevRevisionKey !== repoRevisionKey) {
+    setPrevRevisionKey(repoRevisionKey);
     setExtraLoadedFiles([]);
     setCurrentPage(1);
     setLookupAttemptedPath(null);
@@ -138,13 +148,15 @@ export function RepositoryDetail() {
     }
   }
 
+  const effectiveLookupPath = fileParam ?? storedFilePath;
+
   // Derive whether an active async lookup is underway
   const isLookingUpPath = useMemo(() => {
-    if (!id || !fileParam || !isReady || filesLoading) return false;
-    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, fileParam);
+    if (!id || !effectiveLookupPath || !isReady || filesLoading) return false;
+    const alreadyLoaded = findMatchingRepositoryFile(loadedFiles, effectiveLookupPath);
     if (alreadyLoaded) return false;
-    return lookupAttemptedPath !== fileParam;
-  }, [id, fileParam, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
+    return lookupAttemptedPath !== effectiveLookupPath;
+  }, [id, effectiveLookupPath, isReady, filesLoading, loadedFiles, lookupAttemptedPath]);
 
   // Check if cited file from query parameters is already loaded or needs direct backend path lookup
   const queryMatchedFile = useMemo(() => {
@@ -152,17 +164,23 @@ export function RepositoryDetail() {
     return findMatchingRepositoryFile(loadedFiles, fileParam);
   }, [fileParam, isReady, loadedFiles]);
 
+  const storedMatchedFile = useMemo(() => {
+    if (!storedFilePath || !isReady) return null;
+    return findMatchingRepositoryFile(loadedFiles, storedFilePath);
+  }, [storedFilePath, isReady, loadedFiles]);
+
   // Effect: perform explicit path lookup if not in initial 500
   useEffect(() => {
-    if (!id || !fileParam || !isReady || filesLoading || queryMatchedFile) return;
-    if (lookupAttemptedPath === fileParam) return;
+    const matchedTarget = fileParam ? queryMatchedFile : storedMatchedFile;
+    if (!id || !effectiveLookupPath || !isReady || filesLoading || matchedTarget) return;
+    if (lookupAttemptedPath === effectiveLookupPath) return;
 
     let cancelled = false;
 
-    lookupRepositoryFileByPath(id, fileParam)
+    lookupRepositoryFileByPath(id, effectiveLookupPath)
       .then((file) => {
         if (!cancelled) {
-          setLookupAttemptedPath(fileParam);
+          setLookupAttemptedPath(effectiveLookupPath);
           if (file) {
             setExtraLoadedFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [...prev, file]));
           }
@@ -170,25 +188,32 @@ export function RepositoryDetail() {
       })
       .catch((err) => {
         if (!cancelled) {
-          setLookupAttemptedPath(fileParam);
+          setLookupAttemptedPath(effectiveLookupPath);
         }
-        console.debug(`Path lookup for ${fileParam} unsuccessful:`, err);
+        console.debug(`Path lookup for ${effectiveLookupPath} unsuccessful:`, err);
       });
 
     return () => {
       cancelled = true;
     };
-  }, [id, fileParam, isReady, filesLoading, queryMatchedFile, lookupAttemptedPath]);
+  }, [id, fileParam, effectiveLookupPath, isReady, filesLoading, queryMatchedFile, storedMatchedFile, lookupAttemptedPath]);
 
   const citedFileUnavailable = useMemo(() => {
     return fileParam && !filesLoading && !isLookingUpPath && !queryMatchedFile ? fileParam : null;
   }, [fileParam, filesLoading, isLookingUpPath, queryMatchedFile]);
 
   const selectedFile = useMemo(() => {
-    if (userSelectedFile) return userSelectedFile;
+    if (userSelectedFile) {
+      if (loadedFiles.length === 0) return userSelectedFile;
+      const matchingCurrent = loadedFiles.find(
+        (f) => f.id === userSelectedFile.id || f.path === userSelectedFile.path
+      );
+      if (matchingCurrent) return matchingCurrent;
+    }
     if (queryMatchedFile) return queryMatchedFile;
+    if (storedMatchedFile) return storedMatchedFile;
     return loadedFiles.length > 0 ? loadedFiles[0] : null;
-  }, [userSelectedFile, queryMatchedFile, loadedFiles]);
+  }, [userSelectedFile, queryMatchedFile, storedMatchedFile, loadedFiles]);
 
   // Active target range derived from selection or custom range
   const activeTarget: AnalysisTarget = useMemo(() => {
@@ -244,11 +269,7 @@ export function RepositoryDetail() {
   }
 
   if (repoLoading) {
-    return (
-      <div className="flex h-[50vh] flex-col items-center justify-center gap-4">
-        <LoadingSpinner size="lg" label="Loading repository details…" />
-      </div>
-    );
+    return <StudioLayoutSkeleton />;
   }
 
   if (repoError || !repo || !progress) {
@@ -278,6 +299,7 @@ export function RepositoryDetail() {
           progress={progress}
           isSyncActive={isSyncActive}
           errorMessage={latestJob?.error_message ?? repo.last_sync_error ?? null}
+          liveProgress={liveProgress}
           onSync={() => handleSync(isSyncActive)}
         />
       ) : (
@@ -333,6 +355,9 @@ export function RepositoryDetail() {
                     selectedFile={selectedFile}
                     onSelectFile={(file) => {
                       setUserSelectedFile(file);
+                      if (id) {
+                        setStoredFilePath(id, file.path);
+                      }
                       setUserHighlightedSource(null);
                       setReviewTarget((prev) =>
                         prev.type === 'file' ? { type: 'file', path: file.path } : prev

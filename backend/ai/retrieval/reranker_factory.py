@@ -6,6 +6,7 @@ Owner: Meet — W1-12
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
@@ -15,7 +16,22 @@ from .reranker_onnx import ONNXCrossEncoderReranker
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["create_reranker", "create_serving_reranker"]
+__all__ = ["create_reranker", "create_serving_reranker", "resolve_reranker_model_source"]
+
+
+def resolve_reranker_model_source(settings: Any = None) -> str:
+    """Resolve local pre-baked reranker weights when present, else the HuggingFace model ID."""
+    if settings is None:
+        settings = get_settings()
+    model_path = getattr(settings, "reranker_model_path", None)
+    if model_path:
+        if Path(model_path).is_dir():
+            return str(model_path)
+        logger.warning(
+            "reranker_model_path_missing_falling_back_to_hub",
+            extra={"model_path": str(model_path)},
+        )
+    return getattr(settings, "reranker_model_name", None) or "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 
 def create_reranker(
@@ -61,6 +77,8 @@ def create_reranker(
                     k: v for k, v in kwargs.items()
                     if k in {"model_name", "model", "min_logit", "max_chars"}
                 }
+                if "model_name" not in pytorch_kwargs and "model" not in pytorch_kwargs:
+                    pytorch_kwargs["model_name"] = resolve_reranker_model_source(settings)
                 return CrossEncoderReranker(**pytorch_kwargs)
 
         try:
@@ -78,6 +96,8 @@ def create_reranker(
         k: v for k, v in kwargs.items()
         if k in {"model_name", "model", "min_logit", "max_chars"}
     }
+    if "model_name" not in pytorch_kwargs and "model" not in pytorch_kwargs:
+        pytorch_kwargs["model_name"] = resolve_reranker_model_source(settings)
     return CrossEncoderReranker(**pytorch_kwargs)
 
 

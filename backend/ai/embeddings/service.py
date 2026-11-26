@@ -388,11 +388,17 @@ class CachedEmbeddingService(EmbeddingService):
         provider: EmbeddingProvider,
         batch_size: int = _BATCH_SIZE,
         max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
+        rate_limiter: Any = None,
         redis_client: Any = None,
         ttl_seconds: int = 3600,
         max_memory_entries: int = 512,
     ) -> None:
-        super().__init__(provider=provider, batch_size=batch_size, max_concurrency=max_concurrency)
+        super().__init__(
+            provider=provider,
+            batch_size=batch_size,
+            max_concurrency=max_concurrency,
+            rate_limiter=rate_limiter,
+        )
         self._redis = redis_client
         self._ttl_seconds = ttl_seconds
         self._max_memory_entries = max(1, max_memory_entries)
