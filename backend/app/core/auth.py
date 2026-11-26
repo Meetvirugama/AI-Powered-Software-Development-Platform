@@ -61,12 +61,14 @@ def publish_token_revocation(jti: str, redis_client: Any = None) -> None:
 
 async def revocation_subscriber_loop(stop_event: asyncio.Event | None = None) -> None:
     """Listen for cross-worker token revocations and update the local blocklist cache."""
+    backoff_seconds = 5.0
     while stop_event is None or not stop_event.is_set():
         pubsub = None
         try:
             redis = await get_redis_async()
             pubsub = redis.pubsub()
             await pubsub.subscribe(_REVOCATION_CHANNEL)
+            backoff_seconds = 5.0
             while stop_event is None or not stop_event.is_set():
                 msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
                 if msg and msg.get("type") == "message":
@@ -77,8 +79,12 @@ async def revocation_subscriber_loop(stop_event: asyncio.Event | None = None) ->
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.debug("auth_revocation_subscriber_backoff", extra={"error": str(exc)})
-            await asyncio.sleep(5.0)
+            logger.debug(
+                "auth_revocation_subscriber_backoff",
+                extra={"error": str(exc), "backoff_seconds": backoff_seconds},
+            )
+            await asyncio.sleep(backoff_seconds)
+            backoff_seconds = min(backoff_seconds * 2.0, 60.0)
         finally:
             if pubsub is not None:
                 try:
@@ -176,7 +182,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
             logger.warning("auth_blocklist_missing_exists", extra={"jti": jti})
             raise APIError(503, ErrorCode.SERVICE_UNAVAILABLE, "Authentication service is unavailable.", retryable=True)
 
-        timeout_sec = 1.0
+        timeout_sec = 2.5
         if inspect.iscoroutinefunction(exists_fn):
             res = await asyncio.wait_for(exists_fn(key), timeout=timeout_sec)
         else:
@@ -190,7 +196,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 from app.core.redis import get_redis as sync_get_redis
                 sync_client = sync_get_redis()
                 if sync_client is not None:
-                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=0.8))
+                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=2.0))
             except Exception as sync_exc:
                 logger.debug("auth_blocklist_sync_check_failed", extra={"error": str(sync_exc)})
         logger.warning("auth_blocklist_timeout", extra={"jti": jti, "error": str(exc)})
@@ -207,7 +213,7 @@ async def _check_redis_blocklist(jti: str, is_live_environment: bool) -> bool:
                 from app.core.redis import get_redis as sync_get_redis
                 sync_client = sync_get_redis()
                 if sync_client is not None:
-                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=0.8))
+                    return bool(await asyncio.wait_for(asyncio.to_thread(sync_client.exists, key), timeout=2.0))
             except Exception as sync_err:
                 logger.debug("auth_blocklist_sync_fallback_failed", extra={"error": str(sync_err)})
 

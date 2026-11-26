@@ -254,21 +254,21 @@ class RateLimitMiddleware:
             if get_rate_limit_store is _DEFAULT_GET_RATE_LIMIT_STORE:
                 async_redis = await redis_module.get_redis_async()
                 store: Any = AsyncRedisRateLimitStore(async_redis)
-                count = await asyncio.wait_for(store.hit(key, rule.window_seconds), timeout=1.0)
+                count = await asyncio.wait_for(store.hit(key, rule.window_seconds), timeout=2.0)
             else:
                 store = get_rate_limit_store()
                 hit_fn = getattr(store, "hit", None)
                 if hit_fn is None:
                     count = 1
                 elif inspect.iscoroutinefunction(hit_fn):
-                    count = await asyncio.wait_for(hit_fn(key, rule.window_seconds), timeout=1.0)
+                    count = await asyncio.wait_for(hit_fn(key, rule.window_seconds), timeout=2.0)
                 else:
                     res = await asyncio.wait_for(
                         asyncio.to_thread(hit_fn, key, rule.window_seconds),
-                        timeout=1.0,
+                        timeout=2.0,
                     )
                     if inspect.isawaitable(res):
-                        count = await asyncio.wait_for(res, timeout=1.0)
+                        count = await asyncio.wait_for(res, timeout=2.0)
                     else:
                         count = int(res)
         except Exception as exc:  # noqa: BLE001

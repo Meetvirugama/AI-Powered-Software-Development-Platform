@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -510,6 +511,20 @@ def _run_startup_reconciliation(app: FastAPI) -> None:
         logger.warning("startup_reconciliation_failed", extra={"error": str(exc)})
 
 
+def _should_start_auth_revocation_subscriber() -> bool:
+    """Only hold a persistent Redis pub/sub connection when cross-worker broadcast is needed."""
+    if settings.app_env.strip().lower() in {"testing", "test"}:
+        return False
+    explicit = getattr(settings, "auth_revocation_pubsub_enabled", None)
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    except ValueError:
+        workers = 1
+    return workers > 1
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize process-wide infrastructure before serving requests."""
@@ -568,9 +583,9 @@ async def lifespan(app: FastAPI):
             name="startup-reconciliation",
         )
 
-    # ── Background Auth Revocation Subscriber ────────────────────────────────
+    # ── Background Auth Revocation Subscriber (multi-worker only by default) ─
     auth_revocation_task = None
-    if settings.app_env.strip().lower() not in {"testing", "test"}:
+    if _should_start_auth_revocation_subscriber():
         try:
             from app.core.auth import revocation_subscriber_loop
 

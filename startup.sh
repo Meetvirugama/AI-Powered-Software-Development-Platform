@@ -74,11 +74,9 @@ GRACEFUL_TIMEOUT="${UVICORN_GRACEFUL_TIMEOUT:-15}"
 KEEP_ALIVE="${UVICORN_KEEP_ALIVE:-75}"
 
 ENV_LOWER=$(echo "${APP_ENV:-development}" | tr '[:upper:]' '[:lower:]')
-DEFAULT_WORKERS=1
-if [ -n "$DATABASE_URL" ] && [[ "$DATABASE_URL" == *"postgres"* ]] && { [ "$ENV_LOWER" = "production" ] || [ "$ENV_LOWER" = "prod" ]; } && [ "${DISABLE_EMBEDDED_SYNC_WORKER:-false}" = "true" ]; then
-    DEFAULT_WORKERS=2
-fi
-WORKERS="${UVICORN_WORKERS:-$DEFAULT_WORKERS}"
+# Default to 1 Uvicorn worker to stay within Azure App Service B1/B2 memory and DB pool limits.
+# Opt into multi-worker mode explicitly by setting UVICORN_WORKERS=2+ on larger SKUs.
+WORKERS="${UVICORN_WORKERS:-1}"
 WORKER_ARGS=()
 if [ "$WORKERS" -gt 1 ] 2>/dev/null; then
     WORKER_ARGS=(--workers "$WORKERS")

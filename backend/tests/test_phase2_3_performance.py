@@ -686,3 +686,44 @@ def test_switch_repository_branch_endpoint(
         assert repo.last_indexed_commit_sha is None
     finally:
         app.state.github_service = prev_service
+
+
+def test_startup_defaults_to_single_worker_and_revocation_pubsub_gates_on_multiworker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core import lifespan as lifespan_mod
+
+    startup_text = (Path(__file__).resolve().parents[2] / "startup.sh").read_text(encoding="utf-8")
+    assert 'WORKERS="${UVICORN_WORKERS:-1}"' in startup_text
+    assert "DEFAULT_WORKERS=2" not in startup_text
+
+    monkeypatch.setattr(lifespan_mod.settings, "app_env", "production", raising=False)
+    monkeypatch.setattr(lifespan_mod.settings, "auth_revocation_pubsub_enabled", None, raising=False)
+    monkeypatch.delenv("UVICORN_WORKERS", raising=False)
+    assert lifespan_mod._should_start_auth_revocation_subscriber() is False
+
+    monkeypatch.setenv("UVICORN_WORKERS", "2")
+    assert lifespan_mod._should_start_auth_revocation_subscriber() is True
+
+    monkeypatch.setenv("UVICORN_WORKERS", "1")
+    monkeypatch.setattr(lifespan_mod.settings, "auth_revocation_pubsub_enabled", True, raising=False)
+    assert lifespan_mod._should_start_auth_revocation_subscriber() is True
+
+
+def test_blocklist_check_tolerates_upstash_cold_tls_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    auth_core.clear_blocklist_cache()
+
+    class SlowAsyncRedis:
+        async def exists(self, _key: str) -> int:
+            await asyncio.sleep(1.1)
+            return 0
+
+    async def _get_slow_redis() -> SlowAsyncRedis:
+        return SlowAsyncRedis()
+
+    monkeypatch.setattr(auth_core, "get_redis_async", _get_slow_redis)
+    result = asyncio.run(auth_core._check_redis_blocklist("jti-slow-tls", is_live_environment=True))
+    assert result is False
+    auth_core.clear_blocklist_cache()

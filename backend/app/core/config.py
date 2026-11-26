@@ -162,6 +162,7 @@ class Settings(BaseSettings):
     reranker_model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     reranker_model_path: str | None = None
     reranker_warm_up_on_startup: bool | None = None
+    auth_revocation_pubsub_enabled: bool | None = None
 
     # --- Distributed Tracing & Observability (F31 - Issue #212) -----------
     otel_enabled: bool = False

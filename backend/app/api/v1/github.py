@@ -82,7 +82,7 @@ async def _invalidate_discovery_cache(user_id: UUID, installation_id: str | int)
     try:
         redis = await get_redis_async()
         if redis is not None and hasattr(redis, "delete"):
-            await redis.delete(_discovery_cache_key(user_id, installation_id))
+            await asyncio.wait_for(redis.delete(_discovery_cache_key(user_id, installation_id)), timeout=2.0)
     except Exception as exc:
         logger.debug("github_discovery_cache_invalidate_skipped: %s", exc)
 
@@ -153,7 +153,7 @@ async def list_github_repositories(
 
             if not refresh and redis_client is not None and hasattr(redis_client, "get"):
                 try:
-                    cached_raw = await redis_client.get(cache_key)
+                    cached_raw = await asyncio.wait_for(redis_client.get(cache_key), timeout=2.0)
                     if cached_raw:
                         if isinstance(cached_raw, bytes):
                             cached_raw = cached_raw.decode("utf-8")
@@ -177,10 +177,13 @@ async def list_github_repositories(
             ]
             if redis_client is not None and hasattr(redis_client, "set"):
                 try:
-                    await redis_client.set(
-                        cache_key,
-                        json.dumps(serialized),
-                        ex=_DISCOVERY_CACHE_TTL_SECONDS,
+                    await asyncio.wait_for(
+                        redis_client.set(
+                            cache_key,
+                            json.dumps(serialized),
+                            ex=_DISCOVERY_CACHE_TTL_SECONDS,
+                        ),
+                        timeout=2.0,
                     )
                 except Exception as cache_exc:
                     logger.debug("github_discovery_cache_write_failed: %s", cache_exc)

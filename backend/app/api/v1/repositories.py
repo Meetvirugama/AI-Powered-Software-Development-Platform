@@ -422,15 +422,22 @@ async def get_file_content(
     if etag is not None and etag_matches(request, etag):
         return not_modified(etag)
 
-    chunks = await run_db(
-        db,
-        lambda: (
+    def _load_chunks_and_symbols():
+        loaded_chunks = (
             db.query(CodeChunk)
             .filter(CodeChunk.repository_id == repository_id, CodeChunk.file_id == file_id)
             .order_by(CodeChunk.start_line)
             .all()
-        ),
-    )
+        )
+        loaded_symbols = (
+            db.query(CodeSymbol)
+            .filter(CodeSymbol.repository_id == repository_id, CodeSymbol.file_id == file_id)
+            .order_by(CodeSymbol.start_line)
+            .all()
+        )
+        return loaded_chunks, loaded_symbols
+
+    chunks, symbols = await run_db(db, _load_chunks_and_symbols)
     content = redact(reconstruct_file_from_chunks(chunks))
 
     # Fallback to GitHub source content when a non-empty file has no indexed chunks
@@ -453,16 +460,6 @@ async def get_file_content(
                 "file_content_github_fallback_unavailable",
                 extra={"repository_id": str(repository_id), "file_id": str(file_id), "error": str(exc)},
             )
-
-    symbols = await run_db(
-        db,
-        lambda: (
-            db.query(CodeSymbol)
-            .filter(CodeSymbol.repository_id == repository_id, CodeSymbol.file_id == file_id)
-            .order_by(CodeSymbol.start_line)
-            .all()
-        ),
-    )
 
     if etag is not None and (content or (file_record.size_bytes or 0) == 0):
         apply_cache_headers(response, etag)

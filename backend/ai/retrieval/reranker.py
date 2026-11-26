@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from pathlib import Path
 import threading
 import time
 
@@ -223,7 +224,13 @@ class CrossEncoderReranker:
             "reranker_model_loading",
             extra={"model": self._model_name},
         )
-        model = CrossEncoder(self._model_name)
+        if Path(self._model_name).is_dir():
+            try:
+                model = CrossEncoder(self._model_name, local_files_only=True)
+            except TypeError:
+                model = CrossEncoder(self._model_name)
+        else:
+            model = CrossEncoder(self._model_name)
         logger.info(
             "reranker_model_loaded",
             extra={"model": self._model_name},
