@@ -129,6 +129,10 @@ class TestRateLimiting:
             def hit(self, key, window_seconds):
                 raise ConnectionError("redis timeout")
 
+        # Freeze time so window key never changes mid-test (prevents flakiness on slow CI runners)
+        _FIXED_TIME = 1_700_000_030.0  # arbitrary; mid-window so expires_at is far in the future
+        monkeypatch.setattr(rate_limit.time, "time", lambda: _FIXED_TIME)
+
         monkeypatch.setattr(rate_limit, "get_rate_limit_store", lambda: BrokenStore())
         rate_limit._fallback_ai_store.reset()
 
