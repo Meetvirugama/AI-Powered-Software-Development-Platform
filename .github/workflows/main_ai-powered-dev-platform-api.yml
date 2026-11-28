@@ -448,13 +448,23 @@ jobs:
 
       - name: Ensure correct production app settings on Azure Web App
         run: |
+          # Discover the resource group dynamically so this step is not coupled
+          # to a hardcoded name that may differ across Azure subscriptions.
+          APP_RG=$(az webapp show \
+            --name ai-powered-dev-platform-api \
+            --query resourceGroup \
+            --output tsv 2>/dev/null || true)
+          if [ -z "$APP_RG" ]; then
+            echo "::warning::Could not discover resource group for ai-powered-dev-platform-api; skipping appsettings update."
+            exit 0
+          fi
+          echo "Applying production app settings to resource group: $APP_RG"
           # Apply the small set of non-secret settings that must be correct for
           # production startup. Secret values (DB, JWT, API keys, Redis) are
-          # managed directly in the Azure Portal / Key Vault and are NOT stored
-          # in this repository.
+          # managed directly in the Azure Portal and are NOT stored in this repo.
           az webapp config appsettings set \
             --name ai-powered-dev-platform-api \
-            --resource-group ai-powered-dev-platform-api_group \
+            --resource-group "$APP_RG" \
             --settings \
               APP_ENV=production \
               SANDBOX_BACKEND=container \
