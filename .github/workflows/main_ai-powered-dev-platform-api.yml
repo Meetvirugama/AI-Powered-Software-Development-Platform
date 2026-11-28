@@ -446,6 +446,26 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_F5CA4B1BDC3647FFBF114253AA948A4D }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_FBC8B15832C5410083B5503431A35776 }}
 
+      - name: Ensure correct production app settings on Azure Web App
+        run: |
+          # Apply the small set of non-secret settings that must be correct for
+          # production startup. Secret values (DB, JWT, API keys, Redis) are
+          # managed directly in the Azure Portal / Key Vault and are NOT stored
+          # in this repository.
+          az webapp config appsettings set \
+            --name ai-powered-dev-platform-api \
+            --resource-group ai-powered-dev-platform-api_group \
+            --settings \
+              APP_ENV=production \
+              SANDBOX_BACKEND=container \
+              WEBSITES_PORT=8000 \
+              PORT=8000 \
+              PYTHONPATH=/home/site/wwwroot/backend:/home/site/wwwroot \
+              TRUST_PROXY_HEADERS=true \
+              ENABLE_ORYX_BUILD=true \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+            --output none
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
@@ -497,7 +517,7 @@ jobs:
           READY_URL="${BASE_URL}/api/v1/health/ready"
           DOCS_URL="${BASE_URL}/docs"
           echo "Verifying Azure API production health at ${HEALTH_URL}..."
-          for i in {1..12}; do
+          for i in {1..30}; do
             if curl -fsS --max-time 10 "$HEALTH_URL" | jq -e '.status == "ok"' >/dev/null &&
                curl -fsS --max-time 15 "$READY_URL" | jq -e '.database.status == "healthy"' >/dev/null &&
                curl -fsS --max-time 10 "$DOCS_URL" >/dev/null; then
@@ -505,7 +525,7 @@ jobs:
               exit 0
             fi
             echo "Attempt $i: One or more endpoints are still unavailable."
-            if [ "$i" -lt 12 ]; then sleep 10; fi
+            if [ "$i" -lt 30 ]; then sleep 10; fi
           done
           echo "::error::API health, readiness, or docs check timed out."
           echo "ROLLBACK GUIDANCE: In Azure Portal or via az webapp deployment slot swap, roll back to previous deployment slot."
